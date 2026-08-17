@@ -1,0 +1,4 @@
+trading_task:
+  description: "Analyze the trading signal context below and produce a commentary for the user.\n\nAsset: {asset}\nCurrent price: {price}\nSuggested direction: {direction}\nModel confidence: {confidence}%\nSuggested expiry: {horizon}\nSignal context: {context}\n\nProduce: a plain-language rationale for the direction, the key support/resistance levels to watch, a suggested setup (expiry + direction), the maximum suggested risk per trade as a percentage of account, and an explicit high-risk warning."
+  expected_output: "A markdown trading commentary with sections: Rationale, Key Levels, Suggested Setup, Risk per Trade, Warning."
+  agent: "trading_strategist"

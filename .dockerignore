@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+.plasmo/
+
+# Environment + secrets (mounted at runtime, never baked into the image)
+.env
+.env.local
+.env.*.local
+apps/dashboard/.env
+agents/picc_agents/.env
+infra/pi-node/.env
+*service-account*.json
+
+# Runtime data (automator credentials, agent logs, presence, sessions)
+apps/dashboard/server/data/
+
+# Python agents
+agents/picc_agents/.venv/
+agents/picc_agents/.crewai/
+__pycache__/
+*.pyc
+
+# Git / editors / OS
+.git/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Tests aren't needed in the image
+apps/dashboard/server/__tests__/
+apps/dashboard/src/**/__tests__/

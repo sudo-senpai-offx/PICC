@@ -1,0 +1,91 @@
+{
+  "name": "PICC - Listing Optimizer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analyze-listing",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-listing",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 0],
+      "webhookId": "picc-listing"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are an Amazon listing optimization expert. Based on the product below, suggest 3 concrete, copy-paste-ready improvements.\n\nProduct title: {{ $json.currentTitle }}\nCurrent bullets: {{ JSON.stringify($json.currentBullets) }}\nASIN: {{ $json.asin }}\n\nReturn a JSON array only, each item with fields: title (short label), body (the suggested rewrite/action), confidence (0-1).",
+        "options": {
+          "responseFormat": "jsonObject"
+        }
+      },
+      "id": "llm-listing",
+      "name": "AI Listing Suggestions",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nlet text = raw && (raw.content || raw.text) || '[]';\ntext = text.replace(/^```(json)?/m, '').replace(/```$/m, '').trim();\nlet suggestions = [];\ntry { suggestions = JSON.parse(text); } catch (e) {\n  suggestions = [{ id: 'parse', title: 'Raw AI response', body: text, confidence: 0.5 }];\n}\nreturn [{\n  json: {\n    userId: $json.userId,\n    asin: $json.asin,\n    suggestions: suggestions.map((s, i) => ({ id: 's' + i, ...s }))\n  }\n}];"
+      },
+      "id": "code-parse",
+      "name": "Normalize suggestions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "listing_analyses",
+        "options": {
+          "fields": "user_id,asin,suggestions"
+        },
+        "data": {
+          "json": {
+            "user_id": "={{ $json.userId }}",
+            "asin": "={{ $json.asin }}",
+            "suggestions": "={{ JSON.stringify($json.suggestions) }}"
+          }
+        }
+      },
+      "id": "supabase-listing",
+      "name": "Save analysis (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ suggestions: $json.suggestions }) }}"
+      },
+      "id": "respond-listing",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [320, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "AI Listing Suggestions", "type": "main", "index": 0 }]]
+    },
+    "AI Listing Suggestions": {
+      "main": [[{ "node": "Normalize suggestions", "type": "main", "index": 0 }]]
+    },
+    "Normalize suggestions": {
+      "main": [[{ "node": "Save analysis (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Save analysis (Supabase)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

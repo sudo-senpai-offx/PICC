@@ -1,0 +1,4 @@
+bounty_task:
+  description: "Identify and assess AIGEN bounty opportunities.\n\nTopic / focus: {topic}\n\nList the 3 most worthwhile bounties you can find. For each: title, source, reward (if stated, otherwise an honest estimate), effort estimate, acceptance criteria, and a concrete first action. Rank by effort-adjusted reward. If nothing is clearly worthwhile, say so and explain why."
+  expected_output: "A markdown list of 3 ranked bounty opportunities, each with reward estimate, effort, criteria, and first step. End with a one-line recommendation."
+  agent: "bounty_hunter"

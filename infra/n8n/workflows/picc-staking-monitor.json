@@ -1,0 +1,124 @@
+{
+  "name": "PICC - Staking Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "staking-monitor",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-staking",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "webhookId": "picc-staking-monitor"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.stakingrewards.com/v1/indicators?page%5Bsize%5D=5&page%5Bsort%5D=-annualizedRewardRate",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-staking",
+      "name": "Fetch Staking APYs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize staking/DeFi APY data from the upstream API into a simple list.\nconst input = $input.first().json;\nconst body = input.body || input;\nconst items = Array.isArray(body) ? body : (body.data || body.indicators || []);\n\nconst rows = items.slice(0, 10).map((it) => ({\n  name: it.name || it.asset || 'Unknown',\n  network: it.network || it.networkName || '',\n  apy: it.annualizedRewardRate != null ? it.annualizedRewardRate : (it.apy != null ? it.apy : null),\n  risk: (it.riskScore != null) ? it.riskScore : 'unknown'\n})).filter((r) => r.apy != null);\n\nconst userId = $json.userId || null;\nconst timestamp = new Date().toISOString();\nreturn [{\n  json: { userId, timestamp, opportunities: rows, count: rows.length }\n}];"
+      },
+      "id": "code-staking",
+      "name": "Normalize opportunities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Review the staking/DeFi opportunities below and produce an honest yield+risk summary.\n\n{{ JSON.stringify($json.opportunities) }}\n\nFor the top 3 by yield: name, realistic APY range, main risks (rug, lockups, custody, impermanent loss), and a plain-language recommendation. Never call any yield 'guaranteed' or 'safe'.",
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "id": "llm-staking",
+      "name": "AI Yield Analysis",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nconst analysis = raw && (raw.content || raw.text) || 'No AI analysis available.';\nreturn [{\n  json: {\n    userId: $json.userId,\n    timestamp: $json.timestamp,\n    opportunities: $json.opportunities,\n    count: $json.count,\n    analysis\n  }\n}];"
+      },
+      "id": "code-analysis",
+      "name": "Normalize analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "defi_holdings",
+        "options": {
+          "fields": "user_id,type,name,metadata,analysis,updated_at"
+        },
+        "data": {
+          "json": {
+            "user_id": "={{ $json.userId }}",
+            "type": "staking",
+            "name": "Staking monitor {{ $json.timestamp }}",
+            "metadata": "={{ JSON.stringify($json.opportunities) }}",
+            "analysis": "={{ $json.analysis }}",
+            "updated_at": "={{ $json.timestamp }}"
+          }
+        }
+      },
+      "id": "supabase-staking",
+      "name": "Save snapshot (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [320, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ count: $json.count, opportunities: $json.opportunities, analysis: $json.analysis }) }}"
+      },
+      "id": "respond-staking",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [480, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Fetch Staking APYs", "type": "main", "index": 0 }]]
+    },
+    "Fetch Staking APYs": {
+      "main": [[{ "node": "Normalize opportunities", "type": "main", "index": 0 }]]
+    },
+    "Normalize opportunities": {
+      "main": [[{ "node": "AI Yield Analysis", "type": "main", "index": 0 }]]
+    },
+    "AI Yield Analysis": {
+      "main": [[{ "node": "Normalize analysis", "type": "main", "index": 0 }]]
+    },
+    "Normalize analysis": {
+      "main": [[{ "node": "Save snapshot (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Save snapshot (Supabase)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

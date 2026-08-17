@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 320px;
+      font: 13px/1.5 system-ui, sans-serif;
+      background: #0a0a1e;
+      color: #eef0ff;
+      padding: 16px;
+    }
+    h1 { font-size: 15px; color: #6c63ff; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    h1 span { font-size: 18px; }
+    .status { font-size: 11px; padding: 6px 8px; border-radius: 6px; margin-bottom: 12px; }
+    .status.online { background: rgba(78, 205, 196, 0.1); color: #4ecdc4; }
+    .status.offline { background: rgba(255, 107, 107, 0.1); color: #ff6b6b; }
+    .section { margin-bottom: 12px; }
+    .section-title { font-size: 11px; color: #a5a0ff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    label { font-size: 12px; color: #a5a0ff; min-width: 60px; }
+    input[type="text"], input[type="number"] {
+      background: #1a1a2e; border: 1px solid #6c63ff40; color: #eef0ff;
+      padding: 4px 8px; border-radius: 4px; font-size: 12px; flex: 1;
+    }
+    input[type="range"] { width: 100px; }
+    button {
+      background: #6c63ff30; border: 1px solid #6c63ff40; color: #a5a0ff;
+      cursor: pointer; font-size: 12px; padding: 6px 12px; border-radius: 6px;
+      width: 100%; margin-top: 8px;
+    }
+    button:hover { background: #6c63ff50; color: #eef0ff; }
+    .shortcut { font-size: 11px; color: #666; margin-top: 12px; text-align: center; }
+    .shortcut kbd { background: #1a1a2e; border: 1px solid #6c63ff40; padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+  </style>
+</head>
+<body>
+  <h1><span>\uD83E\uDDE0</span> PICC Overlay</h1>
+  <div id="status" class="status offline">Checking server...</div>
+
+  <div class="section">
+    <div class="section-title">Current Site</div>
+    <div id="site-info" style="font-size:12px;color:#eef0ff;">Loading...</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Quick Actions</div>
+    <button id="toggle-btn">Toggle Overlay</button>
+  </div>
+
+  <div class="shortcut">
+    Shortcut: <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

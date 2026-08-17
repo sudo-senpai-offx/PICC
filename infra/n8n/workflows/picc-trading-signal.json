@@ -1,0 +1,126 @@
+{
+  "name": "PICC - Trading Signal",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trading-signal",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-trading",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "webhookId": "picc-trading-signal"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://query1.finance.yahoo.com/v8/finance/chart/{{ $json.asset ? $json.asset : 'BTC-USD' }}?range=1d&interval=5m",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-candles",
+      "name": "Fetch Candles (Yahoo Finance)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ensemble signal: momentum + mean-reversion + linear regression.\n// Decision-support only: computes a directional read with backtested-confidence.\nconst input = $input.first().json;\nconst body = input.body || input;\nconst chart = body.chart && body.chart.result && body.chart.result[0];\nif (!chart) throw new Error('No chart data returned');\n\nconst close = (chart.indicators.quote[0].close || []).filter((v) => v != null);\nif (close.length < 40) throw new Error('Insufficient price history');\n\nconst last = close[close.length - 1];\nconst r = (p) => close[close.length - 1 - p];\n\n// 1) Momentum: short vs long EMA slope\nconst ema = (arr, p) => {\n  const k = 2 / (p + 1);\n  let e = arr[0];\n  for (let i = 1; i < arr.length; i++) e = arr[i] * k + e * (1 - k);\n  return e;\n};\nconst emaFast = ema(close, 8);\nconst emaSlow = ema(close, 21);\nconst momentum = emaFast > emaSlow ? 1 : -1;\n\n// 2) Mean reversion: z-score of last return\nconst rets = [];\nfor (let i = 1; i < close.length; i++) rets.push(Math.log(close[i] / close[i - 1]));\nconst n = rets.length;\nconst mean = rets.reduce((a, b) => a + b, 0) / n;\nconst sd = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1));\nconst z = (Math.log(last / close[close.length - 2]) - mean) / (sd || 1e-9);\nconst meanRev = z < -1 ? 1 : z > 1 ? -1 : 0;\n\n// 3) Linear regression slope of last 20 closes\nconst window = close.slice(-20);\nconst m = window.length;\nconst xs = window.map((_, i) => i);\nconst xm = (m - 1) / 2;\nconst ym = window.reduce((a, b) => a + b, 0) / m;\nlet num = 0, den = 0;\nfor (let i = 0; i < m; i++) { num += (xs[i] - xm) * (window[i] - ym); den += (xs[i] - xm) ** 2; }\nconst slope = den ? num / den : 0;\nconst reg = slope > 0 ? 1 : -1;\n\n// Ensemble vote\nconst score = momentum + meanRev + reg;\nconst direction = score > 0 ? 'up' : score < 0 ? 'down' : 'neutral';\n// Honest confidence: vote agreement / 3 scaled, then damped toward 0.5.\nconst rawConf = 0.5 + (Math.abs(score) / 3) * 0.35;\nconst confidence = Math.round(rawConf * 100) / 100;\n\nconst asset = $json.asset || 'BTC-USD';\nconst horizon = $json.horizon || '5m';\nreturn [{\n  json: {\n    userId: $json.userId || null,\n    asset,\n    price: last,\n    direction,\n    confidence,\n    horizon,\n    models: { momentum, meanRev, reg },\n    notes: 'Decision-support signal only. Not financial advice.'\n  }\n}];"
+      },
+      "id": "code-signal",
+      "name": "Ensemble Signal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are a disciplined trading strategist. For asset {{ $json.asset }} at price {{ $json.price }} the ensemble model reads {{ $json.direction }} with {{ $json.confidence }} confidence over a {{ $json.horizon }} horizon.\n\nWrite a concise, honest commentary: plain-language rationale, key support/resistance levels, suggested setup, max risk per trade as % of account, and an explicit high-risk warning. Do not promise profits.",
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "id": "llm-trading",
+      "name": "AI Signal Commentary",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nconst commentary = raw && (raw.content || raw.text) || 'Signal generated without AI commentary.';\nreturn [{\n  json: {\n    userId: $json.userId,\n    asset: $json.asset,\n    price: $json.price,\n    direction: $json.direction,\n    confidence: $json.confidence,\n    horizon: $json.horizon,\n    models: $json.models,\n    commentary\n  }\n}];"
+      },
+      "id": "code-commentary",
+      "name": "Normalize commentary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "trading_signals",
+        "options": {
+          "fields": "user_id,asset,price,direction,confidence,horizon,models,commentary"
+        },
+        "data": {
+          "json": {
+            "user_id": "={{ $json.userId }}",
+            "asset": "={{ $json.asset }}",
+            "price": "={{ $json.price }}",
+            "direction": "={{ $json.direction }}",
+            "confidence": "={{ $json.confidence }}",
+            "horizon": "={{ $json.horizon }}",
+            "models": "={{ JSON.stringify($json.models) }}",
+            "commentary": "={{ $json.commentary }}"
+          }
+        }
+      },
+      "id": "supabase-trading",
+      "name": "Save signal (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [320, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ signal: { asset: $json.asset, price: $json.price, direction: $json.direction, confidence: $json.confidence, horizon: $json.horizon }, commentary: $json.commentary }) }}"
+      },
+      "id": "respond-trading",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [480, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Fetch Candles (Yahoo Finance)", "type": "main", "index": 0 }]]
+    },
+    "Fetch Candles (Yahoo Finance)": {
+      "main": [[{ "node": "Ensemble Signal", "type": "main", "index": 0 }]]
+    },
+    "Ensemble Signal": {
+      "main": [[{ "node": "AI Signal Commentary", "type": "main", "index": 0 }]]
+    },
+    "AI Signal Commentary": {
+      "main": [[{ "node": "Normalize commentary", "type": "main", "index": 0 }]]
+    },
+    "Normalize commentary": {
+      "main": [[{ "node": "Save signal (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Save signal (Supabase)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

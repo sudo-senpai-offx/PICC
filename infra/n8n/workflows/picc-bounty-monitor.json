@@ -1,0 +1,97 @@
+{
+  "name": "PICC - AIGEN Bounty Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bounty-monitor",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-bounty",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "webhookId": "picc-bounty-monitor"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.feedUrl || 'https://www.aigen.org/bounties' }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-bounty",
+      "name": "Fetch Bounty Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Defensive normalizer: AIGEN bounties may arrive as JSON or HTML.\nconst input = $input.first().json;\nconst body = input.body ?? input;\n\nlet raw = '';\nif (typeof body === 'string') raw = body;\nelse if (body && typeof body === 'object') raw = JSON.stringify(body);\n\n// JSON path\nlet list = [];\nif (body && typeof body === 'object') {\n  const cand = body.data ?? body.bounties ?? body.items ?? body.results;\n  if (Array.isArray(cand)) list = cand;\n  else if (Array.isArray(body)) list = body;\n}\n\n// HTML path: pull link+title pairs out of the DOM text.\nif (list.length === 0 && /<a/i.test(raw)) {\n  const re = /<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>([^<]{5,120})<\\/a>/gi;\n  let m;\n  while ((m = re.exec(raw)) && list.length < 50) {\n    const href = m[1];\n    if (/javascript:|mailto:|^#/.test(href)) continue;\n    list.push({ url: href, title: m[2].replace(/<[^>]+>/g, '').trim() });\n  }\n}\n\nconst bounties = list.map((b, i) => ({\n  title: b.title ?? b.name ?? `Bounty ${i + 1}`,\n  url: b.url ?? b.link ?? '',\n  reward: b.reward ?? b.payout ?? b.bounty ?? null,\n  status: b.status ?? b.state ?? 'open',\n  platform: 'aigen'\n})).slice(0, 30);\n\nreturn [{\n  json: {\n    userId: $json.userId ?? null,\n    timestamp: new Date().toISOString(),\n    bounties,\n    count: bounties.length\n  }\n}];"
+      },
+      "id": "code-bounty",
+      "name": "Normalize bounties",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are PICC's bounty hunter assistant. Review these AIGEN bounties and flag the 3 most worthwhile.\n\n{{ JSON.stringify($json.bounties) }}\n\nFor each pick: title, url, why it is worth it (scope vs reward), rough effort estimate, and a concrete first step. Rank by effort-adjusted reward. Be honest — say when nothing looks worthwhile.",
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "id": "llm-bounty",
+      "name": "AI Bounty Ranking",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nconst analysis = raw && (raw.content || raw.text) || 'No AI analysis available.';\nreturn [{\n  json: {\n    userId: $json.userId,\n    timestamp: $json.timestamp,\n    bounties: $json.bounties,\n    count: $json.count,\n    analysis\n  }\n}];"
+      },
+      "id": "code-bounty-analysis",
+      "name": "Normalize analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ count: $json.count, bounties: $json.bounties, analysis: $json.analysis }) }}"
+      },
+      "id": "respond-bounty",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [320, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Fetch Bounty Feed", "type": "main", "index": 0 }]]
+    },
+    "Fetch Bounty Feed": {
+      "main": [[{ "node": "Normalize bounties", "type": "main", "index": 0 }]]
+    },
+    "Normalize bounties": {
+      "main": [[{ "node": "AI Bounty Ranking", "type": "main", "index": 0 }]]
+    },
+    "AI Bounty Ranking": {
+      "main": [[{ "node": "Normalize analysis", "type": "main", "index": 0 }]]
+    },
+    "Normalize analysis": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

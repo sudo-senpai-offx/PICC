@@ -1,0 +1,24 @@
+# PICC dashboard — production stack.
+#   docker compose --env-file ../../apps/dashboard/.env -f infra/dashboard/docker-compose.yml up -d
+#
+# The dashboard reads its secrets from the apps/dashboard/.env file (via env_file).
+# Runtime data (automator credentials, agent logs, presence) is persisted in the
+# named volume `picc-data`, so it survives container rebuilds.
+
+services:
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: infra/dashboard/Dockerfile
+    image: picc-dashboard
+    container_name: picc-dashboard
+    restart: unless-stopped
+    ports:
+      - "${PICC_PORT:-3000}:3000"
+    env_file:
+      - ../../apps/dashboard/.env
+    volumes:
+      - picc-data:/repo/apps/dashboard/server/data
+
+volumes:
+  picc-data:

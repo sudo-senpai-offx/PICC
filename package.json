@@ -1,0 +1,21 @@
+{
+  "name": "picc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Passive Income Command Center - AI-assisted passive income planning platform (emulation + overlay architecture)",
+  "workspaces": [
+    "apps/dashboard"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start:all": "node scripts/start-all.mjs",
+    "build": "npm run build --workspace @picc/dashboard",
+    "build:extension": "cd apps/extension && npm run build",
+    "build:all": "npm run build && npm run build:extension",
+    "typecheck": "npm run typecheck --workspace @picc/dashboard",
+    "typecheck:all": "npm run typecheck && cd apps/extension && npm run typecheck"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

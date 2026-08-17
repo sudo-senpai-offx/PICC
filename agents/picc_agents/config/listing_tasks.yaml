@@ -1,0 +1,4 @@
+listing_task:
+  description: "Analyze the Amazon listing below and produce exactly three concrete, copy-paste-ready suggestions.\n\nProduct title: {title}\nCurrent bullets: {bullets}\nASIN: {asin}\n\nFor each suggestion provide: a short label, the suggested rewrite or action, and a confidence score between 0 and 1. Only suggest changes the seller can make in Amazon Seller Central."
+  expected_output: "A JSON array of three objects, each with fields: title (short label), body (the suggested rewrite or action), confidence (0-1)."
+  agent: "listing_analyst"

@@ -1,0 +1,124 @@
+{
+  "name": "PICC - DePIN Aggregator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "depin-aggregator",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-depin",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "webhookId": "picc-depin-aggregator"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&category=depin&order=market_cap_desc&per_page=15&page=1",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-depin",
+      "name": "Fetch DePIN projects (CoinGecko)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize DePIN market data into a compact opportunity list.\nconst input = $input.first().json;\nconst body = input.body || input;\nconst items = Array.isArray(body) ? body : (body.data || []);\n\nconst rows = items.slice(0, 15).map((c) => ({\n  name: c.name || 'Unknown',\n  symbol: (c.symbol || '').toUpperCase(),\n  price: c.current_price != null ? c.current_price : null,\n  marketCap: c.market_cap != null ? c.market_cap : null,\n  change24h: c.price_change_percentage_24h != null ? c.price_change_percentage_24h : null\n}));\n\nconst userId = $json.userId || null;\nconst timestamp = new Date().toISOString();\nreturn [{\n  json: { userId, timestamp, projects: rows, count: rows.length }\n}];"
+      },
+      "id": "code-depin",
+      "name": "Normalize projects",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Review the DePIN (decentralized physical infrastructure) projects below.\n\n{{ JSON.stringify($json.projects) }}\n\nProduce a short overview: which 3-5 look most established (by market cap and stability), which have the most volatile 24h moves, and a cautious note on token volatility and hardware requirements. Do not recommend buying any token.",
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "id": "llm-depin",
+      "name": "AI Project Overview",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nconst overview = raw && (raw.content || raw.text) || 'No AI overview available.';\nreturn [{\n  json: {\n    userId: $json.userId,\n    timestamp: $json.timestamp,\n    projects: $json.projects,\n    count: $json.count,\n    overview\n  }\n}];"
+      },
+      "id": "code-overview",
+      "name": "Normalize overview",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "depin_holdings",
+        "options": {
+          "fields": "user_id,type,name,metadata,analysis,updated_at"
+        },
+        "data": {
+          "json": {
+            "user_id": "={{ $json.userId }}",
+            "type": "depin",
+            "name": "DePIN snapshot {{ $json.timestamp }}",
+            "metadata": "={{ JSON.stringify($json.projects) }}",
+            "analysis": "={{ $json.overview }}",
+            "updated_at": "={{ $json.timestamp }}"
+          }
+        }
+      },
+      "id": "supabase-depin",
+      "name": "Save snapshot (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [320, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ count: $json.count, projects: $json.projects, overview: $json.overview }) }}"
+      },
+      "id": "respond-depin",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [480, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Fetch DePIN projects (CoinGecko)", "type": "main", "index": 0 }]]
+    },
+    "Fetch DePIN projects (CoinGecko)": {
+      "main": [[{ "node": "Normalize projects", "type": "main", "index": 0 }]]
+    },
+    "Normalize projects": {
+      "main": [[{ "node": "AI Project Overview", "type": "main", "index": 0 }]]
+    },
+    "AI Project Overview": {
+      "main": [[{ "node": "Normalize overview", "type": "main", "index": 0 }]]
+    },
+    "Normalize overview": {
+      "main": [[{ "node": "Save snapshot (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Save snapshot (Supabase)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "name": "PICC - Passive Income Aggregator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "income-aggregate",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-aggregator",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "webhookId": "picc-income-aggregator"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull normalized Earnings snapshots from the PICC connector registry and\n// aggregate them into one list. Every connector emits the same shape, so the\n// list is trivially comparable across api/ws/browser transports.\n\nconst base = $json.baseUrl || 'http://localhost:5173';\nconst token = $json.token || null;\nconst slugs = Array.isArray($json.slugs) ? $json.slugs : ['expertoption','honeygain','earnapp','grass','gradient','opensea','aave','yearn'];\n\nconst headers = { 'Content-Type': 'application/json' };\nif (token) headers['Authorization'] = `Bearer ${token}`;\n\nconst rows = await Promise.all(slugs.map(async (slug) => {\n  try {\n    const r = await fetch(`${base}/api/connectors/${encodeURIComponent(slug)}/collect`, {\n      method: 'POST',\n      headers,\n      body: '{}',\n      signal: AbortSignal.timeout(60000)\n    });\n    const d = await r.json();\n    return {\n      provider: d.provider ?? slug,\n      platform: d.platform ?? slug,\n      balance: d.balance ?? null,\n      today: d.today ?? null,\n      lifetime: d.lifetime ?? null,\n      payoutThreshold: d.payoutThreshold ?? null,\n      estimatedDaily: d.estimatedDaily ?? null,\n      currency: d.currency ?? 'USD',\n      source: d.source ?? 'unknown',\n      status: d.status ?? 'error',\n      error: d.error ?? null,\n      lastChecked: d.lastChecked ?? null\n    };\n  } catch (e) {\n    return { provider: slug, platform: slug, status: 'error', error: e.message, lastChecked: null };\n  }\n}));\n\nconst okRows = rows.filter((r) => r.status === 'ok' && (r.balance != null || r.lifetime != null));\nconst totalBalance = okRows.reduce((s, r) => s + (Number(r.balance) || 0), 0);\nconst totalToday = okRows.reduce((s, r) => s + (Number(r.today) || 0), 0);\nconst totalLifetime = okRows.reduce((s, r) => s + (Number(r.lifetime) || 0), 0);\n\nreturn [{\n  json: {\n    userId: $json.userId ?? null,\n    timestamp: new Date().toISOString(),\n    streams: rows,\n    totals: { balance: totalBalance, today: totalToday, lifetime: totalLifetime },\n    count: rows.length\n  }\n}];"
+      },
+      "id": "code-aggregator",
+      "name": "Collect all connectors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "income_streams",
+        "options": {
+          "fields": "user_id,provider,platform,transport,balance,currency,status,error,last_checked"
+        },
+        "data": {
+          "json": {
+            "user_id": "={{ $json.userId }}",
+            "provider": "={{ $json.provider }}",
+            "platform": "={{ $json.platform }}",
+            "transport": "={{ $json.source }}",
+            "balance": "={{ $json.balance }}",
+            "currency": "={{ $json.currency }}",
+            "status": "={{ $json.status }}",
+            "error": "={{ $json.error }}",
+            "last_checked": "={{ $json.lastChecked }}"
+          }
+        }
+      },
+      "id": "supabase-aggregator",
+      "name": "Save streams (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Here is a snapshot of every passive income stream PICC monitors.\n\n{{ JSON.stringify($json.streams) }}\n\nTotals: balance {{ $json.totals.balance }} | today {{ $json.totals.today }} | lifetime {{ $json.totals.lifetime }}\n\nWrite 3-6 sentences: which streams are healthy, which need attention (errors, near payout threshold), and one concrete next action to grow total passive income. Never promise specific future returns.",
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "id": "llm-aggregator",
+      "name": "AI Portfolio Summary",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nconst analysis = raw && (raw.content || raw.text) || 'No AI analysis available.';\nreturn [{\n  json: { ...$json, analysis }\n}];"
+      },
+      "id": "code-aggregator-analysis",
+      "name": "Normalize analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ totals: $json.totals, streams: $json.streams, analysis: $json.analysis }) }}"
+      },
+      "id": "respond-aggregator",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [320, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Collect all connectors", "type": "main", "index": 0 }]]
+    },
+    "Collect all connectors": {
+      "main": [[{ "node": "Save streams (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Save streams (Supabase)": {
+      "main": [[{ "node": "AI Portfolio Summary", "type": "main", "index": 0 }]]
+    },
+    "AI Portfolio Summary": {
+      "main": [[{ "node": "Normalize analysis", "type": "main", "index": 0 }]]
+    },
+    "Normalize analysis": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

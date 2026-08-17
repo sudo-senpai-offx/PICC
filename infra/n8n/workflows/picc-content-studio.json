@@ -1,0 +1,92 @@
+{
+  "name": "PICC - Content Studio",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-content",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-content",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 0],
+      "webhookId": "picc-content"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are a content strategist for passive income education. Produce a {{ $json.kind }} about \"{{ $json.topic }}\".\n\nReturn JSON with fields:\n- headline: attention-grabbing headline\n- script: the full content body\n- tags: array of SEO tags\n- cta: one call to action\n- estimatedReadMinutes: number",
+        "options": {
+          "responseFormat": "jsonObject"
+        }
+      },
+      "id": "llm-content",
+      "name": "AI Content Generation",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nlet text = raw && (raw.content || raw.text) || '{}';\ntext = text.replace(/^```(json)?/m, '').replace(/```$/m, '').trim();\nlet draft = {};\ntry { draft = JSON.parse(text); } catch (e) {\n  draft = { headline: 'Draft', script: text, tags: [], cta: '' };\n}\nreturn [{\n  json: {\n    userId: $json.userId,\n    kind: $json.kind,\n    topic: $json.topic,\n    draft\n  }\n}];"
+      },
+      "id": "code-content",
+      "name": "Normalize draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "content_drafts",
+        "options": {
+          "fields": "user_id,kind,topic,draft"
+        },
+        "data": {
+          "json": {
+            "user_id": "={{ $json.userId }}",
+            "kind": "={{ $json.kind }}",
+            "topic": "={{ $json.topic }}",
+            "draft": "={{ JSON.stringify($json.draft) }}"
+          }
+        }
+      },
+      "id": "supabase-content",
+      "name": "Save draft (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ draft: $json.draft }) }}"
+      },
+      "id": "respond-content",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [320, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "AI Content Generation", "type": "main", "index": 0 }]]
+    },
+    "AI Content Generation": {
+      "main": [[{ "node": "Normalize draft", "type": "main", "index": 0 }]]
+    },
+    "Normalize draft": {
+      "main": [[{ "node": "Save draft (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Save draft (Supabase)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

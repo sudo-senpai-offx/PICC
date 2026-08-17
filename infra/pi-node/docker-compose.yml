@@ -1,0 +1,90 @@
+version: "3.9"
+
+# PICC Pi Node — runs several Tier 0 bandwidth-sharing providers as containers
+# so one small device (Raspberry Pi 4/5, ARM or x86) earns across platforms.
+#
+# Copy .env.example to .env and fill in credentials, then: docker compose up -d
+#
+# Desktop-only providers (PacketStream, Grass, Nodepay, Gradient) and providers
+# that prohibit containers (EarnApp — ToS bans Docker/VMs/home servers) have no
+# container here and are intentionally not listed — see README.md.
+
+services:
+  honeygain:
+    image: honeygain/honeygain:latest
+    container_name: honeygain
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - HONEYGAIN_EMAIL=${HONEYGAIN_EMAIL}
+      - HONEYGAIN_PASSWORD=${HONEYGAIN_PASSWORD}
+      - HONEYGAIN_DEVICE_NAME=${HONEYGAIN_DEVICE_NAME:-picc-pi}
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  pawns:
+    image: iproyal/pawns-cli:latest
+    container_name: pawns
+    restart: unless-stopped
+    env_file: .env
+    command: --accept-tos --email=${PAWNS_EMAIL} --password=${PAWNS_PASSWORD} --device-name=${PAWNS_DEVICE_NAME:-picc-pi}
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  traffmonetizer:
+    image: traffmonetizer/cli_v2:latest
+    container_name: traffmonetizer
+    restart: unless-stopped
+    env_file: .env
+    command: start accept --token ${TM_TOKEN}
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  repocket:
+    image: repocket/repocket:latest
+    container_name: repocket
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - RP_EMAIL=${RP_EMAIL}
+      - RP_API_KEY=${RP_API_KEY}
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # mysterium:
+  #   image: mysteriumnetwork/mystnode:latest
+  #   container_name: mysterium
+  #   restart: unless-stopped
+  #   ports:
+  #     - "4449:4449/udp"
+  #     - "51820:51820/udp"
+  #   environment:
+  #     - MYST_NODE_KEYSERVER_URL=${MYST_NODE_KEYSERVER_URL:-https://keyserver.mysterium.network}
+  #     - MYST_ENABLE_METRICS=${MYST_ENABLE_METRICS:-false}
+  #   volumes:
+  #     - mystdata:/var/lib/mysterium-node
+  #   logging:
+  #     options:
+  #       max-size: "5m"
+  #       max-file: "3"
+
+  # watchtower:
+  #   # Optional self-updater. traffmonetizer's cli_v2 recommends always running
+  #   # the latest image; watchtower keeps every container current.
+  #   image: containrrr/watchtower:latest
+  #   container_name: watchtower
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command: --interval 3600 --cleanup
+
+# volumes:
+#   mystdata:

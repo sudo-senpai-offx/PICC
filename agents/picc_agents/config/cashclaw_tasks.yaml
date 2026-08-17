@@ -1,0 +1,4 @@
+cashclaw_task:
+  description: "Audit the wallet/stream context below for unclaimed crypto rewards.\n\nWallet / platforms: {wallet}\nRecent activity: {context}\n\nIdentify: (1) claimable but unclaimed rewards or airdrops, (2) rewards near expiry or minimum-threshold, (3) suspected underpayments or clawbacks. For each, give the exact claim action on the platform and a deadline if known. Explicitly warn about anything that asks for the private key or a 'send-first' payment."
+  expected_output: "A markdown audit with sections: Claim Now, Near Expiry, Suspected Underpayment, Scam Flags. Each item one or two lines with a concrete action."
+  agent: "cashclaw_hunter"

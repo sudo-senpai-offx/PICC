@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "PICC — Personal Income Command Center",
+  "version": "1.0.0",
+  "description": "Full browser intervention, automation, overlay and intelligence for your income sites.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "cookies",
+    "webRequest",
+    "declarativeNetRequest",
+    "alarms",
+    "notifications",
+    "downloads",
+    "offscreen",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PICC Overlay"
+  },
+  "declarative_net_request": {
+    "rule_resources": []
+  }
+}

@@ -1,0 +1,29 @@
+# PICC dashboard — systemd unit (alternative to Docker/PM2).
+#
+#   sudo cp infra/dashboard/picc-dashboard.service /etc/systemd/system/
+#   sudo nano /etc/systemd/system/picc-dashboard.service   # fix the path below
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now picc-dashboard
+#
+# Adjust WorkingDirectory to the absolute path of apps/dashboard on your host.
+
+[Unit]
+Description=PICC dashboard + same-origin /api backend
+After=network.target
+
+[Service]
+Type=simple
+User=picc
+WorkingDirectory=/opt/picc/apps/dashboard
+ExecStart=/usr/bin/env node server/index.mjs
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# Secrets are read from apps/dashboard/.env (auto-loaded by the server).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

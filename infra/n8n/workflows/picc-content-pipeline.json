@@ -1,0 +1,118 @@
+{
+  "name": "PICC - Content Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-pipeline",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-content",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "webhookId": "picc-content-pipeline"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl || 'http://localhost:5173' }}/api/content/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "kind",
+              "value": "={{ $json.kind || 'blog' }}"
+            },
+            {
+              "name": "topic",
+              "value": "={{ $json.topic }}"
+            },
+            {
+              "name": "tone",
+              "value": "={{ $json.tone || 'professional' }}"
+            },
+            {
+              "name": "length",
+              "value": "={{ $json.length || 'standard' }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 40000
+        }
+      },
+      "id": "http-content",
+      "name": "Generate with PICC",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst body = d.body ?? d;\nconst draft = body.draft ?? {};\nreturn [{\n  json: {\n    userId: $json.userId ?? null,\n    timestamp: new Date().toISOString(),\n    topic: body.topic ?? $json.topic ?? '',\n    source: body.source ?? 'local',\n    headline: draft.headline ?? '',\n    script: draft.script ?? '',\n    tags: draft.tags ?? [],\n    cta: draft.cta ?? '',\n    estimatedReadMinutes: draft.estimatedReadMinutes ?? null,\n    research: Array.isArray(body.research) ? body.research.map((r) => ({ title: r.title ?? '', date: r.date ?? '' })) : []\n  }\n}];"
+      },
+      "id": "code-content",
+      "name": "Normalize draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Polish the following draft into final publish copy. Keep the structure and tone, fix awkward phrasing, tighten the intro, and end with a strong call to action. Do not invent facts.\n\nTitle: {{ $json.headline }}\n\nDraft:\n{{ $json.script }}\n\nCTA: {{ $json.cta }}",
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "id": "llm-content",
+      "name": "AI Final Polish",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nconst polished = raw && (raw.content || raw.text) || $json.script;\nreturn [{\n  json: { ...$json, polished, tagsJoined: $json.tags.join(', ') }\n}];"
+      },
+      "id": "code-content-final",
+      "name": "Normalize final copy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ headline: $json.headline, polished: $json.polished, tags: $json.tags, cta: $json.cta, source: $json.source }) }}"
+      },
+      "id": "respond-content",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [320, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Generate with PICC", "type": "main", "index": 0 }]]
+    },
+    "Generate with PICC": {
+      "main": [[{ "node": "Normalize draft", "type": "main", "index": 0 }]]
+    },
+    "Normalize draft": {
+      "main": [[{ "node": "AI Final Polish", "type": "main", "index": 0 }]]
+    },
+    "AI Final Polish": {
+      "main": [[{ "node": "Normalize final copy", "type": "main", "index": 0 }]]
+    },
+    "Normalize final copy": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

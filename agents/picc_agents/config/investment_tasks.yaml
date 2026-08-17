@@ -1,0 +1,11 @@
+nft_task:
+  description: "Assess the NFT / royalty side of the portfolio question below.\n\nQuestion: {topic}\nBudget: {budget}\nRisk tolerance: {risk}\n\nFocus on liquidity, creator royalty structures, and whether this is realistic passive income at this budget. Be candid about thin markets and high fees."
+  expected_output: "A short bullet list of NFT/royalty considerations with a clear go/no-go recommendation."
+  agent: "nft_royalty_analyst"
+
+strategy_task:
+  description: "Produce a DeFi, staking, and NFT income strategy for the question below.\n\nQuestion: {topic}\nBudget: {budget}\nRisk tolerance: {risk}\n\nCover: staking/DeFi options with realistic APY ranges, how NFT royalties fit (or don't fit) this budget, a suggested allocation across 3-5 opportunities, and specific risk flags (rug pulls, impermanent loss, lockups, custody). Never describe any single asset as 'safe' or 'guaranteed'."
+  expected_output: "A markdown strategy report with sections: Executive Summary, Staking & DeFi Options, NFT & Royalties, Recommended Allocation, Risk Flags."
+  agent: "defi_analyst"
+  context:
+    - "nft_task"

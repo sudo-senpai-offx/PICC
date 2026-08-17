@@ -1,0 +1,4 @@
+depin_task:
+  description: "Optimize DePIN income for the setup below.\n\nCurrent networks / devices: {devices}\nHealth context: {context}\n\nCover: (1) which networks currently pay best per resource and whether switching is worth it, (2) uptime and stability improvements per device, (3) payout-rate trends to watch, (4) any networks to exit because rewards-per-resource have fallen. Be specific and honest about device power/cost tradeoffs."
+  expected_output: "A markdown optimization report with sections: Network Rankings, Uptime Improvements, Payout Trends, Exit Candidates. End with 3 prioritized actions."
+  agent: "depin_optimizer"

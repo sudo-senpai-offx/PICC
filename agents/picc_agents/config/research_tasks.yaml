@@ -1,0 +1,11 @@
+research_task:
+  description: "Conduct thorough research on {topic}. Focus on key concepts, recent developments, major challenges, notable applications, and future outlook."
+  expected_output: "A comprehensive research document with organized sections, specific facts, figures, and useful examples about {topic}."
+  agent: "researcher"
+
+analysis_task:
+  description: "Analyze the research findings and create a professional report on {topic}. Include an executive summary, key insights, trend analysis, risk assessment, and actionable recommendations."
+  expected_output: "A professional markdown report with clear headings, a concise summary, main findings, risks, and recommendations."
+  agent: "analyst"
+  context:
+    - "research_task"

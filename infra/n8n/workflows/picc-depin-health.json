@@ -1,0 +1,97 @@
+{
+  "name": "PICC - DePIN Health Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "depin-health",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-depin",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-480, 0],
+      "webhookId": "picc-depin-health"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.feedUrl || 'https://status.getgrass.io' }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-depin",
+      "name": "Fetch Network Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Defensive normalizer for DePIN network status feeds (JSON or status-page\n// HTML). The template points at the Grass status page — point it at any\n// DePIN network (Gradient, Silencio, Helium, ...) by setting feedUrl.\nconst input = $input.first().json;\nconst body = input.body ?? input;\nlet raw = '';\nif (typeof body === 'string') raw = body;\nelse if (body && typeof body === 'object') raw = JSON.stringify(body);\n\nlet components = [];\nif (body && typeof body === 'object') {\n  const cand = body.components ?? body.incidents ?? body.statuses ?? body.data;\n  if (Array.isArray(cand)) components = cand;\n  else if (Array.isArray(body)) components = body;\n}\n\nif (components.length === 0 && /(operational|degraded|outage|incident)/i.test(raw)) {\n  // HTML status pages: extract status pill text + incident titles.\n  const text = raw.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\n  const m = text.match(/(All Systems Operational|Partial Outage|Major Outage|Minor[^.]{0,80})/i);\n  components.push({ name: 'overall', status: m ? m[1] : 'unknown' });\n}\n\nconst healthy = components.filter((c) => /operational|up|ok/i.test(String(c.status ?? ''))).length;\n\nconst rows = components.slice(0, 40).map((c) => ({\n  name: c.name ?? c.title ?? 'unknown',\n  status: c.status ?? c.state ?? 'unknown',\n  detail: c.detail ?? c.description ?? ''\n}));\n\nreturn [{\n  json: {\n    userId: $json.userId ?? null,\n    timestamp: new Date().toISOString(),\n    network: $json.network ?? 'grass',\n    healthy,\n    total: components.length,\n    components: rows\n  }\n}];"
+      },
+      "id": "code-depin",
+      "name": "Normalize status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Assess DePIN network health for {{ $json.network }}.\n\nHealthy: {{ $json.healthy }}/{{ $json.total }} components.\n\n{{ JSON.stringify($json.components) }}\n\nIf everything is healthy, say so in one line. Otherwise name the failing components, the likely impact on earnings/uptime, and a recommended action. Be concise and factual.",
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "id": "llm-depin",
+      "name": "AI Health Assessment",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices && $json.choices[0] && $json.choices[0].message;\nconst analysis = raw && (raw.content || raw.text) || 'No AI analysis available.';\nreturn [{\n  json: { ...$json, analysis }\n}];"
+      },
+      "id": "code-depin-analysis",
+      "name": "Normalize analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ network: $json.network, healthy: $json.healthy, total: $json.total, components: $json.components, analysis: $json.analysis }) }}"
+      },
+      "id": "respond-depin",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [320, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Fetch Network Status", "type": "main", "index": 0 }]]
+    },
+    "Fetch Network Status": {
+      "main": [[{ "node": "Normalize status", "type": "main", "index": 0 }]]
+    },
+    "Normalize status": {
+      "main": [[{ "node": "AI Health Assessment", "type": "main", "index": 0 }]]
+    },
+    "AI Health Assessment": {
+      "main": [[{ "node": "Normalize analysis", "type": "main", "index": 0 }]]
+    },
+    "Normalize analysis": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

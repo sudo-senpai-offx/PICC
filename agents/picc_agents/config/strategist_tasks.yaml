@@ -1,0 +1,4 @@
+strategist_task:
+  description: "Build a content strategy around the user's income streams.\n\nIncome streams: {streams}\nAudience / niche: {audience}\n\nProduce: (1) 3 content pillars with a repeatable format per pillar (blog, YouTube, short-form, newsletter, X thread), (2) a 30-day posting calendar outline, (3) an affiliate/monetization plan with honest disclosure practices, (4) headline patterns that attract clicks without overpromising. Tie every pillar to a real income stream the user runs."
+  expected_output: "A markdown content strategy with sections: Content Pillars, 30-Day Calendar, Monetization Plan, Honest Headline Patterns."
+  agent: "content_strategist"

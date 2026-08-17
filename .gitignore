@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+.plasmo/
+
+# Environment
+.env
+.env.local
+.env.*.local
+*service-account*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.crewai/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Runtime data (automator credentials, snapshots, presence)
+apps/dashboard/server/data/
+
+# Embedded git repos
+infra/btcpayserver/btcpayserver-docker/

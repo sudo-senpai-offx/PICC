@@ -1,0 +1,98 @@
+{
+  "name": "PICC - Financial Twin Simulator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "simulate",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-simulate",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 0],
+      "webhookId": "picc-simulate"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://query1.finance.yahoo.com/v8/finance/chart/{{ $json.ticker }}?range=10y&interval=1mo",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-yahoo",
+      "name": "Fetch Historical Data (Yahoo Finance)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [-160, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Yahoo Finance chart data and run a Monte Carlo projection.\nconst input = $input.first().json;\nconst body = input.body || input;\nconst chart = body.chart && body.chart.result && body.chart.result[0];\nif (!chart) throw new Error('No chart data returned for ticker');\n\nconst quotes = chart.indicators.quote[0];\nconst close = (quotes.close || []).filter((v) => v != null);\nif (close.length < 12) throw new Error('Insufficient price history');\n\n// Monthly log returns\nconst returns = [];\nfor (let i = 1; i < close.length; i++) {\n  if (close[i] > 0 && close[i - 1] > 0) {\n    returns.push(Math.log(close[i] / close[i - 1]));\n  }\n}\nconst n = returns.length;\nconst mean = returns.reduce((a, b) => a + b, 0) / n;\nconst variance = returns.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1);\nconst vol = Math.sqrt(variance) * Math.sqrt(12); // annualized\nconst drift = (mean * 12) + (vol * vol) / 2;      // GBM drift (monthly->annual)\n\nconst capital = Number($json.capital || 10000);\nconst years = Number($json.horizonYears || 10);\nconst paths = Number($json.simulations || 10000);\n\nconst rng = () => {\n  // Box-Muller normal sample\n  let u = 0, v = 0;\n  while (u === 0) u = Math.random();\n  while (v === 0) v = Math.random();\n  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);\n};\n\nconst ends = [];\nfor (let p = 0; p < paths; p++) {\n  let price = 1;\n  for (let m = 0; m < years * 12; m++) {\n    price *= Math.exp(drift / 12 - (vol * vol) / 24 + (vol / Math.sqrt(12)) * rng());\n  }\n  ends.push(capital * price);\n}\nends.sort((a, b) => a - b);\nconst p = (q) => ends[Math.min(ends.length - 1, Math.floor(q * ends.length))];\nconst median = p(0.5);\nconst p10 = p(0.1);\nconst p90 = p(0.9);\nconst annualized = Math.pow(median / capital, 1 / years) - 1;\n\nconst lastPrice = close[close.length - 1];\nreturn [{\n  json: {\n    userId: $json.userId,\n    ticker: $json.ticker,\n    lastPrice,\n    annualizedVol: vol,\n    projection: {\n      medianEnd: Math.round(median),\n      p10: Math.round(p10),\n      p90: Math.round(p90),\n      annualizedReturn: Math.round(annualized * 10000) / 10000,\n      allocation: { equities: 0.7, bonds: 0.2, cash: 0.1 },\n      horizonYears: years,\n      simulatedPaths: paths\n    },\n    notes: 'Monte Carlo projection from trailing 10y monthly history. Educational only - not investment advice.'\n  }\n}];"
+      },
+      "id": "code-montecarlo",
+      "name": "Monte Carlo Projection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "simulations",
+        "options": {
+          "fields": "user_id,type,name,parameters,results"
+        },
+        "data": {
+          "json": {
+            "user_id": "={{ $json.userId }}",
+            "type": "={{ $json.ticker ? 'stock' : 'reit' }}",
+            "name": "={{ $json.ticker }} projection",
+            "parameters": {
+              "ticker": "={{ $json.ticker }}",
+              "capital": "={{ $json.capital }}",
+              "riskTolerance": "={{ $json.riskTolerance }}",
+              "horizonYears": "={{ $json.horizonYears }}"
+            },
+            "results": "={{ JSON.stringify($json.projection) }}"
+          }
+        }
+      },
+      "id": "supabase-insert-sim",
+      "name": "Save simulation (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [160, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "responseBody": "={{ JSON.stringify({ simulationId: $('Webhook').item.json.query.id || null, projection: $json.projection, notes: $json.notes }) }}"
+      },
+      "id": "respond-simulate",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [320, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Fetch Historical Data (Yahoo Finance)", "type": "main", "index": 0 }]]
+    },
+    "Fetch Historical Data (Yahoo Finance)": {
+      "main": [[{ "node": "Monte Carlo Projection", "type": "main", "index": 0 }]]
+    },
+    "Monte Carlo Projection": {
+      "main": [[{ "node": "Save simulation (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Save simulation (Supabase)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
