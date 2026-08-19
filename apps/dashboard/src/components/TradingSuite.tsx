@@ -9,6 +9,7 @@ import { BacktestPanel } from "@/components/BacktestPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { AlertPanel } from "@/components/AlertPanel"
 import { CalendarPanel } from "@/components/CalendarPanel"
+import { PortfolioPanel } from "@/components/PortfolioPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { getExtensionStatus } from "@/lib/api"
 import type { ExtensionStatus } from "@/lib/api"
@@ -177,6 +178,7 @@ export function MarketsSuite() {
           <AdvancedIndicatorsPanel assetId={chartAsset} timeframe="daily" />
           <AlertPanel />
           <CalendarPanel />
+          <PortfolioPanel />
           <div className="grid">
             <PaperTradingCard positions={positions} closed={closed} refresh={refresh} />
             <div className="stack">

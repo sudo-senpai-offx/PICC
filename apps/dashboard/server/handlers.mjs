@@ -1594,6 +1594,24 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  // ── Portfolio Analytics ──────────────────────────────────────────────
+  if (path === "/api/trading/portfolio" && req.method === "POST") {
+    const symbols = Array.isArray(body?.symbols) ? body.symbols : []
+    const weights = Array.isArray(body?.weights) ? body.weights : []
+    const days = Math.min(Math.max(Number(body?.days) || 90, 10), 365)
+    if (symbols.length < 1) return writeJson(res, 400, { error: "At least 1 symbol required" })
+    if (symbols.length > 20) return writeJson(res, 400, { error: "Max 20 symbols" })
+    try {
+      const { computePortfolioAnalytics } = await import("./services/portfolioAnalytics.mjs")
+      const result = await computePortfolioAnalytics({ symbols, weights, days })
+      if (!result) return writeJson(res, 404, { error: "No data found for any of the provided symbols" })
+      writeJson(res, 200, { ok: true, ...result })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+
   // -------------------------------------------------------------------
   // Strategy backtester — runs multi-model prediction over historical
   // windows and reports walk-forward hit rates, equity curve, drawdown.

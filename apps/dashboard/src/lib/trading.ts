@@ -904,3 +904,36 @@ export function getEconomicCalendar(days = 7, currency?: string): Promise<Calend
   const params = `days=${days}${currency ? `&currency=${currency}` : ""}`
   return request(`/trading/calendar?${params}`)
 }
+
+export interface PortfolioAsset {
+  symbol: string
+  weight: number
+  lastPrice: number
+  change24h: number
+  dailyReturnVol: number
+}
+
+export interface PortfolioAnalytics {
+  ok: boolean
+  assets: PortfolioAsset[]
+  corrMatrix: number[][]
+  metrics: {
+    sharpeRatio: number
+    sortinoRatio: number
+    maxDrawdown: number
+    valueAtRisk95: number
+    stdDev: number
+    totalReturn: number
+    annualizedReturn: number
+    beta: number
+  }
+  diversificationScore: number
+  avgCorrelation: number
+  equityCurve: number[]
+  assetCount: number
+  days: number
+}
+
+export function getPortfolioAnalytics(symbols: string[], weights?: number[], days = 90): Promise<PortfolioAnalytics> {
+  return post("/trading/portfolio", { symbols, weights, days })
+}
