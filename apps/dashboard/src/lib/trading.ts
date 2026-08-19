@@ -988,3 +988,88 @@ export interface ScreenerResult {
 export function screenerRun(opts: { sort?: string; limit?: number; minChange?: number; maxChange?: number; symbols?: string[] } = {}): Promise<ScreenerResult> {
   return post("/trading/screener", opts)
 }
+
+export interface PatternDetection {
+  index: number
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  patterns: { name: string; direction: string; strength: string; description: string }[]
+}
+
+export interface PatternSummary {
+  total: number
+  uniquePatterns: number
+  bullishBias: number
+  bearishBias: number
+  bias: string
+  topPatterns: { name: string; count: number }[]
+  recent: PatternDetection[]
+}
+
+export function getPatterns(symbol: string, timeframe = "daily", count = 200): Promise<{ ok: boolean; detected: PatternDetection[]; summary: PatternSummary }> {
+  return post("/trading/patterns", { symbol, timeframe, count })
+}
+
+export interface TradeJournalEntry {
+  id: string
+  symbol: string
+  side: string
+  entryPrice: number
+  exitPrice: number | null
+  quantity: number
+  reason: string
+  confidence: number
+  strategy: string
+  tags: string[]
+  notes: string
+  timeframe: string
+  pattern: string
+  entryTime: number
+  exitTime: number | null
+  pnl: number | null
+  pnlPct: number | null
+  rMultiple: number | null
+  status: string
+}
+
+export interface JournalStats {
+  totalTrades: number
+  openTrades: number
+  closedTrades: number
+  winRate: number
+  totalPnl: number
+  avgWin: number
+  avgLoss: number
+  profitFactor: number
+  avgRMultiple: number
+  maxWinStreak: number
+  maxLossStreak: number
+  bestTrade: { symbol: string; pnl: number } | null
+  worstTrade: { symbol: string; pnl: number } | null
+  byStrategy: Record<string, { count: number; pnl: number; wins: number; winRate: number }>
+  bySymbol: Record<string, { count: number; pnl: number; wins: number }>
+}
+
+export function getJournal(params: { symbol?: string; tag?: string; limit?: number; offset?: number } = {}): Promise<{ ok: boolean; entries: TradeJournalEntry[]; total: number; stats: JournalStats }> {
+  const qs = new URLSearchParams()
+  if (params.symbol) qs.set("symbol", params.symbol)
+  if (params.tag) qs.set("tag", params.tag)
+  if (params.limit) qs.set("limit", String(params.limit))
+  if (params.offset) qs.set("offset", String(params.offset))
+  return request(`/trading/journal?${qs}`)
+}
+
+export function addJournalEntry(entry: Partial<TradeJournalEntry>): Promise<{ ok: boolean; entry: TradeJournalEntry }> {
+  return post("/trading/journal", entry)
+}
+
+export function closeJournalEntry(id: string, exitPrice: number, notes?: string): Promise<{ ok: boolean; entry: TradeJournalEntry }> {
+  return post("/trading/journal/close", { id, exitPrice, notes })
+}
+
+export function deleteJournalEntry(id: string): Promise<{ ok: boolean }> {
+  return post("/trading/journal/delete", { id })
+}

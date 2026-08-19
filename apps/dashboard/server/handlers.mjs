@@ -1663,6 +1663,69 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  // ── Pattern Recognition ─────────────────────────────────────────────
+  if (path === "/api/trading/patterns" && req.method === "POST") {
+    const symbol = String(body?.symbol ?? "EURUSD").toUpperCase()
+    const timeframe = String(body?.timeframe ?? "daily")
+    const count = Math.min(Math.max(Number(body?.count) || 200, 10), 500)
+    try {
+      const { getHistory } = await import("./services/yahoo.mjs")
+      const { detectPatterns, patternSummary } = await import("./services/patterns.mjs")
+      const hist = await getHistory(symbol, count)
+      if (!hist || !hist.closes?.length) return writeJson(res, 404, { error: "No data" })
+      const candles = hist.dates.map((time, i) => ({
+        time,
+        open: hist.opens[i],
+        high: hist.highs[i],
+        low: hist.lows[i],
+        close: hist.closes[i]
+      }))
+      const detected = detectPatterns(candles)
+      const summary = patternSummary(candles)
+      writeJson(res, 200, { ok: true, symbol, count: candles.length, detected, summary })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // ── Trade Journal ───────────────────────────────────────────────────
+  if (path === "/api/trading/journal" && req.method === "GET") {
+    const { listEntries, journalStats } = await import("./services/tradeJournal.mjs")
+    const symbol = parsed.searchParams.get("symbol") || undefined
+    const tag = parsed.searchParams.get("tag") || undefined
+    const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit")) || 50, 1), 200)
+    const offset = Math.max(Number(parsed.searchParams.get("offset")) || 0, 0)
+    const result = listEntries({ symbol, tag, limit, offset })
+    writeJson(res, 200, { ok: true, ...result, stats: journalStats() })
+    return
+  }
+  if (path === "/api/trading/journal" && req.method === "POST") {
+    const { addEntry } = await import("./services/tradeJournal.mjs")
+    try {
+      const entry = addEntry(body ?? {})
+      writeJson(res, 200, { ok: true, entry })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+  if (path === "/api/trading/journal/close" && req.method === "POST") {
+    const { closeEntry } = await import("./services/tradeJournal.mjs")
+    const { id, exitPrice, exitTime, notes } = body ?? {}
+    if (!id || exitPrice == null) return writeJson(res, 400, { error: "id and exitPrice required" })
+    const entry = closeEntry(id, { exitPrice, exitTime, notes })
+    writeJson(res, entry ? 200 : 404, { ok: !!entry, entry })
+    return
+  }
+  if (path === "/api/trading/journal/delete" && req.method === "POST") {
+    const { deleteEntry } = await import("./services/tradeJournal.mjs")
+    const id = String(body?.id ?? "")
+    if (!id) return writeJson(res, 400, { error: "id required" })
+    writeJson(res, 200, { ok: deleteEntry(id) })
+    return
+  }
+
   // -------------------------------------------------------------------
   // Strategy backtester — runs multi-model prediction over historical
   // windows and reports walk-forward hit rates, equity curve, drawdown.

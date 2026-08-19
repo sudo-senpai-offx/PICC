@@ -1,4 +1,5 @@
 import { useLocation } from "react-router-dom"
+import { NotificationCenter } from "@/components/NotificationCenter"
 
 const TITLES: Record<string, string> = {
   "/": "Command Center",
@@ -35,6 +36,7 @@ export function TopBar({
         <kbd className="topbar-kbd">Ctrl K</kbd>
       </button>
       <div className="topbar-actions">
+        <NotificationCenter />
         <button type="button" className="btn btn-sm btn-secondary" onClick={onOpenPalette}>
           ⚡ Actions
         </button>
