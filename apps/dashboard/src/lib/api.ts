@@ -1350,6 +1350,14 @@ export function saveBrowserPreference(site: string, prefs: BrowserPreference): P
   return post(`/browser/prefs`, { site, prefs })
 }
 
+export function getSuitePresets(): Promise<{ ok: boolean; presets: Record<string, unknown> }> {
+  return request(`/browser/suite-presets`)
+}
+
+export function saveSuitePreset(suiteId: string, settings: unknown): Promise<{ ok: boolean; suite: string; preset: unknown }> {
+  return post(`/browser/suite-presets`, { suite: suiteId, settings })
+}
+
 export function browserOpenSite(opts: { site: string; url?: string; headless?: boolean; profile?: string }): Promise<StudioStatus> {
   return post(`/browser/site`, opts)
 }

@@ -139,6 +139,44 @@ describe("Browser Studio — settings, permissions and per-source prefs", () => 
     expect(all.honeygain).toMatchObject({ profile: "honey", homepage: "https://dashboard.honeygain.com" })
   })
 
+  it("deep-merges overlaySettings including dockables and dockableLayout", async () => {
+    await m.saveBrowserPreference("testsite", {
+      overlaySettings: {
+        enabled: true,
+        opacity: 0.8,
+        dockables: { "price-ticker": true, "portfolio": false },
+        dockableLayout: { "price-ticker": { position: { x: 100, y: 200 }, opacity: 0.9 } }
+      }
+    })
+    const r2 = await m.saveBrowserPreference("testsite", {
+      overlaySettings: {
+        opacity: 0.5,
+        dockables: { "portfolio": true },
+        dockableLayout: { "price-ticker": { size: { width: 400, height: 300 } } }
+      }
+    })
+    expect(r2.prefs.overlaySettings.opacity).toBe(0.5)
+    expect(r2.prefs.overlaySettings.dockables["price-ticker"]).toBe(true)
+    expect(r2.prefs.overlaySettings.dockables["portfolio"]).toBe(true)
+    expect(r2.prefs.overlaySettings.dockableLayout["price-ticker"].position).toEqual({ x: 100, y: 200 })
+    expect(r2.prefs.overlaySettings.dockableLayout["price-ticker"].size).toEqual({ width: 400, height: 300 })
+  })
+
+  it("saves and retrieves suite default presets", async () => {
+    const r = await m.saveSuitePreset("trading", {
+      enabled: true,
+      opacity: 0.75,
+      dockables: { "price-ticker": true, "autopilot": false }
+    })
+    expect(r.ok).toBe(true)
+    expect(r.preset.opacity).toBe(0.75)
+    const presets = await m.getSuitePresets()
+    expect(presets.trading).toBeDefined()
+    expect(presets.trading.opacity).toBe(0.75)
+    expect(presets.trading.dockables["price-ticker"]).toBe(true)
+    expect(presets.trading.dockables["autopilot"]).toBe(false)
+  })
+
   it("exposes the CDP permission catalog", async () => {
     expect(m.PERMISSION_CATALOG.length).toBeGreaterThan(10)
     expect(m.PERMISSION_CATALOG.map((p) => p.name)).toContain("notifications")

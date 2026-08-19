@@ -9,12 +9,13 @@ describe("site suites", () => {
     }
   })
 
-  test("trading is the only overlay/hud suite today", () => {
-    expect(SUITES.trading.overlay).toBe(true)
+  test("all suites have overlay enabled, only trading has hud", () => {
+    for (const [category, suite] of Object.entries(SUITES)) {
+      expect(suite.overlay).toBe(true)
+    }
     expect(SUITES.trading.hud).toBe(true)
     for (const [category, suite] of Object.entries(SUITES)) {
       if (category === "trading") continue
-      expect(suite.overlay).toBe(false)
       expect(suite.hud).toBe(false)
     }
   })

@@ -21,6 +21,37 @@ async function serverFetch(path) {
   return null
 }
 
+// Sound settings
+const SOUND_KEY = "piccAlertSound"
+
+async function getSoundEnabled() {
+  try {
+    const data = await chrome.storage.local.get([SOUND_KEY])
+    return data[SOUND_KEY] !== false
+  } catch { return true }
+}
+
+async function setSoundEnabled(enabled) {
+  chrome.storage.local.set({ [SOUND_KEY]: enabled })
+}
+
+let _audioCtx = null
+function playSideAlert() {
+  try {
+    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+    const osc = _audioCtx.createOscillator()
+    const gain = _audioCtx.createGain()
+    osc.connect(gain)
+    gain.connect(_audioCtx.destination)
+    osc.frequency.value = 880
+    gain.gain.value = 0.15
+    osc.type = "square"
+    osc.start()
+    gain.gain.exponentialRampToValueAtTime(0.001, _audioCtx.currentTime + 0.3)
+    osc.stop(_audioCtx.currentTime + 0.3)
+  } catch { /* ignore */ }
+}
+
 // Tab switching
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
@@ -84,13 +115,23 @@ async function loadAlerts() {
   const data = await serverFetch("/trading/alerts")
   if (!data || !data.ok) { el.innerHTML = '<div class="empty">No alerts</div>'; return }
   const alerts = (data.alerts || []).filter((a) => a.status === "armed")
-  if (alerts.length === 0) { el.innerHTML = '<div class="empty">No active alerts</div>'; return }
-  el.innerHTML = alerts.slice(0, 10).map((a) => `
+  const soundOn = await getSoundEnabled()
+  const soundToggle = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:11px;color:#9aa0c0;">
+    <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+      <input type="checkbox" id="sound-toggle" ${soundOn ? "checked" : ""} style="width:12px;height:12px;" />
+      Alert sound
+    </label>
+  </div>`
+  if (alerts.length === 0) { el.innerHTML = soundToggle + '<div class="empty">No active alerts</div>'; return }
+  if (soundOn) playSideAlert()
+  el.innerHTML = soundToggle + alerts.slice(0, 10).map((a) => `
     <div class="metric">
       <span class="metric-label">${a.symbol} ${a.condition.replace(/_/g, " ")} ${a.value}</span>
       <span class="metric-value" style="color:#4ade80;font-size:10px;">ARMED</span>
     </div>
   `).join("")
+  const cb = document.getElementById("sound-toggle")
+  if (cb) cb.addEventListener("change", () => setSoundEnabled(cb.checked))
 }
 
 async function loadSessions() {

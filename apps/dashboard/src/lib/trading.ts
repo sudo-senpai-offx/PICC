@@ -1111,3 +1111,37 @@ export function getTradingSessions(): Promise<SessionInfo> {
 export function getAssetSession(symbol: string): Promise<{ ok: boolean; symbol: string; preferredSessions: { id: string; name: string; color: string }[]; isPreferredNow: boolean; currentSession: string[]; recommendation: string }> {
   return post("/trading/sessions/asset", { symbol })
 }
+
+export interface StressScenario {
+  name: string
+  portfolioImpact: number
+  assetImpacts: { symbol: string; weight: number; shock: number; impact: number }[]
+}
+
+export interface StressTestResult {
+  ok: boolean
+  scenarios: StressScenario[]
+  worstCase: StressScenario
+  bestCase: StressScenario
+  avgImpact: number
+}
+
+export function runStressTest(symbols: string[], weights?: number[]): Promise<StressTestResult> {
+  return post("/trading/stress-test", { symbols, weights })
+}
+
+export interface AlertHistoryEntry {
+  id: string
+  alertId: string
+  symbol: string
+  condition: string
+  value: number
+  price: number
+  message: string
+  ts: number
+}
+
+export function getAlertHistoryApi(limit = 50, symbol?: string): Promise<{ ok: boolean; history: AlertHistoryEntry[] }> {
+  const params = `limit=${limit}${symbol ? `&symbol=${symbol}` : ""}`
+  return request(`/trading/alerts/history?${params}`)
+}

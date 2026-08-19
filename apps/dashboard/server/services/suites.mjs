@@ -15,7 +15,6 @@ export const SUITES = {
     id: "trading",
     label: "Trading",
     icon: "📈",
-    // The trading suite injects the live decision HUD into the browsed page.
     overlay: true,
     hud: true,
     features: ["markets", "decisions", "autopilot", "ledger", "payouts"]
@@ -24,7 +23,7 @@ export const SUITES = {
     id: "bandwidth",
     label: "Bandwidth",
     icon: "🌐",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: ["automator", "connectors"]
   },
@@ -32,7 +31,7 @@ export const SUITES = {
     id: "depin",
     label: "DePIN",
     icon: "🛰️",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: []
   },
@@ -40,7 +39,7 @@ export const SUITES = {
     id: "nft",
     label: "NFT & Royalties",
     icon: "🎨",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: []
   },
@@ -48,7 +47,7 @@ export const SUITES = {
     id: "defi",
     label: "DeFi & Yield",
     icon: "💧",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: []
   },
@@ -56,7 +55,7 @@ export const SUITES = {
     id: "crypto",
     label: "Crypto & Staking",
     icon: "₿",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: []
   },
@@ -64,7 +63,7 @@ export const SUITES = {
     id: "p2p",
     label: "P2P Lending",
     icon: "🤝",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: []
   },
@@ -72,7 +71,7 @@ export const SUITES = {
     id: "agent",
     label: "AI Agent",
     icon: "🤖",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: []
   },
@@ -80,7 +79,7 @@ export const SUITES = {
     id: "other",
     label: "Site",
     icon: "🧭",
-    overlay: false,
+    overlay: true,
     hud: false,
     features: []
   }

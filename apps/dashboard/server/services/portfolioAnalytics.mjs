@@ -196,3 +196,48 @@ export async function computePortfolioAnalytics({ symbols, weights: inputWeights
     days
   }
 }
+
+// Stress test — simulate portfolio under shock scenarios
+export function stressTest(weights, assets, scenarios = null) {
+  const defaultScenarios = [
+    { name: "USD Crashes -5%", shocks: { USD: -0.05, EUR: 0.03, GBP: 0.03, JPY: 0.04, GOLD: 0.08, BTCUSD: 0.10, ETHUSD: 0.12 } },
+    { name: "Risk-Off Crash -10%", shocks: { AAPL: -0.10, MSFT: -0.10, GOOGL: -0.12, AMZN: -0.11, TSLA: -0.15, NVDA: -0.14, META: -0.10, BTCUSD: -0.20, ETHUSD: -0.22, GOLD: 0.05 } },
+    { name: "Rate Hike -200bp", shocks: { AAPL: -0.05, MSFT: -0.04, TSLA: -0.08, NVDA: -0.06, BTCUSD: -0.10, GOLD: -0.03, EURUSD: -0.02, GBPUSD: -0.02 } },
+    { name: "Inflation Spike", shocks: { GOLD: 0.12, OIL: 0.15, NATGAS: 0.20, AAPL: -0.03, TSLA: -0.05, EURUSD: -0.01 } },
+    { name: "Flash Crash -3%", shocks: { AAPL: -0.03, MSFT: -0.03, GOOGL: -0.03, AMZN: -0.03, TSLA: -0.05, BTCUSD: -0.08, ETHUSD: -0.10, GOLD: 0.01, EURUSD: -0.005 } },
+    { name: "Crypto Winter -30%", shocks: { BTCUSD: -0.30, ETHUSD: -0.35, SOLUSD: -0.40, ADAUSD: -0.35 } },
+    { name: "Geopolitical Shock", shocks: { GOLD: 0.10, OIL: 0.20, NATGAS: 0.15, EURUSD: -0.03, GBPUSD: -0.04, AAPL: -0.04, TSLA: -0.06 } }
+  ]
+
+  const sc = scenarios || defaultScenarios
+  const results = []
+
+  for (const scenario of sc) {
+    let portfolioImpact = 0
+    const assetImpacts = []
+
+    for (let i = 0; i < assets.length; i++) {
+      const asset = assets[i]
+      const shock = scenario.shocks[asset.symbol] ?? 0
+      const impact = weights[i] * shock
+      portfolioImpact += impact
+      assetImpacts.push({ symbol: asset.symbol, weight: Math.round(weights[i] * 10000) / 100, shock: Math.round(shock * 10000) / 100, impact: Math.round(impact * 10000) / 100 })
+    }
+
+    results.push({
+      name: scenario.name,
+      portfolioImpact: Math.round(portfolioImpact * 10000) / 100,
+      assetImpacts
+    })
+  }
+
+  // Sort by worst impact
+  results.sort((a, b) => a.portfolioImpact - b.portfolioImpact)
+
+  return {
+    scenarios: results,
+    worstCase: results[0],
+    bestCase: results[results.length - 1],
+    avgImpact: Math.round(results.reduce((s, r) => s + r.portfolioImpact, 0) / results.length * 100) / 100
+  }
+}

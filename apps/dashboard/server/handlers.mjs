@@ -144,6 +144,8 @@ import {
   removeSitePermissions,
   getBrowserPreferences,
   saveBrowserPreference,
+  getSuitePresets,
+  saveSuitePreset,
   PERMISSION_CATALOG,
   studioAutomate,
   startStudioAutomation,
@@ -1555,6 +1557,13 @@ export async function handleApi(req, res, url) {
     writeJson(res, 200, { ok: true, alerts: listAlerts(), stats: alertStats() })
     return
   }
+  if (path === "/api/trading/alerts/history" && req.method === "GET") {
+    const { getAlertHistory } = await import("./services/alertEngine.mjs")
+    const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit")) || 50, 1), 200)
+    const symbol = parsed.searchParams.get("symbol") || null
+    writeJson(res, 200, { ok: true, history: getAlertHistory({ limit, symbol }) })
+    return
+  }
   if (path === "/api/trading/alerts" && req.method === "POST") {
     const { createAlert } = await import("./services/alertEngine.mjs")
     const { symbol, condition, value, message, recurring, expiresAt } = body ?? {}
@@ -1605,6 +1614,23 @@ export async function handleApi(req, res, url) {
       const { computePortfolioAnalytics } = await import("./services/portfolioAnalytics.mjs")
       const result = await computePortfolioAnalytics({ symbols, weights, days })
       if (!result) return writeJson(res, 404, { error: "No data found for any of the provided symbols" })
+      writeJson(res, 200, { ok: true, ...result })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // ── Portfolio Stress Test ────────────────────────────────────────────
+  if (path === "/api/trading/stress-test" && req.method === "POST") {
+    const symbols = Array.isArray(body?.symbols) ? body.symbols : []
+    const weights = Array.isArray(body?.weights) ? body.weights : []
+    if (symbols.length < 1) return writeJson(res, 400, { error: "At least 1 symbol required" })
+    try {
+      const { computePortfolioAnalytics, stressTest } = await import("./services/portfolioAnalytics.mjs")
+      const portfolio = await computePortfolioAnalytics({ symbols, weights, days: 90 })
+      if (!portfolio) return writeJson(res, 404, { error: "No data" })
+      const result = stressTest(portfolio.weights, portfolio.assets)
       writeJson(res, 200, { ok: true, ...result })
     } catch (err) {
       writeJson(res, 500, { ok: false, error: err.message })
@@ -2845,6 +2871,22 @@ const BROWSER_ROUTES = {
     if (req.method === "POST") {
       try {
         writeJson(res, 200, await saveBrowserPreference(parsed.body?.site, parsed.body?.prefs ?? {}))
+      } catch (err) {
+        writeJson(res, 400, { ok: false, error: err.message })
+      }
+      return true
+    }
+    return false
+  },
+  "/api/browser/suite-presets": async (req, res, parsed) => {
+    if (!(await requireAuth(req, res))) return true
+    if (req.method === "GET") {
+      writeJson(res, 200, { ok: true, presets: await getSuitePresets() })
+      return true
+    }
+    if (req.method === "POST") {
+      try {
+        writeJson(res, 200, await saveSuitePreset(parsed.body?.suite, parsed.body?.settings ?? {}))
       } catch (err) {
         writeJson(res, 400, { ok: false, error: err.message })
       }

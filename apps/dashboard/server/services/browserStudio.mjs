@@ -387,17 +387,77 @@ export async function saveBrowserPreference(site, prefs = {}) {
   if (!key) throw new Error("site is required")
   const all = await readPrefs()
   const existing = all[key] || {}
+
+  // Deep-merge overlaySettings (dockables, dockableLayout, features are nested)
+  let mergedOverlaySettings = existing.overlaySettings
+  if (prefs.overlaySettings) {
+    const ex = existing.overlaySettings || {}
+    const nw = prefs.overlaySettings
+    // Deep-merge dockableLayout per-dockable
+    const exLayout = ex.dockableLayout || {}
+    const nwLayout = nw.dockableLayout || {}
+    const mergedLayout = {}
+    const allDockIds = new Set([...Object.keys(exLayout), ...Object.keys(nwLayout)])
+    for (const did of allDockIds) {
+      mergedLayout[did] = { ...(exLayout[did] || {}), ...(nwLayout[did] || {}) }
+    }
+    mergedOverlaySettings = {
+      ...ex,
+      ...nw,
+      position: { ...(ex.position || {}), ...(nw.position || {}) },
+      size: { ...(ex.size || {}), ...(nw.size || {}) },
+      features: { ...(ex.features || {}), ...(nw.features || {}) },
+      dockables: { ...(ex.dockables || {}), ...(nw.dockables || {}) },
+      dockableLayout: mergedLayout,
+    }
+  }
+
   all[key] = {
     profile: String(prefs.profile || "").trim() || existing.profile,
     headless: typeof prefs.headless === "boolean" ? prefs.headless : existing.headless,
     homepage: String(prefs.homepage || "").trim() || existing.homepage,
     overlay: typeof prefs.overlay === "boolean" ? prefs.overlay : existing.overlay,
-    overlaySettings: prefs.overlaySettings
-      ? { ...(existing.overlaySettings || {}), ...prefs.overlaySettings }
-      : existing.overlaySettings
+    overlaySettings: mergedOverlaySettings
   }
   await writePrefs(all)
   return { ok: true, site: key, prefs: all[key] }
+}
+
+// ---------------------------------------------------------------------
+// Suite default presets — per-suite-type default overlay settings
+// Stored under the "suites" key in browser-preferences.json
+// ---------------------------------------------------------------------
+
+export async function getSuitePresets() {
+  const all = await readPrefs()
+  return all.suites || {}
+}
+
+export async function saveSuitePreset(suiteId, overlaySettings) {
+  const key = String(suiteId || "").trim().toLowerCase()
+  if (!key) throw new Error("suiteId is required")
+  const all = await readPrefs()
+  if (!all.suites) all.suites = {}
+  const existing = all.suites[key] || {}
+  // Deep-merge dockableLayout per-dockable
+  const exLayout = existing.dockableLayout || {}
+  const nwLayout = overlaySettings.dockableLayout || {}
+  const mergedLayout = {}
+  const allDockIds = new Set([...Object.keys(exLayout), ...Object.keys(nwLayout)])
+  for (const did of allDockIds) {
+    mergedLayout[did] = { ...(exLayout[did] || {}), ...(nwLayout[did] || {}) }
+  }
+  all.suites[key] = {
+    ...existing,
+    ...overlaySettings,
+    position: { ...(existing.position || {}), ...(overlaySettings.position || {}) },
+    size: { ...(existing.size || {}), ...(overlaySettings.size || {}) },
+    features: { ...(existing.features || {}), ...(overlaySettings.features || {}) },
+    dockables: { ...(existing.dockables || {}), ...(overlaySettings.dockables || {}) },
+    dockableLayout: mergedLayout,
+  }
+  await writePrefs(all)
+  return { ok: true, suite: key, preset: all.suites[key] }
 }
 
 // ---------------------------------------------------------------------

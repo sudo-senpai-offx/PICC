@@ -9,6 +9,8 @@ const DATA_DIR = join(__dirname, "..", "data")
 const ALERTS_FILE = join(DATA_DIR, "alerts.json")
 
 let alerts = []
+let alertHistory = []
+const MAX_HISTORY = 500
 let priceCache = new Map() // symbol -> { price, prevPrice, ts }
 let listeners = new Set()
 let evalInterval = null
@@ -176,6 +178,8 @@ function evaluateAlert(alert) {
     for (const cb of listeners) {
       try { cb(notification) } catch { /* ignore */ }
     }
+    alertHistory.unshift(notification)
+    if (alertHistory.length > MAX_HISTORY) alertHistory.length = MAX_HISTORY
     return notification
   }
   return null
@@ -212,3 +216,28 @@ export function alertStats() {
   const disabled = alerts.filter((a) => a.status === "disabled").length
   return { total: alerts.length, armed, triggered, expired, disabled, symbols: [...new Set(alerts.map((a) => a.symbol))].length }
 }
+
+export function getAlertHistory({ limit = 50, symbol = null } = {}) {
+  let result = alertHistory
+  if (symbol) result = result.filter((n) => n.symbol === String(symbol).toUpperCase())
+  return result.slice(0, limit)
+}
+
+// Load history from triggered alerts
+function loadHistory() {
+  for (const a of alerts) {
+    if (a.status === "triggered" && a.triggeredAt) {
+      alertHistory.unshift({
+        id: `hist_${a.id}_${a.triggeredAt}`,
+        alertId: a.id,
+        symbol: a.symbol,
+        condition: a.condition,
+        value: a.value,
+        price: a.lastPrice ?? 0,
+        message: a.message || `${a.symbol} alert triggered`,
+        ts: a.triggeredAt
+      })
+    }
+  }
+}
+loadHistory()

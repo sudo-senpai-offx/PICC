@@ -11,6 +11,124 @@
   let serverOnline = null
   let activeDockables = []
   let currentSite = null
+  let currentSettings = {}
+
+  // ── State maps for dockable persistence ──
+  const dockablePositions = {}
+  const dockableSizes = {}
+  const dockableOpacities = {}
+
+  function saveDockableLayout() {
+    const layout = {}
+    for (const d of activeDockables) {
+      layout[d.id] = {
+        position: dockablePositions[d.id] || null,
+        size: dockableSizes[d.id] || null,
+        opacity: dockableOpacities[d.id] ?? null
+      }
+    }
+    // Save via server
+    try {
+      const data = { dockableLayout: layout }
+      chrome.runtime.sendMessage({ action: "save-prefs", data })
+    } catch {}
+  }
+
+  function restoreDockableLayout(dockEl, id) {
+    const layout = currentSettings?.dockableLayout?.[id]
+    if (!layout) return
+    if (layout.position) {
+      dockEl.style.left = layout.position.x + "px"
+      dockEl.style.top = layout.position.y + "px"
+      dockEl.style.right = "auto"
+      dockEl.style.bottom = "auto"
+      dockablePositions[id] = layout.position
+    }
+    if (layout.size) {
+      dockEl.style.width = layout.size.width + "px"
+      dockEl.style.maxHeight = layout.size.height + "px"
+      dockableSizes[id] = layout.size
+    }
+    if (layout.opacity != null) {
+      dockEl.style.opacity = String(layout.opacity)
+      dockableOpacities[id] = layout.opacity
+    }
+  }
+
+  // Default dockable presets per suite type
+  const SUITE_DOCKABLE_PRESETS = {
+    trading: [
+      { id: "price-ticker", title: "Price Ticker", icon: "📈", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
+      { id: "portfolio", title: "Portfolio", icon: "📊", defaultPos: "top-left", defaultSize: { width: 300, height: 180 }, defaultCollapsed: true },
+      { id: "ai-signals", title: "AI Signals", icon: "🧠", defaultPos: "right", defaultSize: { width: 260, height: 260 }, defaultCollapsed: true },
+      { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", defaultPos: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultCollapsed: true },
+      { id: "autopilot", title: "Autopilot", icon: "🤖", defaultPos: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false }
+    ],
+    bandwidth: [
+      { id: "speed", title: "Speed Monitor", icon: "📡", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
+      { id: "connectors", title: "Connectors", icon: "🔌", defaultPos: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true }
+    ],
+    affiliate: [
+      { id: "tracker", title: "Affiliate Tracker", icon: "💰", defaultPos: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
+      { id: "optimizer", title: "Link Optimizer", icon: "🔗", defaultPos: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true }
+    ],
+    content: [
+      { id: "analytics", title: "Content Analytics", icon: "📊", defaultPos: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
+      { id: "scheduler", title: "Post Scheduler", icon: "📅", defaultPos: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true }
+    ],
+    dividend: [
+      { id: "portfolio", title: "Dividend Portfolio", icon: "💎", defaultPos: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
+      { id: "calendar", title: "Ex-Date Calendar", icon: "📅", defaultPos: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true }
+    ],
+    defi: [
+      { id: "yield", title: "Yield Tracker", icon: "🌱", defaultPos: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
+      { id: "gas", title: "Gas Tracker", icon: "⛽", defaultPos: "bottom-right", defaultSize: { width: 280, height: 160 }, defaultCollapsed: true }
+    ],
+    generic: [
+      { id: "general", title: "PICC Panel", icon: "🧠", defaultPos: "bottom-right", defaultSize: { width: 280, height: 160 }, defaultCollapsed: false }
+    ]
+  }
+
+  function getDefaultSettings(suite) {
+    const dockables = (SUITE_DOCKABLE_PRESETS[suite] || SUITE_DOCKABLE_PRESETS.generic).map((d) => d.id)
+    return {
+      enabled: true,
+      position: { x: 16, y: 16 },
+      size: { width: 340, height: 400 },
+      opacity: 0.92,
+      collapsed: false,
+      dockables: Object.fromEntries(dockables.map((id) => [id, true])),
+      features: { assistance: true, decisionSupport: true, automation: false, autopilot: false, analysis: true, ai: true },
+      dockableLayout: {}
+    }
+  }
+
+  function addSection(panel, title, buildFn) {
+    const sec = document.createElement("fieldset")
+    sec.style.cssText = "border:1px solid #2a2a4a;border-radius:4px;padding:6px 8px;margin-bottom:6px;"
+    const legend = document.createElement("legend")
+    legend.style.cssText = "font-size:10px;color:#6c63ff;padding:0 4px;"
+    legend.textContent = title
+    sec.appendChild(legend)
+    buildFn(sec)
+    panel.appendChild(sec)
+  }
+
+  function addRow(parent, label, value, onChange) {
+    const row = document.createElement("div")
+    row.style.cssText = "display:flex;align-items:center;gap:6px;margin:3px 0;"
+    const lbl = document.createElement("span")
+    lbl.style.cssText = "font-size:10px;color:#9aa0c0;min-width:20px;"
+    lbl.textContent = label
+    const input = document.createElement("input")
+    input.type = "number"
+    input.value = String(value)
+    input.style.cssText = "flex:1;padding:2px 6px;font-size:10px;background:#1a1a2e;border:1px solid #6c63ff40;color:#eef0ff;border-radius:3px;"
+    input.addEventListener("change", () => onChange(input.value))
+    row.appendChild(lbl)
+    row.appendChild(input)
+    parent.appendChild(row)
+  }
 
   // ── Shadow DOM isolation ────────────────────────────────────────────────────
   const shadowHost = document.createElement("div")
@@ -164,6 +282,34 @@
   // Expose metrics getter for PICC web app (accessible only to extension content scripts, not page JS)
   // SECURITY: window-level getter removed — page scripts must not access internal extension data
 
+  // ── Sound alerts ──────────────────────────────────────────────────────
+  let audioCtx = null
+  function playAlertSound(type = "info") {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+      const osc = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      osc.connect(gain)
+      gain.connect(audioCtx.destination)
+      if (type === "danger") {
+        osc.frequency.value = 880
+        gain.gain.value = 0.15
+        osc.type = "square"
+      } else if (type === "success") {
+        osc.frequency.value = 523
+        gain.gain.value = 0.12
+        osc.type = "sine"
+      } else {
+        osc.frequency.value = 440
+        gain.gain.value = 0.1
+        osc.type = "sine"
+      }
+      osc.start()
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3)
+      osc.stop(audioCtx.currentTime + 0.3)
+    } catch { /* ignore */ }
+  }
+
   // ── In-page toast notification ──────────────────────────────────────────────
   function showToast(title, message, type = "info") {
     const toast = document.createElement("div")
@@ -309,42 +455,149 @@
       }
     }
 
-    // Drag
-    let dragging = false, sx = 0, sy = 0
-    titleBar.addEventListener("mousedown", (e) => {
-      if (e.target.tagName === "BUTTON") return
-      dragging = true; sx = e.clientX; sy = e.clientY
-      const rect = dock.getBoundingClientRect()
-      e.preventDefault()
-      const onMove = (ev) => {
-        if (!dragging) return
-        dock.style.left = (rect.left + ev.clientX - sx) + "px"
-        dock.style.top = (rect.top + ev.clientY - sy) + "px"
+      // ── Drag with edge-docking + position persistence ──
+      const DOCK_THRESHOLD = 24
+      const EDGE_OFFSET = 4
+      let isDragging = false
+      let dragStartX, dragStartY, dragElStartX, dragElStartY
+
+      titleBar.addEventListener("mousedown", (e) => {
+        if (e.target.closest("[data-picc-action]")) return
+        e.preventDefault()
+        isDragging = true
+        dragStartX = e.clientX
+        dragStartY = e.clientY
+        const rect = dock.getBoundingClientRect()
+        dragElStartX = rect.left
+        dragElStartY = rect.top
+        dock.style.transition = "none"
+        const onMove = (ev) => {
+          if (!isDragging) return
+          const dx = ev.clientX - dragStartX
+          const dy = ev.clientY - dragStartY
+          let nx = dragElStartX + dx
+          let ny = dragElStartY + dy
+          // Edge docking
+          if (nx < DOCK_THRESHOLD) nx = EDGE_OFFSET
+          if (ny < DOCK_THRESHOLD) ny = EDGE_OFFSET
+          if (nx + dock.offsetWidth > window.innerWidth - DOCK_THRESHOLD) nx = window.innerWidth - dock.offsetWidth - EDGE_OFFSET
+          if (ny + dock.offsetHeight > window.innerHeight - DOCK_THRESHOLD) ny = window.innerHeight - dock.offsetHeight - EDGE_OFFSET
+          dock.style.left = nx + "px"
+          dock.style.top = ny + "px"
+          dock.style.right = "auto"
+          dock.style.bottom = "auto"
+        }
+        const onUp = () => {
+          isDragging = false
+          dock.style.transition = ""
+          document.removeEventListener("mousemove", onMove)
+          document.removeEventListener("mouseup", onUp)
+          // Persist position
+          const r = dock.getBoundingClientRect()
+          dockablePositions[id] = { x: Math.round(r.left), y: Math.round(r.top) }
+          saveDockableLayout()
+        }
+        document.addEventListener("mousemove", onMove)
+        document.addEventListener("mouseup", onUp)
+      })
+
+      // Touch support for drag
+      titleBar.addEventListener("touchstart", (e) => {
+        if (e.target.closest("[data-picc-action]")) return
+        const touch = e.touches[0]
+        isDragging = true
+        dragStartX = touch.clientX
+        dragStartY = touch.clientY
+        const rect = dock.getBoundingClientRect()
+        dragElStartX = rect.left
+        dragElStartY = rect.top
+        dock.style.transition = "none"
+      }, { passive: true })
+
+      titleBar.addEventListener("touchmove", (e) => {
+        if (!isDragging) return
+        e.preventDefault()
+        const touch = e.touches[0]
+        const dx = touch.clientX - dragStartX
+        const dy = touch.clientY - dragStartY
+        let nx = dragElStartX + dx
+        let ny = dragElStartY + dy
+        if (nx < DOCK_THRESHOLD) nx = EDGE_OFFSET
+        if (ny < DOCK_THRESHOLD) ny = EDGE_OFFSET
+        if (nx + dock.offsetWidth > window.innerWidth - DOCK_THRESHOLD) nx = window.innerWidth - dock.offsetWidth - EDGE_OFFSET
+        if (ny + dock.offsetHeight > window.innerHeight - DOCK_THRESHOLD) ny = window.innerHeight - dock.offsetHeight - EDGE_OFFSET
+        dock.style.left = nx + "px"
+        dock.style.top = ny + "px"
         dock.style.right = "auto"
         dock.style.bottom = "auto"
-        dock.style.transform = "none"
-      }
-      const onUp = () => { dragging = false; document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp) }
-      document.addEventListener("mousemove", onMove)
-      document.addEventListener("mouseup", onUp)
-    })
+      }, { passive: false })
 
-    // Resize handle
-    const resizeHandle = document.createElement("div")
-    resizeHandle.style.cssText = "position:absolute;bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize;opacity:.3;"
-    resizeHandle.addEventListener("mousedown", (e) => {
-      e.stopPropagation()
-      const startX = e.clientX, startY = e.clientY
-      const startW = dock.offsetWidth, startH = dock.offsetHeight
-      const onMove = (ev) => {
-        dock.style.width = Math.max(150, startW + ev.clientX - startX) + "px"
-        dock.style.maxHeight = Math.max(80, startH + ev.clientY - startY) + "px"
+      titleBar.addEventListener("touchend", () => {
+        isDragging = false
+        dock.style.transition = ""
+        const r = dock.getBoundingClientRect()
+        dockablePositions[id] = { x: Math.round(r.left), y: Math.round(r.top) }
+        saveDockableLayout()
+      })
+
+      // ── Resize handle ──
+      const handle = shadowRoot.getElementById(`__PICC_RESIZE_${id}__`)
+      const resizeHandle = document.createElement("div")
+      resizeHandle.id = `__PICC_RESIZE_${id}__`
+      resizeHandle.style.cssText = "position:absolute;bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize;opacity:.3;"
+      if (handle) handle.remove()
+      {
+        let isResizing = false
+        let rsx, rsy, rw, rh
+        resizeHandle.addEventListener("mousedown", (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          isResizing = true
+          rsx = e.clientX; rsy = e.clientY
+          rw = dock.offsetWidth; rh = dock.offsetHeight
+          dock.style.transition = "none"
+          const onMove = (ev) => {
+            if (!isResizing) return
+            const nw = Math.max(200, rw + ev.clientX - rsx)
+            const nh = Math.max(100, rh + ev.clientY - rsy)
+            dock.style.width = nw + "px"
+            dock.style.maxHeight = nh + "px"
+          }
+          const onUp = () => {
+            isResizing = false
+            dock.style.transition = ""
+            document.removeEventListener("mousemove", onMove)
+            document.removeEventListener("mouseup", onUp)
+            const r = dock.getBoundingClientRect()
+            dockableSizes[id] = { width: Math.round(r.width), height: Math.round(r.height) }
+            saveDockableLayout()
+          }
+          document.addEventListener("mousemove", onMove)
+          document.addEventListener("mouseup", onUp)
+        })
       }
-      const onUp = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp) }
-      document.addEventListener("mousemove", onMove)
-      document.addEventListener("mouseup", onUp)
-    })
-    dock.appendChild(resizeHandle)
+      dock.appendChild(resizeHandle)
+
+      // ── Opacity slider ──
+      const opacityRow = document.createElement("div")
+      opacityRow.style.cssText = "display:flex;align-items:center;gap:4px;padding:2px 8px;font-size:9px;color:#9aa0c0;"
+      const opacityLabel = document.createElement("span")
+      opacityLabel.textContent = "Opacity"
+      const opacitySlider = document.createElement("input")
+      opacitySlider.type = "range"
+      opacitySlider.min = "20"
+      opacitySlider.max = "100"
+      opacitySlider.value = String(Math.round((dockableOpacities[id] ?? 0.92) * 100))
+      opacitySlider.style.cssText = "flex:1;height:3px;cursor:pointer;"
+      opacitySlider.addEventListener("input", () => {
+        const val = Number(opacitySlider.value) / 100
+        dock.style.opacity = String(val)
+        dockableOpacities[id] = val
+      })
+      opacitySlider.addEventListener("change", () => saveDockableLayout())
+      opacityRow.appendChild(opacityLabel)
+      opacityRow.appendChild(opacitySlider)
+      dock.insertBefore(opacityRow, dock.children[1]) // after title bar, before content
 
     return dock
   }
@@ -548,22 +801,36 @@
 
   // ── Create dockables with live-rendered content ────────────────────────────
   function createTradingDockables(siteInfo) {
-    const dockables = []
-
-    function mkDock(id, title, icon, position, w, h, collapsed) {
+    const presets = SUITE_DOCKABLE_PRESETS.trading
+    const renderers = {
+      "price-ticker": renderPriceTicker,
+      "portfolio": renderPortfolio,
+      "ai-signals": renderAISignals,
+      "risk-mgr": renderRiskManager,
+      "autopilot": renderAutopilot
+    }
+    const dockables = presets.map((preset) => {
       const body = document.createElement("div")
       body.setAttribute("data-picc-body", "")
       body.style.cssText = "padding:6px 8px;font-size:11px;color:#eef0ff;min-height:30px;"
       body.innerHTML = '<div style="color:#a5a0ff">Loading\u2026</div>'
-      const dock = createDockable({ id, title, icon, content: body, position, width: w, height: h, collapsed, features: { decisionSupport: true, analysis: true }, suite: "trading" })
+      const dock = createDockable({
+        id: preset.id,
+        title: preset.title,
+        icon: preset.icon,
+        content: body,
+        position: preset.defaultPos,
+        width: preset.defaultSize.width,
+        height: preset.defaultSize.height,
+        collapsed: preset.defaultCollapsed,
+        features: { decisionSupport: true, analysis: true },
+        suite: "trading"
+      })
+      shadowRoot.appendChild(dock)
+      dock.style.display = "none"
+      restoreDockableLayout(dock, preset.id)
       return dock
-    }
-
-    dockables.push(mkDock("price-ticker", "Price Ticker", "\uD83D\uDCC8", "top-right", 280, 200, false))
-    dockables.push(mkDock("portfolio", "Portfolio", "\uD83D\uDCC0", "top-left", 300, 180, true))
-    dockables.push(mkDock("ai-signals", "AI Signals", "\uD83E\uDDE0", "right", 260, 260, true))
-    dockables.push(mkDock("risk-mgr", "Risk Manager", "\u26A0\uFE0F", "bottom-right", 280, 140, true))
-    dockables.push(mkDock("autopilot", "Autopilot", "\uD83E\uDD16", "bottom-left", 260, 180, false))
+    })
 
     startTradingPoll()
     return dockables
@@ -571,12 +838,25 @@
 
   // ── Generic suite dockables ────────────────────────────────────────────────
   function createGenericDockables(siteInfo) {
-    return [createDockable({
-      id: "general", title: siteInfo?.label || "Site", icon: "\uD83D\uDDA5\uFE0F",
-      content: `PICC active on ${siteInfo?.label || window.location.hostname}`,
-      position: "bottom-right", width: 280, height: 160, collapsed: false,
-      features: { assistance: true }, suite: siteInfo?.suite
-    })]
+    const presets = SUITE_DOCKABLE_PRESETS[siteInfo?.suite] || SUITE_DOCKABLE_PRESETS.generic
+    return presets.map((preset) => {
+      const dock = createDockable({
+        id: preset.id,
+        title: preset.title,
+        icon: preset.icon,
+        content: `PICC active on ${siteInfo?.label || window.location.hostname}`,
+        position: preset.defaultPos,
+        width: preset.defaultSize.width,
+        height: preset.defaultSize.height,
+        collapsed: preset.defaultCollapsed,
+        features: { assistance: true },
+        suite: siteInfo?.suite
+      })
+      shadowRoot.appendChild(dock)
+      dock.style.display = "none"
+      restoreDockableLayout(dock, preset.id)
+      return dock
+    })
   }
 
   // ── Main overlay creation ──────────────────────────────────────────────────
@@ -596,10 +876,28 @@
     shadowRoot.appendChild(el)
 
     const cfg = overlaySettings || {}
-    const posX = cfg.position?.x ?? 16
-    const posY = cfg.position?.y ?? 16
-    const opa = cfg.opacity ?? 0.92
-    const isCollapsed = cfg.collapsed !== false
+    currentSettings = { ...getDefaultSettings(siteInfo?.suite), ...cfg }
+    const posX = currentSettings.position.x
+    const posY = currentSettings.position.y
+    const opa = currentSettings.opacity
+
+    function applyOverlayPosition() {
+      el.style.left = currentSettings.position.x + "px"
+      el.style.bottom = "auto"
+      el.style.top = currentSettings.position.y + "px"
+    }
+
+    function applySettings(settings) {
+      applyOverlayPosition()
+      el.style.background = `rgba(20,20,48,${settings.opacity})`
+      for (const d of activeDockables) {
+        const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
+        if (dockEl) {
+          dockEl.style.display = settings.dockables?.[d.id] !== false ? "" : "none"
+          dockEl.style.opacity = String(settings.opacity)
+        }
+      }
+    }
 
     el.style.cssText =
       `position:fixed;bottom:${posY}px;left:${posX}px;z-index:2147483647;width:auto;max-height:none;overflow:visible;` +
@@ -633,21 +931,23 @@
     const btnRow = document.createElement("span")
     btnRow.style.cssText = "display:flex;gap:2px;align-items:center;"
 
-    // Expand button (shows dockables)
-    const expandBtn = document.createElement("button")
-    expandBtn.textContent = "\u25B8"
-    expandBtn.title = "Show suite dockables"
-    expandBtn.style.cssText = "background:none;border:none;color:#eef0ff;cursor:pointer;font-size:13px;padding:2px 5px;border-radius:4px;"
-    let dockablesVisible = false
-    expandBtn.addEventListener("click", (e) => {
+    // Toggle overlay button
+    const toggleBtn = document.createElement("button")
+    toggleBtn.textContent = "👁"
+    toggleBtn.title = "Toggle overlay dockables"
+    toggleBtn.dataset.piccAction = "toggle-dockables"
+    toggleBtn.style.cssText = "background:none;border:none;color:#eef0ff;cursor:pointer;font-size:13px;padding:2px 5px;border-radius:4px;"
+    toggleBtn.addEventListener("click", (e) => {
       e.stopPropagation()
-      dockablesVisible = !dockablesVisible
-      expandBtn.textContent = dockablesVisible ? "\u25BE" : "\u25B8"
-      expandBtn.title = dockablesVisible ? "Hide suite dockables" : "Show suite dockables"
+      const allHidden = activeDockables.every((d) => {
+        const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
+        return dockEl && dockEl.style.display === "none"
+      })
       activeDockables.forEach((d) => {
         const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
-        if (dockEl) dockEl.style.display = dockablesVisible ? "" : "none"
+        if (dockEl) dockEl.style.display = allHidden ? "" : "none"
       })
+      toggleBtn.textContent = allHidden ? "👁" : "👁‍🗨"
     })
 
     // Settings button
@@ -657,9 +957,89 @@
     settingsBtn.style.cssText = "background:none;border:none;color:#eef0ff;cursor:pointer;font-size:13px;padding:2px 5px;border-radius:4px;"
     settingsBtn.addEventListener("click", (e) => {
       e.stopPropagation()
-      let panel = el.querySelector("[data-picc-settings]")
-      if (panel) { panel.remove(); return }
-      panel = createSettingsPanel(el, cfg, siteInfo)
+      const existing = shadowRoot.getElementById("__PICC_SETTINGS__")
+      if (existing) { existing.remove(); return }
+
+      const panel = document.createElement("div")
+      panel.id = "__PICC_SETTINGS__"
+      panel.style.cssText = "position:absolute;bottom:100%;right:0;width:300px;max-height:500px;overflow-y:auto;background:#0d0d1a;border:1px solid #2a2a4a;border-radius:8px;padding:12px;margin-bottom:8px;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,0.5);"
+
+      // Title
+      const title = document.createElement("div")
+      title.style.cssText = "font-size:12px;font-weight:700;color:#6c63ff;margin-bottom:8px;"
+      title.textContent = "Overlay Settings"
+      panel.appendChild(title)
+
+      // Position
+      addSection(panel, "Position", (sec) => {
+        addRow(sec, "X", currentSettings.position.x, (v) => { currentSettings.position.x = Number(v); applyOverlayPosition() })
+        addRow(sec, "Y", currentSettings.position.y, (v) => { currentSettings.position.y = Number(v); applyOverlayPosition() })
+      })
+
+      // Global Opacity
+      addSection(panel, "Opacity", (sec) => {
+        const slider = document.createElement("input")
+        slider.type = "range"; slider.min = "20"; slider.max = "100"
+        slider.value = String(Math.round(currentSettings.opacity * 100))
+        slider.style.cssText = "width:100%;"
+        slider.addEventListener("input", () => {
+          currentSettings.opacity = Number(slider.value) / 100
+          shadowRoot.querySelectorAll("[id^=__PICC_DOCK_]").forEach((d) => d.style.opacity = String(currentSettings.opacity))
+        })
+        sec.appendChild(slider)
+      })
+
+      // Per-dockable toggles
+      addSection(panel, "Dockables", (sec) => {
+        const dockConfig = SUITE_DOCKABLE_PRESETS[currentSite?.suite] || []
+        dockConfig.forEach((d) => {
+          const row = document.createElement("label")
+          row.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;cursor:pointer;"
+          const cb = document.createElement("input")
+          cb.type = "checkbox"
+          cb.checked = currentSettings.dockables?.[d.id] !== false
+          cb.addEventListener("change", () => {
+            if (!currentSettings.dockables) currentSettings.dockables = {}
+            currentSettings.dockables[d.id] = cb.checked
+            const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
+            if (dockEl) dockEl.style.display = cb.checked ? "" : "none"
+          })
+          row.appendChild(cb)
+          row.appendChild(document.createTextNode(`${d.icon} ${d.title}`))
+          sec.appendChild(row)
+        })
+      })
+
+      // Feature toggles
+      addSection(panel, "Features", (sec) => {
+        Object.entries(currentSettings.features || {}).forEach(([key, val]) => {
+          const row = document.createElement("label")
+          row.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;cursor:pointer;"
+          const cb = document.createElement("input")
+          cb.type = "checkbox"
+          cb.checked = val
+          cb.addEventListener("change", () => { currentSettings.features[key] = cb.checked })
+          row.appendChild(cb)
+          row.appendChild(document.createTextNode(key.replace(/([A-Z])/g, " $1").trim()))
+          sec.appendChild(row)
+        })
+      })
+
+      // Save buttons
+      const btnRow = document.createElement("div")
+      btnRow.style.cssText = "display:flex;gap:6px;margin-top:8px;"
+      const saveBtn = document.createElement("button")
+      saveBtn.textContent = "Save"
+      saveBtn.style.cssText = "flex:1;padding:4px 8px;font-size:10px;background:#6c63ff30;border:1px solid #6c63ff40;color:#a5a0ff;border-radius:4px;cursor:pointer;"
+      saveBtn.addEventListener("click", () => { savePrefsForSite(currentSite?.id, { overlaySettings: currentSettings }) })
+      const resetBtn = document.createElement("button")
+      resetBtn.textContent = "Reset"
+      resetBtn.style.cssText = "flex:1;padding:4px 8px;font-size:10px;background:#ff6b6b20;border:1px solid #ff6b6b40;color:#ff6b6b;border-radius:4px;cursor:pointer;"
+      resetBtn.addEventListener("click", () => { currentSettings = getDefaultSettings(currentSite?.suite); applySettings(currentSettings) })
+      btnRow.appendChild(saveBtn)
+      btnRow.appendChild(resetBtn)
+      panel.appendChild(btnRow)
+
       el.appendChild(panel)
     })
 
@@ -678,7 +1058,7 @@
       if (siteInfo?.id) savePrefsForSite(siteInfo.id, { overlay: false })
     })
 
-    btnRow.appendChild(expandBtn)
+    btnRow.appendChild(toggleBtn)
     btnRow.appendChild(settingsBtn)
     btnRow.appendChild(closeBtn)
     header.replaceChildren(brand, serverStatus, btnRow)
@@ -712,10 +1092,6 @@
     activeDockables = docks.map((d) => {
       const rawId = d.id || ""
       return { id: rawId.replace(/^__PICC_DOCK_/, "").replace(/__$/, "") }
-    })
-    docks.forEach((dock) => {
-      dock.style.display = "none" // Hidden until expand is clicked
-      shadowRoot.appendChild(dock)
     })
 
     return el
@@ -865,6 +1241,7 @@
         await serverFetch("/api/autopilot/stop", { method: "POST", body: { reason: "emergency-kill-switch" } })
         await fetchTradingData()
         updateAllDockables()
+        playAlertSound("danger")
         showToast("Kill Switch", "Emergency stop executed. All autopilot activity halted.", "error")
       } catch { /* ignore */ }
       btn.disabled = false
@@ -882,6 +1259,9 @@
     }
     if (msg.action === "show-notification") {
       // Show in-page toast notification
+      if (msg.type === "error" || msg.type === "danger") playAlertSound("danger")
+      else if (msg.type === "success") playAlertSound("success")
+      else playAlertSound("info")
       showToast(msg.title, msg.message, msg.type)
     }
   })
