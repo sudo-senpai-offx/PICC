@@ -9,19 +9,14 @@
     "scripting",
     "tabs",
     "cookies",
-    "webRequest",
-    "declarativeNetRequest",
     "alarms",
     "notifications",
-    "downloads",
-    "offscreen",
-    "contextMenus"
+    "contextMenus",
+    "sidePanel"
   ],
   "host_permissions": [
     "http://localhost:*/*",
-    "http://127.0.0.1:*/*",
-    "http://*/*",
-    "https://*/*"
+    "http://127.0.0.1:*/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -37,7 +32,20 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "PICC Overlay"
+    "default_title": "PICC Overlay",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
   "declarative_net_request": {
     "rule_resources": []

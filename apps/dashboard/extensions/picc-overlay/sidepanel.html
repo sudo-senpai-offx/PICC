@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 100%;
+      font: 13px/1.5 system-ui, sans-serif;
+      background: #0a0a1e;
+      color: #eef0ff;
+      padding: 12px;
+      overflow-y: auto;
+    }
+    h1 { font-size: 14px; color: #6c63ff; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    .tab-bar { display: flex; gap: 2px; margin-bottom: 10px; border-bottom: 1px solid #2a2a4a; padding-bottom: 4px; }
+    .tab {
+      padding: 4px 10px; font-size: 11px; cursor: pointer; border: none; background: none;
+      color: #9aa0c0; border-radius: 4px 4px 0 0; transition: all 0.15s;
+    }
+    .tab.active { background: #6c63ff20; color: #6c63ff; border-bottom: 2px solid #6c63ff; }
+    .tab:hover { color: #eef0ff; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .status { font-size: 11px; padding: 4px 8px; border-radius: 4px; margin-bottom: 8px; }
+    .status.online { background: rgba(74,222,128,0.1); color: #4ade80; }
+    .status.offline { background: rgba(255,107,107,0.1); color: #ff6b6b; }
+    .metric { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #1a1a2e; font-size: 12px; }
+    .metric-label { color: #9aa0c0; }
+    .metric-value { font-weight: 600; }
+    .section-title { font-size: 10px; color: #6c63ff; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 4px; }
+    .btn {
+      background: #6c63ff30; border: 1px solid #6c63ff40; color: #a5a0ff;
+      cursor: pointer; font-size: 11px; padding: 5px 10px; border-radius: 4px; width: 100%; margin-top: 6px;
+    }
+    .btn:hover { background: #6c63ff50; color: #eef0ff; }
+    .btn.danger { border-color: #ff6b6b40; color: #ff6b6b; }
+    .btn.danger:hover { background: #ff6b6b30; }
+    .session-bar { display: flex; align-items: center; gap: 6px; margin: 3px 0; font-size: 11px; }
+    .session-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .row { display: flex; gap: 6px; margin-bottom: 6px; }
+    select, input[type="text"] {
+      background: #1a1a2e; border: 1px solid #6c63ff40; color: #eef0ff;
+      padding: 3px 6px; border-radius: 3px; font-size: 11px; flex: 1;
+    }
+    .empty { font-size: 11px; color: #9aa0c0; text-align: center; padding: 16px; }
+  </style>
+</head>
+<body>
+  <h1>🧠 PICC</h1>
+  <div id="status" class="status offline">Checking...</div>
+
+  <div class="tab-bar">
+    <button class="tab active" data-tab="signals">Signals</button>
+    <button class="tab" data-tab="portfolio">Portfolio</button>
+    <button class="tab" data-tab="alerts">Alerts</button>
+    <button class="tab" data-tab="sessions">Sessions</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </div>
+
+  <!-- Signals Tab -->
+  <div id="tab-signals" class="panel active">
+    <div class="section-title">AI Decision</div>
+    <div id="signal-content"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- Portfolio Tab -->
+  <div id="tab-portfolio" class="panel">
+    <div class="section-title">Positions</div>
+    <div id="portfolio-content"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- Alerts Tab -->
+  <div id="tab-alerts" class="panel">
+    <div class="section-title">Active Alerts</div>
+    <div id="alerts-content"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- Sessions Tab -->
+  <div id="tab-sessions" class="panel">
+    <div class="section-title">Trading Session</div>
+    <div id="sessions-content"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- Settings Tab -->
+  <div id="tab-settings" class="panel">
+    <div class="section-title">Controls</div>
+    <button id="toggle-overlay" class="btn">Toggle Overlay</button>
+    <button id="open-dashboard" class="btn">Open Dashboard</button>
+    <div class="section-title" style="margin-top:12px">Current Site</div>
+    <div id="site-info" style="font-size:12px;">Loading...</div>
+    <div class="section-title">Keyboard Shortcuts</div>
+    <div style="font-size:11px;color:#9aa0c0;">
+      <kbd style="background:#1a1a2e;border:1px solid #6c63ff40;padding:1px 4px;border-radius:2px;font-size:10px;">Ctrl</kbd>+<kbd style="background:#1a1a2e;border:1px solid #6c63ff40;padding:1px 4px;border-radius:2px;font-size:10px;">Alt</kbd>+<kbd style="background:#1a1a2e;border:1px solid #6c63ff40;padding:1px 4px;border-radius:2px;font-size:10px;">Shift</kbd>+<kbd style="background:#1a1a2e;border:1px solid #6c63ff40;padding:1px 4px;border-radius:2px;font-size:10px;">O</kbd> Toggle overlay
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

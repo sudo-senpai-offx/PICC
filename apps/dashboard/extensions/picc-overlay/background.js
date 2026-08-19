@@ -15,6 +15,11 @@ let serverFetchRetries = 0
 const MAX_RETRIES = 1
 let extensionState = { installed: true, installTime: null, activeTabId: null }
 
+// ── Side Panel ────────────────────────────────────────────────────────────────
+if (chrome.sidePanel) {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {})
+}
+
 // ── Sender validation ────────────────────────────────────────────────────────
 // Only accept messages from our own extension's content scripts and popup.
 function isTrustedSender(sender) {
@@ -263,6 +268,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!isTrustedSender(sender)) {
     sendResponse({ error: "untrusted sender" })
     return false
+  }
+
+  // Open side panel on action click (when no popup is set)
+  if (msg.action === "open-sidepanel" && sender.tab?.id) {
+    chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => {})
+    return
   }
 
   // Server proxy (content scripts → background → PICC server)

@@ -12,6 +12,13 @@
   let activeDockables = []
   let currentSite = null
 
+  // ── Shadow DOM isolation ────────────────────────────────────────────────────
+  const shadowHost = document.createElement("div")
+  shadowHost.id = "__PICC_SHADOW_HOST__"
+  shadowHost.style.cssText = "all:initial;position:fixed;z-index:2147483647;top:0;left:0;width:0;height:0;pointer-events:none;"
+  document.body.appendChild(shadowHost)
+  const shadowRoot = shadowHost.attachShadow({ mode: "open" })
+
   // ── Site detection ──────────────────────────────────────────────────────────
   const SITE_PROFILES = [
     // Trading
@@ -110,7 +117,7 @@
 
   let serverPort = null
   function updateServerStatus() {
-    const overlay = document.getElementById(OVERLAY_ID)
+    const overlay = shadowRoot.getElementById(OVERLAY_ID)
     if (!overlay) return
     const statusEl = overlay.querySelector("[data-picc-server-status]")
     if (!statusEl) return
@@ -171,9 +178,9 @@
     `
     const style = document.createElement("style")
     style.textContent = `@keyframes picc-toast-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}`
-    if (!document.getElementById("__picc_toast_style__")) {
+    if (!shadowRoot.getElementById("__picc_toast_style__")) {
       style.id = "__picc_toast_style__"
-      document.documentElement.appendChild(style)
+      shadowRoot.appendChild(style)
     }
 
     const titleEl = document.createElement("div")
@@ -188,7 +195,7 @@
       toast.appendChild(msgEl)
     }
 
-    document.documentElement.appendChild(toast)
+    shadowRoot.appendChild(toast)
     setTimeout(() => { toast.style.opacity = "0"; toast.style.transition = "opacity .3s"; setTimeout(() => toast.remove(), 300) }, 4000)
   }
 
@@ -522,7 +529,7 @@
       "autopilot": renderAutopilot
     }
     for (const [id, renderer] of Object.entries(panels)) {
-      const dock = document.getElementById(`__PICC_DOCK_${id}__`)
+      const dock = shadowRoot.getElementById(`__PICC_DOCK_${id}__`)
       if (!dock) continue
       const body = dock.querySelector("[data-picc-body]")
       if (body) body.innerHTML = renderer()
@@ -575,9 +582,9 @@
   // ── Main overlay creation ──────────────────────────────────────────────────
   function createOverlay(siteInfo, overlaySettings) {
     // Remove existing
-    const existing = document.getElementById(OVERLAY_ID)
+    const existing = shadowRoot.getElementById(OVERLAY_ID)
     if (existing) existing.remove()
-    activeDockables.forEach((d) => { const el = document.getElementById(`__PICC_DOCK_${d.id}__`); if (el) el.remove() })
+    activeDockables.forEach((d) => { const el = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (el) el.remove() })
     activeDockables = []
 
     currentSite = siteInfo
@@ -586,7 +593,7 @@
     const el = document.createElement("div")
     el.id = OVERLAY_ID
     el.setAttribute("data-picc-overlay", "1")
-    document.documentElement.appendChild(el)
+    shadowRoot.appendChild(el)
 
     const cfg = overlaySettings || {}
     const posX = cfg.position?.x ?? 16
@@ -638,7 +645,7 @@
       expandBtn.textContent = dockablesVisible ? "\u25BE" : "\u25B8"
       expandBtn.title = dockablesVisible ? "Hide suite dockables" : "Show suite dockables"
       activeDockables.forEach((d) => {
-        const dockEl = document.getElementById(`__PICC_DOCK_${d.id}__`)
+        const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
         if (dockEl) dockEl.style.display = dockablesVisible ? "" : "none"
       })
     })
@@ -666,7 +673,7 @@
       overlayVisible = false
       stopTradingPoll()
       el.remove()
-      activeDockables.forEach((d) => { const dockEl = document.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
+      activeDockables.forEach((d) => { const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
       activeDockables = []
       if (siteInfo?.id) savePrefsForSite(siteInfo.id, { overlay: false })
     })
@@ -708,7 +715,7 @@
     })
     docks.forEach((dock) => {
       dock.style.display = "none" // Hidden until expand is clicked
-      document.documentElement.appendChild(dock)
+      shadowRoot.appendChild(dock)
     })
 
     return el
@@ -798,9 +805,9 @@
   // ── Toggle overlay ──────────────────────────────────────────────────────────
   async function toggleOverlay() {
     if (overlayVisible) {
-      const el = document.getElementById(OVERLAY_ID)
+      const el = shadowRoot.getElementById(OVERLAY_ID)
       if (el) el.remove()
-      activeDockables.forEach((d) => { const dockEl = document.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
+      activeDockables.forEach((d) => { const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
       activeDockables = []
       overlayVisible = false
       return
@@ -836,7 +843,7 @@
 
   // ── Autopilot control button delegation ────────────────────────────────────
   document.addEventListener("click", async (e) => {
-    const btn = e.target.closest("[data-picc-action]")
+    const btn = e.composedPath().find((el) => el.hasAttribute?.("data-picc-action"))
     if (!btn) return
     const action = btn.getAttribute("data-picc-action")
     if (action === "autopilot-toggle") {
