@@ -1612,6 +1612,57 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  // ── Watchlists ──────────────────────────────────────────────────────
+  if (path === "/api/trading/watchlists" && req.method === "GET") {
+    const { listWatchlists, fetchWatchlistPrices } = await import("./services/watchlist.mjs")
+    const lists = listWatchlists()
+    // Attach prices to each watchlist
+    const enriched = await Promise.all(lists.map(async (wl) => {
+      const prices = await fetchWatchlistPrices(wl.symbols)
+      return { ...wl, prices }
+    }))
+    writeJson(res, 200, { ok: true, watchlists: enriched })
+    return
+  }
+  if (path === "/api/trading/watchlists" && req.method === "POST") {
+    const { createWatchlist, addToWatchlist } = await import("./services/watchlist.mjs")
+    const action = body?.action
+    if (action === "add") {
+      const wl = addToWatchlist(body.watchlistId, body.symbol)
+      return writeJson(res, wl ? 200 : 404, { ok: !!wl, watchlist: wl })
+    }
+    if (action === "remove") {
+      const { removeFromWatchlist } = await import("./services/watchlist.mjs")
+      const wl = removeFromWatchlist(body.watchlistId, body.symbol)
+      return writeJson(res, wl ? 200 : 404, { ok: !!wl, watchlist: wl })
+    }
+    const { name, symbols } = body ?? {}
+    if (!name) return writeJson(res, 400, { error: "name required" })
+    const wl = createWatchlist({ name, symbols })
+    writeJson(res, 200, { ok: true, watchlist: wl })
+    return
+  }
+  if (path === "/api/trading/watchlists/delete" && req.method === "POST") {
+    const { deleteWatchlist } = await import("./services/watchlist.mjs")
+    const id = String(body?.id ?? "")
+    if (!id) return writeJson(res, 400, { error: "id required" })
+    writeJson(res, 200, { ok: deleteWatchlist(id) })
+    return
+  }
+
+  // ── Screener ─────────────────────────────────────────────────────────
+  if (path === "/api/trading/screener" && req.method === "POST") {
+    const { screenerRun } = await import("./services/watchlist.mjs")
+    try {
+      const { sort, limit, minChange, maxChange, symbols } = body ?? {}
+      const result = await screenerRun({ sort, limit: Math.min(Math.max(Number(limit) || 20, 1), 50), minChange, maxChange, symbols })
+      writeJson(res, 200, { ok: true, ...result })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+
   // -------------------------------------------------------------------
   // Strategy backtester — runs multi-model prediction over historical
   // windows and reports walk-forward hit rates, equity curve, drawdown.

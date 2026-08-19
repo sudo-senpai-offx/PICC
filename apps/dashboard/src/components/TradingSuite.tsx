@@ -10,6 +10,8 @@ import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { AlertPanel } from "@/components/AlertPanel"
 import { CalendarPanel } from "@/components/CalendarPanel"
 import { PortfolioPanel } from "@/components/PortfolioPanel"
+import { WatchlistPanel } from "@/components/WatchlistPanel"
+import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { getExtensionStatus } from "@/lib/api"
 import type { ExtensionStatus } from "@/lib/api"
@@ -179,6 +181,8 @@ export function MarketsSuite() {
           <AlertPanel />
           <CalendarPanel />
           <PortfolioPanel />
+          <WatchlistPanel />
+          <ScreenerPanel />
           <div className="grid">
             <PaperTradingCard positions={positions} closed={closed} refresh={refresh} />
             <div className="stack">

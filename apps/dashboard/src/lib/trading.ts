@@ -937,3 +937,54 @@ export interface PortfolioAnalytics {
 export function getPortfolioAnalytics(symbols: string[], weights?: number[], days = 90): Promise<PortfolioAnalytics> {
   return post("/trading/portfolio", { symbols, weights, days })
 }
+
+export interface WatchlistItem {
+  symbol: string
+  last: number
+  change24h: number
+  changeWeek: number
+  changeMonth: number
+  high30d: number
+  low30d: number
+  volume: number
+}
+
+export interface Watchlist {
+  id: string
+  name: string
+  symbols: string[]
+  createdAt: number
+  updatedAt: number
+  prices: WatchlistItem[]
+}
+
+export function getWatchlists(): Promise<{ ok: boolean; watchlists: Watchlist[] }> {
+  return request("/trading/watchlists")
+}
+
+export function createWatchlist(name: string, symbols: string[] = []): Promise<{ ok: boolean; watchlist: Watchlist }> {
+  return post("/trading/watchlists", { name, symbols })
+}
+
+export function deleteWatchlistApi(id: string): Promise<{ ok: boolean }> {
+  return post("/trading/watchlists/delete", { id })
+}
+
+export function addToWatchlistApi(watchlistId: string, symbol: string): Promise<{ ok: boolean; watchlist: Watchlist }> {
+  return post("/trading/watchlists", { action: "add", watchlistId, symbol })
+}
+
+export function removeFromWatchlistApi(watchlistId: string, symbol: string): Promise<{ ok: boolean; watchlist: Watchlist }> {
+  return post("/trading/watchlists", { action: "remove", watchlistId, symbol })
+}
+
+export interface ScreenerResult {
+  ok: boolean
+  results: WatchlistItem[]
+  total: number
+  universe: number
+}
+
+export function screenerRun(opts: { sort?: string; limit?: number; minChange?: number; maxChange?: number; symbols?: string[] } = {}): Promise<ScreenerResult> {
+  return post("/trading/screener", opts)
+}
