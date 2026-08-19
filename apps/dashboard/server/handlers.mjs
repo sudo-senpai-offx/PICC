@@ -1726,6 +1726,19 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  // ── Trading Sessions ────────────────────────────────────────────────
+  if (path === "/api/trading/sessions" && req.method === "GET") {
+    const { getCurrentSession, getSessionSchedule } = await import("./services/tradingSessions.mjs")
+    writeJson(res, 200, { ok: true, current: getCurrentSession(), schedule: getSessionSchedule() })
+    return
+  }
+  if (path === "/api/trading/sessions/asset" && req.method === "POST") {
+    const { getSessionForAsset } = await import("./services/tradingSessions.mjs")
+    const symbol = String(body?.symbol ?? "EURUSD").toUpperCase()
+    writeJson(res, 200, { ok: true, ...getSessionForAsset(symbol) })
+    return
+  }
+
   // -------------------------------------------------------------------
   // Strategy backtester — runs multi-model prediction over historical
   // windows and reports walk-forward hit rates, equity curve, drawdown.

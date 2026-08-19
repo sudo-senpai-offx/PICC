@@ -1073,3 +1073,41 @@ export function closeJournalEntry(id: string, exitPrice: number, notes?: string)
 export function deleteJournalEntry(id: string): Promise<{ ok: boolean }> {
   return post("/trading/journal/delete", { id })
 }
+
+export interface TradingSession {
+  id: string
+  name: string
+  open: number
+  close: number
+  color: string
+  preferredAssets: string[]
+  volatilityFilter: string
+  description: string
+}
+
+export interface SessionInfo {
+  ok: boolean
+  current: {
+    utcHour: number
+    activeSessions: (TradingSession & { hoursRemaining: number })[]
+    activeOverlaps: { name: string; start: number; end: number; color: string; volatility: string; description: string; hoursRemaining: number }[]
+    nextSession: TradingSession & { hoursUntil: number }
+    isHighVolatility: boolean
+    preferredAssets: string[]
+    description: string
+  }
+  schedule: {
+    schedule: (TradingSession & { isActive: boolean; hoursUntilOpen: number; hoursUntilClose: number | null })[]
+    overlaps: { name: string; start: number; end: number; color: string; volatility: string; description: string }[]
+    currentTimeUTC: string
+    utcHour: number
+  }
+}
+
+export function getTradingSessions(): Promise<SessionInfo> {
+  return request("/trading/sessions")
+}
+
+export function getAssetSession(symbol: string): Promise<{ ok: boolean; symbol: string; preferredSessions: { id: string; name: string; color: string }[]; isPreferredNow: boolean; currentSession: string[]; recommendation: string }> {
+  return post("/trading/sessions/asset", { symbol })
+}
