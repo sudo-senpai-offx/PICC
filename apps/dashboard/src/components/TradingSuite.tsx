@@ -4,6 +4,9 @@ import { LiveMarketBoard } from "@/components/LiveMarketBoard"
 import { MarketIntelPanel } from "@/components/MarketIntelPanel"
 import { LiveDecisionsPanel } from "@/components/LiveDecisionsPanel"
 import { LedgerPanel } from "@/components/LedgerPanel"
+import { TradingChart } from "@/components/TradingChart"
+import { BacktestPanel } from "@/components/BacktestPanel"
+import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { getExtensionStatus } from "@/lib/api"
 import type { ExtensionStatus } from "@/lib/api"
@@ -94,6 +97,7 @@ export function MarketsSuite() {
   const [signals, setSignals] = useState<TradingSignal[]>([])
   const [loaded, setLoaded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [chartAsset, setChartAsset] = useState("EURUSD")
   const lastLoadAt = useRef(0)
   const { snapshot, error: streamError } = useRealtimeSuite()
 
@@ -124,6 +128,8 @@ export function MarketsSuite() {
     if (snapshot.signals) setSignals(snapshot.signals)
   }, [snapshot])
 
+  const watchedAssets = snapshot?.live?.watched ?? []
+
   const refresh = () => setReloadKey((k) => k + 1)
 
   return (
@@ -139,12 +145,34 @@ export function MarketsSuite() {
             demo={snapshot?.demo ?? null}
             liveAccount={snapshot?.live?.account ?? null}
           />
+          <Card className="pad stack">
+            <div className="row-between" style={{ alignItems: "center" }}>
+              <h3 style={{ margin: 0 }}>Live Chart</h3>
+              <div className="row gap" style={{ alignItems: "center" }}>
+                <Select value={chartAsset} onChange={(e) => setChartAsset(e.target.value)}>
+                  {watchedAssets.map((a) => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
+                  <option value="EURUSD">EURUSD</option>
+                  <option value="BTCUSD">BTCUSD</option>
+                  <option value="AAPL">AAPL</option>
+                  <option value="TSLA">TSLA</option>
+                </Select>
+                <span className="muted small">
+                  {chartAsset} · {watchedAssets.includes(chartAsset) ? "EO live" : "Yahoo"}
+                </span>
+              </div>
+            </div>
+            <TradingChart assetId={chartAsset} height={380} />
+          </Card>
           <MarketIntelPanel />
           <LiveMarketBoard />
           <LiveDecisionsPanel />
           <LedgerPanel />
           <PredictionCard recordSignal={refresh} />
           <ProAnalysisCard />
+          <BacktestPanel />
+          <AdvancedIndicatorsPanel assetId={chartAsset} timeframe="daily" />
           <div className="grid">
             <PaperTradingCard positions={positions} closed={closed} refresh={refresh} />
             <div className="stack">
@@ -282,6 +310,13 @@ export function AutopilotSuite() {
           </div>
         </div>
       </Card>
+
+      {/* ─── Live Chart ─── */}
+      {cfg?.assetId ? (
+        <Card className="pad stack">
+          <TradingChart assetId={cfg.assetId} height={340} />
+        </Card>
+      ) : null}
 
       {/* ─── Quick Stats ─── */}
       <div className="grid grid-4">
@@ -502,19 +537,20 @@ export function AutopilotSuite() {
             <div>
               <h4 className="small">Equity Curve</h4>
               <div className="row" style={{ gap: 2, alignItems: "flex-end", height: 64 }}>
-                {analytics.metrics.equity.map((p, i) => {
-                  const max = Math.max(...analytics.metrics.equity.map((x) => x.equity), 0.01)
-                  const min = Math.min(...analytics.metrics.equity.map((x) => x.equity), 0)
+                {(() => {
+                  const eq = analytics.metrics.equity
+                  const max = Math.max(...eq.map((x) => x.equity), 0.01)
+                  const min = Math.min(...eq.map((x) => x.equity), 0)
                   const range = Math.max(max - min, 0.01)
-                  return (
+                  return eq.map((p, i) => (
                     <div
                       key={i}
                       title={`${p.t ?? "start"} · ${fmtMoney(p.equity)}`}
                       className={p.pnl >= 0 ? "bar-fill" : "bar-fill bar-danger"}
                       style={{ height: `${Math.max(4, ((p.equity - min) / range) * 100)}%`, flex: 1, minWidth: 3 }}
                     />
-                  )
-                })}
+                  ))
+                })()}
               </div>
             </div>
           ) : null}
@@ -858,39 +894,6 @@ function ProAnalysisCard() {
   )
 }
 
-/** Lightweight SVG sparkline of price + EMAs from a pro-analysis chartSeries. */
-function MiniPriceChart({ series }: { series: Record<string, (number | null)[]> }) {
-  const closes = (series.closes ?? []).filter((v): v is number => typeof v === "number")
-  if (closes.length < 2) return null
-  const ema20 = series.ema20 ?? []
-  const ema50 = series.ema50 ?? []
-  const all = [...closes, ...ema20, ...ema50].filter((v): v is number => typeof v === "number")
-  const lo = Math.min(...all)
-  const hi = Math.max(...all)
-  const span = hi - lo || 1
-  const W = 640
-  const H = 120
-  const n = closes.length
-  const x = (i: number) => (i / (n - 1)) * W
-  const y = (v: number) => H - ((v - lo) / span) * H
-  const polyline = (arr: (number | null)[], color: string, width: number) => {
-    const pts: string[] = []
-    arr.forEach((v, i) => {
-      if (typeof v !== "number") return
-      pts.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`)
-    })
-    if (pts.length < 2) return null
-    return <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={width} />
-  }
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }} preserveAspectRatio="none">
-      {polyline(closes, "#e2e8f0", 1.75)}
-      {polyline(ema20, "#22c55e", 1.25)}
-      {polyline(ema50, "#f59e0b", 1.25)}
-    </svg>
-  )
-}
-
 function ProAnalysisResultView({ result }: { result: ProAnalysisResult }) {
   const [narrative, setNarrative] = useState<ProNarrativeResult | null>(null)
   const [narrativeBusy, setNarrativeBusy] = useState(false)
@@ -958,8 +961,12 @@ function ProAnalysisResultView({ result }: { result: ProAnalysisResult }) {
 
       {result.chartSeries ? (
         <div className="card pad" style={{ padding: 4 }}>
-          <MiniPriceChart series={result.chartSeries} />
-          <p className="muted small" style={{ padding: "0 6px 4px" }}>Price + EMA20/50 — trailing {result.bars} bars</p>
+          <TradingChart
+            assetId={result.symbol ?? result.name ?? ""}
+            label={`${result.symbol ?? result.name} — Analysis`}
+            height={160}
+          />
+          <p className="muted small" style={{ padding: "0 6px 4px" }}>Live candlestick chart with EMA overlays</p>
         </div>
       ) : null}
 
@@ -1521,19 +1528,19 @@ function PaperAnalyticsCard() {
             <div>
               <h4>Equity curve</h4>
               <div className="row" style={{ gap: 2, alignItems: "flex-end", height: 64 }}>
-                {m.equity.map((p, i) => {
+                {(() => {
                   const max = Math.max(...m.equity.map((x) => x.equity), 0.01)
                   const min = Math.min(...m.equity.map((x) => x.equity), 0)
                   const range = Math.max(max - min, 0.01)
-                  return (
+                  return m.equity.map((p, i) => (
                     <div
                       key={i}
                       title={`${p.t ?? "start"} · ${fmtMoney(p.equity)}`}
                       className={p.pnl >= 0 ? "bar-fill" : "bar-fill bar-danger"}
                       style={{ height: `${Math.max(4, ((p.equity - min) / range) * 100)}%`, flex: 1, minWidth: 3 }}
                     />
-                  )
-                })}
+                  ))
+                })()}
               </div>
             </div>
           ) : null}

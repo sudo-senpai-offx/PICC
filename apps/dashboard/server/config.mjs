@@ -21,6 +21,7 @@ if (!process.env.PICC_ENV_LOADED) {
 }
 
 export const env = {
+  port: Number(process.env.PORT ?? 3000),
   // Cloud LLM providers — free tiers, no credit card needed.
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",

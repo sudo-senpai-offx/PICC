@@ -2,37 +2,53 @@
 // ALL server communication, state management, tab management, heartbeat.
 // Content scripts NEVER fetch — they talk to this worker only.
 
-const PICC_PORTS = [5173, 3000, 5174, 3001] // Vite dev first, then production
-const HEARTBEAT_MS = 12_000
+const PICC_PORTS = [5173, 3000, 5174, 3001]
+// Chrome enforces minimum 30s alarm period; 12s is silently clamped.
+const HEARTBEAT_MS = 30_000
 const METRICS_MS = 30_000
 
 // ── State ────────────────────────────────────────────────────────────────────
 let serverOnline = false
 let lastServerCheck = 0
 let detectedPort = null
+let serverFetchRetries = 0
+const MAX_RETRIES = 1
 let extensionState = { installed: true, installTime: null, activeTabId: null }
+
+// ── Sender validation ────────────────────────────────────────────────────────
+// Only accept messages from our own extension's content scripts and popup.
+function isTrustedSender(sender) {
+  // Background-to-background messages (alarms, etc.)
+  if (!sender.url) return true
+  // Our own extension pages
+  if (sender.url.startsWith("chrome-extension://") && sender.url.includes(chrome.runtime.id)) return true
+  // Content scripts injected by us match our extension ID
+  if (sender.id === chrome.runtime.id) return true
+  return false
+}
 
 // ── Installation ─────────────────────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === "install") {
-    extensionState.installTime = Date.now()
-    chrome.storage.local.set({
-      piccInstalled: true,
-      piccInstallTime: Date.now(),
-      piccVersion: chrome.runtime.getManifest().version
-    })
+  if (details.reason === "install" || details.reason === "update") {
+    if (details.reason === "install") {
+      extensionState.installTime = Date.now()
+      chrome.storage.local.set({
+        piccInstalled: true,
+        piccInstallTime: Date.now(),
+        piccVersion: chrome.runtime.getManifest().version
+      })
+    }
+    // Ensure context menu exists (re-create on update if removed)
     chrome.contextMenus?.create({
       id: "picc-overlay",
       title: "PICC: Toggle Overlay",
       contexts: ["page", "action"]
-    })
+    }).catch(() => {})
   }
 })
 
 // ── Port detection ───────────────────────────────────────────────────────────
-// Try each port until one responds. Cache the working port.
 async function detectServerPort() {
-  // If we already found a working port, try it first
   const ports = detectedPort
     ? [detectedPort, ...PICC_PORTS.filter((p) => p !== detectedPort)]
     : PICC_PORTS
@@ -49,6 +65,7 @@ async function detectServerPort() {
         const data = await resp.json().catch(() => null)
         if (data?.ok) {
           detectedPort = port
+          serverFetchRetries = 0
           return { port, ok: true, data }
         }
       }
@@ -61,16 +78,20 @@ async function detectServerPort() {
 
 // ── Central server fetch ─────────────────────────────────────────────────────
 async function serverFetch(path, opts = {}) {
-  // Auto-detect port if not yet known
-  if (!detectedPort) {
-    await detectServerPort()
-  }
+  if (!detectedPort) await detectServerPort()
   if (!detectedPort) return { ok: false, data: null, error: "no server found" }
 
   try {
+    const headers = opts.body ? { "Content-Type": "application/json" } : {}
+    // Attach auth token if stored
+    try {
+      const stored = await chrome.storage.local.get("piccAuthToken")
+      if (stored.piccAuthToken) headers["Authorization"] = `Bearer ${stored.piccAuthToken}`
+    } catch { /* storage unavailable */ }
+
     const resp = await fetch(`http://localhost:${detectedPort}${path}`, {
       method: opts.method || "GET",
-      headers: opts.body ? { "Content-Type": "application/json" } : {},
+      headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: AbortSignal.timeout(opts.timeout || 8000)
     })
@@ -78,11 +99,12 @@ async function serverFetch(path, opts = {}) {
     const data = await resp.json().catch(() => null)
     return { ok: true, data, status: resp.status }
   } catch (err) {
-    // Port might have changed — clear cache and retry once
-    if (detectedPort) {
+    if (serverFetchRetries < MAX_RETRIES) {
       detectedPort = null
+      serverFetchRetries++
       return serverFetch(path, opts)
     }
+    serverFetchRetries = 0
     return { ok: false, data: null, error: err.message }
   }
 }
@@ -99,23 +121,27 @@ async function checkServer() {
     piccServerPort: detectedPort
   })
 
-  // Push status change to all content scripts
-  if (wasOnline !== serverOnline || true) {
-    try {
-      const tabs = await chrome.tabs.query({})
-      for (const tab of tabs) {
-        if (tab.id) {
-          chrome.tabs.sendMessage(tab.id, {
-            action: "server-status",
-            online: serverOnline,
-            port: detectedPort
-          }).catch(() => {})
-        }
-      }
-    } catch {}
+  // Only broadcast on actual status change (fixed: removed || true)
+  if (wasOnline !== serverOnline) {
+    broadcastStatus()
   }
 
   return serverOnline
+}
+
+// Broadcast status to all tabs with content scripts
+function broadcastStatus() {
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (tab.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          action: "server-status",
+          online: serverOnline,
+          port: detectedPort
+        }).catch(() => {})
+      }
+    }
+  })
 }
 
 // ── Heartbeat ────────────────────────────────────────────────────────────────
@@ -215,9 +241,31 @@ async function getCookiesForUrl(url) {
   }
 }
 
+// ── URL validation for downloads ─────────────────────────────────────────────
+function isSafeDownloadUrl(url) {
+  try {
+    const u = new URL(url)
+    // Only allow http/https — no file://, no ftp://, no data:
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false
+    // Block internal network ranges
+    const host = u.hostname
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false
+    if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) return false
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ── Message handler ──────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // Server proxy
+  // ── Sender validation: only trust our own extension pages ──
+  if (!isTrustedSender(sender)) {
+    sendResponse({ error: "untrusted sender" })
+    return false
+  }
+
+  // Server proxy (content scripts → background → PICC server)
   if (msg.type === "picc-server-fetch" || msg.action === "server-request") {
     serverFetch(msg.path, { method: msg.method, body: msg.body, timeout: msg.timeout })
       .then((result) => sendResponse(result))
@@ -238,7 +286,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
-  // Toggle overlay
+  // Toggle overlay — inject content.js if needed
   if (msg.action === "toggle-overlay") {
     const tabId = msg.tabId || sender.tab?.id
     if (tabId) {
@@ -252,26 +300,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false
   }
 
-  // Cookie access
+  // Cookie access (restricted to active tab's origin)
   if (msg.action === "get-cookies") {
     getCookiesForUrl(msg.url || "").then((cookies) => sendResponse({ cookies }))
     return true
   }
 
-  // Execute script in tab
+  // Execute script in tab — ONLY our own content.js file, no arbitrary functions
   if (msg.action === "execute-script") {
+    // SECURITY: Only allow executing our own content.js, not arbitrary functions
+    if (msg.func || (msg.files && msg.files.some((f) => f !== "content.js"))) {
+      sendResponse({ ok: false, error: "only content.js execution is permitted" })
+      return false
+    }
     chrome.scripting.executeScript({
       target: { tabId: msg.tabId, allFrames: false },
-      func: msg.func,
-      args: msg.args || []
+      files: msg.files || ["content.js"]
     }).then((results) => sendResponse({ ok: true, results }))
       .catch((err) => sendResponse({ ok: false, error: err.message }))
     return true
   }
 
-  // Inject CSS
+  // Inject CSS — ONLY from our own extension resources
   if (msg.action === "inject-css") {
-    chrome.scripting.insertCSS({ target: { tabId: msg.tabId }, css: msg.css })
+    // SECURITY: Only allow injecting CSS from our own files
+    if (msg.css) {
+      sendResponse({ ok: false, error: "inline CSS injection not permitted — use file-based CSS" })
+      return false
+    }
+    chrome.scripting.insertCSS({ target: { tabId: msg.tabId }, files: msg.files || [] })
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: err.message }))
     return true
@@ -286,11 +343,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
-  // Notification
+  // Notification — use extension icon
   if (msg.action === "notify") {
     chrome.notifications?.create({
       type: "basic",
-      iconUrl: chrome.runtime.getURL("icon.png"),
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
       title: msg.title || "PICC",
       message: msg.message || ""
     }).catch(() => {})
@@ -298,8 +355,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false
   }
 
-  // Download
+  // Download — validate URL safety
   if (msg.action === "download") {
+    if (!isSafeDownloadUrl(msg.url)) {
+      sendResponse({ ok: false, error: "unsafe download URL" })
+      return false
+    }
     chrome.downloads?.download({ url: msg.url, filename: msg.filename }).catch(() => {})
     sendResponse({ ok: true })
     return false

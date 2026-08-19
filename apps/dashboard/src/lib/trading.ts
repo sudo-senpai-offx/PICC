@@ -5,7 +5,8 @@ import { getToken } from "./auth"
 const BASE = "/api"
 
 async function request<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  const headers: Record<string, string> = {}
+  if (init.method && init.method !== "GET") headers["Content-Type"] = "application/json"
   const authToken = token ?? getToken()
   if (authToken) headers.Authorization = `Bearer ${authToken}`
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
@@ -785,4 +786,59 @@ export interface ObservedPayouts {
 
 export function getObservedPayouts(limit = 200): Promise<ObservedPayouts> {
   return request<ObservedPayouts>(`/trading/observed-payouts?limit=${limit}`)
+}
+
+export interface BacktestResult {
+  ok: boolean
+  symbol: string
+  days: number
+  windows: number
+  hitRate: number
+  sampleSize: number
+  agreement: number
+  trades: Array<{ model: string; hitRate: number | null; n: number }>
+  equity: Array<{ i: number; v: number }>
+  drawdown: Array<{ i: number; v: number }>
+  peak: number
+  returnPct: number
+  maxDrawdown: number
+  name?: string
+  error?: string
+}
+
+export function runBacktest(symbol: string, days = 3, windows = 10): Promise<BacktestResult> {
+  return post<BacktestResult>("/trading/backtest", { symbol, days, windows })
+}
+
+export interface AdvancedIndicators {
+  ichimoku: { tenkan: number | null; kijun: number | null; senkouA: number | null; senkouB: number | null; chikou: number | null; cloudColor: number | null; trend: string }
+  fibonacci: { retracements: Array<{ ratio: number; label: string; price: number }>; extensions: Array<{ ratio: number; label: string; price: number }>; swingHigh: number | null; swingLow: number | null; trend: string; range: number | null }
+  keltner: { middle: number | null; upper: number | null; lower: number | null; bandwidth: number | null }
+  pivots: { classic: { PP: number; R1: number; R2: number; R3: number; S1: number; S2: number; S3: number }; camarilla: Record<string, number>; woodie: Record<string, number> } | null
+  volumeProfile: { poc: { price: number; volume: number } | null; vah: number | null; val: number | null; bins: Array<{ price: number; volume: number }> }
+  heikinAshi: { time: number; open: number; high: number; low: number; close: number } | null
+  ema: { ema20: number | null; ema50: number | null; ema200: number | null; read: string }
+  atr: { value: number | null; series: (number | null)[] }
+  rsi: { value: number | null; read: string }
+  bollinger: { upper: number | null; mid: number | null; lower: number | null; bandwidth: number | null; percentB: number | null }
+  macd: { line: number | null; signal: number | null; hist: number | null; cross: string; zero: string }
+  stochastic: { k: number | null; d: number | null; cross: string; read: string }
+  adx: { adx: number | null; plusDI: number | null; minusDI: number | null; read: string }
+  alligator: { state: string; label: string; jaw: number | null; teeth: number | null; lips: number | null }
+  aroon: { up: number | null; down: number | null; osc: number | null; read: string }
+  psar: { trend: string; value: number | null; reversed: boolean }
+  linearRegression: { slope: number | null; slopePct: number | null; r2: number | null; angle: number | null; fit: number | null; upper: number | null; lower: number | null }
+}
+
+export interface IndicatorsResult {
+  ok: boolean
+  assetId: string
+  timeframe: string
+  bars: number
+  last: number
+  indicators: AdvancedIndicators
+}
+
+export function getAdvancedIndicators(assetId: string, timeframe = "daily", count = 200): Promise<IndicatorsResult> {
+  return request<IndicatorsResult>(`/trading/indicators?assetId=${encodeURIComponent(assetId)}&timeframe=${encodeURIComponent(timeframe)}&count=${count}`)
 }

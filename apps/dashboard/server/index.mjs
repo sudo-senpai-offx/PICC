@@ -61,8 +61,10 @@ const server = createServer(async (req, res) => {
     const info = await stat(filePath)
     if (!info.isFile()) throw new Error("not a file")
     const body = await readFile(filePath)
+    const isHashedAsset = /-[A-Za-z0-9]{8}\.(js|css)$/.test(filePath)
     res.writeHead(200, {
-      "Content-Type": MIME[extname(filePath)] ?? "application/octet-stream"
+      "Content-Type": MIME[extname(filePath)] ?? "application/octet-stream",
+      "Cache-Control": isHashedAsset ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate"
     })
     res.end(body)
   } catch {

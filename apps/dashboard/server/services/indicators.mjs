@@ -790,6 +790,283 @@ export function findDivergences(price, osc, { lookback = 3, minDistance = 6, max
 }
 
 // ---------------------------------------------------------------------
+// Advanced indicators: Ichimoku, Fibonacci, Pivots, Keltner, Volume Profile, Heikin-Ashi
+// ---------------------------------------------------------------------
+
+/**
+ * Ichimoku Cloud. Standard defaults: tenkan=9, kijun=26, senkou=52, displacement=26.
+ * Returns: tenkan, kijun, senkouA, senkouB, chikou, cloudColor (+1=bullish, -1=bearish).
+ * All series length = candles.length. senkou spans are displaced forward (+26), chikou is displaced backward (-26).
+ */
+export function ichimoku(highs, lows, closes, { tenkanPeriod = 9, kijunPeriod = 26, senkouPeriod = 52, displacement = 26 } = {}) {
+  const h = numArr(highs), l = numArr(lows), c = numArr(closes)
+  const n = h.length
+  const tenkan = fillNull(n), kijun = fillNull(n), chikou = fillNull(n)
+  const senkouA = fillNull(n), senkouB = fillNull(n), cloudColor = fillNull(n)
+
+  for (let i = 0; i < n; i++) {
+    if (i >= tenkanPeriod - 1) {
+      let hi = -Infinity, lo = Infinity
+      for (let k = i - tenkanPeriod + 1; k <= i; k++) {
+        if (h[k] != null && h[k] > hi) hi = h[k]
+        if (l[k] != null && l[k] < lo) lo = l[k]
+      }
+      if (hi !== -Infinity && lo !== Infinity) tenkan[i] = (hi + lo) / 2
+    }
+    if (i >= kijunPeriod - 1) {
+      let hi = -Infinity, lo = Infinity
+      for (let k = i - kijunPeriod + 1; k <= i; k++) {
+        if (h[k] != null && h[k] > hi) hi = h[k]
+        if (l[k] != null && l[k] < lo) lo = l[k]
+      }
+      if (hi !== -Infinity && lo !== Infinity) kijun[i] = (hi + lo) / 2
+    }
+    const saSrc = tenkan[i] != null && kijun[i] != null ? (tenkan[i] + kijun[i]) / 2 : null
+    if (i + displacement < n && saSrc != null) senkouA[i + displacement] = saSrc
+    if (i >= senkouPeriod - 1) {
+      let hi = -Infinity, lo = Infinity
+      for (let k = i - senkouPeriod + 1; k <= i; k++) {
+        if (h[k] != null && h[k] > hi) hi = h[k]
+        if (l[k] != null && l[k] < lo) lo = l[k]
+      }
+      if (hi !== -Infinity && lo !== Infinity) {
+        const sb = (hi + lo) / 2
+        if (i + displacement < n) senkouB[i + displacement] = sb
+      }
+    }
+    if (c[i] != null && i - displacement >= 0) chikou[i - displacement] = c[i]
+    if (senkouA[i] != null && senkouB[i] != null) {
+      cloudColor[i] = senkouA[i] > senkouB[i] ? 1 : senkouA[i] < senkouB[i] ? -1 : 0
+    }
+  }
+  return { tenkan, kijun, senkouA, senkouB, chikou, cloudColor }
+}
+
+/**
+ * Fibonacci retracement and extension levels from recent swing points.
+ * Returns { retracements: [...], extensions: [...], swingHigh, swingLow }.
+ * Looks back `lookback` bars to find swing high/low.
+ */
+export function fibonacciLevels(highs, lows, closes, { lookback = 5 } = {}) {
+  const h = numArr(highs), l = numArr(lows)
+  const n = h.length
+  const lb = Math.max(3, Math.round(lookback))
+
+  let swingHigh = null, swingHighIdx = -1, swingLow = null, swingLowIdx = -1
+  for (let i = n - 1; i >= lb && i < n; i--) {
+    if (h[i] == null || l[i] == null) continue
+    let isHigh = true
+    let isLow = true
+    for (let k = 1; k <= lb; k++) {
+      if (i - k < 0 || i + k >= n) { isHigh = isLow = false; break }
+      if (h[i - k] == null || h[i + k] == null) { isHigh = isLow = false; break }
+      if (h[i] <= h[i - k] || h[i] <= h[i + k]) isHigh = false
+      if (l[i] >= l[i - k] || l[i] >= l[i + k]) isLow = false
+    }
+    if (isHigh && swingHigh == null) { swingHigh = h[i]; swingHighIdx = i }
+    if (isLow && swingLow == null) { swingLow = l[i]; swingLowIdx = i }
+    if (swingHigh != null && swingLow != null) break
+  }
+
+  if (swingHigh == null) {
+    const slice = h.slice(Math.max(0, n - lookback * 5)).filter(v => v != null)
+    swingHigh = slice.length ? Math.max(...slice) : null
+    swingHighIdx = n - 1
+  }
+  if (swingLow == null) {
+    const slice = l.slice(Math.max(0, n - lookback * 5)).filter(v => v != null)
+    swingLow = slice.length ? Math.min(...slice) : null
+    swingLowIdx = n - 1
+  }
+
+  if (swingHigh == null || swingLow == null || swingHigh <= swingLow) {
+    return { retracements: [], extensions: [], swingHigh, swingLow, trend: "none" }
+  }
+
+  const isUptrend = swingHighIdx > swingLowIdx
+  const range = swingHigh - swingLow
+  const retracementRatios = [0.236, 0.382, 0.5, 0.618, 0.786]
+  const extensionRatios = [1.0, 1.272, 1.618, 2.0, 2.618]
+
+  const retracements = retracementRatios.map(r => ({
+    ratio: r,
+    label: `${(r * 100).toFixed(1)}%`,
+    price: isUptrend ? swingHigh - range * r : swingLow + range * r
+  }))
+
+  const extensions = extensionRatios.map(r => ({
+    ratio: r,
+    label: `${(r * 100).toFixed(1)}%`,
+    price: isUptrend ? swingLow + range * r : swingHigh - range * r
+  }))
+
+  return {
+    retracements,
+    extensions,
+    swingHigh,
+    swingLow,
+    trend: isUptrend ? "uptrend" : "downtrend",
+    range
+  }
+}
+
+/**
+ * Pivot points (Classic, Camarilla, Woodie). Takes a single bar's H/L/C.
+ * Returns { classic: {PP,R1,R2,R3,S1,S2,S3}, camarilla: {R1..R4,S1..S4}, woodie: {PP,R1,R2,S1,S2} }.
+ */
+export function pivotPoints(high, low, close, { type = "classic" } = {}) {
+  const H = Number(high), L = Number(low), C = Number(close)
+  if (!isNum(H) || !isNum(L) || !isNum(C)) return null
+
+  const R = H - L
+  const classic = {
+    PP: (H + L + C) / 3,
+    R1: 2 * (H + L + C) / 3 - L,
+    R2: (H + L + C) / 3 + R,
+    R3: H + 2 * ((H + L + C) / 3 - L),
+    S1: 2 * (H + L + C) / 3 - H,
+    S2: (H + L + C) / 3 - R,
+    S3: L - 2 * (H - (H + L + C) / 3)
+  }
+
+  const camarilla = {
+    R4: C + R * 1.1 / 2,
+    R3: C + R * 1.1 / 4,
+    R2: C + R * 1.1 / 6,
+    R1: C + R * 1.1 / 12,
+    S1: C - R * 1.1 / 12,
+    S2: C - R * 1.1 / 6,
+    S3: C - R * 1.1 / 4,
+    S4: C - R * 1.1 / 2
+  }
+
+  const woodie = {
+    PP: (H + L + 2 * C) / 4,
+    R1: 2 * (H + L + 2 * C) / 4 - L,
+    R2: (H + L + 2 * C) / 4 + R,
+    S1: 2 * (H + L + 2 * C) / 4 - H,
+    S2: (H + L + 2 * C) / 4 - R
+  }
+
+  return { classic, camarilla, woodie }
+}
+
+/**
+ * Keltner Channels: EMA(20) +/- 2*ATR(10). Returns { middle, upper, lower }.
+ */
+export function keltnerChannels(highs, lows, closes, { emaPeriod = 20, atrPeriod = 10, multiplier = 2 } = {}) {
+  const c = numArr(closes)
+  const n = c.length
+  const middle = ema(c, emaPeriod)
+  const atrSeries = atr(highs, lows, closes, atrPeriod)
+  const upper = fillNull(n), lower = fillNull(n)
+  for (let i = 0; i < n; i++) {
+    if (middle[i] != null && atrSeries[i] != null) {
+      upper[i] = middle[i] + multiplier * atrSeries[i]
+      lower[i] = middle[i] - multiplier * atrSeries[i]
+    }
+  }
+  return { middle, upper, lower }
+}
+
+/**
+ * Volume Profile: divide price range into bins, accumulate volume per bin.
+ * Returns { bins: [{price, volume}], poc: {price, volume}, vah, val }.
+ */
+export function volumeProfile(candles, { rows = 24, valueAreaPct = 0.7 } = {}) {
+  if (!Array.isArray(candles) || !candles.length) return { bins: [], poc: null, vah: null, val: null }
+
+  let sessionHigh = -Infinity, sessionLow = Infinity
+  for (const c of candles) {
+    const h = Number(c.high), l = Number(c.low)
+    if (isNum(h) && h > sessionHigh) sessionHigh = h
+    if (isNum(l) && l < sessionLow) sessionLow = l
+  }
+  if (!isNum(sessionHigh) || !isNum(sessionLow) || sessionHigh <= sessionLow) {
+    return { bins: [], poc: null, vah: null, val: null }
+  }
+
+  const binSize = (sessionHigh - sessionLow) / rows
+  const bins = Array.from({ length: rows }, (_, i) => ({
+    price: sessionLow + (i + 0.5) * binSize,
+    low: sessionLow + i * binSize,
+    high: sessionLow + (i + 1) * binSize,
+    volume: 0
+  }))
+
+  for (const c of candles) {
+    const h = Number(c.high), l = Number(c.low), v = Number(c.volume) || 0
+    if (!isNum(h) || !isNum(l) || v <= 0) continue
+    const lowBin = Math.max(0, Math.floor((l - sessionLow) / binSize))
+    const highBin = Math.min(rows - 1, Math.floor((h - sessionLow) / binSize))
+    const touched = highBin - lowBin + 1
+    const volPerBin = v / touched
+    for (let b = lowBin; b <= highBin; b++) {
+      bins[b].volume += volPerBin
+    }
+  }
+
+  let pocBin = bins[0]
+  for (const b of bins) {
+    if (b.volume > pocBin.volume) pocBin = b
+  }
+  const poc = { price: pocBin.price, volume: pocBin.volume }
+
+  const totalVol = bins.reduce((s, b) => s + b.volume, 0)
+  const targetVol = totalVol * valueAreaPct
+  let accVol = pocBin.volume
+  let vaLowIdx = bins.indexOf(pocBin)
+  let vaHighIdx = vaLowIdx
+  while (accVol < targetVol && (vaLowIdx > 0 || vaHighIdx < rows - 1)) {
+    const aboveVol = vaHighIdx < rows - 1 ? bins[vaHighIdx + 1].volume : -1
+    const belowVol = vaLowIdx > 0 ? bins[vaLowIdx - 1].volume : -1
+    if (aboveVol >= belowVol && aboveVol >= 0) {
+      vaHighIdx++
+      accVol += bins[vaHighIdx].volume
+    } else if (belowVol >= 0) {
+      vaLowIdx--
+      accVol += bins[vaLowIdx].volume
+    } else break
+  }
+
+  return {
+    bins,
+    poc,
+    vah: bins[vaHighIdx]?.high ?? null,
+    val: bins[vaLowIdx]?.low ?? null,
+    totalVolume: totalVol,
+    valueAreaVolume: accVol
+  }
+}
+
+/**
+ * Heikin-Ashi candles. Returns array of { time, open, high, low, close }.
+ */
+export function heikinAshi(candles) {
+  if (!Array.isArray(candles) || !candles.length) return []
+  const out = []
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i]
+    const o = Number(c.open), h = Number(c.high), l = Number(c.low), cl = Number(c.close)
+    if (!isNum(o) || !isNum(h) || !isNum(l) || !isNum(cl)) continue
+
+    const haClose = (o + h + l + cl) / 4
+    let haOpen
+    if (i === 0) {
+      haOpen = (o + cl) / 2
+    } else {
+      const prev = out[out.length - 1]
+      haOpen = (prev.open + prev.close) / 2
+    }
+    const haHigh = Math.max(h, haOpen, haClose)
+    const haLow = Math.min(l, haOpen, haClose)
+
+    out.push({ time: c.time, open: haOpen, high: haHigh, low: haLow, close: haClose })
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------
 // Regime statistics
 // ---------------------------------------------------------------------
 
@@ -892,6 +1169,14 @@ export function computeIndicatorDashboard(candles) {
     ? (close > ema200Now && ema20Now > ema50Now ? "bullish alignment" : close < ema200Now && ema20Now < ema50Now ? "bearish alignment" : "mixed")
     : "n/a"
 
+  const ich = ichimoku(highs, lows, closes)
+  const fib = fibonacciLevels(highs, lows, closes)
+  const kc = keltnerChannels(highs, lows, closes)
+  const lastBar = candles[candles.length - 1]
+  const piv = lastBar ? pivotPoints(lastBar.high, lastBar.low, lastBar.close) : null
+  const vp = volumeProfile(candles)
+  const ha = heikinAshi(candles)
+
   return {
     bars: closes.length,
     lastBarIndex: last,
@@ -923,6 +1208,31 @@ export function computeIndicatorDashboard(candles) {
     apo: g(ap),
     bollinger: { ...bNow, bandwidthSeries: b.bandwidth, bbUpperSeries: b.upper, bbLowerSeries: b.lower },
     supportResistance: supportResistance(candles),
+    ichimoku: {
+      tenkan: g(ich.tenkan),
+      kijun: g(ich.kijun),
+      senkouA: g(ich.senkouA),
+      senkouB: g(ich.senkouB),
+      chikou: g(ich.chikou),
+      cloudColor: g(ich.cloudColor),
+      trend: ich.cloudColor[last] === 1 ? "bullish" : ich.cloudColor[last] === -1 ? "bearish" : "neutral"
+    },
+    fibonacci: fib,
+    keltner: {
+      middle: g(kc.middle),
+      upper: g(kc.upper),
+      lower: g(kc.lower),
+      bandwidth: kc.upper[last] != null && kc.lower[last] != null && kc.middle[last] != null && kc.middle[last] > 0
+        ? ((kc.upper[last] - kc.lower[last]) / kc.middle[last]) * 100 : null
+    },
+    pivots: piv,
+    volumeProfile: {
+      poc: vp.poc,
+      vah: vp.vah,
+      val: vp.val,
+      bins: vp.bins?.slice(0, 10)?.map(b => ({ price: Math.round(b.price * 100) / 100, volume: Math.round(b.volume) }))
+    },
+    heikinAshi: ha.length > 0 ? ha[ha.length - 1] : null,
     autocorrelation: returnAutocorrelation(closes),
     chartSeries: {
       closes: closes.slice(-200),
@@ -939,7 +1249,14 @@ export function computeIndicatorDashboard(candles) {
       jaw: alli.jaw.slice(-200),
       teeth: alli.teeth.slice(-200),
       lips: alli.lips.slice(-200),
-      vwap: vw.slice(-200)
+      vwap: vw.slice(-200),
+      tenkan: ich.tenkan.slice(-200),
+      kijun: ich.kijun.slice(-200),
+      senkouA: ich.senkouA.slice(-200),
+      senkouB: ich.senkouB.slice(-200),
+      kcUpper: kc.upper.slice(-200),
+      kcMiddle: kc.middle.slice(-200),
+      kcLower: kc.lower.slice(-200)
     }
   }
 }

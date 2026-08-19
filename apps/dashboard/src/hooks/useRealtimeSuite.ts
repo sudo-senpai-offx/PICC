@@ -19,67 +19,82 @@ type SuiteListener = {
   onEvent?: (e: LiveEvent) => void
 }
 
-let streamHandle: { close: () => void } | null = null
-let retryTimer: ReturnType<typeof setTimeout> | null = null
-let retryDelay = 2000
-const listeners = new Set<SuiteListener>()
-let lastSnapshot: TradingSuiteSnapshot | null = null
-let lastLive: LiveStats | null = null
+// Singleton stream manager — survives HMR by attaching to globalThis.
+// Module-level `let` variables reset on HMR, breaking the singleton contract.
+class SuiteStreamManager {
+  private streamHandle: { close: () => void } | null = null
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private retryDelay = 2000
+  private listeners = new Set<SuiteListener>()
+  private lastSnapshot: TradingSuiteSnapshot | null = null
+  private lastLive: LiveStats | null = null
 
-function clearStream() {
-  if (retryTimer) {
-    clearTimeout(retryTimer)
-    retryTimer = null
-  }
-  if (streamHandle) {
-    streamHandle.close()
-    streamHandle = null
-  }
-  retryDelay = 2000
-}
+  getSnapshot() { return this.lastSnapshot }
+  getLive() { return this.lastLive }
 
-function startStream() {
-  if (streamHandle || retryTimer) return
-  streamHandle = streamLiveTrading(
-    (e: LiveEvent) => {
-      if (e.type === "suite") {
-        lastSnapshot = e.snapshot
-        for (const l of listeners) l.setSnapshot(e.snapshot)
-      } else if (e.type === "stats") {
-        lastLive = e.stats
-        for (const l of listeners) l.setLive(e.stats)
-      } else if (e.type === "ready") {
-        // A real `ready` payload means the server accepted the connection —
-        // clear any prior failure and mark live. (The transport already treats
-        // an HTTP 401 as a hard failure, so this path is genuinely reachable.)
-        if (e.ok) for (const l of listeners) l.setError(null)
-      }
-      // Raw forwarding for consumers that need the live stream itself
-      // (tick/account/status/snapshot/decision) without their own connection.
-      for (const l of listeners) l.onEvent?.(e)
-    },
-    () => {
-      for (const l of listeners) {
-        l.setConnected(true)
-        l.setError(null)
-      }
-    },
-    (err) => {
-      streamHandle = null
-      for (const l of listeners) {
-        l.setConnected(false)
-        l.setError(err.message)
-      }
-      // Reconnect with exponential backoff; the transport re-registers the
-      // server-side subscriptions on each new connection.
-      retryDelay = Math.min(retryDelay * 1.5, 15000)
-      retryTimer = setTimeout(() => {
-        retryTimer = null
-        startStream()
-      }, retryDelay)
+  private clearStream() {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
     }
-  )
+    if (this.streamHandle) {
+      this.streamHandle.close()
+      this.streamHandle = null
+    }
+    this.retryDelay = 2000
+  }
+
+  private startStream() {
+    if (this.streamHandle || this.retryTimer) return
+    this.streamHandle = streamLiveTrading(
+      (e: LiveEvent) => {
+        if (e.type === "suite") {
+          this.lastSnapshot = e.snapshot
+          for (const l of this.listeners) l.setSnapshot(e.snapshot)
+        } else if (e.type === "stats") {
+          this.lastLive = e.stats
+          for (const l of this.listeners) l.setLive(e.stats)
+        } else if (e.type === "ready") {
+          if (e.ok) for (const l of this.listeners) l.setError(null)
+        }
+        for (const l of this.listeners) l.onEvent?.(e)
+      },
+      () => {
+        for (const l of this.listeners) {
+          l.setConnected(true)
+          l.setError(null)
+        }
+      },
+      (err) => {
+        this.streamHandle = null
+        for (const l of this.listeners) {
+          l.setConnected(false)
+          l.setError(err.message)
+        }
+        this.retryDelay = Math.min(this.retryDelay * 1.5, 15000)
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null
+          this.startStream()
+        }, this.retryDelay)
+      }
+    )
+  }
+
+  add(listener: SuiteListener) {
+    this.listeners.add(listener)
+    this.startStream()
+  }
+
+  remove(listener: SuiteListener) {
+    this.listeners.delete(listener)
+    if (this.listeners.size === 0) this.clearStream()
+  }
 }
+
+// Singleton: attach to globalThis so it survives HMR reloads.
+const g = globalThis as unknown as { __picc_suite_stream?: SuiteStreamManager }
+if (!g.__picc_suite_stream) g.__picc_suite_stream = new SuiteStreamManager()
+const manager = g.__picc_suite_stream
 
 /**
  * Live aggregated snapshot of the whole trading suite (paper status/positions/
@@ -100,8 +115,8 @@ export function useRealtimeSuite(onEvent?: (e: LiveEvent) => void): {
   connected: boolean
   error: string | null
 } {
-  const [snapshot, setSnapshot] = useState<TradingSuiteSnapshot | null>(lastSnapshot)
-  const [live, setLive] = useState<LiveStats | null>(lastLive)
+  const [snapshot, setSnapshot] = useState<TradingSuiteSnapshot | null>(manager.getSnapshot())
+  const [live, setLive] = useState<LiveStats | null>(manager.getLive())
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const onEventRef = useRef(onEvent)
@@ -115,12 +130,8 @@ export function useRealtimeSuite(onEvent?: (e: LiveEvent) => void): {
       setError,
       onEvent: (e) => onEventRef.current?.(e)
     }
-    listeners.add(listener)
-    startStream()
-    return () => {
-      listeners.delete(listener)
-      if (listeners.size === 0) clearStream()
-    }
+    manager.add(listener)
+    return () => { manager.remove(listener) }
   }, [])
 
   return { snapshot, live, connected, error }

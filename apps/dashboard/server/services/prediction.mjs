@@ -115,35 +115,44 @@ function modelExpectations(closes, h) {
 
 // Walk-forward backtest: for the trailing K windows, predict the next `h` days
 // from each model using only data up to that point, then score the call.
-function backtestModels(closes, h, maxWindows = 20) {
+export function backtestModels(closes, h, maxWindows = 20) {
   const minObs = Math.max(30, h * 4 + 10)
   const scores = { momentum: [], meanRevert: [], trend: [], monteCarlo: [] }
   const total = closes.length
-  if (total < minObs + h + 5) return { scores, sampleSize: 0, hitRates: {} }
+  if (total < minObs + h + 5) return { scores, sampleSize: 0, hitRates: {}, windows: [] }
 
   const windows = Math.min(maxWindows, total - minObs - h)
   const step = Math.max(1, Math.floor(windows / maxWindows))
   let evaluated = 0
+  const windowResults = []
 
   for (let start = minObs; start + h <= total - 1 && evaluated < maxWindows; start += step) {
     evaluated += 1
-    const slice = closes.slice(0, start + 1) // include the "current" bar
+    const slice = closes.slice(0, start + 1)
     const exp = modelExpectations(slice, h)
     const future = closes.slice(start + 1, start + 1 + h)
     const realized = Math.log(Math.max(Number(future[future.length - 1]) || 0, EPS)) - Math.log(Math.max(Number(future[0]) || 0, EPS))
+    let windowHits = 0
+    let windowModels = 0
     for (const name of Object.keys(scores)) {
       const call = exp[name]
       const dir = Math.abs(call) < EPS ? 0 : call > 0 ? 1 : -1
       const truth = Math.abs(realized) < EPS ? 0 : realized > 0 ? 1 : -1
-      if (dir !== 0) scores[name].push(dir === truth ? 1 : 0)
+      if (dir !== 0) {
+        const hit = dir === truth ? 1 : 0
+        scores[name].push(hit)
+        windowHits += hit
+        windowModels++
+      }
     }
+    windowResults.push({ idx: evaluated, hit: windowModels > 0 ? windowHits / windowModels > 0.5 : false })
   }
 
   const hitRates = {}
   for (const [name, list] of Object.entries(scores)) {
     hitRates[name] = list.length > 0 ? list.reduce((a, b) => a + b, 0) / list.length : null
   }
-  return { scores, sampleSize: evaluated, hitRates }
+  return { scores, sampleSize: evaluated, hitRates, windows: windowResults }
 }
 
 export function predictDirection(closes, horizonDays = 3, opts = {}) {

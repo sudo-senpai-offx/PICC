@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Badge, Button, Card, Spinner } from "@/components/ui"
 import type { GateBacktest, LedgerEntry, LedgerStats, ObservedPayouts, TradingLedger } from "@/lib/trading"
 import { flushTradingLedger, getLedgerBacktest, getObservedPayouts, getTradingLedger } from "@/lib/trading"
@@ -101,6 +101,84 @@ function ObservedPayoutsLine({ observed }: { observed: ObservedPayouts | null })
       {observed.entries.length > 4 ? " …" : ""}
       . The engine uses these instead of the assumed schedule when present.
     </p>
+  )
+}
+
+/** Equity curve + drawdown visualization from resolved ledger entries. */
+function EquityCurveChart({ entries }: { entries: LedgerEntry[] }) {
+  const resolved = useMemo(
+    () => entries.filter((e) => e.result === "hit" || e.result === "miss" || e.result === "push"),
+    [entries]
+  )
+
+  const { equity, drawdown, stats } = useMemo(() => {
+    if (!resolved.length) return { equity: [] as { i: number; v: number }[], drawdown: [] as { i: number; v: number }[], peak: 0, stats: null as { totalReturn: number; maxDrawdown: number; peak: number } | null }
+    let eq = 100
+    let pk = 100
+    const eqArr: { i: number; v: number }[] = [{ i: 0, v: eq }]
+    const ddArr: { i: number; v: number }[] = [{ i: 0, v: 0 }]
+    resolved.forEach((e, idx) => {
+      const stake = 1
+      if (e.result === "hit") eq += stake * ((e.payout ?? 80) / 100)
+      else if (e.result === "miss") eq -= stake
+      // pushes: flat segment (equity unchanged)
+      pk = Math.max(pk, eq)
+      const dd = pk > 0 ? ((pk - eq) / pk) * 100 : 0
+      eqArr.push({ i: idx + 1, v: eq })
+      ddArr.push({ i: idx + 1, v: dd })
+    })
+    return { equity: eqArr, drawdown: ddArr, peak: pk, stats: { totalReturn: eq - 100, maxDrawdown: Math.max(...ddArr.map((d: { i: number; v: number }) => d.v)), peak: pk } }
+  }, [resolved])
+
+  if (equity.length < 2) return <p className="muted small">Need at least 2 resolved entries to plot equity curve.</p>
+
+  const W = 640
+  const H = 100
+  const lo = Math.min(...equity.map((p: { i: number; v: number }) => p.v), 0)
+  const hi = Math.max(...equity.map((p: { i: number; v: number }) => p.v), 100)
+  const span = Math.max(hi - lo, 0.01)
+  const n = equity.length
+  const x = (i: number) => (i / (n - 1)) * W
+  const y = (v: number) => H - ((v - lo) / span) * (H - 8) - 4
+
+  const eqPts = equity.map((p: { i: number; v: number }) => `${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")
+  const eqFillPts = `0,${H} ` + eqPts + ` ${W},${H}`
+
+  const ddHi = Math.max(...drawdown.map((d: { i: number; v: number }) => d.v), 1)
+  const yDd = (v: number) => (v / ddHi) * (H - 8)
+  const ddPts = drawdown.map((d: { i: number; v: number }) => `${x(d.i).toFixed(1)},${yDd(d.v).toFixed(1)}`).join(" ")
+  const ddFillPts = `0,0 ` + ddPts + ` ${W},0`
+
+  const returnColor = (stats?.totalReturn ?? 0) >= 0 ? "#4ade80" : "#ff6b6b"
+
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <div className="row gap" style={{ alignItems: "center" }}>
+        <h4 className="small" style={{ margin: 0 }}>Equity curve</h4>
+        {stats ? (
+          <span className="muted small">
+            return <strong style={{ color: returnColor }}>{stats.totalReturn >= 0 ? "+" : ""}{stats.totalReturn.toFixed(2)}%</strong>
+            {" · "}max DD <strong className="danger-text">{stats.maxDrawdown.toFixed(1)}%</strong>
+            {" · "}peak ${stats.peak.toFixed(2)}
+          </span>
+        ) : null}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 2 }}>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 80 }} preserveAspectRatio="none">
+            <polygon points={eqFillPts} fill="rgba(74,222,128,0.08)" />
+            <polyline points={eqPts} fill="none" stroke="#4ade80" strokeWidth="1.5" />
+          </svg>
+        </div>
+        <div style={{ flex: 1 }}>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 80 }} preserveAspectRatio="none">
+            <polygon points={ddFillPts} fill="rgba(255,107,107,0.12)" />
+            <polyline points={ddPts} fill="none" stroke="#ff6b6b" strokeWidth="1.5" />
+          </svg>
+          <div className="muted small" style={{ textAlign: "center" }}>drawdown</div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -267,6 +345,7 @@ export function LedgerPanel() {
         <>
           <ObservedPayoutsLine observed={observed} />
           <StatsGrid stats={stats} />
+          <EquityCurveChart entries={entries} />
           <BacktestSection stats={stats} backtest={backtest} />
           <div className="stack">
             <h4 className="small">Decision history ({entries.length})</h4>

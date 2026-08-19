@@ -248,7 +248,7 @@ describe("Profile HTTP endpoints", () => {
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
     expect(res.body.authorizeUrl).toContain("code_challenge_method=S256")
-    expect(res.body.callbackUrl).toBe("http://localhost/api/profile/github/callback")
+    expect(res.body.callbackUrl).toBe("http://localhost:3000/api/profile/github/callback")
 
     res = await call(hApi, "POST", "/api/profile/github/oauth", { clientId: "" }, auth)
     expect(res.status).toBe(400)

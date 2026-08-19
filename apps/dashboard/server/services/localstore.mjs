@@ -37,6 +37,21 @@ try {
   /* already exists */
 }
 
+// ── Write lock per table — prevents concurrent JSON writes from clobbering data
+const locks = new Map()
+async function withLock(table, fn) {
+  while (locks.get(table)) await locks.get(table)
+  let release
+  const p = new Promise((r) => { release = r })
+  locks.set(table, p)
+  try {
+    return await fn()
+  } finally {
+    locks.delete(table)
+    release()
+  }
+}
+
 export function isTable(table) {
   return TABLES.has(table)
 }
@@ -84,33 +99,39 @@ export async function listRows(table) {
 }
 
 export async function appendRow(table, row, userId) {
-  const rows = await readRows(table)
-  const entry = {
-    id: row?.id ?? randomBytes(8).toString("hex"),
-    created_at: new Date().toISOString(),
-    user_id: userId ?? null,
-    ...row
-  }
-  rows.push(entry)
-  await writeRows(table, rows)
-  return entry
+  return withLock(table, async () => {
+    const rows = await readRows(table)
+    const entry = {
+      id: row?.id ?? randomBytes(8).toString("hex"),
+      created_at: new Date().toISOString(),
+      user_id: userId ?? null,
+      ...row
+    }
+    rows.push(entry)
+    await writeRows(table, rows)
+    return entry
+  })
 }
 
 /** Replace a row with the same id (or insert it) — used for single-row-per-user settings. */
 export async function upsertRow(table, row, userId) {
-  const rows = await readRows(table)
-  const id = row?.id ?? randomBytes(8).toString("hex")
-  const entry = { ...row, id, user_id: userId ?? null }
-  const idx = rows.findIndex((r) => r.id === id)
-  if (idx >= 0) rows[idx] = entry
-  else rows.push(entry)
-  await writeRows(table, rows)
-  return entry
+  return withLock(table, async () => {
+    const rows = await readRows(table)
+    const id = row?.id ?? randomBytes(8).toString("hex")
+    const entry = { ...row, id, user_id: userId ?? null }
+    const idx = rows.findIndex((r) => r.id === id)
+    if (idx >= 0) rows[idx] = entry
+    else rows.push(entry)
+    await writeRows(table, rows)
+    return entry
+  })
 }
 
 export async function removeRow(table, id) {
-  const rows = await readRows(table)
-  const next = rows.filter((r) => r.id !== id)
-  if (next.length !== rows.length) await writeRows(table, next)
-  return { removed: next.length !== rows.length }
+  return withLock(table, async () => {
+    const rows = await readRows(table)
+    const next = rows.filter((r) => r.id !== id)
+    if (next.length !== rows.length) await writeRows(table, next)
+    return { removed: next.length !== rows.length }
+  })
 }

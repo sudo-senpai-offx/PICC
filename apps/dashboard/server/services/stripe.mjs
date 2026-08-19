@@ -36,8 +36,8 @@ export async function createPortalSession(customerId) {
   })
 }
 
-export function constructWebhookEvent(rawBody, signature) {
-  const s = stripe()
+export async function constructWebhookEvent(rawBody, signature) {
+  const s = await stripe()
   if (!env.stripeWebhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET not configured")
   return s.webhooks.constructEvent(rawBody, signature, env.stripeWebhookSecret)
 }

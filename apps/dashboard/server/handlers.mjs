@@ -203,6 +203,64 @@ function maskAutomatorCredentials(creds) {
   return out
 }
 
+// ---------------------------------------------------------------------
+// CSRF / Origin protection (2025 best practice: Sec-Fetch-Site + Origin)
+// ---------------------------------------------------------------------
+// Trusted origins for CORS and CSRF. Only these may make credentialed requests.
+const TRUSTED_ORIGINS = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:3000"
+]
+
+// Allowed redirect destinations for Stripe/PayPal (prevents open redirect)
+const ALLOWED_REDIRECT_HOSTS = ["localhost", "127.0.0.1"]
+
+/**
+ * CSRF check for state-changing requests (POST/PUT/PATCH/DELETE).
+ * Uses Sec-Fetch-Site (primary) + Origin (fallback) per Filippo Valsorda's algorithm.
+ * GET/HEAD/OPTIONS are always safe.
+ */
+function checkCsrf(req) {
+  const method = (req.method ?? "GET").toUpperCase()
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return true
+
+  const origin = req.headers.origin
+  const secFetchSite = req.headers["sec-fetch-site"]
+
+  // Step 1: Check trusted origins allow-list
+  if (origin && TRUSTED_ORIGINS.includes(origin)) return true
+
+  // Step 2: Check Sec-Fetch-Site (primary defense, all browsers since 2023)
+  if (secFetchSite !== undefined) {
+    return secFetchSite === "same-origin" || secFetchSite === "none"
+  }
+
+  // Step 3: No browser headers at all (curl, API clients) — not a CSRF
+  if (!origin) return true
+
+  // Step 4: Fallback — compare Origin host with Host header
+  try {
+    const originHost = new URL(origin).host
+    const reqHost = req.headers.host ?? "localhost"
+    return originHost === reqHost
+  } catch {
+    return false
+  }
+}
+
+/** Validate a redirect URL is on a trusted host (prevents open redirect). */
+function isAllowedRedirect(url) {
+  if (!url) return false
+  try {
+    const u = new URL(url)
+    return ALLOWED_REDIRECT_HOSTS.includes(u.hostname)
+  } catch {
+    return false
+  }
+}
+
 // Tiny in-memory per-key rate limiter for sensitive/costly endpoints.
 const rateBuckets = new Map()
 function rateLimited(key, limit, windowMs) {
@@ -217,9 +275,17 @@ function rateLimited(key, limit, windowMs) {
   return false
 }
 
+// Evict stale rate-limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, list] of rateBuckets) {
+    const fresh = list.filter((t) => now - t < 300_000)
+    if (fresh.length === 0) rateBuckets.delete(key)
+    else rateBuckets.set(key, fresh)
+  }
+}, 300_000).unref()
+
 function clientIp(req) {
-  const xff = req.headers?.["x-forwarded-for"]
-  if (typeof xff === "string" && xff.trim()) return xff.split(",")[0].trim()
   return req.socket?.remoteAddress ?? "unknown"
 }
 
@@ -694,17 +760,30 @@ export function isApiRequest(url) {
 }
 
 export async function handleApi(req, res, url) {
+  // CSRF protection for state-changing requests
+  if (!checkCsrf(req)) {
+    writeJson(res, 403, { error: "CSRF rejected: cross-origin state-changing request blocked" })
+    return
+  }
+
   const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`)
   const path = parsed.pathname
   const body = path === "/api/browser/upload" ? await readBodyMax(req, 64e6) : await readBody(req)
   const auth = req.headers.authorization
+
+  // Reject invalid JSON bodies on POST/PUT/PATCH
+  if (body === null && ["POST", "PUT", "PATCH"].includes(req.method)) {
+    writeJson(res, 400, { error: "invalid JSON in request body" })
+    return
+  }
 
   if (path === "/api/health" && (req.method === "GET" || req.method === "POST")) {
     let agents = null
     if (env.agentsUrl) {
       try {
         const r = await withTimeout(fetch(`${env.agentsUrl}/health`), 3000)
-        agents = { url: env.agentsUrl, ok: r.ok, ...(await r.json()) }
+        const data = await r.json().catch(() => ({}))
+        agents = { url: env.agentsUrl, ok: r.ok, ...data }
       } catch {
         agents = { url: env.agentsUrl, ok: false }
       }
@@ -724,7 +803,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/finance/quote" && req.method === "POST") {
-    const tickers = Array.isArray(body.tickers) ? body.tickers.map(String).filter(Boolean) : []
+    const tickers = Array.isArray(body.tickers) ? body.tickers.map(String).filter(Boolean).slice(0, 20) : []
     if (tickers.length === 0) return writeJson(res, 400, { error: "tickers required" })
     const settled = await Promise.allSettled(tickers.map((t) => withTimeout(getQuote(t), 8000)))
     const quotes = {}
@@ -755,7 +834,7 @@ export async function handleApi(req, res, url) {
       })
     } catch (err) {
       console.warn("[picc] forecast failed:", err.message)
-      writeJson(res, 502, { error: err.message })
+      writeJson(res, 502, { error: "forecast service unavailable" })
     }
     return
   }
@@ -765,7 +844,7 @@ export async function handleApi(req, res, url) {
       writeJson(res, 200, await withTimeout(getCryptoMarket(), 20000))
     } catch (err) {
       console.warn("[picc] crypto market failed:", err.message)
-      writeJson(res, 502, { error: err.message })
+      writeJson(res, 502, { error: "crypto market unavailable" })
     }
     return
   }
@@ -922,7 +1001,7 @@ export async function handleApi(req, res, url) {
 
   if (path === "/api/trading/ledger" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
-    const limit = Number(parsed.searchParams.get("limit") ?? 200)
+    const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 200), 1), 1000)
     writeJson(res, 200, { ok: true, stats: ledgerStats(), engine: ledgerEngineStats(), entries: ledgerHistory(limit) })
     return
   }
@@ -935,7 +1014,7 @@ export async function handleApi(req, res, url) {
 
   if (path === "/api/trading/observed-payouts" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
-    const limit = Number(parsed.searchParams.get("limit") ?? 200)
+    const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 200), 1), 1000)
     writeJson(res, 200, await observedPayouts({ limit }))
     return
   }
@@ -1122,7 +1201,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/trading/paper/history" && (req.method === "GET" || req.method === "POST")) {
-    writeJson(res, 200, { ok: true, closed: await paperHistory(Number(body?.limit) || 50) })
+    writeJson(res, 200, { ok: true, closed: await paperHistory(Math.min(Math.max(Number(body?.limit) || 50, 1), 500)) })
     return
   }
 
@@ -1280,7 +1359,7 @@ export async function handleApi(req, res, url) {
 
   if (path === "/api/trading/demo/deals" && (req.method === "GET" || req.method === "POST")) {
     try {
-      writeJson(res, 200, await demoDeals(Number(body?.limit) || Number(parsed.searchParams.get("limit")) || 50))
+      writeJson(res, 200, await demoDeals(Math.min(Math.max(Number(body?.limit) || Number(parsed.searchParams.get("limit")) || 50, 1), 500)))
     } catch (err) {
       writeJson(res, 500, { ok: false, error: err.message })
     }
@@ -1350,6 +1429,179 @@ export async function handleApi(req, res, url) {
       )
     } catch (err) {
       console.warn("[picc] trading scan failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // -------------------------------------------------------------------
+  // OHLCV candle data for the chart component. Returns liveEO buffer data
+  // (for EO assets) or Yahoo Finance history (for stocks/ETFs).
+  // -------------------------------------------------------------------
+  if (path === "/api/trading/candles" && req.method === "POST") {
+    const assetId = String(body?.assetId ?? "").trim().toUpperCase()
+    const timeframe = Math.min(Math.max(Number(body?.timeframe) || 60, 5), 3600)
+    const count = Math.min(Math.max(Number(body?.count) || 200, 20), 500)
+    if (!assetId) return writeJson(res, 400, { error: "assetId required" })
+    try {
+      const { liveEOData } = await import("./services/liveEO.mjs")
+      const data = liveEOData()
+      const asset = data.assets.find((a) => a.id === assetId)
+      if (asset && asset.periods[timeframe]) {
+        const ohlc = asset.periods[timeframe].slice(-count)
+        return writeJson(res, 200, { ok: true, source: "live", assetId, timeframe, candles: ohlc })
+      }
+      const { getHistory } = await import("./services/yahoo.mjs")
+      const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
+      const candles = history.dates.map((ts, i) => ({
+        time: Math.floor(ts / 1000),
+        open: Number(history.opens[i]) || 0,
+        high: Number(history.highs[i]) || 0,
+        low: Number(history.lows[i]) || 0,
+        close: Number(history.closes[i]) || 0
+      })).filter((c) => c.close > 0 && c.time > 0).slice(-count)
+      writeJson(res, 200, { ok: true, source: "yahoo", assetId, timeframe, candles, name: history.name })
+    } catch (err) {
+      console.warn("[picc] candles failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // ── Advanced indicator calculations ──────────────────────────────────────
+  if (req.method === "GET" && path === "/api/trading/indicators") {
+    const assetId = parsed.searchParams.get("assetId") || "EURUSD"
+    const timeframe = parsed.searchParams.get("timeframe") || "daily"
+    const count = parsed.searchParams.get("count") || 200
+    const safeCount = Math.min(500, Math.max(10, Number(count) || 200))
+
+    try {
+      let candles = []
+      try {
+        const { liveEOData } = await import("./services/liveEO.mjs")
+        const data = liveEOData()
+        const asset = data.assets?.find((a) => a.id === assetId)
+        const buffer = asset?.periods?.[timeframe] ?? []
+        if (buffer.length > 0) {
+          const sliced = buffer.slice(-safeCount)
+          candles = sliced.map(c => ({
+            time: Math.floor(Number(c.t ?? c.time ?? 0) / 1000) || Math.floor(Number(c.t ?? c.time ?? 0)),
+            open: Number(c.o ?? c.open ?? c.close) || 0,
+            high: Number(c.h ?? c.high ?? c.close) || 0,
+            low: Number(c.l ?? c.low ?? c.close) || 0,
+            close: Number(c.c ?? c.close) || 0,
+            volume: Number(c.v ?? c.volume ?? 0) || 0
+          })).filter(c => c.close > 0)
+        }
+      } catch { /* liveEO not available */ }
+
+      if (!candles.length) {
+        const { getHistory } = await import("./services/yahoo.mjs")
+        const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
+        candles = history.dates.map((ts, i) => ({
+          time: Math.floor(ts / 1000),
+          open: Number(history.opens[i]) || 0,
+          high: Number(history.highs[i]) || 0,
+          low: Number(history.lows[i]) || 0,
+          close: Number(history.closes[i]) || 0,
+          volume: Number(history.volumes?.[i] ?? 0) || 0
+        })).filter(c => c.close > 0 && c.time > 0).slice(-safeCount)
+      }
+
+      if (!candles.length) {
+        writeJson(res, 404, { ok: false, error: "No candle data available" })
+        return
+      }
+
+      const { computeIndicatorDashboard } = await import("./services/indicators.mjs")
+      const dashboard = computeIndicatorDashboard(candles)
+
+      writeJson(res, 200, {
+        ok: true,
+        assetId,
+        timeframe,
+        bars: dashboard.bars,
+        last: dashboard.last,
+        indicators: {
+          ichimoku: dashboard.ichimoku,
+          fibonacci: dashboard.fibonacci,
+          keltner: dashboard.keltner,
+          pivots: dashboard.pivots,
+          volumeProfile: dashboard.volumeProfile,
+          heikinAshi: dashboard.heikinAshi,
+          // Also include key base indicators for context
+          ema: dashboard.ema,
+          atr: dashboard.atr,
+          rsi: dashboard.rsi,
+          bollinger: dashboard.bollinger,
+          macd: dashboard.macd,
+          stochastic: dashboard.stochastic,
+          adx: dashboard.adx,
+          alligator: dashboard.alligator,
+          aroon: dashboard.aroon,
+          psar: dashboard.psar,
+          linearRegression: dashboard.linearRegression
+        }
+      })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: String(err?.message ?? err) })
+    }
+    return
+  }
+
+  // -------------------------------------------------------------------
+  // Strategy backtester — runs multi-model prediction over historical
+  // windows and reports walk-forward hit rates, equity curve, drawdown.
+  // -------------------------------------------------------------------
+  if (path === "/api/trading/backtest" && req.method === "POST") {
+    const symbol = String(body?.symbol ?? "").trim().toUpperCase()
+    const days = Math.min(Math.max(Number(body?.days) || 3, 1), 30)
+    const windows = Math.min(Math.max(Number(body?.windows) || 10, 3), 30)
+    if (!symbol) return writeJson(res, 400, { error: "symbol required" })
+    try {
+      const { getHistory } = await import("./services/yahoo.mjs")
+      const { backtestModels } = await import("./services/prediction.mjs")
+      const history = await withTimeout(getHistory(symbol, "2y"), 15000)
+      const closes = (history.closes ?? []).filter((v) => typeof v === "number" && isFinite(v) && v > 0)
+      if (closes.length < 60) return writeJson(res, 400, { error: "insufficient data for backtest" })
+      const bt = backtestModels(closes, days, windows)
+      const hitRates = bt.hitRates ?? {}
+      const sampleSize = bt.sampleSize ?? 0
+      const avgHitRate = Object.values(hitRates).filter((v) => v != null).reduce((s, v, _, a) => s + v / a.length, 0)
+      const agreement = Object.values(hitRates).filter((v) => v != null).length > 0
+        ? Object.values(hitRates).filter((v) => v != null).filter((v) => v > 0.5).length / Object.values(hitRates).filter((v) => v != null).length
+        : 0
+      const trades = Object.entries(hitRates).map(([model, hr]) => ({ model, hitRate: hr, n: (bt.scores?.[model]?.length ?? 0) }))
+      const windowResults = bt.windows ?? []
+      let eq = 100
+      let pk = 100
+      const equity = [{ i: 0, v: 100 }]
+      const dd = [{ i: 0, v: 0 }]
+      windowResults.forEach((w, idx) => {
+        if (w.hit) eq += 0.8
+        else eq -= 1
+        pk = Math.max(pk, eq)
+        equity.push({ i: idx + 1, v: eq })
+        dd.push({ i: idx + 1, v: pk > 0 ? ((pk - eq) / pk) * 100 : 0 })
+      })
+      writeJson(res, 200, {
+        ok: true,
+        symbol,
+        days,
+        windows,
+        hitRate: avgHitRate,
+        sampleSize,
+        agreement,
+        trades,
+        equity,
+        drawdown: dd,
+        peak: pk,
+        returnPct: eq - 100,
+        maxDrawdown: dd.length ? Math.max(...dd.map((d) => d.v)) : 0,
+        name: history.name
+      })
+    } catch (err) {
+      console.warn("[picc] backtest failed:", err.message)
       writeJson(res, 502, { ok: false, error: err.message })
     }
     return
@@ -1544,7 +1796,8 @@ export async function handleApi(req, res, url) {
   if (path === "/api/profile/github/begin" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return
     const userId = await verifyUser(auth)
-    const redirectUri = `http://${req.headers.host ?? "localhost"}/api/profile/github/callback`
+    // Use fixed redirect URI to prevent Host header manipulation
+    const redirectUri = `http://localhost:${env.port}/api/profile/github/callback`
     try {
       const flow = await beginGithubOauth(userId, redirectUri)
       writeJson(res, 200, { ok: true, ...flow })
@@ -1805,11 +2058,11 @@ export async function handleApi(req, res, url) {
         }),
         60000
       )
-      const data = await r.json()
+      const data = await r.json().catch(() => ({ error: "non-JSON response from agents service" }))
       writeJson(res, r.ok ? 200 : 502, data)
     } catch (err) {
-      console.error("[picc] agents proxy failed:", err)
-      writeJson(res, 502, { error: "agents service unreachable", detail: err.message })
+      console.error("[picc] agents proxy failed:", err.message)
+      writeJson(res, 502, { error: "agents service unreachable" })
     }
     return
   }
@@ -1828,11 +2081,11 @@ export async function handleApi(req, res, url) {
         }),
         8000
       )
-      const data = await r.json()
+      const data = await r.json().catch(() => ({ error: "non-JSON response from agents service" }))
       writeJson(res, r.ok ? 200 : 502, data)
     } catch (err) {
-      console.error("[picc] agents settings proxy failed:", err)
-      writeJson(res, 502, { error: "agents service unreachable", detail: err.message })
+      console.error("[picc] agents settings proxy failed:", err.message)
+      writeJson(res, 502, { error: "agents service unreachable" })
     }
     return
   }
@@ -1843,18 +2096,23 @@ export async function handleApi(req, res, url) {
     if (!userId) return writeJson(res, 401, { error: "authentication required" })
     const { priceId, tier = "pro" } = body
     if (!priceId) return writeJson(res, 400, { error: "priceId required" })
+    const successUrl = body.successUrl || "http://localhost:5173/profile?billing=success"
+    const cancelUrl = body.cancelUrl || "http://localhost:5173/profile"
+    if (!isAllowedRedirect(successUrl) || !isAllowedRedirect(cancelUrl)) {
+      return writeJson(res, 400, { error: "redirect URLs must point to localhost" })
+    }
     try {
       const session = await createCheckoutSession({
         priceId,
         tier,
         userId,
-        successUrl: body.successUrl ?? "http://localhost:5173/profile?billing=success",
-        cancelUrl: body.cancelUrl ?? "http://localhost:5173/profile"
+        successUrl,
+        cancelUrl
       })
       writeJson(res, 200, { url: session.url })
     } catch (err) {
       console.error("[picc] stripe checkout failed:", err)
-      writeJson(res, 400, { error: "stripe checkout failed", detail: err.message })
+      writeJson(res, 400, { error: "stripe checkout failed" })
     }
     return
   }
@@ -1895,17 +2153,22 @@ export async function handleApi(req, res, url) {
     if (!userId) return writeJson(res, 401, { error: "authentication required" })
     const tier = validTier(body.tier)
     if (!tier) return writeJson(res, 400, { error: "tier must be 'pro' or 'business'" })
+    const returnUrl = body.returnUrl || "http://localhost:5173/profile?billing=success"
+    const cancelUrl = body.cancelUrl || "http://localhost:5173/pricing"
+    if (!isAllowedRedirect(returnUrl) || !isAllowedRedirect(cancelUrl)) {
+      return writeJson(res, 400, { error: "redirect URLs must point to localhost" })
+    }
     try {
       const result = await createPayPalOrder({
         tier,
         userId,
-        returnUrl: body.returnUrl ?? "http://localhost:5173/profile?billing=success",
-        cancelUrl: body.cancelUrl ?? "http://localhost:5173/pricing"
+        returnUrl,
+        cancelUrl
       })
       writeJson(res, 200, { orderId: result.orderId, url: result.url })
     } catch (err) {
       console.error("[picc] paypal create-order failed:", err)
-      writeJson(res, 400, { error: "paypal checkout failed", detail: err.message })
+      writeJson(res, 400, { error: "paypal checkout failed" })
     }
     return
   }
@@ -2528,10 +2791,29 @@ const BROWSER_ROUTES = {
   // Extension-supplied page metrics (received from content script via background)
   "/api/browser/metrics": async (req, res, parsed) => {
     if (req.method !== "POST") return false
+    const ip = clientIp(req)
+    if (rateLimited(`ext-metrics:${ip}`, 60, 60_000)) {
+      return writeJson(res, 429, { error: "rate limited" })
+    }
     const body = parsed.body || {}
-    // Store latest metrics in memory (broadcast to dashboard via stream)
+    // Bound metrics to prevent memory exhaustion — max 50 tracked tabs
     if (!globalThis.__picc_ext_metrics) globalThis.__picc_ext_metrics = {}
-    globalThis.__picc_ext_metrics[body.tabId || "active"] = { ...body, receivedAt: Date.now() }
+    const metrics = globalThis.__picc_ext_metrics
+    const key = String(body.tabId || "active").slice(0, 64)
+    metrics[key] = {
+      url: String(body.url || "").slice(0, 2048),
+      title: String(body.title || "").slice(0, 256),
+      timestamp: Number(body.timestamp) || Date.now(),
+      viewport: body.viewport || null,
+      resources: Number(body.resources) || 0,
+      receivedAt: Date.now()
+    }
+    // Evict oldest if exceeding 50 tabs
+    const keys = Object.keys(metrics)
+    if (keys.length > 50) {
+      const sorted = keys.sort((a, b) => (metrics[a].receivedAt || 0) - (metrics[b].receivedAt || 0))
+      for (let i = 0; i < keys.length - 50; i++) delete metrics[sorted[i]]
+    }
     writeJson(res, 200, { ok: true })
     return true
   },
@@ -2552,13 +2834,22 @@ const BROWSER_ROUTES = {
   // Extension heartbeat (background.js calls this every ~12s)
   "/api/extension/heartbeat": async (req, res) => {
     if (req.method !== "POST") return writeJson(res, 405, { error: "POST required" })
+    const ip = clientIp(req)
+    if (rateLimited(`ext-heartbeat:${ip}`, 30, 60_000)) {
+      return writeJson(res, 429, { error: "rate limited" })
+    }
     const body = typeof req.__body === "object" ? req.__body : {}
+    // Bound the data to prevent memory exhaustion
     globalThis.__picc_ext_heartbeat = {
-      version: body.extensionVersion || "unknown",
-      installTime: body.installTime || null,
-      activeTab: body.activeTab || null,
-      cookieCount: body.cookieCount || 0,
-      timestamp: body.timestamp || Date.now(),
+      version: String(body.extensionVersion || "unknown").slice(0, 32),
+      installTime: Number(body.installTime) || null,
+      activeTab: body.activeTab ? {
+        id: Number(body.activeTab.id) || null,
+        url: String(body.activeTab.url || "").slice(0, 2048),
+        title: String(body.activeTab.title || "").slice(0, 256)
+      } : null,
+      cookieCount: Math.min(Number(body.cookieCount) || 0, 10000),
+      timestamp: Date.now(),
       receivedAt: Date.now()
     }
     writeJson(res, 200, { ok: true })
@@ -2569,9 +2860,13 @@ const BROWSER_ROUTES = {
   "/api/extension/tab-changed": async (req, res) => {
     if (req.method !== "POST") return writeJson(res, 405, { error: "POST required" })
     const body = typeof req.__body === "object" ? req.__body : {}
-    // Update heartbeat with current tab
+    // Update heartbeat with current tab (bounded)
     if (globalThis.__picc_ext_heartbeat) {
-      globalThis.__picc_ext_heartbeat.activeTab = body
+      globalThis.__picc_ext_heartbeat.activeTab = {
+        id: Number(body.id) || null,
+        url: String(body.url || "").slice(0, 2048),
+        title: String(body.title || "").slice(0, 256)
+      }
       globalThis.__picc_ext_heartbeat.receivedAt = Date.now()
     }
     writeJson(res, 200, { ok: true })
@@ -2640,33 +2935,43 @@ function readRawBody(req, maxBytes = 2e6) {
 
 function readBody(req) {
   return readRawBody(req).then((raw) => {
+    if (!raw) return {}
     try {
-      return raw ? JSON.parse(raw) : {}
+      return JSON.parse(raw)
     } catch {
-      return {}
+      return null // signal invalid JSON to caller
     }
   })
 }
 
 function readBodyMax(req, maxBytes) {
   return readRawBody(req, maxBytes).then((raw) => {
+    if (!raw) return {}
     try {
-      return raw ? JSON.parse(raw) : {}
+      return JSON.parse(raw)
     } catch {
-      return {}
+      return null
     }
   })
 }
 
 export function writeJson(res, status, payload) {
   const json = JSON.stringify(payload)
-  res.writeHead(status, {
+  // Origin-specific CORS instead of wildcard — prevents credentialed cross-origin abuse
+  const reqOrigin = res.req?.headers?.origin
+  const allowedOrigin = reqOrigin && TRUSTED_ORIGINS.includes(reqOrigin) ? reqOrigin : null
+  const headers = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Content-Length": Buffer.byteLength(json)
-  })
+  }
+  if (allowedOrigin) {
+    headers["Access-Control-Allow-Origin"] = allowedOrigin
+    headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    headers["Access-Control-Allow-Credentials"] = "true"
+    headers["Vary"] = "Origin"
+  }
+  res.writeHead(status, headers)
   res.end(json)
 }
 

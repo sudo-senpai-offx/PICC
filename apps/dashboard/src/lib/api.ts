@@ -33,7 +33,9 @@ export interface HealthInfo {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  const headers: Record<string, string> = {}
+  // Only set Content-Type for non-GET requests to avoid triggering unnecessary CORS preflight
+  if (init.method && init.method !== "GET") headers["Content-Type"] = "application/json"
   const authToken = token ?? getToken()
   if (authToken) headers.Authorization = `Bearer ${authToken}`
   let res: Response

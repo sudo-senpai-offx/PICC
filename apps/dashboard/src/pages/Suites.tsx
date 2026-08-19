@@ -86,7 +86,6 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
  */
 function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () => void }) {
   const meta = SUITE_META[suiteId]
-  if (!meta) return null
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -95,6 +94,8 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
+
+  if (!meta) return null
 
   return (
     <div

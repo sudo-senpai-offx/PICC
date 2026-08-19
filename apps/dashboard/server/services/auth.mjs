@@ -18,6 +18,21 @@ try {
   /* already exists */
 }
 
+// ── Write lock per file — prevents concurrent JSON writes from clobbering data
+const locks = new Map()
+async function withLock(file, fn) {
+  while (locks.get(file)) await locks.get(file)
+  let release
+  const p = new Promise((r) => { release = r })
+  locks.set(file, p)
+  try {
+    return await fn()
+  } finally {
+    locks.delete(file)
+    release()
+  }
+}
+
 async function readJSON(file, fallback) {
   try {
     return JSON.parse(await readFile(file, "utf8"))
@@ -100,7 +115,7 @@ export async function createAccount({ email, password, name }) {
     passwordHash: hashPassword(password, salt),
     createdAt: new Date().toISOString()
   })
-  await saveUsers(users)
+  await withLock(USERS_FILE, () => saveUsers(users))
 
   const token = await createSession(id)
   return { user: publicUser(users[users.length - 1]), token }
@@ -120,11 +135,13 @@ export async function loginAccount({ email, password }) {
 
 async function createSession(userId) {
   const token = randomBytes(32).toString("hex")
-  const data = await readJSON(SESSIONS_FILE, { sessions: {} })
-  const sessions = data.sessions ?? {}
-  sessions[token] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS }
-  await writeJSON(SESSIONS_FILE, { sessions })
-  return token
+  return withLock(SESSIONS_FILE, async () => {
+    const data = await readJSON(SESSIONS_FILE, { sessions: {} })
+    const sessions = data.sessions ?? {}
+    sessions[token] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS }
+    await writeJSON(SESSIONS_FILE, { sessions })
+    return token
+  })
 }
 
 export async function verifyToken(token) {
@@ -134,8 +151,12 @@ export async function verifyToken(token) {
   const s = sessions[token]
   if (!s) return null
   if (Date.now() > s.expiresAt) {
-    delete sessions[token]
-    await writeJSON(SESSIONS_FILE, { sessions })
+    await withLock(SESSIONS_FILE, async () => {
+      const d = await readJSON(SESSIONS_FILE, { sessions: {} })
+      const sess = d.sessions ?? {}
+      delete sess[token]
+      await writeJSON(SESSIONS_FILE, { sessions: sess })
+    })
     return null
   }
   return s.userId
@@ -143,12 +164,14 @@ export async function verifyToken(token) {
 
 export async function revokeToken(token) {
   if (!token) return
-  const data = await readJSON(SESSIONS_FILE, { sessions: {} })
-  const sessions = data.sessions ?? {}
-  if (sessions[token]) {
-    delete sessions[token]
-    await writeJSON(SESSIONS_FILE, { sessions })
-  }
+  await withLock(SESSIONS_FILE, async () => {
+    const data = await readJSON(SESSIONS_FILE, { sessions: {} })
+    const sessions = data.sessions ?? {}
+    if (sessions[token]) {
+      delete sessions[token]
+      await writeJSON(SESSIONS_FILE, { sessions })
+    }
+  })
 }
 
 export async function getUserById(id) {

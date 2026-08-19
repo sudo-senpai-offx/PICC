@@ -136,25 +136,26 @@
 
   // ── Metrics collection (supplies data to PICC web app) ─────────────────────
   function collectPageMetrics() {
+    // Use PerformanceNavigationTiming (modern) instead of deprecated performance.timing
+    const nav = performance.getEntriesByType?.("navigation")?.[0]
+    const loadTime = nav ? nav.loadEventEnd - nav.startTime : 0
+    const domReady = nav ? nav.domContentLoadedEventEnd - nav.startTime : 0
+
     return {
       url: window.location.href,
       title: document.title,
       timestamp: Date.now(),
       viewport: { width: window.innerWidth, height: window.innerHeight },
       scroll: { x: window.scrollX, y: window.scrollY, max: document.documentElement.scrollHeight },
-      performance: {
-        loadTime: performance.timing?.loadEventEnd - performance.timing?.navigationStart || 0,
-        domReady: performance.timing?.domContentLoadedEventEnd - performance.timing?.navigationStart || 0,
-      },
+      performance: { loadTime, domReady },
       resources: performance.getEntriesByType?.("resource")?.length || 0,
       forms: document.forms.length,
       links: document.links.length,
       images: document.images.length,
     }
   }
-
-  // Expose metrics getter for PICC web app
-  window.__picc_getMetrics = collectPageMetrics
+  // Expose metrics getter for PICC web app (accessible only to extension content scripts, not page JS)
+  // SECURITY: window-level getter removed — page scripts must not access internal extension data
 
   // ── In-page toast notification ──────────────────────────────────────────────
   function showToast(title, message, type = "info") {
@@ -170,7 +171,10 @@
     `
     const style = document.createElement("style")
     style.textContent = `@keyframes picc-toast-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}`
-    document.documentElement.appendChild(style)
+    if (!document.getElementById("__picc_toast_style__")) {
+      style.id = "__picc_toast_style__"
+      document.documentElement.appendChild(style)
+    }
 
     const titleEl = document.createElement("div")
     titleEl.style.cssText = "font-weight:600;font-size:12px;color:#6c63ff;margin-bottom:4px;"
@@ -339,49 +343,222 @@
   }
 
   // ── Trading suite dockables ────────────────────────────────────────────────
+  // Live data state for all trading panels
+  const tradingState = {
+    assets: [],
+    account: null,
+    decisions: [],
+    autopilot: null,
+    paper: null,
+    demo: null,
+    lastUpdate: 0
+  }
+
+  function fmt$(n) {
+    if (n == null || !isFinite(n)) return "\u2014"
+    return "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+  function fmtPct(n) {
+    if (n == null || !isFinite(n)) return "\u2014"
+    return n.toFixed(2) + "%"
+  }
+  function tone(val, pos, neg) {
+    if (val > 0) return pos || "#4ade80"
+    if (val < 0) return neg || "#ff6b6b"
+    return "#a5a0ff"
+  }
+
+  // ── Price Ticker Renderer ──────────────────────────────────────────────────
+  function renderPriceTicker() {
+    const assets = tradingState.assets
+    if (!assets.length) return '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
+    const rows = assets.slice(0, 6).map((a) => {
+      const c = tone(a.changePct)
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #6c63ff20">` +
+        `<span style="font-weight:600;font-size:11px">${a.name || a.id}</span>` +
+        `<span style="font-size:11px;color:${c}">${a.price != null ? a.price.toFixed(4) : "\u2014"}</span>` +
+        `<span style="font-size:10px;color:${c}">${a.changePct != null ? (a.changePct >= 0 ? "+" : "") + a.changePct.toFixed(2) + "%" : ""}</span>` +
+        `</div>`
+    }).join("")
+    const acct = tradingState.account
+    const bal = acct ? fmt$(acct.balance) : ""
+    return `<div style="font-size:11px">${rows}</div>` +
+      (bal ? `<div style="margin-top:4px;font-size:10px;color:#a5a0ff">Balance: ${bal}</div>` : "")
+  }
+
+  // ── Portfolio Renderer ─────────────────────────────────────────────────────
+  function renderPortfolio() {
+    const paper = tradingState.paper
+    const demo = tradingState.demo
+    const lines = []
+    if (paper) {
+      lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin-bottom:2px">Paper Trading</div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cash</span><span>${fmt$(paper.cash)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Committed</span><span>${fmt$(paper.committed)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>PnL</span><span style="color:${tone(paper.realizedPnl)}">${fmt$(paper.realizedPnl)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${paper.winRate != null ? paper.winRate + "%" : "\u2014"}</span></div>`)
+    }
+    if (demo) {
+      lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin:4px 0 2px">ExpertOption Demo</div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Balance</span><span>${fmt$(demo.balance)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Today</span><span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Trades</span><span>${demo.todayTrades ?? 0}</span></div>`)
+    }
+    if (!lines.length) return '<div style="color:#a5a0ff;padding:4px">No position data yet\u2026</div>'
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── AI Signals Renderer ────────────────────────────────────────────────────
+  function renderAISignals() {
+    const d = tradingState.decisions
+    if (!d.length) return '<div style="color:#a5a0ff;padding:4px">Waiting for AI analysis\u2026</div>'
+    const rows = d.slice(0, 5).map((dec) => {
+      const verdictColor = dec.verdict === "TRADE" ? "#4ade80" : dec.verdict === "OBSERVE" ? "#f59e0b" : "#a5a0ff"
+      const gates = dec.gates || {}
+      const gIcon = (ok) => ok ? '<span style="color:#4ade80">\u2713</span>' : '<span style="color:#ff6b6b">\u2717</span>'
+      return `<div style="border-bottom:1px solid #6c63ff15;padding:3px 0">` +
+        `<div style="display:flex;justify-content:space-between;align-items:center">` +
+          `<span style="font-weight:600;font-size:11px">${dec.asset || dec.assetId}</span>` +
+          `<span style="font-size:10px;font-weight:600;color:${verdictColor}">${dec.verdict}</span>` +
+        `</div>` +
+        `<div style="display:flex;gap:6px;font-size:9px;color:#a5a0ff">` +
+          `<span>${gIcon(gates.score)} conf</span>` +
+          `<span>${gIcon(gates.winProb)} prob</span>` +
+          `<span>${gIcon(gates.payout)} pay</span>` +
+          `<span>${dec.confidence != null ? dec.confidence.toFixed(0) + "%" : ""}</span>` +
+          `<span style="color:${tone(0, dec.direction === "up" ? "#4ade80" : "#ff6b6b")}">${(dec.direction || "").toUpperCase()}</span>` +
+        `</div>` +
+        `</div>`
+    }).join("")
+    return `<div style="padding:2px 0">${rows}</div>`
+  }
+
+  // ── Risk Manager Renderer ──────────────────────────────────────────────────
+  function renderRiskManager() {
+    const demo = tradingState.demo
+    const auto = tradingState.autopilot
+    if (!demo && !auto) return '<div style="color:#a5a0ff;padding:4px">Risk metrics loading\u2026</div>'
+    const lines = []
+    if (auto) {
+      const maxLoss = auto.dailyLossLimitPct ?? 10
+      const todayLoss = auto.dailyLoss != null ? Math.abs(auto.dailyLoss) : 0
+      const pct = maxLoss > 0 ? Math.min(100, (todayLoss / maxLoss) * 100) : 0
+      const barColor = pct > 80 ? "#ff6b6b" : pct > 50 ? "#f59e0b" : "#4ade80"
+      lines.push(`<div style="font-size:11px;font-weight:600;color:#6c63ff;margin-bottom:2px">Daily Loss Limit</div>`)
+      lines.push(`<div style="background:#1a1a2e;border-radius:3px;height:8px;overflow:hidden;margin-bottom:2px">` +
+        `<div style="height:100%;width:${pct}%;background:${barColor};border-radius:3px;transition:width .3s"></div></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;color:#a5a0ff"><span>${fmtPct(todayLoss)} used</span><span>${fmtPct(maxLoss)} limit</span></div>`)
+    }
+    if (demo?.autopilot) {
+      const ap = demo.autopilot
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:4px"><span>Concurrent</span><span>${ap.concurrent ?? 0}/${ap.maxConcurrent ?? 1}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Trades today</span><span>${demo.todayTrades ?? 0}/${ap.maxDailyTrades ?? "\u221e"}</span></div>`)
+      const cdLeft = ap.cooldownRemainingMs ? Math.ceil(ap.cooldownRemainingMs / 1000) + "s" : "ready"
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cooldown</span><span>${cdLeft}</span></div>`)
+    }
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Autopilot Control Renderer ─────────────────────────────────────────────
+  function renderAutopilot() {
+    const auto = tradingState.autopilot
+    const running = auto?.enabled ?? false
+    const statusColor = running ? "#4ade80" : "#a5a0ff"
+    const lines = []
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">`)
+    lines.push(`<div style="width:8px;height:8px;border-radius:50%;background:${statusColor}"></div>`)
+    lines.push(`<span style="font-weight:600;font-size:11px">${running ? "Running" : "Stopped"}</span>`)
+    lines.push(`</div>`)
+    if (auto?.strategy) lines.push(`<div style="font-size:11px">Strategy: <b>${auto.strategy}</b></div>`)
+    if (auto?.assetId) lines.push(`<div style="font-size:11px">Asset: <b>${auto.assetId}</b></div>`)
+    if (auto?.lastDecision) lines.push(`<div style="font-size:10px;color:#a5a0ff">Last: ${auto.lastDecision}</div>`)
+    const demo = tradingState.demo
+    if (demo?.todayPnl != null) {
+      lines.push(`<div style="font-size:11px;margin-top:2px">Today PnL: <span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl)}</span></div>`)
+    }
+    // Control buttons
+    lines.push(`<div style="display:flex;gap:4px;margin-top:6px">`)
+    lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
+    lines.push(`<button data-picc-action="autopilot-kill" style="background:#ff6b6b30;border:1px solid #ff6b6b;color:#ff6b6b;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">Kill</button>`)
+    lines.push(`</div>`)
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Fetch and update all trading data ──────────────────────────────────────
+  let tradingPollTimer = null
+
+  async function fetchTradingData() {
+    try {
+      const [status, autopilot, demo, decisions] = await Promise.all([
+        serverFetch("/api/trading/status"),
+        serverFetch("/api/autopilot/config"),
+        serverFetch("/api/expertoption/demo/status"),
+        serverFetch("/api/decisions")
+      ])
+      if (status?.ok) {
+        tradingState.paper = status.paper || null
+        tradingState.account = status.live || null
+      }
+      if (autopilot?.ok) tradingState.autopilot = autopilot.config || null
+      if (demo) tradingState.demo = demo
+      if (decisions?.decisions) tradingState.decisions = decisions.decisions
+      // Fetch live asset prices
+      const live = await serverFetch("/api/live/stats")
+      if (live?.watched) {
+        tradingState.assets = live.watched.map((w) => ({ id: w, name: w, price: null, changePct: null, change: null }))
+      }
+      tradingState.lastUpdate = Date.now()
+    } catch {
+      // Server not reachable — keep last state
+    }
+  }
+
+  function updateAllDockables() {
+    const panels = {
+      "price-ticker": renderPriceTicker,
+      "portfolio": renderPortfolio,
+      "ai-signals": renderAISignals,
+      "risk-mgr": renderRiskManager,
+      "autopilot": renderAutopilot
+    }
+    for (const [id, renderer] of Object.entries(panels)) {
+      const dock = document.getElementById(`__PICC_DOCK_${id}__`)
+      if (!dock) continue
+      const body = dock.querySelector("[data-picc-body]")
+      if (body) body.innerHTML = renderer()
+    }
+  }
+
+  function startTradingPoll() {
+    if (tradingPollTimer) return
+    fetchTradingData().then(updateAllDockables)
+    tradingPollTimer = setInterval(() => { fetchTradingData().then(updateAllDockables) }, 5000)
+  }
+
+  function stopTradingPoll() {
+    if (tradingPollTimer) { clearInterval(tradingPollTimer); tradingPollTimer = null }
+  }
+
+  // ── Create dockables with live-rendered content ────────────────────────────
   function createTradingDockables(siteInfo) {
     const dockables = []
 
-    // Price ticker
-    dockables.push(createDockable({
-      id: "price-ticker", title: "Price Ticker", icon: "\uD83D\uDCC8",
-      content: "Loading market data...", position: "top-right",
-      width: 280, height: 180, collapsed: false,
-      features: { decisionSupport: true, analysis: true }, suite: "trading"
-    }))
+    function mkDock(id, title, icon, position, w, h, collapsed) {
+      const body = document.createElement("div")
+      body.setAttribute("data-picc-body", "")
+      body.style.cssText = "padding:6px 8px;font-size:11px;color:#eef0ff;min-height:30px;"
+      body.innerHTML = '<div style="color:#a5a0ff">Loading\u2026</div>'
+      const dock = createDockable({ id, title, icon, content: body, position, width: w, height: h, collapsed, features: { decisionSupport: true, analysis: true }, suite: "trading" })
+      return dock
+    }
 
-    // Portfolio overview
-    dockables.push(createDockable({
-      id: "portfolio", title: "Portfolio", icon: "\uD83D\uDCC0",
-      content: "Connecting to exchange...", position: "top-left",
-      width: 300, height: 200, collapsed: true,
-      features: { assistance: true, decisionSupport: true }, suite: "trading"
-    }))
+    dockables.push(mkDock("price-ticker", "Price Ticker", "\uD83D\uDCC8", "top-right", 280, 200, false))
+    dockables.push(mkDock("portfolio", "Portfolio", "\uD83D\uDCC0", "top-left", 300, 180, true))
+    dockables.push(mkDock("ai-signals", "AI Signals", "\uD83E\uDDE0", "right", 260, 260, true))
+    dockables.push(mkDock("risk-mgr", "Risk Manager", "\u26A0\uFE0F", "bottom-right", 280, 140, true))
+    dockables.push(mkDock("autopilot", "Autopilot", "\uD83E\uDD16", "bottom-left", 260, 180, false))
 
-    // AI signals
-    dockables.push(createDockable({
-      id: "ai-signals", title: "AI Signals", icon: "\uD83E\uDDE0",
-      content: "Analyzing market conditions...", position: "right",
-      width: 260, height: 300, collapsed: true,
-      features: { ai: true, analysis: true, decisionSupport: true }, suite: "trading"
-    }))
-
-    // Risk manager
-    dockables.push(createDockable({
-      id: "risk-mgr", title: "Risk Manager", icon: "\u26A0\uFE0F",
-      content: "Calculating risk metrics...", position: "bottom-right",
-      width: 280, height: 160, collapsed: true,
-      features: { assistance: true, automation: true }, suite: "trading"
-    }))
-
-    // Autopilot status
-    dockables.push(createDockable({
-      id: "autopilot", title: "Autopilot", icon: "\uD83E\uDD16",
-      content: "Autopilot standby", position: "bottom-left",
-      width: 260, height: 200, collapsed: false,
-      features: { autopilot: true, automation: true }, suite: "trading"
-    }))
-
+    startTradingPoll()
     return dockables
   }
 
@@ -487,6 +664,7 @@
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation()
       overlayVisible = false
+      stopTradingPoll()
       el.remove()
       activeDockables.forEach((d) => { const dockEl = document.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
       activeDockables = []
@@ -524,7 +702,10 @@
       ? createTradingDockables(siteInfo)
       : createGenericDockables(siteInfo)
 
-    activeDockables = docks.map((d) => ({ id: d.id || "" }))
+    activeDockables = docks.map((d) => {
+      const rawId = d.id || ""
+      return { id: rawId.replace(/^__PICC_DOCK_/, "").replace(/__$/, "") }
+    })
     docks.forEach((dock) => {
       dock.style.display = "none" // Hidden until expand is clicked
       document.documentElement.appendChild(dock)
@@ -652,6 +833,36 @@
       toggleOverlay()
     }
   }, true)
+
+  // ── Autopilot control button delegation ────────────────────────────────────
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-picc-action]")
+    if (!btn) return
+    const action = btn.getAttribute("data-picc-action")
+    if (action === "autopilot-toggle") {
+      btn.disabled = true
+      btn.textContent = "..."
+      try {
+        const running = tradingState.autopilot?.enabled
+        const path = running ? "/api/autopilot/stop" : "/api/autopilot/start"
+        const method = running ? "POST" : "POST"
+        await serverFetch(path, { method, body: { reason: "user" } })
+        await fetchTradingData()
+        updateAllDockables()
+      } catch { /* ignore */ }
+      btn.disabled = false
+    }
+    if (action === "autopilot-kill") {
+      btn.disabled = true
+      try {
+        await serverFetch("/api/autopilot/stop", { method: "POST", body: { reason: "emergency-kill-switch" } })
+        await fetchTradingData()
+        updateAllDockables()
+        showToast("Kill Switch", "Emergency stop executed. All autopilot activity halted.", "error")
+      } catch { /* ignore */ }
+      btn.disabled = false
+    }
+  })
 
   // ── Message listener from background/popup ──────────────────────────────────
   chrome.runtime.onMessage.addListener((msg) => {
