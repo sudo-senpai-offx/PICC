@@ -842,3 +842,65 @@ export interface IndicatorsResult {
 export function getAdvancedIndicators(assetId: string, timeframe = "daily", count = 200): Promise<IndicatorsResult> {
   return request<IndicatorsResult>(`/trading/indicators?assetId=${encodeURIComponent(assetId)}&timeframe=${encodeURIComponent(timeframe)}&count=${count}`)
 }
+
+export interface Alert {
+  id: string
+  userId: string
+  symbol: string
+  condition: string
+  value: number
+  message: string
+  recurring: boolean
+  expiresAt: number | null
+  status: string
+  createdAt: number
+  triggeredAt: number | null
+  lastPrice: number | null
+}
+
+export interface AlertStats {
+  total: number
+  armed: number
+  triggered: number
+  expired: number
+  disabled: number
+  symbols: string[]
+}
+
+export function getAlerts(): Promise<{ ok: boolean; alerts: Alert[]; stats: AlertStats }> {
+  return request("/trading/alerts")
+}
+
+export function createAlert(input: { symbol: string; condition: string; value: number; message?: string; recurring?: boolean; expiresAt?: string }): Promise<{ ok: boolean; alert: Alert }> {
+  return post("/trading/alerts", input)
+}
+
+export function deleteAlert(id: string): Promise<{ ok: boolean }> {
+  return post("/trading/alerts/delete", { id })
+}
+
+export function toggleAlert(id: string, enabled: boolean): Promise<{ ok: boolean; alert: Alert }> {
+  return post("/trading/alerts/toggle", { id, enabled })
+}
+
+export interface CalendarEvent {
+  date: string
+  time: string
+  currency: string
+  event: string
+  impact: string
+  forecast: string
+  previous: string
+  actual?: string
+}
+
+export interface CalendarResult {
+  ok: boolean
+  events: CalendarEvent[]
+  summary: { total: number; high: number; medium: number; low: number; currencies: string[]; nextHigh: CalendarEvent | null }
+}
+
+export function getEconomicCalendar(days = 7, currency?: string): Promise<CalendarResult> {
+  const params = `days=${days}${currency ? `&currency=${currency}` : ""}`
+  return request(`/trading/calendar?${params}`)
+}

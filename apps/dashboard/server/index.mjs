@@ -82,6 +82,53 @@ if (!process.env.PICC_NO_LISTEN) {
   process.on("unhandledRejection", (reason) => {
     console.error("[picc-server] unhandledRejection:", reason)
   })
+
+  let shuttingDown = false
+  async function gracefulShutdown(signal) {
+    if (shuttingDown) return
+    shuttingDown = true
+    console.log(`[picc-server] ${signal} received — shutting down gracefully...`)
+
+    const shutdownFns = []
+    try {
+      const { stopAutopilot } = await import("./services/autopilot.mjs")
+      shutdownFns.push(() => stopAutopilot("server shutdown"))
+    } catch { /* optional */ }
+    try {
+      const { stopDecisionEngine } = await import("./services/adaptiveConfluence.mjs")
+      shutdownFns.push(stopDecisionEngine)
+    } catch { /* optional */ }
+    try {
+      const { stopLiveEO } = await import("./services/liveEO.mjs")
+      shutdownFns.push(stopLiveEO)
+    } catch { /* optional */ }
+    try {
+      const { stopStudioAutomation } = await import("./services/browserStudio.mjs")
+      shutdownFns.push(stopStudioAutomation)
+    } catch { /* optional */ }
+    try {
+      const { stopWorkflow } = await import("./services/interventions.mjs")
+      shutdownFns.push(stopWorkflow)
+    } catch { /* optional */ }
+
+    for (const fn of shutdownFns) {
+      try { await fn() } catch { /* best effort */ }
+    }
+
+    server.close(() => {
+      console.log("[picc-server] HTTP server closed")
+      process.exit(0)
+    })
+
+    setTimeout(() => {
+      console.warn("[picc-server] forced exit after timeout")
+      process.exit(1)
+    }, 5000).unref()
+  }
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"))
+
   server.listen(PORT, () => {
     console.log(`PICC dashboard + API serving dist/ on http://localhost:${PORT}`)
     if (startScheduler()) {

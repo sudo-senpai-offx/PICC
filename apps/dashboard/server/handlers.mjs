@@ -1549,6 +1549,51 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  // ── Alert Engine ──────────────────────────────────────────────────────
+  if (path === "/api/trading/alerts" && req.method === "GET") {
+    const { listAlerts, alertStats } = await import("./services/alertEngine.mjs")
+    writeJson(res, 200, { ok: true, alerts: listAlerts(), stats: alertStats() })
+    return
+  }
+  if (path === "/api/trading/alerts" && req.method === "POST") {
+    const { createAlert } = await import("./services/alertEngine.mjs")
+    const { symbol, condition, value, message, recurring, expiresAt } = body ?? {}
+    if (!symbol || !condition || value == null) return writeJson(res, 400, { error: "symbol, condition, and value required" })
+    const alert = createAlert({ symbol, condition, value: Number(value), message, recurring, expiresAt })
+    writeJson(res, 200, { ok: true, alert })
+    return
+  }
+  if (path === "/api/trading/alerts/delete" && req.method === "POST") {
+    const { deleteAlert } = await import("./services/alertEngine.mjs")
+    const id = String(body?.id ?? "")
+    if (!id) return writeJson(res, 400, { error: "id required" })
+    writeJson(res, 200, { ok: deleteAlert(id) })
+    return
+  }
+  if (path === "/api/trading/alerts/toggle" && req.method === "POST") {
+    const { enableAlert, disableAlert } = await import("./services/alertEngine.mjs")
+    const id = String(body?.id ?? "")
+    const enabled = body?.enabled !== false
+    if (!id) return writeJson(res, 400, { error: "id required" })
+    const alert = enabled ? enableAlert(id) : disableAlert(id)
+    writeJson(res, 200, { ok: true, alert })
+    return
+  }
+
+  // ── Economic Calendar ─────────────────────────────────────────────────
+  if (path === "/api/trading/calendar" && req.method === "GET") {
+    const days = Math.min(Math.max(Number(parsed.searchParams.get("days")) || 7, 1), 30)
+    const currency = parsed.searchParams.get("currency") || null
+    const { getEconomicEvents, getImpactSummary } = await import("./services/economicCalendar.mjs")
+    try {
+      const events = await getEconomicEvents({ days, currency })
+      writeJson(res, 200, { ok: true, events, summary: getImpactSummary(events) })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+
   // -------------------------------------------------------------------
   // Strategy backtester — runs multi-model prediction over historical
   // windows and reports walk-forward hit rates, equity curve, drawdown.
