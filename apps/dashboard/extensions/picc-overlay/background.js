@@ -44,11 +44,13 @@ chrome.runtime.onInstalled.addListener((details) => {
       })
     }
     // Ensure context menu exists (re-create on update if removed)
-    chrome.contextMenus?.create({
-      id: "picc-overlay",
-      title: "PICC: Toggle Overlay",
-      contexts: ["page", "action"]
-    }).catch(() => {})
+    try {
+      chrome.contextMenus.create({
+        id: "picc-overlay",
+        title: "PICC: Toggle Overlay",
+        contexts: ["page", "action"]
+      })
+    } catch {}
   }
 })
 
@@ -372,7 +374,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: "unsafe download URL" })
       return false
     }
-    chrome.downloads?.download({ url: msg.url, filename: msg.filename }).catch(() => {})
+    try { chrome.downloads?.download({ url: msg.url, filename: msg.filename }) } catch {}
     sendResponse({ ok: true })
     return false
   }
