@@ -133,7 +133,7 @@
   // ── Shadow DOM isolation ────────────────────────────────────────────────────
   const shadowHost = document.createElement("div")
   shadowHost.id = "__PICC_SHADOW_HOST__"
-  shadowHost.style.cssText = "all:initial;position:fixed;z-index:2147483647;top:0;left:0;width:0;height:0;pointer-events:none;"
+  shadowHost.style.cssText = "all:initial;position:fixed;z-index:2147483647;top:0;left:0;width:0;height:0;"
   document.body.appendChild(shadowHost)
   const shadowRoot = shadowHost.attachShadow({ mode: "open" })
 
@@ -380,7 +380,7 @@
       Object.entries(pos).map(([k, v]) => `${k}:${v}`).join(";") + ";" +
       `background:rgba(20,20,48,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:#eef0ff;` +
       `border:1px solid rgba(108,99,255,0.4);border-radius:8px;font:12px/1.4 system-ui,sans-serif;` +
-      `box-shadow:0 4px 16px rgba(0,0,0,.3);transition:max-height .2s ease,width .2s ease;user-select:none;`
+      `box-shadow:0 4px 16px rgba(0,0,0,.3);transition:max-height .2s ease,width .2s ease;user-select:none;pointer-events:auto;`
     dock.setAttribute("data-collapsed", collapsed ? "1" : "0")
 
     // Title bar (always visible)
@@ -903,7 +903,7 @@
       `position:fixed;bottom:${posY}px;left:${posX}px;z-index:2147483647;width:auto;max-height:none;overflow:visible;` +
       `background:rgba(20,20,48,${opa});backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:#eef0ff;` +
       `border:1px solid rgba(108,99,255,0.5);border-radius:12px;padding:4px 8px;font:13px/1.5 system-ui,sans-serif;` +
-      `box-shadow:0 8px 32px rgba(0,0,0,.4),0 0 0 1px rgba(108,99,255,0.15);user-select:none;`
+      `box-shadow:0 8px 32px rgba(0,0,0,.4),0 0 0 1px rgba(108,99,255,0.15);user-select:none;pointer-events:auto;`
 
     // Pill header
     const header = document.createElement("div")
@@ -1217,8 +1217,8 @@
     }
   }, true)
 
-  // ── Autopilot control button delegation ────────────────────────────────────
-  document.addEventListener("click", async (e) => {
+  // ── Autopilot control button delegation (on shadowRoot — document won't receive shadow DOM click events) ──
+  shadowRoot.addEventListener("click", async (e) => {
     const btn = e.composedPath().find((el) => el.hasAttribute?.("data-picc-action"))
     if (!btn) return
     const action = btn.getAttribute("data-picc-action")
