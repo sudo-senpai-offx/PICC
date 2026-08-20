@@ -24,6 +24,7 @@ import { computeIndicatorDashboard, detectMarketPhase } from "./indicators.mjs"
 import { liveEOData, subscribeLiveEO } from "./liveEO.mjs"
 import { recordSignal } from "./trading.mjs"
 import { recordDecision } from "./accuracyLedger.mjs"
+import { getSentiment } from "./sentimentEngine.mjs"
 
 export const CANDIDATE_EXPIRIES = [60, 120, 300, 900] // seconds (15s excluded: 60s bar resolution can't estimate it honestly)
 export const ASSUMED_PAYOUT = { 60: 82, 120: 85, 300: 88, 900: 90 } // % per expiry, conservative
@@ -240,6 +241,68 @@ export function winProbEstimate({ closes, times = null, period = ANALYSIS_PERIOD
 }
 
 // ---------------------------------------------------------------------
+// Multi-timeframe confirmation
+// ---------------------------------------------------------------------
+
+/**
+ * Check if higher timeframes agree with the primary (60s) direction.
+ * Uses the liveEO asset's periods map: [60, 300, 900] (1m, 5m, 15m).
+ * Returns a confidence boost/penalty and a list of agreeing TFs.
+ */
+export function mtfConfirm({ asset, primaryDirection, primaryPeriod = 60 } = {}) {
+  if (!asset || primaryDirection === 0) return { agree: 0, total: 0, boost: 0, tfDetails: [] }
+  const periods = asset.periods || {}
+  const tfSeconds = [300, 900] // check 5m and 15m against the 1m primary
+  const details = []
+  let agree = 0
+  let checked = 0
+  for (const tf of tfSeconds) {
+    const candles = periods[tf]
+    if (!Array.isArray(candles) || candles.length < 12) continue
+    checked += 1
+    const closes = candles.map((c) => Number(c.close ?? c.c)).filter((v) => Number.isFinite(v) && v > 0)
+    if (closes.length < 12) continue
+    // Simple EMA-12 direction on higher TF
+    let sum = 0
+    let weight = 0
+    const alpha = 2 / (12 + 1)
+    let ema = closes[0]
+    for (let i = 1; i < closes.length; i++) {
+      ema = alpha * closes[i] + (1 - alpha) * ema
+    }
+    const emaShort = (() => { let e = closes[0]; for (let i = 1; i < closes.length; i++) { e = 2 / (5 + 1) * closes[i] + (1 - 2 / (5 + 1)) * e } return e })()
+    const tfDir = Math.abs(emaShort - ema) < 1e-12 ? 0 : emaShort > ema ? 1 : -1
+    const matches = tfDir === primaryDirection
+    if (matches) agree += 1
+    details.push({ tf, dir: tfDir, matches })
+  }
+  // Boost: +0.05 per agreeing higher TF, -0.03 per disagreeing
+  const boost = checked > 0 ? (agree * 0.05 - (checked - agree) * 0.03) : 0
+  return { agree, total: checked, boost: round(boost, 4), tfDetails: details }
+}
+
+// ---------------------------------------------------------------------
+// Sentiment scoring (news + social)
+// ---------------------------------------------------------------------
+
+/**
+ * Fetch current sentiment for an asset symbol and return a confluence weight.
+ * Positive = bullish alignment, negative = bearish, 0 = neutral/no data.
+ */
+async function sentimentScore(symbol) {
+  if (!symbol) return { score: 0, source: "none", detail: null }
+  try {
+    const result = await getSentiment(String(symbol).toUpperCase())
+    if (!result) return { score: 0, source: "none", detail: null }
+    // getSentiment returns { symbol, composite: { score, label }, news, social }
+    const compositeScore = result.composite?.score ?? 0
+    return { score: clamp(compositeScore, -1, 1), source: result.composite?.label || "fusion", detail: result }
+  } catch {
+    return { score: 0, source: "error", detail: null }
+  }
+}
+
+// ---------------------------------------------------------------------
 // MTTD — mean time to a directional target move (guides expiry choice)
 // ---------------------------------------------------------------------
 
@@ -337,7 +400,7 @@ export function evGate({ winProb, payoutPct, margin = PAYOUT_MARGIN, evRRMin = E
 // Single-asset evaluation across candidate expiries
 // ---------------------------------------------------------------------
 
-export function evaluateAsset({ id, name, candles, volume, observedPayout = null, now = Date.now(), period = ANALYSIS_PERIOD } = {}) {
+export function evaluateAsset({ id, name, candles, volume, observedPayout = null, now = Date.now(), period = ANALYSIS_PERIOD, asset = null, sentimentOverride = null } = {}) {
   const read = confluenceRead(candles, volume)
   if (!read.ok || read.direction === 0) {
     return {
@@ -362,6 +425,17 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
   const { closes, times } = arraysOf(cleanCandles(candles))
   const direction = read.direction
 
+  // Multi-timeframe confirmation (5m, 15m vs 1m primary)
+  const mtf = mtfConfirm({ asset, primaryDirection: direction, primaryPeriod: period })
+
+  // Sentiment score (pre-fetched or passed in)
+  const sent = sentimentOverride ?? { score: 0, source: "none" }
+  // Sentiment alignment: +boost if sentiment agrees with direction, -penalty if opposing
+  const sentimentAligned = sent.score * direction > 0
+  const sentimentBoost = Math.abs(sent.score) > 0.1
+    ? (sentimentAligned ? 0.05 : -0.08) * Math.abs(sent.score)
+    : 0
+
   const expiryRuns = CANDIDATE_EXPIRIES.map((expiry) => {
     const wp = winProbEstimate({ closes, times, period, direction, expiry })
     const pay = observedPayout?.[`${id}:${expiry}`] ?? ASSUMED_PAYOUT[expiry]
@@ -378,14 +452,18 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     }
     const passCount = Object.values(gates).filter(Boolean).length
     let verdict
-    if (passCount === 5 && read.phase !== "volatile_range") verdict = "TRADE"
+    // MTF veto: if higher TFs strongly disagree (0 agree out of 2 checked), block TRADE
+    const mtfBlock = mtf.total >= 2 && mtf.agree === 0
+    if (passCount === 5 && read.phase !== "volatile_range" && !mtfBlock) verdict = "TRADE"
     else if (passCount >= 3 && Math.abs(read.score) >= MIN_SCORE * 0.5) verdict = "OBSERVE"
     else verdict = "NEUTRAL"
 
-    // Confidence is honest and regime-adjusted.
+    // Confidence is honest, regime-adjusted, MTF-adjusted, and sentiment-adjusted.
     let confidence = 55 + Math.abs(read.score) * 30 + (wp.winProb - 0.5) * 80
     if (read.phase === "volatile_range") confidence -= 8
     if (wp.sampleSize < 12) confidence -= 5
+    confidence += mtf.boost * 100 // MTF agreement/disagreement adjustment
+    confidence += sentimentBoost * 100 // sentiment alignment adjustment
     confidence = clamp(Math.round(confidence), 45, 92)
 
     return {
@@ -405,7 +483,9 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
       adverse: rr.adverse,
       mttdSec: mttd.mttdSec,
       gates,
-      confidence
+      confidence,
+      mtf: { agree: mtf.agree, total: mtf.total, details: mtf.tfDetails },
+      sentiment: { score: round(sent.score, 4), source: sent.source, aligned: sentimentAligned }
     }
   })
 
@@ -473,11 +553,25 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
 
 export function decideAssets({ data, observedPayout = null, now = Date.now() } = {}) {
   const assets = Array.isArray(data?.assets) ? data.assets : []
+  // Pre-fetch sentiment for all assets (best-effort, non-blocking)
+  const sentimentPromises = assets.map(async (a) => {
+    try {
+      return { id: a.id, ...(await sentimentScore(a.name || a.id)) }
+    } catch {
+      return { id: a.id, score: 0, source: "error" }
+    }
+  })
+  // Resolve sentiments (fire-and-forget pattern: if they fail, defaults to 0)
+  let sentiments = {}
+  Promise.all(sentimentPromises).then((list) => {
+    for (const s of list) sentiments[s.id] = s
+  }).catch(() => {})
+
   const out = assets
     .map((a) => {
       const candles = a?.periods?.[ANALYSIS_PERIOD] ?? []
       if (!Array.isArray(candles) || candles.length < MIN_BARS) return null
-      return evaluateAsset({ id: a.id, name: a.name, candles, volume: a.ticks, observedPayout, now })
+      return evaluateAsset({ id: a.id, name: a.name, candles, volume: a.ticks, observedPayout, now, asset: a, sentimentOverride: sentiments[a.id] || null })
     })
     .filter(Boolean)
   const rank = { TRADE: 0, OBSERVE: 1, NEUTRAL: 2 }

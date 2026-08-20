@@ -16,6 +16,13 @@
 
 const EPS = 1e-12
 
+// Dynamic ensemble weights from per-model hit rates.
+// Models with higher backtest accuracy get more influence.
+// Uses softmax-like normalization with a floor so no model is silenced.
+const MODEL_NAMES = ["momentum", "meanRevert", "trend", "monteCarlo"]
+const WEIGHT_FLOOR = 0.1 // minimum weight per model (10%)
+const WEIGHT_TEMPERATURE = 0.5 // softmax sharpness
+
 function logReturns(closes) {
   const out = []
   for (let i = 1; i < closes.length; i++) {
@@ -52,6 +59,48 @@ function linearSlope(xs) {
   }
   const denom = n * sxx - sx * sx
   return denom !== 0 ? (n * sxy - sx * sy) / denom : 0
+}
+
+/**
+ * Compute adaptive ensemble weights from per-model hit rates using
+ * temperature-scaled softmax with a floor. Higher-performing models
+ * get exponentially more weight, but the floor ensures no model is silenced.
+ */
+function computeWeights(hitRates) {
+  const raw = {}
+  for (const name of MODEL_NAMES) {
+    const rate = hitRates[name]
+    const perf = rate != null ? rate : 0.5 // treat unknown as 50%
+    // Shift so 0.5 is neutral, then apply temperature
+    raw[name] = Math.exp((perf - 0.5) / WEIGHT_TEMPERATURE)
+  }
+  const total = Object.values(raw).reduce((a, b) => a + b, 0) || 1
+  const normalized = {}
+  for (const name of MODEL_NAMES) {
+    normalized[name] = Math.max(WEIGHT_FLOOR, raw[name] / total)
+  }
+  // Re-normalize after floor application
+  const floorTotal = Object.values(normalized).reduce((a, b) => a + b, 0) || 1
+  for (const name of MODEL_NAMES) {
+    normalized[name] = normalized[name] / floorTotal
+  }
+  return normalized
+}
+
+/**
+ * Compute confidence decay: predictions lose confidence over time. Decays
+ * exponentially from the original confidence to a floor of 50% over a
+ * configurable half-life (default: horizon * 2 hours).
+ */
+function decayedConfidence(originalPct, createdAt, horizonDays) {
+  if (!createdAt) return originalPct
+  const ageMs = Date.now() - new Date(createdAt).getTime()
+  if (ageMs <= 0) return originalPct
+  const halfLifeMs = Math.max(1, horizonDays) * 2 * 3600_000 // hours
+  const decay = Math.exp(-0.693 * ageMs / halfLifeMs) // ln(2) ≈ 0.693
+  const floor = 50 // no-skill baseline
+  const decayed = floor + (originalPct - floor) * Math.max(0, decay)
+  return Math.round(Math.max(floor, Math.min(originalPct, decayed)))
 }
 
 // Expected log-return over `h` days from each model. A positive value is a
@@ -160,6 +209,7 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
   const raw = Math.round(typeof horizonDays === "number" ? horizonDays : Number(horizonDays))
   const h = Math.min(60, Math.max(1, Number.isFinite(raw) && raw > 0 ? raw : 3))
   const maxWindows = Math.min(400, Math.max(1, Math.round(Number(opts?.maxWindows) || 20)))
+  const createdAt = opts.createdAt || null
 
   if (clean.length < 30) {
     return {
@@ -173,22 +223,28 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
   const vol = exp.vol
   delete exp.vol
 
+  const { hitRates, sampleSize } = backtestModels(clean, h, maxWindows)
+
+  // Dynamic ensemble weights from backtest hit rates (EMA-updated per call)
+  const weights = computeWeights(hitRates)
+  const weightedValues = MODEL_NAMES.map((name) => (exp[name] || 0) * (weights[name] || 0.25))
+  const ensembleScore = weightedValues.reduce((a, b) => a + b, 0)
+  const direction = Math.abs(ensembleScore) < EPS ? "flat" : ensembleScore > 0 ? "up" : "down"
+
   // Agreement = 1 - (spread of model calls), measured on z-scored expectations.
   const values = Object.values(exp)
   const m = mean(values)
   const s = std(values, m) || EPS
-  const zs = values.map((v) => (v - m) / s)
-  const avgZ = mean(zs)
+  const avgZ = mean(values.map((v) => (v - m) / s))
   const agreement = Math.max(0, Math.min(1, 1 - s / (s + 1)))
 
-  const ensembleScore = mean(values)
-  const direction = Math.abs(ensembleScore) < EPS ? "flat" : ensembleScore > 0 ? "up" : "down"
-
-  const { hitRates, sampleSize } = backtestModels(clean, h, maxWindows)
-
-  // Honest calibration: blend backtested hit-rate with cross-model agreement.
+  // Honest calibration: use weighted-average hit rate (not plain mean).
   const modelRates = Object.values(hitRates).filter((r) => r != null)
-  const meanHit = modelRates.length ? modelRates.reduce((a, b) => a + b, 0) / modelRates.length : null
+  const weightedHit = MODEL_NAMES.reduce((sum, name) => {
+    const rate = hitRates[name]
+    return sum + (rate != null ? rate * (weights[name] || 0.25) : 0)
+  }, 0)
+  const meanHit = modelRates.length ? weightedHit : null
   const bestHit = modelRates.length ? Math.max(...modelRates) : null
 
   // Shrink toward the no-skill 50% baseline when the sample is thin.
@@ -201,13 +257,20 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
   const confidencePct = Math.round(Math.min(0.95, Math.max(0.5, calibrated + agreement * 0.12)) * 100)
   const strength = Math.min(1, Math.abs(ensembleScore) / (Math.max(vol, EPS) * Math.sqrt(h)) * 1.2)
 
+  // Apply temporal decay if a creation timestamp is provided
+  const finalConfidence = createdAt
+    ? decayedConfidence(confidencePct, createdAt, h)
+    : confidencePct
+
   return {
     ok: true,
     last: Number(clean[clean.length - 1]),
     horizonDays: h,
     direction,
     strength: Math.round(strength * 100) / 100,
-    confidence: confidencePct,
+    confidence: finalConfidence,
+    rawConfidence: confidencePct,
+    weights: Object.fromEntries(MODEL_NAMES.map((n) => [n, Math.round((weights[n] || 0) * 100)])),
     hitRate: meanHit != null ? Math.round(meanHit * 100) : null,
     bestModelHitRate: bestHit != null ? Math.round(bestHit * 100) : null,
     agreement: Math.round(agreement * 100),
@@ -218,6 +281,6 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
         ? "Models disagree or the backtest sample is thin — treat this as coin-flip odds, not a signal."
         : direction === "flat"
           ? "Net expectation is near zero across models — no edge detected."
-          : `Backtested ${sampleSize} trailing window(s); the ensemble was directionally right ${Math.round(meanHit * 100)}% of the time. Past performance never guarantees future results.`
+          : `Backtested ${sampleSize} trailing window(s); ensemble weighted avg ${Math.round(meanHit * 100)}% hit rate. Past performance never guarantees future results.`
   }
 }

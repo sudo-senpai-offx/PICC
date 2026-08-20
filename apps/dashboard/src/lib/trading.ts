@@ -89,10 +89,13 @@ export interface PredictionResult {
 
 export interface PaperPosition {
   id: string
+  signalId?: string | null
   symbol: string
   side: "up" | "down"
   entry: number
   amount: number
+  takeProfit?: number | null
+  stopLoss?: number | null
   openedAt: string
   status: "open" | "closed"
 }
@@ -101,6 +104,8 @@ export interface ClosedTrade extends PaperPosition {
   status: "closed"
   exit: number
   pnl: number
+  reason?: string
+  exitSource?: string
   closedAt: string
   holdingMs: number
 }
