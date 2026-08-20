@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Badge, Card, Spinner } from "@/components/ui"
+import { Badge, Button, Card, Spinner } from "@/components/ui"
 import { getTradingSignals, getSignalAccuracy } from "@/lib/trading"
 import type { TradingSignal, SignalAccuracy } from "@/lib/trading"
 
@@ -19,7 +19,7 @@ function fmtPct(n: number | null | undefined, d = 0): string {
   return `${n.toFixed(d)}%`
 }
 
-function SignalRow({ s }: { s: TradingSignal }) {
+function SignalRow({ s, onCopyTrade }: { s: TradingSignal; onCopyTrade?: (params: { symbol: string; side: "up" | "down" }) => void }) {
   const dir = s.direction === "up" ? "▲" : s.direction === "down" ? "▼" : "→"
   const tone = s.direction === "up" ? "success" : s.direction === "down" ? "danger" : "muted"
   return (
@@ -29,9 +29,18 @@ function SignalRow({ s }: { s: TradingSignal }) {
         <strong className="small">{s.symbol ?? "—"}</strong>
         <span className="muted small">{fmtTime(s.createdAt)}</span>
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         {s.confidence != null && <Badge tone={s.confidence >= 60 ? "success" : s.confidence >= 50 ? "warn" : "muted"}>{fmtPct(s.confidence)}</Badge>}
         {typeof s.source === "string" && s.source && <span className="muted small">{s.source}</span>}
+        {onCopyTrade && s.symbol && s.direction && (s.direction === "up" || s.direction === "down") && (
+          <Button
+            variant="ghost"
+            onClick={() => onCopyTrade({ symbol: s.symbol as string, side: s.direction as "up" | "down" })}
+            style={{ padding: "1px 6px", fontSize: 10, lineHeight: 1 }}
+          >
+            Copy
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -63,7 +72,7 @@ function AccuracyBar({ stats }: { stats: SignalAccuracy | null }) {
   )
 }
 
-export function SignalFeed({ maxItems = 25 }: { maxItems?: number }) {
+export function SignalFeed({ maxItems = 25, onCopyTrade }: { maxItems?: number; onCopyTrade?: (params: { symbol: string; side: "up" | "down" }) => void }) {
   const [signals, setSignals] = useState<TradingSignal[]>([])
   const [accuracy, setAccuracy] = useState<SignalAccuracy | null>(null)
   const [loading, setLoading] = useState(true)
@@ -98,7 +107,7 @@ export function SignalFeed({ maxItems = 25 }: { maxItems?: number }) {
         {signals.length === 0 ? (
           <div className="muted small" style={{ padding: 12, textAlign: "center" }}>No signals recorded yet. Signals appear when the confluence engine evaluates assets.</div>
         ) : (
-          signals.map((s) => <SignalRow key={s.id} s={s} />)
+          signals.map((s) => <SignalRow key={s.id} s={s} onCopyTrade={onCopyTrade} />)
         )}
       </Card>
     </div>

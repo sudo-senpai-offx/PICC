@@ -1,8 +1,11 @@
+import { useState, useCallback } from "react"
 import { Card } from "@/components/ui"
 import { SignalFeed } from "@/components/SignalFeed"
 import { AutopilotControls } from "@/components/AutopilotControls"
 import { PaperLedger } from "@/components/PaperLedger"
 import { TradingHud } from "@/components/TradingHud"
+import { ConfluencePanel } from "@/components/ConfluencePanel"
+import { TradeOrderForm } from "@/components/TradeOrderForm"
 
 /**
  * Trading Dashboard — a dedicated page combining the three core trading
@@ -11,6 +14,14 @@ import { TradingHud } from "@/components/TradingHud"
  * full TradingSuite for users who want a clean operational view.
  */
 export function TradingDashboard() {
+  const [orderPrefill, setOrderPrefill] = useState<{ symbol?: string; side?: "up" | "down" }>({})
+  const [orderKey, setOrderKey] = useState(0)
+
+  const handleCopyTrade = useCallback((params: { symbol: string; side: "up" | "down" }) => {
+    setOrderPrefill(params)
+    setOrderKey((k) => k + 1)
+  }, [])
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: 16 }}>
       <div className="row-between">
@@ -18,7 +29,7 @@ export function TradingDashboard() {
         <span className="muted small">Decision support only — no real trades</span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
         {/* Left column: Autopilot + Signal Feed */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <Card className="pad">
@@ -26,9 +37,18 @@ export function TradingDashboard() {
             <AutopilotControls />
           </Card>
           <Card className="pad">
-            <strong style={{ marginBottom: 4, display: "block" }}>Signal Feed</strong>
-            <SignalFeed maxItems={20} />
+            <div className="row-between" style={{ marginBottom: 4 }}>
+              <strong>Signal Feed</strong>
+              <span className="muted small">Click Copy to fill the order form</span>
+            </div>
+            <SignalFeed maxItems={20} onCopyTrade={handleCopyTrade} />
           </Card>
+        </div>
+
+        {/* Center column: Confluence + Order Form */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <ConfluencePanel maxItems={6} />
+          <TradeOrderForm key={orderKey} prefill={orderPrefill} />
         </div>
 
         {/* Right column: Paper Ledger */}

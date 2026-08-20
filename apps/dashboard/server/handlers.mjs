@@ -2076,6 +2076,30 @@ export async function handleApi(req, res, url) {
         }
       }
     } catch { result.autopilot = { enabled: false, error: "failed" } }
+    try {
+      const { backtestModels } = await import("./services/prediction.mjs")
+      const { quickMtfCheck } = await import("./services/multiTimeframe.mjs")
+      const liveData = liveEOData()
+      const firstAsset = liveData?.assets?.[0]
+      const closes = firstAsset?.periods?.[60]?.map((c) => Number(c.close ?? c.c)).filter((v) => Number.isFinite(v) && v > 0) || []
+      if (closes.length > 40) {
+        const bt = backtestModels(closes, 3, 15)
+        result.prediction = {
+          models: bt.hitRates,
+          sampleSize: bt.sampleSize,
+          availableModels: ["momentum", "meanRevert", "trend", "monteCarlo", "arima", "prophet", "lstm", "garch"]
+        }
+      } else {
+        result.prediction = { models: null, sampleSize: 0, availableModels: ["momentum", "meanRevert", "trend", "monteCarlo", "arima", "prophet", "lstm", "garch"], note: "insufficient candle data" }
+      }
+      if (firstAsset) {
+        const mtfUp = quickMtfCheck(firstAsset, 1)
+        const mtfDown = quickMtfCheck(firstAsset, -1)
+        result.mtf = { up: mtfUp, down: mtfDown }
+      } else {
+        result.mtf = null
+      }
+    } catch { result.prediction = { error: "failed" }; result.mtf = null }
     writeJson(res, 200, result)
     return true
   }

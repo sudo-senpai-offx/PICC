@@ -25,6 +25,7 @@ import { liveEOData, subscribeLiveEO } from "./liveEO.mjs"
 import { recordSignal } from "./trading.mjs"
 import { recordDecision } from "./accuracyLedger.mjs"
 import { getSentiment } from "./sentimentEngine.mjs"
+import { quickMtfCheck, multiTimeframeConfluence } from "./multiTimeframe.mjs"
 
 export const CANDIDATE_EXPIRIES = [60, 120, 300, 900] // seconds (15s excluded: 60s bar resolution can't estimate it honestly)
 export const ASSUMED_PAYOUT = { 60: 82, 120: 85, 300: 88, 900: 90 } // % per expiry, conservative
@@ -425,8 +426,8 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
   const { closes, times } = arraysOf(cleanCandles(candles))
   const direction = read.direction
 
-  // Multi-timeframe confirmation (5m, 15m vs 1m primary)
-  const mtf = mtfConfirm({ asset, primaryDirection: direction, primaryPeriod: period })
+  // Multi-timeframe confirmation using full indicator dashboard (not just EMA)
+  const mtf = quickMtfCheck(asset, direction)
 
   // Sentiment score (pre-fetched or passed in)
   const sent = sentimentOverride ?? { score: 0, source: "none" }
