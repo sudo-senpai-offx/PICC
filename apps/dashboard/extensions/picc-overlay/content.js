@@ -18,6 +18,10 @@
   const dockableSizes = {}
   const dockableOpacities = {}
 
+  // ── Dock grouping state ──
+  const dockGroups = {} // groupId → [dockId, dockId, ...]
+  const dockGroupMap = {} // dockId → groupId
+
   function saveDockableLayout() {
     const layout = {}
     for (const d of activeDockables) {
@@ -29,9 +33,155 @@
     }
     // Save via server
     try {
-      const data = { dockableLayout: layout }
+      const data = { dockableLayout: layout, groups: dockGroups }
       chrome.runtime.sendMessage({ action: "save-prefs", data })
     } catch {}
+  }
+
+  // ── Dock grouping (Krita/Photoshop-style tab stacking) ──
+  function groupDocks(dockIdA, dockIdB) {
+    const groupId = dockGroupMap[dockIdA] || dockGroupMap[dockIdB] || `picc-group-${Date.now()}`
+    const docks = [dockIdA, dockIdB]
+    if (!dockGroups[groupId]) dockGroups[groupId] = []
+    for (const d of docks) {
+      if (!dockGroups[groupId].includes(d)) dockGroups[groupId].push(d)
+      dockGroupMap[d] = groupId
+    }
+    rebuildGroupContainer(groupId)
+  }
+
+  function ungroupDock(dockId) {
+    const groupId = dockGroupMap[dockId]
+    if (!groupId) return
+    const members = dockGroups[groupId] || []
+    delete dockGroupMap[dockId]
+    const remaining = members.filter((d) => d !== dockId)
+    if (remaining.length <= 1) {
+      // Dissolve group entirely
+      for (const d of remaining) delete dockGroupMap[d]
+      delete dockGroups[groupId]
+      // Remove the group container
+      const gc = shadowRoot.getElementById(`__PICC_GROUP_${groupId}__`)
+      if (gc) gc.remove()
+      // Show individual docks
+      for (const d of remaining) {
+        const el = shadowRoot.getElementById(`__PICC_DOCK_${d}__`)
+        if (el) el.style.display = ""
+      }
+    } else {
+      dockGroups[groupId] = remaining
+      rebuildGroupContainer(groupId)
+    }
+    saveDockableLayout()
+  }
+
+  function rebuildGroupContainer(groupId) {
+    const members = dockGroups[groupId] || []
+    if (members.length < 2) return
+    // Remove old container
+    const oldGc = shadowRoot.getElementById(`__PICC_GROUP_${groupId}__`)
+    if (oldGc) oldGc.remove()
+    // Hide individual dock elements
+    for (const d of members) {
+      const el = shadowRoot.getElementById(`__PICC_DOCK_${d}__`)
+      if (el) el.style.display = "none"
+    }
+    // Create grouped container
+    const gc = document.createElement("div")
+    gc.id = `__PICC_GROUP_${groupId}__`
+    gc.setAttribute("data-picc-group", groupId)
+    // Position at the first member's position
+    const firstDock = shadowRoot.getElementById(`__PICC_DOCK_${members[0]}__`)
+    const firstPos = dockablePositions[members[0]] || { x: 16, y: 16 }
+    const firstSize = dockableSizes[members[0]] || { width: 280, height: 200 }
+    gc.style.cssText = `position:fixed;top:${firstPos.y}px;left:${firstPos.x}px;width:${firstSize.width}px;max-height:${firstSize.height}px;overflow:auto;z-index:2147483646;` +
+      `background:rgba(20,20,48,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:#eef0ff;` +
+      `border:1px solid rgba(108,99,255,0.4);border-radius:8px;font:12px/1.4 system-ui,sans-serif;` +
+      `box-shadow:0 4px 16px rgba(0,0,0,.3);transition:max-height .2s ease;user-select:none;pointer-events:auto;`
+    gc.style.opacity = String(dockableOpacities[members[0]] ?? currentSettings.opacity)
+
+    // Tab bar
+    const tabBar = document.createElement("div")
+    tabBar.style.cssText = "display:flex;align-items:center;background:rgba(26,26,46,0.6);border-bottom:1px solid rgba(42,42,74,0.4);overflow-x:auto;user-select:none;"
+    let activeTab = members[0]
+    const tabEls = {}
+
+    for (const dId of members) {
+      const preset = (SUITE_DOCKABLE_PRESETS.trading || []).concat(SUITE_DOCKABLE_PRESETS.bandwidth || []).concat(SUITE_DOCKABLE_PRESETS.affiliate || []).concat(SUITE_DOCKABLE_PRESETS.generic || []).find((p) => p.id === dId)
+      const tab = document.createElement("div")
+      const isActive = dId === activeTab
+      tab.style.cssText = `display:flex;align-items:center;gap:3px;padding:4px 8px;font-size:10px;cursor:pointer;white-space:nowrap;border-bottom:2px solid ${isActive ? "#6c63ff" : "transparent"};` +
+        `background:${isActive ? "rgba(108,99,255,0.12)" : "transparent"};color:${isActive ? "#eef0ff" : "#9aa0c0"};`
+      tab.textContent = `${preset?.icon || "?"} ${preset?.title || dId}`
+      tab.addEventListener("click", () => {
+        activeTab = dId
+        // Update tab styles
+        for (const [tid, tel] of Object.entries(tabEls)) {
+          const isActive2 = tid === dId
+          tel.style.borderBottom = `2px solid ${isActive2 ? "#6c63ff" : "transparent"}`
+          tel.style.background = isActive2 ? "rgba(108,99,255,0.12)" : "transparent"
+          tel.style.color = isActive2 ? "#eef0ff" : "#9aa0c0"
+        }
+        // Swap content
+        const body = gc.querySelector("[data-picc-group-body]")
+        if (body) {
+          const srcDock = shadowRoot.getElementById(`__PICC_DOCK_${dId}__`)
+          const srcBody = srcDock?.querySelector("[data-picc-body]")
+          if (srcBody) body.innerHTML = srcBody.innerHTML
+        }
+      })
+      // Double-click tab to ungroup
+      tab.addEventListener("dblclick", (e) => { e.stopPropagation(); ungroupDock(dId) })
+      tabEls[dId] = tab
+      tabBar.appendChild(tab)
+    }
+
+    // Close group button
+    const closeGroupBtn = document.createElement("button")
+    closeGroupBtn.textContent = "\u2715"
+    closeGroupBtn.style.cssText = "background:none;border:none;color:#9aa0c0;cursor:pointer;font-size:10px;padding:2px 5px;margin-left:auto;"
+    closeGroupBtn.addEventListener("click", () => {
+      for (const dId of [...members]) ungroupDock(dId)
+    })
+    tabBar.appendChild(closeGroupBtn)
+    gc.appendChild(tabBar)
+
+    // Content area
+    const contentBody = document.createElement("div")
+    contentBody.setAttribute("data-picc-group-body", "")
+    contentBody.style.cssText = "padding:4px;min-height:40px;"
+    // Show active tab content
+    const activeDockEl = shadowRoot.getElementById(`__PICC_DOCK_${activeTab}__`)
+    const activeBody = activeDockEl?.querySelector("[data-picc-body]")
+    if (activeBody) contentBody.innerHTML = activeBody.innerHTML
+    gc.appendChild(contentBody)
+
+    // Make group draggable via tab bar
+    let gDrag = false, gsx = 0, gsy = 0
+    tabBar.addEventListener("mousedown", (e) => {
+      if (e.target.tagName === "BUTTON" || e.target.closest("[data-picc-group-body]")) return
+      gDrag = true; gsx = e.clientX; gsy = e.clientY
+      const rect = gc.getBoundingClientRect()
+      gc.style.transition = "none"
+      const onMove = (ev) => {
+        if (!gDrag) return
+        gc.style.left = (rect.left + ev.clientX - gsx) + "px"
+        gc.style.top = (rect.top + ev.clientY - gsy) + "px"
+      }
+      const onUp = () => {
+        gDrag = false
+        gc.style.transition = ""
+        document.removeEventListener("mousemove", onMove)
+        document.removeEventListener("mouseup", onUp)
+        const r = gc.getBoundingClientRect()
+        for (const dId of members) dockablePositions[dId] = { x: Math.round(r.left), y: Math.round(r.top) }
+        saveDockableLayout()
+      }
+      document.addEventListener("mousemove", onMove)
+      document.addEventListener("mouseup", onUp)
+    })
+
+    shadowRoot.appendChild(gc)
   }
 
   function restoreDockableLayout(dockEl, id) {
@@ -55,19 +205,28 @@
     }
   }
 
+  function cleanupGroups() {
+    for (const gid of Object.keys(dockGroups)) {
+      const gc = shadowRoot.getElementById(`__PICC_GROUP_${gid}__`)
+      if (gc) gc.remove()
+    }
+    Object.keys(dockGroups).forEach((k) => delete dockGroups[k])
+    Object.keys(dockGroupMap).forEach((k) => delete dockGroupMap[k])
+  }
+
   // Default dockable presets per suite type
   const SUITE_DOCKABLE_PRESETS = {
     trading: [
-      { id: "price-ticker", title: "Price Ticker", icon: "📈", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
-      { id: "portfolio", title: "Portfolio", icon: "📊", defaultPos: "top-left", defaultSize: { width: 300, height: 180 }, defaultCollapsed: true },
-      { id: "ai-signals", title: "AI Signals", icon: "🧠", defaultPos: "right", defaultSize: { width: 260, height: 260 }, defaultCollapsed: true },
-      { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", defaultPos: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultCollapsed: true },
-      { id: "autopilot", title: "Autopilot", icon: "🤖", defaultPos: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false },
-      { id: "kelly-sizing", title: "Kelly Sizing", icon: "🎯", defaultPos: "left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: true },
-      { id: "regime-detect", title: "Regime Detection", icon: "📡", defaultPos: "top-left", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
-      { id: "order-flow", title: "Order Flow", icon: "🌊", defaultPos: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultCollapsed: true },
-      { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", defaultPos: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
-      { id: "sentiment", title: "Sentiment", icon: "🎭", defaultPos: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
+      { id: "price-ticker", title: "Price Ticker", icon: "📈", description: "Real-time asset prices with percentage change", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
+      { id: "ai-signals", title: "AI Signals", icon: "🧠", description: "Live confluence decisions with verdict badges", defaultPos: "right", defaultSize: { width: 260, height: 260 }, defaultCollapsed: false },
+      { id: "autopilot", title: "Autopilot", icon: "🤖", description: "Start/stop autopilot, status, today PnL", defaultPos: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false },
+      { id: "portfolio", title: "Portfolio", icon: "📊", description: "Paper trading balance, PnL, and win rate", defaultPos: "top-left", defaultSize: { width: 300, height: 180 }, defaultCollapsed: true },
+      { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", description: "Daily loss limit, concurrent trades, cooldown", defaultPos: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultCollapsed: true },
+      { id: "kelly-sizing", title: "Kelly Sizing", icon: "🎯", description: "Kelly criterion sizing with suggested positions", defaultPos: "left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: true },
+      { id: "regime-detect", title: "Regime Detection", icon: "📡", description: "Market regime: trending, ranging, volatile, breakout", defaultPos: "top-left", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
+      { id: "order-flow", title: "Order Flow", icon: "🌊", description: "Cumulative delta, imbalance, and divergence signals", defaultPos: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultCollapsed: true },
+      { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", description: "Optimal expiry selection with volatility analysis", defaultPos: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
+      { id: "sentiment", title: "Sentiment", icon: "🎭", description: "News + social sentiment fusion with extremes", defaultPos: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
     ],
     bandwidth: [
       { id: "speed", title: "Speed Monitor", icon: "📡", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
@@ -583,7 +742,23 @@
           // Persist position
           const r = dock.getBoundingClientRect()
           dockablePositions[id] = { x: Math.round(r.left), y: Math.round(r.top) }
-          saveDockableLayout()
+          // Check for grouping — if overlapping another dock's title bar, stack them
+          const myRect = dock.getBoundingClientRect()
+          let grouped = false
+          for (const otherDock of shadowRoot.querySelectorAll("[data-picc-dock]")) {
+            if (otherDock === dock) continue
+            if (otherDock.style.display === "none") continue
+            const otherRect = otherDock.getBoundingClientRect()
+            // Check if the title bar areas overlap
+            const titleOverlap = !(myRect.right < otherRect.left || otherRect.right < myRect.left ||
+              myRect.bottom < otherRect.top || otherRect.top + 36 < myRect.top)
+            if (titleOverlap) {
+              groupDocks(id, otherDock.id.replace(/^__PICC_DOCK_/, "").replace(/__$/, ""))
+              grouped = true
+              break
+            }
+          }
+          if (!grouped) saveDockableLayout()
         }
         document.addEventListener("mousemove", onMove)
         document.addEventListener("mouseup", onUp)
@@ -1071,6 +1246,7 @@
     const existing = shadowRoot.getElementById(OVERLAY_ID)
     if (existing) existing.remove()
     activeDockables.forEach((d) => { const el = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (el) el.remove() })
+    cleanupGroups()
     activeDockables = []
 
     currentSite = siteInfo
@@ -1166,10 +1342,18 @@
       panel.style.cssText = "position:absolute;bottom:100%;right:0;width:300px;max-height:500px;overflow-y:auto;background:#0d0d1a;border:1px solid #2a2a4a;border-radius:8px;padding:12px;margin-bottom:8px;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,0.5);"
 
       // Title
+      const hasSiteConfig = !!(currentSite?.id && currentSettings._siteSpecific)
       const title = document.createElement("div")
-      title.style.cssText = "font-size:12px;font-weight:700;color:#6c63ff;margin-bottom:8px;"
+      title.style.cssText = "font-size:12px;font-weight:700;color:#6c63ff;margin-bottom:4px;"
       title.textContent = "Overlay Settings"
       panel.appendChild(title)
+
+      // Config source indicator
+      const sourceBadge = document.createElement("div")
+      sourceBadge.style.cssText = "font-size:9px;margin-bottom:8px;padding:3px 6px;border-radius:4px;" +
+        (hasSiteConfig ? "background:#4ade8020;color:#4ade80;border:1px solid #4ade8040;" : "background:#6c63ff20;color:#6c63ff;border:1px solid #6c63ff40;")
+      sourceBadge.textContent = hasSiteConfig ? `Using saved config for ${currentSite.label}` : `Using default ${currentSite?.suite || "generic"} config`
+      panel.appendChild(sourceBadge)
 
       // Global Opacity
       addSection(panel, "Opacity", (sec) => {
@@ -1256,13 +1440,34 @@
       const btnRow = document.createElement("div")
       btnRow.style.cssText = "display:flex;gap:6px;margin-top:8px;"
       const saveBtn = document.createElement("button")
-      saveBtn.textContent = "Save"
-      saveBtn.style.cssText = "flex:1;padding:4px 8px;font-size:10px;background:#6c63ff30;border:1px solid #6c63ff40;color:#a5a0ff;border-radius:4px;cursor:pointer;"
-      saveBtn.addEventListener("click", () => { savePrefsForSite(currentSite?.id, { overlaySettings: currentSettings }) })
+      saveBtn.textContent = "💾 Save Site Config"
+      saveBtn.style.cssText = "flex:1;padding:5px 8px;font-size:10px;background:#6c63ff30;border:1px solid #6c63ff40;color:#a5a0ff;border-radius:4px;cursor:pointer;font-weight:600;"
+      saveBtn.addEventListener("click", async () => {
+        currentSettings._siteSpecific = true
+        const ok = await savePrefsForSite(currentSite?.id, { overlaySettings: currentSettings })
+        if (ok !== null) {
+          saveBtn.textContent = "✓ Saved!"
+          saveBtn.style.background = "#4ade8030"
+          saveBtn.style.borderColor = "#4ade8040"
+          saveBtn.style.color = "#4ade80"
+          setTimeout(() => {
+            saveBtn.textContent = "💾 Save Site Config"
+            saveBtn.style.background = "#6c63ff30"
+            saveBtn.style.borderColor = "#6c63ff40"
+            saveBtn.style.color = "#a5a0ff"
+          }, 1500)
+        }
+      })
       const resetBtn = document.createElement("button")
-      resetBtn.textContent = "Reset"
-      resetBtn.style.cssText = "flex:1;padding:4px 8px;font-size:10px;background:#ff6b6b20;border:1px solid #ff6b6b40;color:#ff6b6b;border-radius:4px;cursor:pointer;"
-      resetBtn.addEventListener("click", () => { currentSettings = getDefaultSettings(currentSite?.suite); applySettings(currentSettings) })
+      resetBtn.textContent = "↺ Reset to Defaults"
+      resetBtn.style.cssText = "flex:1;padding:5px 8px;font-size:10px;background:#ff6b6b20;border:1px solid #ff6b6b40;color:#ff6b6b;border-radius:4px;cursor:pointer;"
+      resetBtn.addEventListener("click", async () => {
+        currentSettings = getDefaultSettings(currentSite?.suite)
+        currentSettings._siteSpecific = false
+        applySettings(currentSettings)
+        // Also clear saved site config
+        if (currentSite?.id) await savePrefsForSite(currentSite.id, { overlaySettings: null })
+      })
       btnRow.appendChild(saveBtn)
       btnRow.appendChild(resetBtn)
       panel.appendChild(btnRow)
@@ -1281,6 +1486,7 @@
       stopTradingPoll()
       el.remove()
       activeDockables.forEach((d) => { const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
+      cleanupGroups()
       activeDockables = []
       if (siteInfo?.id) savePrefsForSite(siteInfo.id, { overlay: false })
     })
@@ -1330,6 +1536,7 @@
       const el = shadowRoot.getElementById(OVERLAY_ID)
       if (el) el.remove()
       activeDockables.forEach((d) => { const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
+      cleanupGroups()
       activeDockables = []
       overlayVisible = false
       return
@@ -1348,7 +1555,10 @@
     if (siteInfo?.id) {
       const prefs = await getPrefs()
       const sitePrefs = prefs[siteInfo.id]
-      if (sitePrefs?.overlaySettings) overlaySettings = sitePrefs.overlaySettings
+      if (sitePrefs?.overlaySettings) {
+        overlaySettings = sitePrefs.overlaySettings
+        overlaySettings._siteSpecific = true
+      }
     }
 
     createOverlay(siteInfo, overlaySettings)

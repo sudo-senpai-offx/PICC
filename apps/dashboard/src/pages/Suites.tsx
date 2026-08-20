@@ -72,22 +72,18 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
   )
 }
 
-/**
- * Dashboard overlay with two tabs:
- * - Preview: full-viewport dockable preview with all panels in default positions
- *   (drag, resize, pin, opacity — all interactive, saved as default config)
- * - Settings: the overlay settings panel for configuring dockable visibility and features
- *
- * Site-specific customization is not available in preview mode, but configurations
- * are stored locally per site and loaded when the same site is loaded again with
- * PICC's show/hide pill (Ctrl+Alt+Shift+O).
- */
 function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () => void }) {
   const meta = SUITE_META[suiteId]
   const [overlayTab, setOverlayTab] = useState<"preview" | "settings">("preview")
 
   if (!meta) return null
 
+  // Preview mode: DockablePreview is fullscreen, renders its own close mechanism
+  if (overlayTab === "preview") {
+    return <DockablePreview suiteId={suiteId} onClose={onClose} />
+  }
+
+  // Settings mode: modal dialog
   return (
     <div
       style={{
@@ -110,14 +106,13 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
           border: "1px solid rgba(108, 99, 255, 0.5)",
           borderRadius: 16,
           padding: "20px 24px",
-          maxWidth: overlayTab === "preview" ? 900 : 600,
+          maxWidth: 600,
           width: "100%",
           maxHeight: "85vh",
           overflow: "auto",
           boxShadow: "0 16px 64px rgba(0,0,0,.6), 0 0 0 1px rgba(108,99,255,0.15)",
           color: "#eef0ff",
           fontFamily: "13px/1.5 system-ui, sans-serif",
-          transition: "max-width 0.2s",
         }}
       >
         <div className="row gap" style={{ alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -126,56 +121,42 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
             <div>
               <h3 style={{ margin: 0, color: "#eef0ff" }}>PICC Overlay — {meta.label}</h3>
               <p className="muted small" style={{ margin: 0 }}>
-                Default preset for all {meta.label.toLowerCase()} sites. Per-site overrides available via per-site tab.
+                Default preset for all {meta.label.toLowerCase()} sites. Per-site overrides available via pill settings.
               </p>
             </div>
           </div>
           <button
             className="btn btn-sm btn-ghost"
             onClick={onClose}
-            title="Close overlay preview"
+            title="Close overlay settings"
             style={{ color: "#eef0ff", fontSize: 18, lineHeight: 1, padding: "4px 8px" }}
           >
             ✕
           </button>
         </div>
 
-        {/* Tab bar */}
         <div className="tabs" style={{ marginBottom: 12 }}>
           <button
             type="button"
-            className={`tab ${overlayTab === "preview" ? "active" : ""}`}
+            className="tab"
             onClick={() => setOverlayTab("preview")}
           >
             🖥 Preview (Full Viewport)
           </button>
           <button
             type="button"
-            className={`tab ${overlayTab === "settings" ? "active" : ""}`}
+            className="tab active"
             onClick={() => setOverlayTab("settings")}
           >
             ⚙ Settings & Toggles
           </button>
         </div>
 
-        {overlayTab === "preview" ? (
-          <div style={{ textAlign: "center", padding: "20px 0" }}>
-            <p className="muted small" style={{ marginBottom: 16 }}>
-              Click below to open a full-viewport preview of all {meta.label.toLowerCase()} overlay dockables.
-              Drag panels to reposition, resize from corners, pin to keep on top, and adjust opacity per-panel.
-              This saves as the default configuration for all {meta.label.toLowerCase()} sites.
-            </p>
-            <DockablePreview suiteId={suiteId} onClose={() => {}} />
-          </div>
-        ) : (
-          <div>
-            <p className="muted small" style={{ margin: "0 0 8px" }}>
-              Configure which dockable panels appear and which PICC intervention features are enabled.
-              Dockable positions and sizes are set by dragging in the live overlay or preview.
-            </p>
-            <OverlaySettingsPanel site={`__suite_default__${suiteId}`} mode="suite-default" suiteId={suiteId} />
-          </div>
-        )}
+        <p className="muted small" style={{ margin: "0 0 8px" }}>
+          Configure which dockable panels appear and which PICC intervention features are enabled.
+          Layout is configured in the Preview tab (drag to reposition, group by stacking).
+        </p>
+        <OverlaySettingsPanel site={`__suite_default__${suiteId}`} mode="suite-default" suiteId={suiteId} />
       </div>
     </div>
   )
