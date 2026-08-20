@@ -98,8 +98,6 @@
     const dockables = (SUITE_DOCKABLE_PRESETS[suite] || SUITE_DOCKABLE_PRESETS.generic).map((d) => d.id)
     return {
       enabled: true,
-      position: { x: 16, y: 16 },
-      size: { width: 340, height: 400 },
       opacity: 0.92,
       collapsed: false,
       dockables: Object.fromEntries(dockables.map((id) => [id, true])),
@@ -1085,18 +1083,13 @@
 
     const cfg = overlaySettings || {}
     currentSettings = { ...getDefaultSettings(siteInfo?.suite), ...cfg }
-    const posX = currentSettings.position.x
-    const posY = currentSettings.position.y
     const opa = currentSettings.opacity
 
-    function applyOverlayPosition() {
-      el.style.left = currentSettings.position.x + "px"
-      el.style.bottom = "auto"
-      el.style.top = currentSettings.position.y + "px"
-    }
+    // Pill position is always bottom-left (fixed); dockables are positioned independently
+    const PILL_X = 16
+    const PILL_Y = 16
 
     function applySettings(settings) {
-      applyOverlayPosition()
       el.style.background = `rgba(20,20,48,${settings.opacity})`
       for (const d of activeDockables) {
         const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
@@ -1108,7 +1101,7 @@
     }
 
     el.style.cssText =
-      `position:fixed;bottom:${posY}px;left:${posX}px;z-index:2147483647;width:auto;max-height:none;overflow:visible;` +
+      `position:fixed;bottom:${PILL_Y}px;left:${PILL_X}px;z-index:2147483647;width:auto;max-height:none;overflow:visible;` +
       `background:rgba(20,20,48,${opa});backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:#eef0ff;` +
       `border:1px solid rgba(108,99,255,0.5);border-radius:12px;padding:4px 8px;font:13px/1.5 system-ui,sans-serif;` +
       `box-shadow:0 8px 32px rgba(0,0,0,.4),0 0 0 1px rgba(108,99,255,0.15);user-select:none;pointer-events:auto;`
@@ -1178,12 +1171,6 @@
       title.textContent = "Overlay Settings"
       panel.appendChild(title)
 
-      // Position
-      addSection(panel, "Position", (sec) => {
-        addRow(sec, "X", currentSettings.position.x, (v) => { currentSettings.position.x = Number(v); applyOverlayPosition() })
-        addRow(sec, "Y", currentSettings.position.y, (v) => { currentSettings.position.y = Number(v); applyOverlayPosition() })
-      })
-
       // Global Opacity
       addSection(panel, "Opacity", (sec) => {
         const slider = document.createElement("input")
@@ -1198,22 +1185,54 @@
       })
 
       // Per-dockable toggles
-      addSection(panel, "Dockables", (sec) => {
+      addSection(panel, "Dockable Panels", (sec) => {
+        const hint = document.createElement("p")
+        hint.style.cssText = "font-size:10px;color:#9aa0c0;margin:0 0 6px;"
+        hint.textContent = "Toggle which dockable panels appear in the overlay. Drag to reposition, resize from bottom-right corner."
+        sec.appendChild(hint)
+
         const dockConfig = SUITE_DOCKABLE_PRESETS[currentSite?.suite] || []
         dockConfig.forEach((d) => {
           const row = document.createElement("label")
-          row.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;cursor:pointer;"
+          row.style.cssText = "display:flex;align-items:center;gap:8px;font-size:11px;padding:4px 6px;border-radius:4px;cursor:pointer;margin-bottom:3px;border:1px solid " + (currentSettings.dockables?.[d.id] !== false ? "#6c63ff" : "#2a2a4a") + ";background:" + (currentSettings.dockables?.[d.id] !== false ? "rgba(108,99,255,0.08)" : "transparent") + ";transition:border-color 0.15s,background 0.15s;"
+
           const cb = document.createElement("input")
           cb.type = "checkbox"
           cb.checked = currentSettings.dockables?.[d.id] !== false
+          cb.style.cssText = "width:14px;height:14px;"
           cb.addEventListener("change", () => {
             if (!currentSettings.dockables) currentSettings.dockables = {}
             currentSettings.dockables[d.id] = cb.checked
             const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
             if (dockEl) dockEl.style.display = cb.checked ? "" : "none"
+            row.style.borderColor = cb.checked ? "#6c63ff" : "#2a2a4a"
+            row.style.background = cb.checked ? "rgba(108,99,255,0.08)" : "transparent"
           })
+
+          const icon = document.createElement("span")
+          icon.style.cssText = "font-size:14px;"
+          icon.textContent = d.icon
+
+          const info = document.createElement("div")
+          info.style.cssText = "flex:1;"
+          const name = document.createElement("strong")
+          name.style.cssText = "font-size:11px;"
+          name.textContent = d.title
+          info.appendChild(name)
+          if (d.description) {
+            const desc = document.createElement("p")
+            desc.style.cssText = "font-size:9px;color:#9aa0c0;margin:1px 0 0;"
+            desc.textContent = d.description
+            info.appendChild(desc)
+          }
+          const meta = document.createElement("p")
+          meta.style.cssText = "font-size:9px;color:#666;margin:1px 0 0;"
+          meta.textContent = `${d.defaultSize.width}×${d.defaultSize.height} · ${d.defaultPosition}`
+          info.appendChild(meta)
+
           row.appendChild(cb)
-          row.appendChild(document.createTextNode(`${d.icon} ${d.title}`))
+          row.appendChild(icon)
+          row.appendChild(info)
           sec.appendChild(row)
         })
       })

@@ -24,12 +24,9 @@ interface OverlaySettingsPanelProps {
 }
 
 /**
- * Comprehensive overlay settings panel — fine-grained controls for
- * position, size, opacity, collapse, per-dockable toggles, and per-feature toggles.
- *
- * Two modes:
- * - suite-default: edits the default preset stored under "suites.{suiteId}" in browser-preferences
- * - per-site: edits per-site override stored under "{site}" in browser-preferences
+ * Overlay settings panel — controls for opacity, per-dockable toggles,
+ * and per-feature toggles. Position and size are per-dockable (set via drag/resize
+ * in the live overlay or preview).
  */
 export function OverlaySettingsPanel({ site, mode = "per-site", suiteId }: OverlaySettingsPanelProps) {
   const effectiveSuiteId = suiteId || site.replace("__suite_default__", "")
@@ -135,64 +132,11 @@ export function OverlaySettingsPanel({ site, mode = "per-site", suiteId }: Overl
 
       {settings.enabled ? (
         <>
-          {/* Position */}
-          <fieldset style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-            <legend style={{ padding: "0 6px", color: "var(--text-muted, #999)", fontSize: 12 }}>Position & Size</legend>
-            <div className="grid-2" style={{ gap: 8 }}>
-              <label className="muted small">
-                X offset (px)
-                <input
-                  type="number"
-                  className="input"
-                  value={settings.position.x}
-                  min={0}
-                  onChange={(e) => update({ position: { ...settings.position, x: Number(e.target.value) } })}
-                  style={{ width: "100%", marginTop: 4 }}
-                />
-              </label>
-              <label className="muted small">
-                Y offset (px)
-                <input
-                  type="number"
-                  className="input"
-                  value={settings.position.y}
-                  min={0}
-                  onChange={(e) => update({ position: { ...settings.position, y: Number(e.target.value) } })}
-                  style={{ width: "100%", marginTop: 4 }}
-                />
-              </label>
-              <label className="muted small">
-                Width (px)
-                <input
-                  type="number"
-                  className="input"
-                  value={settings.size.width}
-                  min={200}
-                  max={1200}
-                  onChange={(e) => update({ size: { ...settings.size, width: Number(e.target.value) } })}
-                  style={{ width: "100%", marginTop: 4 }}
-                />
-              </label>
-              <label className="muted small">
-                Max height (px)
-                <input
-                  type="number"
-                  className="input"
-                  value={settings.size.height}
-                  min={100}
-                  max={900}
-                  onChange={(e) => update({ size: { ...settings.size, height: Number(e.target.value) } })}
-                  style={{ width: "100%", marginTop: 4 }}
-                />
-              </label>
-            </div>
-          </fieldset>
-
-          {/* Opacity */}
+          {/* Appearance */}
           <fieldset style={{ border: "1px solid var(--border, #333)", borderRadius: 8, padding: 12, marginBottom: 12 }}>
             <legend style={{ padding: "0 6px", color: "var(--text-muted, #999)", fontSize: 12 }}>Appearance</legend>
             <label className="muted small" style={{ display: "block" }}>
-              Opacity: {Math.round(settings.opacity * 100)}%
+              Global Opacity: {Math.round(settings.opacity * 100)}%
               <input
                 type="range"
                 min={20}
@@ -225,36 +169,42 @@ export function OverlaySettingsPanel({ site, mode = "per-site", suiteId }: Overl
                 Toggle which dockable panels appear in the overlay. Drag to reposition, resize from bottom-right corner.
               </p>
               <div className="stack" style={{ gap: 6 }}>
-                {dockableConfigs.map((d) => (
-                  <label
-                    key={d.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "6px 8px",
-                      borderRadius: 6,
-                      background: settings.dockables[d.id] !== false ? "var(--accent-bg, #6c63ff10)" : "transparent",
-                      border: `1px solid ${settings.dockables[d.id] !== false ? "var(--accent, #6c63ff)" : "var(--border, #333)"}`,
-                      cursor: "pointer",
-                      transition: "border-color 0.15s, background 0.15s",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={settings.dockables[d.id] !== false}
-                      onChange={(e) => updateDockable(d.id, e.target.checked)}
-                      style={{ width: 16, height: 16 }}
-                    />
-                    <span style={{ fontSize: 16 }}>{d.icon}</span>
-                    <div>
-                      <strong style={{ fontSize: 13 }}>{d.title}</strong>
-                      <p className="muted small" style={{ margin: "2px 0 0", fontSize: 11 }}>
-                        Default: {d.defaultSize.width}×{d.defaultSize.height} · {d.defaultPosition}
-                      </p>
-                    </div>
-                  </label>
-                ))}
+                {dockableConfigs.map((d) => {
+                  const enabled = settings.dockables[d.id] !== false
+                  return (
+                    <label
+                      key={d.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "8px 10px",
+                        borderRadius: 6,
+                        background: enabled ? "var(--accent-bg, #6c63ff10)" : "transparent",
+                        border: `1px solid ${enabled ? "var(--accent, #6c63ff)" : "var(--border, #333)"}`,
+                        cursor: "pointer",
+                        transition: "border-color 0.15s, background 0.15s",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(e) => updateDockable(d.id, e.target.checked)}
+                        style={{ width: 16, height: 16 }}
+                      />
+                      <span style={{ fontSize: 20 }}>{d.icon}</span>
+                      <div style={{ flex: 1 }}>
+                        <strong style={{ fontSize: 13 }}>{d.title}</strong>
+                        <p className="muted small" style={{ margin: "2px 0 0", fontSize: 11 }}>
+                          {d.description}
+                        </p>
+                        <p className="muted small" style={{ margin: "2px 0 0", fontSize: 10, opacity: 0.6 }}>
+                          {d.defaultSize.width}×{d.defaultSize.height} · {d.defaultPosition} · opacity {Math.round(d.defaultOpacity * 100)}%
+                        </p>
+                      </div>
+                    </label>
+                  )
+                })}
               </div>
             </fieldset>
           )}
@@ -328,8 +278,6 @@ function mergeSettings(base: OverlaySettings, patch: Partial<OverlaySettings>): 
   return {
     ...base,
     ...patch,
-    position: { ...base.position, ...(patch.position || {}) },
-    size: { ...base.size, ...(patch.size || {}) },
     features: { ...base.features, ...(patch.features || {}) },
     dockables: { ...base.dockables, ...(patch.dockables || {}) },
     dockableLayout: { ...base.dockableLayout, ...(patch.dockableLayout || {}) },

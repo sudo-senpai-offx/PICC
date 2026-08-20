@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useState } from "react"
 import { SUITE_META } from "@/lib/suites"
 import type { SuiteMeta } from "@/lib/suites"
 import { Card } from "@/components/ui"
@@ -6,6 +6,7 @@ import { MarketsSuite, AutopilotSuite } from "@/components/TradingSuite"
 import { AutomatorPanel } from "@/components/AutomatorPanel"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
 import { OverlaySettingsPanel } from "@/components/OverlaySettingsPanel"
+import { DockablePreview } from "@/components/DockablePreview"
 
 const SUITE_CATEGORIES = Object.values(SUITE_META) as SuiteMeta[]
 
@@ -72,22 +73,18 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
 }
 
 /**
- * Dashboard overlay: shows all overlay dockables in default preset mode.
- * The overlay settings panel here edits the DEFAULT preset for the suite type.
- * Per-site customization is available as a separate section below.
+ * Dashboard overlay with two tabs:
+ * - Preview: full-viewport dockable preview with all panels in default positions
+ *   (drag, resize, pin, opacity — all interactive, saved as default config)
+ * - Settings: the overlay settings panel for configuring dockable visibility and features
+ *
+ * Site-specific customization is not available in preview mode, but configurations
+ * are stored locally per site and loaded when the same site is loaded again with
+ * PICC's show/hide pill (Ctrl+Alt+Shift+O).
  */
 function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () => void }) {
   const meta = SUITE_META[suiteId]
-  const [presetTab, setPresetTab] = useState<"default" | "per-site">("default")
-  const [perSiteId, setPerSiteId] = useState("")
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [onClose])
+  const [overlayTab, setOverlayTab] = useState<"preview" | "settings">("preview")
 
   if (!meta) return null
 
@@ -103,7 +100,7 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 24
+        padding: 24,
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
@@ -113,13 +110,14 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
           border: "1px solid rgba(108, 99, 255, 0.5)",
           borderRadius: 16,
           padding: "20px 24px",
-          maxWidth: 600,
+          maxWidth: overlayTab === "preview" ? 900 : 600,
           width: "100%",
           maxHeight: "85vh",
           overflow: "auto",
           boxShadow: "0 16px 64px rgba(0,0,0,.6), 0 0 0 1px rgba(108,99,255,0.15)",
           color: "#eef0ff",
-          fontFamily: "13px/1.5 system-ui, sans-serif"
+          fontFamily: "13px/1.5 system-ui, sans-serif",
+          transition: "max-width 0.2s",
         }}
       >
         <div className="row gap" style={{ alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -128,7 +126,7 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
             <div>
               <h3 style={{ margin: 0, color: "#eef0ff" }}>PICC Overlay — {meta.label}</h3>
               <p className="muted small" style={{ margin: 0 }}>
-                Default preset for all {meta.label.toLowerCase()} sites. Per-site overrides available below.
+                Default preset for all {meta.label.toLowerCase()} sites. Per-site overrides available via per-site tab.
               </p>
             </div>
           </div>
@@ -142,52 +140,40 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
           </button>
         </div>
 
-        {/* Settings mode tabs */}
+        {/* Tab bar */}
         <div className="tabs" style={{ marginBottom: 12 }}>
           <button
             type="button"
-            className={`tab ${presetTab === "default" ? "active" : ""}`}
-            onClick={() => setPresetTab("default")}
+            className={`tab ${overlayTab === "preview" ? "active" : ""}`}
+            onClick={() => setOverlayTab("preview")}
           >
-            ⚙ Default Preset
+            🖥 Preview (Full Viewport)
           </button>
           <button
             type="button"
-            className={`tab ${presetTab === "per-site" ? "active" : ""}`}
-            onClick={() => setPresetTab("per-site")}
+            className={`tab ${overlayTab === "settings" ? "active" : ""}`}
+            onClick={() => setOverlayTab("settings")}
           >
-            🌐 Per-Site Override
+            ⚙ Settings & Toggles
           </button>
         </div>
 
-        {presetTab === "default" ? (
-          <div>
-            <p className="muted small" style={{ margin: "0 0 8px" }}>
-              These settings apply as the default to every {meta.label.toLowerCase()} site.
-              Individual sites can override these via the Per-Site tab.
+        {overlayTab === "preview" ? (
+          <div style={{ textAlign: "center", padding: "20px 0" }}>
+            <p className="muted small" style={{ marginBottom: 16 }}>
+              Click below to open a full-viewport preview of all {meta.label.toLowerCase()} overlay dockables.
+              Drag panels to reposition, resize from corners, pin to keep on top, and adjust opacity per-panel.
+              This saves as the default configuration for all {meta.label.toLowerCase()} sites.
             </p>
-            <OverlaySettingsPanel site={`__suite_default__${suiteId}`} mode="suite-default" suiteId={suiteId} />
+            <DockablePreview suiteId={suiteId} onClose={() => {}} />
           </div>
         ) : (
           <div>
             <p className="muted small" style={{ margin: "0 0 8px" }}>
-              Override the default preset for a specific site. Enter the site id (e.g. "binance", "speedtest").
+              Configure which dockable panels appear and which PICC intervention features are enabled.
+              Dockable positions and sizes are set by dragging in the live overlay or preview.
             </p>
-            <div className="row gap" style={{ marginBottom: 12, alignItems: "center" }}>
-              <input
-                type="text"
-                className="input"
-                placeholder="Site id (e.g. binance)"
-                value={perSiteId}
-                onChange={(e) => setPerSiteId(e.target.value.toLowerCase().trim())}
-                style={{ flex: 1 }}
-              />
-            </div>
-            {perSiteId ? (
-              <OverlaySettingsPanel site={perSiteId} mode="per-site" suiteId={suiteId} />
-            ) : (
-              <p className="muted small">Enter a site id above to customize its overlay.</p>
-            )}
+            <OverlaySettingsPanel site={`__suite_default__${suiteId}`} mode="suite-default" suiteId={suiteId} />
           </div>
         )}
       </div>
