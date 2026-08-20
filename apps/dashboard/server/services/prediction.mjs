@@ -1,10 +1,14 @@
 // PICC prediction engine — multi-model ensemble with honest, backtested confidence.
 //
-// Four independent models look at the same close series:
+// Eight independent models look at the same close series:
 //   1. Momentum    — recent return trend extrapolated (with decay).
 //   2. Mean-revert — Ornstein-Uhlenbeck pull back to the long-run mean.
 //   3. Trend fit   — log-linear regression slope over the window.
 //   4. Monte Carlo — geometric Brownian motion using historic drift/vol.
+//   5. ARIMA       — AutoRegressive Integrated Moving Average (Yule-Walker).
+//   6. Prophet     — Holt-Winters trend + weekly seasonality decomposition.
+//   7. LSTM-lite   — Sliding-window logistic regression classifier.
+//   8. GARCH-lite  — Volatility clustering regime model.
 //
 // Every model is walk-forward backtested on the trailing window so the reported
 // "confidence" is a calibrated fraction of the times the model's direction call
@@ -16,11 +20,13 @@
 
 const EPS = 1e-12
 
+import { arimaForecast, holtWintersForecast, lstmLiteForecast, garchForecast } from "./models.mjs"
+
 // Dynamic ensemble weights from per-model hit rates.
 // Models with higher backtest accuracy get more influence.
 // Uses softmax-like normalization with a floor so no model is silenced.
-const MODEL_NAMES = ["momentum", "meanRevert", "trend", "monteCarlo"]
-const WEIGHT_FLOOR = 0.1 // minimum weight per model (10%)
+const MODEL_NAMES = ["momentum", "meanRevert", "trend", "monteCarlo", "arima", "prophet", "lstm", "garch"]
+const WEIGHT_FLOOR = 0.06 // minimum weight per model (6%) — lower floor with 8 models
 const WEIGHT_TEMPERATURE = 0.5 // softmax sharpness
 
 function logReturns(closes) {
@@ -158,6 +164,25 @@ function modelExpectations(closes, h) {
     meanRevert: reversionPerDay * h,
     trend: trendPerDay * h,
     monteCarlo: driftPerDay * h,
+    ...(() => {
+      try {
+        const arima = arimaForecast(closes, h)
+        const prophet = holtWintersForecast(closes, h)
+        const lstm = lstmLiteForecast(closes, h)
+        const garch = garchForecast(closes, h)
+        // Scale new models conservatively: use 30% of the base signal
+        // to avoid overwhelming the original 4 models in the ensemble
+        const scaleFactor = 0.3
+        return {
+          arima: (arima.forecast || 0) * scaleFactor,
+          prophet: (prophet.forecast || 0) * scaleFactor,
+          lstm: (lstm.direction * lstm.strength * vol * Math.sqrt(h) || 0) * scaleFactor,
+          garch: (garch.direction * garch.strength * vol * Math.sqrt(h) * 0.5 || 0) * scaleFactor
+        }
+      } catch {
+        return { arima: 0, prophet: 0, lstm: 0, garch: 0 }
+      }
+    })(),
     vol
   }
 }
@@ -166,7 +191,7 @@ function modelExpectations(closes, h) {
 // from each model using only data up to that point, then score the call.
 export function backtestModels(closes, h, maxWindows = 20) {
   const minObs = Math.max(30, h * 4 + 10)
-  const scores = { momentum: [], meanRevert: [], trend: [], monteCarlo: [] }
+  const scores = { momentum: [], meanRevert: [], trend: [], monteCarlo: [], arima: [], prophet: [], lstm: [], garch: [] }
   const total = closes.length
   if (total < minObs + h + 5) return { scores, sampleSize: 0, hitRates: {}, windows: [] }
 
