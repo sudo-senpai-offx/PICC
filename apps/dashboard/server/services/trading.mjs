@@ -22,6 +22,7 @@ import { chatText, llmConfigured } from "./llm.mjs"
 import { env } from "../config.mjs"
 import { news as serperNews } from "./serper.mjs"
 import { kellySnapshot } from "./kellyCriterion.mjs"
+import { atr as computeAtr, adx as computeAdx } from "./indicators.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -174,6 +175,100 @@ export async function paperHistory(limit = 50) {
 }
 
 const round2 = (x) => Math.round(x * 100) / 100
+
+/**
+ * Compute adaptive SL/TP from volatility regime. Uses ATR (Average True Range)
+ * to set dynamic stop-loss and take-profit levels based on the current market
+ * volatility, regime, and direction.
+ *
+ * Regime-adaptive multipliers:
+ *   - Trending:   wider TP (2.5× ATR), tighter SL (1.2× ATR) — ride the wave
+ *   - Ranging:    tight TP (1.5× ATR), wider SL (1.8× ATR) — mean reversion
+ *   - Volatile:   wide TP (2.0× ATR), wide SL (2.0× ATR) — accommodate noise
+ *   - Breakout:   target previous high/low, SL at ATR midpoint
+ *
+ * @param {Array} candles - OHLC candles [{time, open, high, low, close}]
+ * @param {"up"|"down"} direction - trade direction
+ * @param {Object} opts - { atrPeriod, regime, tpMult, slMult }
+ * @returns {{ takeProfit: number|null, stopLoss: number|null, atr: number, regime: string }}
+ */
+export function computeAdaptiveStops(candles, direction, opts = {}) {
+  if (!Array.isArray(candles) || candles.length < 20 || !direction) {
+    return { takeProfit: null, stopLoss: null, atr: null, regime: "unknown" }
+  }
+  const closes = candles.map((c) => c.close)
+  const highs = candles.map((c) => c.high)
+  const lows = candles.map((c) => c.low)
+  const atrPeriod = opts.atrPeriod || 14
+  const atrValues = computeAtr(highs, lows, closes, atrPeriod)
+  const currentAtr = atrValues[atrValues.length - 1]
+  if (!Number.isFinite(currentAtr) || currentAtr <= 0) {
+    return { takeProfit: null, stopLoss: null, atr: null, regime: "unknown" }
+  }
+
+  // Detect regime for multiplier selection
+  const adxValues = computeAdx(highs, lows, closes, atrPeriod)
+  const currentAdx = adxValues.adx[adxValues.adx.length - 1] || 0
+  const avgAtr = atrValues.filter((v) => v != null).reduce((s, v) => s + v, 0) / atrValues.filter((v) => v != null).length || currentAtr
+  const atrRatio = avgAtr > 0 ? currentAtr / avgAtr : 1
+
+  let regime = "ranging"
+  if (currentAdx > 25 && atrRatio > 1.3) regime = "volatile_trend"
+  else if (currentAdx > 25) regime = "trending"
+  else if (atrRatio > 1.5) regime = "volatile"
+
+  // Regime-adaptive multipliers (research-backed: trending = wider TP, tighter SL)
+  const multipliers = {
+    trending:        { tp: 2.5, sl: 1.2 },
+    volatile_trend:  { tp: 3.0, sl: 1.5 },
+    volatile:        { tp: 2.0, sl: 1.8 },
+    ranging:         { tp: 1.8, sl: 1.5 },
+    unknown:         { tp: 2.0, sl: 1.5 }
+  }
+  const m = multipliers[regime]
+  const tpMult = opts.tpMult || m.tp
+  const slMult = opts.slMult || m.sl
+
+  const last = closes[closes.length - 1]
+  const isUp = direction === "up"
+  const takeProfit = isUp
+    ? Math.round((last + currentAtr * tpMult) * 1e6) / 1e6
+    : Math.round((last - currentAtr * tpMult) * 1e6) / 1e6
+  const stopLoss = isUp
+    ? Math.round((last - currentAtr * slMult) * 1e6) / 1e6
+    : Math.round((last + currentAtr * slMult) * 1e6) / 1e6
+
+  return { takeProfit, stopLoss, atr: currentAtr, regime, adx: currentAdx, atrRatio, multipliers: { tp: tpMult, sl: slMult } }
+}
+
+/**
+ * Compute adaptive stops for a symbol by fetching its recent candle data.
+ * Tries liveEO first (for EO assets), falls back to Yahoo Finance history.
+ */
+async function computeAdaptiveStopsFromSymbol(symbol, timeframe = 60) {
+  try {
+    const { liveEOData } = await import("./liveEO.mjs")
+    const data = liveEOData()
+    const asset = data.assets?.find((a) => a.id === symbol || a.name === symbol)
+    if (asset?.periods?.[timeframe]?.length >= 30) {
+      return computeAdaptiveStops(asset.periods[timeframe], "up") // direction-neutral — only the magnitude matters
+    }
+  } catch { /* liveEO not available */ }
+  try {
+    const history = await getHistory(symbol, "1mo")
+    if (history?.dates?.length >= 30) {
+      const candles = history.dates.map((ts, i) => ({
+        time: Math.floor(ts / 1000),
+        open: Number(history.opens[i]) || 0,
+        high: Number(history.highs[i]) || 0,
+        low: Number(history.lows[i]) || 0,
+        close: Number(history.closes[i]) || 0
+      })).filter((c) => c.close > 0)
+      return computeAdaptiveStops(candles, "up")
+    }
+  } catch { /* Yahoo not available */ }
+  return null
+}
 
 /**
  * Full paper analytics: mark open positions to market via Yahoo quotes,
@@ -384,8 +479,25 @@ async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, s
   // Stop-loss/take-profit levels are plain price levels on the position. For an
   // "up" position SL sits below entry and TP above; the reverse for "down".
   const mult = sideName === "down" ? -1 : 1
-  const tp = takeProfit != null && takeProfit !== "" ? Number(takeProfit) : null
-  const sl = stopLoss != null && stopLoss !== "" ? Number(stopLoss) : null
+  let tp = takeProfit != null && takeProfit !== "" ? Number(takeProfit) : null
+  let sl = stopLoss != null && stopLoss !== "" ? Number(stopLoss) : null
+
+  // Adaptive stops: auto-compute SL/TP from volatility when not explicitly provided
+  if (tp == null && sl == null) {
+    try {
+      const adaptive = await computeAdaptiveStopsFromSymbol(symbolName)
+      if (adaptive) {
+        // Only apply if the computed levels sit on the correct side of entry
+        const tpValid = mult === 1 ? adaptive.takeProfit > entryPrice : adaptive.takeProfit < entryPrice
+        const slValid = mult === 1 ? adaptive.stopLoss < entryPrice : adaptive.stopLoss > entryPrice
+        if (tpValid) tp = adaptive.takeProfit
+        if (slValid) sl = adaptive.stopLoss
+      }
+    } catch {
+      /* adaptive stops are best-effort — never block a trade */
+    }
+  }
+
   if (tp != null) {
     if (!Number.isFinite(tp) || tp <= 0) throw new Error("take-profit must be a valid price")
     if (mult === 1 ? tp <= entryPrice : tp >= entryPrice) {

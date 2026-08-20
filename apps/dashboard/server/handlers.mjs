@@ -455,6 +455,78 @@ function ruleBasedExtensionSuggestions(platform, pageTitle) {
 }
 
 // ---------------------------------------------------------------------
+// Lightweight schema validation (zod-free)
+// ---------------------------------------------------------------------
+
+function validate(body, schema) {
+  const errors = []
+  for (const [key, rules] of Object.entries(schema)) {
+    const val = body?.[key]
+    for (const rule of rules) {
+      const msg = rule(val, body)
+      if (msg) errors.push(`${key}: ${msg}`)
+    }
+  }
+  return errors.length ? errors.join("; ") : null
+}
+
+function required(val) { return val == null || val === "" ? "required" : null }
+function isNumber(val, lo, hi) {
+  return (v) => { const n = Number(v); return v != null && v !== "" && (!Number.isFinite(n) || n < lo || n > hi) ? `must be ${lo}-${hi}` : null }
+}
+function isString(val) { return (v) => v != null && typeof v !== "string" ? "must be a string" : null }
+function oneOf(...opts) { return (v) => v != null && v !== "" && !opts.includes(v) ? `must be one of: ${opts.join(", ")}` : null }
+function maxLength(n) { return (v) => typeof v === "string" && v.length > n ? `max ${n} chars` : null }
+
+// Validation schemas for critical POST endpoints
+const SCHEMAS = {
+  paperTrade: {
+    symbol: [required, isString()],
+    side: [oneOf("up", "down")],
+    entry: [required, isNumber(0, 1e12)],
+    amount: [(v) => v != null && v !== "" && (Number(v) <= 0 || !Number.isFinite(Number(v))) ? "must be positive" : null],
+    takeProfit: [(v) => v != null && v !== "" && Number(v) <= 0 ? "must be positive" : null],
+    stopLoss: [(v) => v != null && v !== "" && Number(v) <= 0 ? "must be positive" : null]
+  },
+  paperClose: {
+    id: [required, isString()],
+    exit: [required, isNumber(0, 1e12)]
+  },
+  autopilot: {
+    assetId: [maxLength(20)],
+    duration: [isNumber(5, 43200)],
+    minConfidence: [isNumber(30, 95)],
+    cooldownMs: [isNumber(10000, 86400000)],
+    maxConcurrent: [isNumber(1, 10)],
+    dailyLossLimitPct: [isNumber(1, 100)],
+    maxDailyTrades: [isNumber(0, 100)]
+  },
+  demoPlace: {
+    assetId: [required, maxLength(20)],
+    type: [oneOf("call", "put")],
+    amount: [(v) => v != null && v !== "" && (Number(v) <= 0 || !Number.isFinite(Number(v))) ? "must be positive" : null],
+    duration: [isNumber(5, 43200)]
+  },
+  alertCreate: {
+    symbol: [required, isString()],
+    condition: [required, oneOf("price_above", "price_below", "percent_change", "rsi_above", "rsi_below", "volume_spike")],
+    value: [required]
+  },
+  signalResolve: {
+    id: [required, isString()],
+    resultPrice: [required, isNumber(0, 1e12)]
+  }
+}
+
+function validateOr400(res, body, schemaName) {
+  const schema = SCHEMAS[schemaName]
+  if (!schema) return null
+  const err = validate(body, schema)
+  if (err) { writeJson(res, 400, { ok: false, error: err }); return true }
+  return false
+}
+
+// ---------------------------------------------------------------------
 // Feature handlers
 // ---------------------------------------------------------------------
 
@@ -1187,6 +1259,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/trading/paper/trade" && req.method === "POST") {
+    if (validateOr400(res, body, "paperTrade")) return
     try {
       writeJson(res, 200, { ok: true, position: await openPaperTrade(body) })
       bustRealtimeSuite()
@@ -1197,6 +1270,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/trading/paper/close" && req.method === "POST") {
+    if (validateOr400(res, body, "paperClose")) return
     try {
       writeJson(res, 200, { ok: true, closed: await closePaperTrade(body) })
       bustRealtimeSuite()
@@ -1232,6 +1306,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/trading/signals/resolve" && req.method === "POST") {
+    if (validateOr400(res, body, "signalResolve")) return
     try {
       writeJson(res, 200, { ok: true, signal: await resolveSignal(body) })
       bustRealtimeSuite()
@@ -1288,6 +1363,7 @@ export async function handleApi(req, res, url) {
     if (!(await verifyUser(auth)) && (await hasUsers())) {
       return writeJson(res, 401, { error: "authentication required" })
     }
+    if (validateOr400(res, body, "demoPlace")) return
     try {
       const deal = await withTimeout(
         placeDemoTrade({
@@ -1320,6 +1396,7 @@ export async function handleApi(req, res, url) {
     if (!(await verifyUser(auth)) && (await hasUsers())) {
       return writeJson(res, 401, { error: "authentication required" })
     }
+    if (validateOr400(res, body, "autopilot")) return true
     try {
       writeJson(res, 200, { ok: true, config: await saveAutopilotConfig(body) })
       bustRealtimeSuite()
@@ -1575,6 +1652,7 @@ export async function handleApi(req, res, url) {
   }
   if (path === "/api/trading/alerts" && req.method === "POST") {
     const { createAlert } = await import("./services/alertEngine.mjs")
+    if (validateOr400(res, body, "alertCreate")) return true
     const { symbol, condition, value, message, recurring, expiresAt } = body ?? {}
     if (!symbol || !condition || value == null) return writeJson(res, 400, { error: "symbol, condition, and value required" })
     const alert = createAlert({ symbol, condition, value: Number(value), message, recurring, expiresAt })
@@ -1873,6 +1951,84 @@ export async function handleApi(req, res, url) {
     const { analyzeOrderFlow } = await import("./services/orderFlow.mjs")
     const candles = body?.candles || []
     writeJson(res, 200, { ok: true, ...analyzeOrderFlow(candles, body?.lookback) })
+    return true
+  }
+
+  if (path === "/api/trading/adaptive-stops" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const { computeAdaptiveStops } = await import("./services/trading.mjs")
+    const { candles, direction, timeframe } = body ?? {}
+    if (!candles || !Array.isArray(candles) || candles.length < 20) {
+      writeJson(res, 400, { ok: false, error: "at least 20 candles required" })
+      return true
+    }
+    if (!direction || (direction !== "up" && direction !== "down")) {
+      writeJson(res, 400, { ok: false, error: "direction must be 'up' or 'down'" })
+      return true
+    }
+    writeJson(res, 200, { ok: true, ...computeAdaptiveStops(candles, direction, { atrPeriod: timeframe }) })
+    return true
+  }
+
+  if (path === "/api/trading/walk-forward" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const symbol = String(body?.symbol ?? "").trim().toUpperCase()
+    const horizonDays = Math.min(Math.max(Number(body?.horizonDays) || 3, 1), 30)
+    const trainWindow = Math.min(Math.max(Number(body?.trainWindow) || 60, 30), 500)
+    const testWindow = Math.min(Math.max(Number(body?.testWindow) || 20, 5), 100)
+    const stepSize = Math.min(Math.max(Number(body?.stepSize) || testWindow, 5), 200)
+    const maxWindows = Math.min(Math.max(Number(body?.maxWindows) || 20, 3), 100)
+    if (!symbol) { writeJson(res, 400, { ok: false, error: "symbol required" }); return true }
+    try {
+      const { getHistory } = await import("./services/yahoo.mjs")
+      const { backtestModels, predictDirection } = await import("./services/prediction.mjs")
+      const history = await withTimeout(getHistory(symbol, "5y"), 20000)
+      const closes = (history.closes ?? []).filter((v) => typeof v === "number" && isFinite(v) && v > 0)
+      if (closes.length < trainWindow + testWindow + horizonDays) {
+        writeJson(res, 400, { ok: false, error: `need at least ${trainWindow + testWindow + horizonDays} data points` })
+        return true
+      }
+      const windows = []
+      let eq = 100
+      let peak = 100
+      const equity = [{ i: 0, v: 100 }]
+      const drawdown = [{ i: 0, v: 0 }]
+      for (let start = trainWindow; start + testWindow + horizonDays <= closes.length && windows.length < maxWindows; start += stepSize) {
+        const trainSlice = closes.slice(0, start)
+        const bt = backtestModels(trainSlice, horizonDays, 10)
+        const hitRates = bt.hitRates ?? {}
+        const avgHR = Object.values(hitRates).filter((v) => v != null).reduce((s, v, _, a) => s + v / a.length, 0)
+        const testSlice = closes.slice(start, start + testWindow)
+        const futureSlice = closes.slice(start, testWindow, start + testWindow + horizonDays)
+        const entry = testSlice[testSlice.length - 1]
+        const exit = futureSlice.length > 0 ? futureSlice[futureSlice.length - 1] : entry
+        const direction = avgHR > 0.5 ? "up" : avgHR < 0.5 ? "down" : "flat"
+        const mult = direction === "up" ? 1 : direction === "down" ? -1 : 0
+        const returnPct = entry > 0 ? (exit / entry - 1) * mult : 0
+        const hit = returnPct > 0
+        eq = Math.round((eq + eq * returnPct) * 100) / 100
+        peak = Math.max(peak, eq)
+        windows.push({ idx: windows.length + 1, trainStart: start - trainWindow, testStart: start, hitRate: Math.round(avgHR * 100), hit, returnPct: Math.round(returnPct * 10000) / 100, entry, exit })
+        equity.push({ i: windows.length, v: eq })
+        drawdown.push({ i: windows.length, v: peak > 0 ? Math.round(((peak - eq) / peak) * 10000) / 100 : 0 })
+      }
+      const totalHits = windows.filter((w) => w.hit).length
+      const totalReturn = eq - 100
+      const maxDD = drawdown.length ? Math.max(...drawdown.map((d) => d.v)) : 0
+      writeJson(res, 200, {
+        ok: true,
+        symbol, horizonDays, trainWindow, testWindow, stepSize,
+        windowsCompleted: windows.length,
+        walkForwardHitRate: windows.length ? Math.round((totalHits / windows.length) * 100) : null,
+        totalReturnPct: Math.round(totalReturn * 100) / 100,
+        maxDrawdownPct: maxDD,
+        equity, drawdown, windowDetails: windows,
+        name: history.name
+      })
+    } catch (err) {
+      console.warn("[picc] walk-forward failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
     return true
   }
 

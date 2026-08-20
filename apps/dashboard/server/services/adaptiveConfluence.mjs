@@ -430,11 +430,39 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
 
   // Sentiment score (pre-fetched or passed in)
   const sent = sentimentOverride ?? { score: 0, source: "none" }
-  // Sentiment alignment: +boost if sentiment agrees with direction, -penalty if opposing
+  // Regime-adaptive sentiment weighting:
+  //   Trending:  sentiment CONFIRMS the trend — amplify bullish/bearish alignment
+  //   Ranging:   sentiment is CONTRARIAN at extremes — flip when very strong
+  //   Volatile:  sentiment is noise — minimize impact
+  //   Breakout:  sentiment confirms the breakout direction
   const sentimentAligned = sent.score * direction > 0
-  const sentimentBoost = Math.abs(sent.score) > 0.1
-    ? (sentimentAligned ? 0.05 : -0.08) * Math.abs(sent.score)
-    : 0
+  const absScore = Math.abs(sent.score)
+  let sentimentBoost = 0
+  const regime = read.phase
+  if (absScore > 0.1) {
+    if (regime === "trend" || regime === "volatile_trend") {
+      // Trending: confirm sentiment with the trend — stronger boost for aligned
+      sentimentBoost = sentimentAligned
+        ? 0.08 * absScore   // confirming: +8% of sentiment magnitude
+        : -0.04 * absScore  // opposing: mild penalty
+    } else if (regime === "quiet_range" || regime === "volatile_range") {
+      // Ranging: contrarian at extremes (>0.6), confirming at moderate levels
+      if (absScore > 0.6) {
+        sentimentBoost = sentimentAligned
+          ? -0.03 * absScore  // extreme + aligned = crowded trade, penalty
+          : 0.05 * absScore   // extreme + opposing = contrarian opportunity, bonus
+      } else {
+        sentimentBoost = sentimentAligned
+          ? 0.04 * absScore   // moderate + aligned = mild confirmation
+          : -0.02 * absScore  // moderate + opposing = mild noise
+      }
+    } else {
+      // Breakout or unknown: default confirming behavior
+      sentimentBoost = sentimentAligned
+        ? 0.05 * absScore
+        : -0.06 * absScore
+    }
+  }
 
   const expiryRuns = CANDIDATE_EXPIRIES.map((expiry) => {
     const wp = winProbEstimate({ closes, times, period, direction, expiry })
