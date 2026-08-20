@@ -574,6 +574,8 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
   const candleListeners = new Set()
   const reconnectListeners = new Set()
   const dropListeners = new Set()
+  const outbox = [] // queued payloads during disconnect, drained on reconnect
+  const MAX_OUTBOX = 50
 
   /**
    * Reject every in-flight waiter with `reason` and clear the maps. Without
@@ -703,6 +705,7 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
           await openSocket()
           reconnecting = false
           reconnectAttempts = 0
+          drainOutbox()
           for (const cb of reconnectListeners) {
             try {
               cb()
@@ -869,8 +872,27 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
   }
 
   function send(payload) {
-    ensureOpen()
-    ws.sendText(JSON.stringify(payload))
+    if (ws && !userClosed) {
+      ws.sendText(JSON.stringify(payload))
+    } else if (!userClosed && !authFailed) {
+      // Queue for delivery once reconnected (bounded to prevent memory growth)
+      if (outbox.length < MAX_OUTBOX) outbox.push(payload)
+    } else {
+      throw new Error("connection closed — cannot send")
+    }
+  }
+
+  function drainOutbox() {
+    while (outbox.length > 0 && ws && !userClosed) {
+      const payload = outbox.shift()
+      try {
+        ws.sendText(JSON.stringify(payload))
+      } catch {
+        // Socket died mid-drain — re-queue remaining
+        outbox.unshift(payload)
+        break
+      }
+    }
   }
 
   function withAsset(assetId) {

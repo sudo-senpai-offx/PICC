@@ -52,7 +52,6 @@ const state = {
   session: null,
   sessionPromise: null,
   sessionError: null,
-  ticking: false,
   loopTimer: null,
   lastRun: null,
   lastDecision: null,
@@ -602,5 +601,25 @@ export async function demoAnalytics() {
     },
     metrics,
     byType: byTypeList
+  }
+}
+
+// ---------------------------------------------------------------------
+// Bootstrap — auto-restart autopilot on server boot if enabled on disk
+// ---------------------------------------------------------------------
+export async function bootstrapAutopilot() {
+  try {
+    const config = await getAutopilotConfig()
+    if (config.enabled) {
+      console.log("[autopilot] resuming from previous session")
+      if (!state.loopTimer) {
+        state.loopTimer = setInterval(() => {
+          void autopilotTick()
+        }, 60_000)
+      }
+      void autopilotTick()
+    }
+  } catch {
+    /* config file missing — nothing to resume */
   }
 }

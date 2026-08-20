@@ -21,6 +21,7 @@ import {
 import { chatText, llmConfigured } from "./llm.mjs"
 import { env } from "../config.mjs"
 import { news as serperNews } from "./serper.mjs"
+import { kellySnapshot } from "./kellyCriterion.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -361,14 +362,23 @@ export function openPaperTrade(input) {
   return withLedgerLock(() => openPaperTradeLocked(input))
 }
 
-async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, stopLoss }) {
+async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, stopLoss, signalId }) {
   const creds = await getCredentials()
   const ledger = await getLedger()
   const symbolName = String(symbol || "UNKNOWN").toUpperCase()
   const sideName = side === "down" ? "down" : "up"
   const entryPrice = Number(entry)
-  const tradeAmount = Number(amount)
   if (!Number.isFinite(entryPrice) || entryPrice <= 0) throw new Error("entry price required")
+
+  // Position sizing: use Kelly when no explicit amount is provided
+  let tradeAmount = Number(amount)
+  if (!Number.isFinite(tradeAmount) || tradeAmount <= 0) {
+    const { stats, kelly } = kellySnapshot()
+    const { cash } = await paperOverview()
+    const fraction = kelly.suggested > 0 ? kelly.suggested : creds.riskPerTradePct / 100
+    tradeAmount = Math.round(cash * fraction * 100) / 100
+    tradeAmount = Math.max(1, Math.min(tradeAmount, cash)) // floor $1, cap at available cash
+  }
   if (!Number.isFinite(tradeAmount) || tradeAmount <= 0) throw new Error("amount required")
 
   // Stop-loss/take-profit levels are plain price levels on the position. For an
@@ -399,6 +409,7 @@ async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, s
 
   const position = {
     id: randomBytes(6).toString("hex"),
+    signalId: signalId || null,
     symbol: symbolName,
     side: sideName,
     entry: Math.round(entryPrice * 1e6) / 1e6,
@@ -439,6 +450,29 @@ async function closePaperTradeLocked({ id, exit, reason = "manual", exitSource =
   }
   ledger.positions.splice(idx, 1)
   ledger.closed.push(closed)
+
+  // Auto-resolve linked signal if present
+  if (p.signalId) {
+    const sIdx = ledger.signals.findIndex((s) => s.id === p.signalId && s.status !== "resolved")
+    if (sIdx >= 0) {
+      const s = ledger.signals[sIdx]
+      const diff = exitPrice - s.entry
+      let resolution = "draw"
+      if (Math.abs(diff) > 1e-9) {
+        resolution = s.direction === "up" ? (diff > 0 ? "win" : "loss") : diff > 0 ? "loss" : "win"
+      }
+      ledger.signals[sIdx] = {
+        ...s,
+        status: "resolved",
+        resolution,
+        outcomePct: Math.round((diff / s.entry) * 10000) / 100,
+        resultPrice: Math.round(exitPrice * 1e6) / 1e6,
+        resolvedAt: new Date().toISOString(),
+        tradeId: closed.id
+      }
+    }
+  }
+
   await saveLedger(ledger)
   return closed
 }

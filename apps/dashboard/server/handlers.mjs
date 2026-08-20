@@ -779,6 +779,15 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  // General rate limit: 60 requests per 60 seconds per IP for all POST endpoints
+  if (["POST", "PUT", "PATCH"].includes(req.method)) {
+    const generalKey = `general:${clientIp(req)}`
+    if (rateLimited(generalKey, 60, 60_000)) {
+      writeJson(res, 429, { error: "rate limit exceeded — try again later" })
+      return
+    }
+  }
+
   if (path === "/api/health" && (req.method === "GET" || req.method === "POST")) {
     let agents = null
     if (env.agentsUrl) {

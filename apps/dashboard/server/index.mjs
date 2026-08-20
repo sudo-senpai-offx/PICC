@@ -136,5 +136,8 @@ if (!process.env.PICC_NO_LISTEN) {
     }
     startLedger()
     console.log("[picc-accuracy-ledger] auto-resolving trading decisions")
+    import("./services/autopilot.mjs").then(({ bootstrapAutopilot }) => {
+      bootstrapAutopilot()
+    }).catch(() => {})
   })
 }
