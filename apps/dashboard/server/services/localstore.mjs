@@ -135,3 +135,35 @@ export async function removeRow(table, id) {
     return { removed: next.length !== rows.length }
   })
 }
+
+/**
+ * Simple synchronous-style local JSON store for services that need an
+ * in-memory cache with periodic persistence. Reads once on first access,
+ * writes on explicit .write(). The file lives at DATA_DIR/<name>.json.
+ */
+const storeCache = new Map()
+export function localStore(name, defaults = {}) {
+  if (storeCache.has(name)) return storeCache.get(name)
+  const store = { data: JSON.parse(JSON.stringify(defaults)), _dirty: false }
+  // Fire-and-forget initial load (file may not exist yet — that's fine)
+  const file = join(DATA_DIR, `${name}.json`)
+  readFile(file, "utf8")
+    .then((raw) => {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        store.data = { ...defaults, ...parsed }
+      }
+    })
+    .catch(() => { /* file doesn't exist yet or is corrupt — use defaults */ })
+  store.write = () => {
+    try {
+      writeFile(file, JSON.stringify(store.data, null, 2), "utf8").catch((err) => {
+        console.warn(`[picc-localstore] localStore write failed ${name}:`, err.message)
+      })
+    } catch (err) {
+      console.warn(`[picc-localstore] localStore write failed ${name}:`, err.message)
+    }
+  }
+  storeCache.set(name, store)
+  return store
+}

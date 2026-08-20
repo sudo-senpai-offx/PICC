@@ -21,6 +21,13 @@ async function serverFetch(path) {
   return null
 }
 
+const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
+function fmt$(n, currency) {
+  if (n == null || !isFinite(n)) return "\u2014"
+  const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (currency || "$") + " "
+  return sym + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 // Sound settings
 const SOUND_KEY = "piccAlertSound"
 
@@ -103,9 +110,9 @@ async function loadPortfolio() {
   const data = await serverFetch("/trading/status")
   if (!data) { el.innerHTML = '<div class="empty">No portfolio data</div>'; return }
   el.innerHTML = `
-    <div class="metric"><span class="metric-label">Balance</span><span class="metric-value">$${(data.balance ?? 0).toFixed(2)}</span></div>
-    <div class="metric"><span class="metric-label">Equity</span><span class="metric-value">$${(data.equity ?? 0).toFixed(2)}</span></div>
-    <div class="metric"><span class="metric-label">Today P&L</span><span class="metric-value" style="color:${(data.todayPnl ?? 0) >= 0 ? "#4ade80" : "#ff6b6b"}">$${(data.todayPnl ?? 0).toFixed(2)}</span></div>
+    <div class="metric"><span class="metric-label">Balance</span><span class="metric-value">${fmt$(data.balance, data.currency)}</span></div>
+    <div class="metric"><span class="metric-label">Equity</span><span class="metric-value">${fmt$(data.equity, data.currency)}</span></div>
+    <div class="metric"><span class="metric-label">Today P&L</span><span class="metric-value" style="color:${(data.todayPnl ?? 0) >= 0 ? "#4ade80" : "#ff6b6b"}">${fmt$(data.todayPnl, data.currency)}</span></div>
     <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value">${data.openPositions ?? 0}</span></div>
   `
 }

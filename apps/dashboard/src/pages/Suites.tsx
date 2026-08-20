@@ -142,29 +142,6 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
           </button>
         </div>
 
-        {/* Dockable preview cards */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-          {getDockablePreviewCards(suiteId).map((d) => (
-            <div
-              key={d.id}
-              style={{
-                flex: "1 1 140px",
-                background: "rgba(26, 26, 46, 0.8)",
-                border: "1px solid rgba(108, 99, 255, 0.3)",
-                borderRadius: 8,
-                padding: "10px 12px",
-                minWidth: 140,
-              }}
-            >
-              <div style={{ fontSize: 16, marginBottom: 4 }}>{d.icon}</div>
-              <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 2 }}>{d.title}</div>
-              <div style={{ fontSize: 10, color: "#9aa0c0" }}>
-                {d.defaultSize.width}×{d.defaultSize.height} · {d.defaultPosition}
-              </div>
-            </div>
-          ))}
-        </div>
-
         {/* Settings mode tabs */}
         <div className="tabs" style={{ marginBottom: 12 }}>
           <button
@@ -216,39 +193,6 @@ function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () =
       </div>
     </div>
   )
-}
-
-function getDockablePreviewCards(suiteId: string) {
-  const presets: Record<string, { id: string; title: string; icon: string; defaultPosition: string; defaultSize: { width: number; height: number }; defaultCollapsed: boolean }[]> = {
-    trading: [
-      { id: "price-ticker", title: "Price Ticker", icon: "📈", defaultPosition: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
-      { id: "portfolio", title: "Portfolio", icon: "📊", defaultPosition: "top-left", defaultSize: { width: 300, height: 180 }, defaultCollapsed: true },
-      { id: "ai-signals", title: "AI Signals", icon: "🧠", defaultPosition: "right", defaultSize: { width: 260, height: 260 }, defaultCollapsed: true },
-      { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultCollapsed: true },
-      { id: "autopilot", title: "Autopilot", icon: "🤖", defaultPosition: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false },
-    ],
-    bandwidth: [
-      { id: "speed", title: "Speed Monitor", icon: "📡", defaultPosition: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
-      { id: "connectors", title: "Connectors", icon: "🔌", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
-    ],
-    affiliate: [
-      { id: "tracker", title: "Affiliate Tracker", icon: "💰", defaultPosition: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
-      { id: "optimizer", title: "Link Optimizer", icon: "🔗", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
-    ],
-    content: [
-      { id: "analytics", title: "Content Analytics", icon: "📊", defaultPosition: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
-      { id: "scheduler", title: "Post Scheduler", icon: "📅", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
-    ],
-    dividend: [
-      { id: "portfolio", title: "Dividend Portfolio", icon: "💎", defaultPosition: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
-      { id: "calendar", title: "Ex-Date Calendar", icon: "📅", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
-    ],
-    defi: [
-      { id: "yield", title: "Yield Tracker", icon: "🌱", defaultPosition: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
-      { id: "gas", title: "Gas Tracker", icon: "⛽", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 160 }, defaultCollapsed: true },
-    ],
-  }
-  return presets[suiteId] || [{ id: "general", title: "PICC Panel", icon: "🧠", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 160 }, defaultCollapsed: false }]
 }
 
 export function Suites() {

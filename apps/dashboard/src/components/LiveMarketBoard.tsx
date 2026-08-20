@@ -15,9 +15,11 @@ function fmtPct(n: number): string {
   return `${v >= 0 ? "+" : ""}${v.toFixed(3)}%`
 }
 
-function fmtMoney(n: number | null | undefined): string {
-  if (n == null) return "—"
-  return `${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+function fmtMoney(n: number | null | undefined, currency?: string): string {
+  if (n == null) return "\u2014"
+  const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
+  const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (currency || "$") + " "
+  return sym + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /** Mini live sparkline of the base-period closes (60s). */
@@ -126,11 +128,11 @@ export function LiveMarketBoard() {
           {account ? (
             <span className="muted row" style={{ gap: "10px" }}>
               <span>
-                <Badge tone="accent">demo</Badge> {account.demoWallet?.currency ?? account.currency ?? ""}{" "}
-                {fmtMoney(account.demoWallet?.balance ?? account.balance)}
+                <Badge tone="accent">demo</Badge>{" "}
+                {fmtMoney(account.demoWallet?.balance ?? account.balance, account.demoWallet?.currency ?? account.currency)}
               </span>
               <span>
-                <Badge tone="success">real</Badge> {account.realWallet?.currency ?? account.currency ?? ""} {fmtMoney(account.realWallet?.balance)}
+                <Badge tone="success">real</Badge> {fmtMoney(account.realWallet?.balance, account.realWallet?.currency ?? account.currency)}
               </span>
               <Badge tone={account.active === "demo" ? "muted" : "success"}>
                 active: {account.active ?? (account.demo ? "demo" : "real")}

@@ -62,7 +62,12 @@
       { id: "portfolio", title: "Portfolio", icon: "📊", defaultPos: "top-left", defaultSize: { width: 300, height: 180 }, defaultCollapsed: true },
       { id: "ai-signals", title: "AI Signals", icon: "🧠", defaultPos: "right", defaultSize: { width: 260, height: 260 }, defaultCollapsed: true },
       { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", defaultPos: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultCollapsed: true },
-      { id: "autopilot", title: "Autopilot", icon: "🤖", defaultPos: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false }
+      { id: "autopilot", title: "Autopilot", icon: "🤖", defaultPos: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false },
+      { id: "kelly-sizing", title: "Kelly Sizing", icon: "🎯", defaultPos: "left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: true },
+      { id: "regime-detect", title: "Regime Detection", icon: "📡", defaultPos: "top-left", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
+      { id: "order-flow", title: "Order Flow", icon: "🌊", defaultPos: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultCollapsed: true },
+      { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", defaultPos: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
+      { id: "sentiment", title: "Sentiment", icon: "🎭", defaultPos: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
     ],
     bandwidth: [
       { id: "speed", title: "Speed Monitor", icon: "📡", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
@@ -281,6 +286,91 @@
   }
   // Expose metrics getter for PICC web app (accessible only to extension content scripts, not page JS)
   // SECURITY: window-level getter removed — page scripts must not access internal extension data
+
+  // ── DOM content extraction ────────────────────────────────────────────────
+  function extractPageContent(selectors) {
+    if (!selectors) {
+      return {
+        url: location.href,
+        title: document.title,
+        text: (document.body?.innerText || "").slice(0, 50000),
+      }
+    }
+    const out = { url: location.href, title: document.title }
+    for (const [key, selector] of Object.entries(selectors)) {
+      const tryOne = (sel) => {
+        if (typeof sel === "string" && sel.startsWith("text:")) {
+          const needle = sel.slice(5)
+          for (const el of document.querySelectorAll("div,span,p,td,h1,h2,h3,label,a")) {
+            const t = (el.textContent || "").trim()
+            if (t.includes(needle) && t.length <= 300) return el
+          }
+          return null
+        }
+        try { return document.querySelector(sel) } catch { return null }
+      }
+      const list = Array.isArray(selector) ? selector : [selector]
+      let found = null
+      for (const s of list) { found = tryOne(s); if (found) break }
+      out[key] = found ? (found.innerText || found.textContent || "").trim() : null
+    }
+    return out
+  }
+
+  // ── Form detection ─────────────────────────────────────────────────────────
+  function detectForms() {
+    const forms = []
+    for (const form of document.forms) {
+      const fields = []
+      for (const el of form.elements) {
+        if (el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA") {
+          fields.push({ tag: el.tagName, type: el.type || "text", name: el.name || "", id: el.id || "", placeholder: el.placeholder || "", value: el.value || "", required: el.required })
+        }
+      }
+      forms.push({ action: form.action, method: form.method, fields })
+    }
+    const standalone = []
+    for (const inp of document.querySelectorAll("input, select, textarea")) {
+      if (!inp.form) {
+        standalone.push({ tag: inp.tagName, type: inp.type || "text", name: inp.name || "", id: inp.id || "", placeholder: inp.placeholder || "", value: inp.value || "" })
+      }
+    }
+    return { forms, standalone, totalFormCount: document.forms.length }
+  }
+
+  // ── Web storage reading ────────────────────────────────────────────────────
+  function readWebStorage() {
+    const local = {}
+    const session = {}
+    try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); local[k] = localStorage.getItem(k) } } catch {}
+    try { for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); session[k] = sessionStorage.getItem(k) } } catch {}
+    return { localStorage: local, sessionStorage: session }
+  }
+
+  // ── Form fill / element click ──────────────────────────────────────────────
+  function fillField(selector, value) {
+    const el = document.querySelector(selector)
+    if (!el) return { ok: false, error: "element not found" }
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set
+    if (setter) setter.call(el, value)
+    else el.value = value
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+    el.dispatchEvent(new Event("change", { bubbles: true }))
+    return { ok: true, selector }
+  }
+
+  function clickElement(selector) {
+    const el = document.querySelector(selector)
+    if (!el) return { ok: false, error: "element not found" }
+    el.click()
+    return { ok: true, selector, text: (el.textContent || "").trim().slice(0, 100) }
+  }
+
+  function navigateTo(url) {
+    if (url && /^https?:\/\//i.test(url)) { window.location.href = url; return { ok: true, url } }
+    return { ok: false, error: "invalid url" }
+  }
 
   // ── Sound alerts ──────────────────────────────────────────────────────
   let audioCtx = null
@@ -611,12 +701,20 @@
     autopilot: null,
     paper: null,
     demo: null,
+    kelly: null,
+    regime: null,
+    orderFlow: null,
+    expiry: null,
+    sentiment: null,
+    lastCandles: [],
     lastUpdate: 0
   }
 
-  function fmt$(n) {
+  const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
+  function fmt$(n, currency) {
     if (n == null || !isFinite(n)) return "\u2014"
-    return "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (currency || "$") + " "
+    return sym + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
   function fmtPct(n) {
     if (n == null || !isFinite(n)) return "\u2014"
@@ -641,7 +739,7 @@
         `</div>`
     }).join("")
     const acct = tradingState.account
-    const bal = acct ? fmt$(acct.balance) : ""
+    const bal = acct ? fmt$(acct.balance, acct.currency) : ""
     return `<div style="font-size:11px">${rows}</div>` +
       (bal ? `<div style="margin-top:4px;font-size:10px;color:#a5a0ff">Balance: ${bal}</div>` : "")
   }
@@ -653,15 +751,15 @@
     const lines = []
     if (paper) {
       lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin-bottom:2px">Paper Trading</div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cash</span><span>${fmt$(paper.cash)}</span></div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Committed</span><span>${fmt$(paper.committed)}</span></div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>PnL</span><span style="color:${tone(paper.realizedPnl)}">${fmt$(paper.realizedPnl)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cash</span><span>${fmt$(paper.cash, tradingState.account?.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Committed</span><span>${fmt$(paper.committed, tradingState.account?.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>PnL</span><span style="color:${tone(paper.realizedPnl)}">${fmt$(paper.realizedPnl, tradingState.account?.currency)}</span></div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${paper.winRate != null ? paper.winRate + "%" : "\u2014"}</span></div>`)
     }
     if (demo) {
       lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin:4px 0 2px">ExpertOption Demo</div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Balance</span><span>${fmt$(demo.balance)}</span></div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Today</span><span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Balance</span><span>${fmt$(demo.balance, demo.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Today</span><span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, demo.currency)}</span></div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Trades</span><span>${demo.todayTrades ?? 0}</span></div>`)
     }
     if (!lines.length) return '<div style="color:#a5a0ff;padding:4px">No position data yet\u2026</div>'
@@ -734,13 +832,92 @@
     if (auto?.lastDecision) lines.push(`<div style="font-size:10px;color:#a5a0ff">Last: ${auto.lastDecision}</div>`)
     const demo = tradingState.demo
     if (demo?.todayPnl != null) {
-      lines.push(`<div style="font-size:11px;margin-top:2px">Today PnL: <span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl)}</span></div>`)
+      lines.push(`<div style="font-size:11px;margin-top:2px">Today PnL: <span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, demo.currency)}</span></div>`)
     }
     // Control buttons
     lines.push(`<div style="display:flex;gap:4px;margin-top:6px">`)
     lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
     lines.push(`<button data-picc-action="autopilot-kill" style="background:#ff6b6b30;border:1px solid #ff6b6b;color:#ff6b6b;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">Kill</button>`)
     lines.push(`</div>`)
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Kelly Sizing Renderer ──────────────────────────────────────────────────
+  function renderKellySizing() {
+    const kelly = tradingState.kelly
+    if (!kelly) return '<div style="color:#a5a0ff;padding:4px">Loading Kelly data…</div>'
+    const stats = kelly.stats || {}
+    const k = kelly.kelly || {}
+    const lines = []
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${stats.winRate != null ? stats.winRate + "%" : "—"}</span></div>`)
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Avg payout</span><span>${stats.avgPayout != null ? stats.avgPayout + "x" : "—"}</span></div>`)
+    lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Full Kelly</span><span style="color:#6c63ff">${k.fullKelly != null ? k.fullKelly + "%" : "—"}</span></div>`)
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Suggested (${k.mode || "half"})</span><span style="font-weight:600;color:#4ade80">${k.suggested != null ? k.suggested + "%" : "—"}</span></div>`)
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Break-even WR</span><span>${k.breakEven != null ? k.breakEven + "%" : "—"}</span></div>`)
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Regime Detection Renderer ──────────────────────────────────────────────
+  function renderRegimeDetect() {
+    const regime = tradingState.regime
+    if (!regime || regime.regime === "unknown") return '<div style="color:#a5a0ff;padding:4px">Analyzing market regime…</div>'
+    const colors = { trending: "#4ade80", ranging: "#f59e0b", volatile: "#ff6b6b", breakout: "#6c63ff" }
+    const c = colors[regime.regime] || "#a5a0ff"
+    const lines = []
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><div style="width:8px;height:8px;border-radius:50%;background:${c}"></div><span style="font-weight:600;font-size:12px;color:${c}">${(regime.regime || "").toUpperCase()}</span><span style="font-size:10px;color:#9aa0c0">${regime.confidence || 0}%</span></div>`)
+    if (regime.metrics) lines.push(`<div style="font-size:10px;color:#9aa0c0">ADX: ${regime.metrics.adx} · ATR ratio: ${regime.metrics.atrRatio}x</div>`)
+    if (regime.suggestedStrategy) lines.push(`<div style="font-size:10px;margin-top:4px">Strategy: <b style="color:#6c63ff">${regime.suggestedStrategy}</b></div>`)
+    if (regime.factors?.length) lines.push(`<div style="font-size:9px;color:#9aa0c0;margin-top:2px">${regime.factors.join(" · ")}</div>`)
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Order Flow Renderer ────────────────────────────────────────────────────
+  function renderOrderFlow() {
+    const of = tradingState.orderFlow
+    if (!of || !of.delta?.length) return '<div style="color:#a5a0ff;padding:4px">Loading order flow…</div>'
+    const lines = []
+    const imbColor = of.imbalance === "buy-heavy" ? "#4ade80" : of.imbalance === "sell-heavy" ? "#ff6b6b" : "#f59e0b"
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:11px">Net Delta</span><span style="color:${of.cumulative >= 0 ? "#4ade80" : "#ff6b6b"};font-weight:600">${of.cumulative >= 0 ? "+" : ""}${of.cumulative}</span><span style="font-size:9px;padding:1px 4px;border-radius:3px;background:${imbColor}30;color:${imbColor}">${of.imbalance}</span></div>`)
+    if (of.avgDelta != null) lines.push(`<div style="font-size:10px;color:#9aa0c0">Avg delta: ${of.avgDelta}</div>`)
+    if (of.signals?.length) {
+      for (const sig of of.signals.slice(0, 3)) {
+        lines.push(`<div style="font-size:9px;color:${sig.type === "divergence" ? "#f59e0b" : "#6c63ff"};margin-top:2px">⚡ ${sig.desc}</div>`)
+      }
+    }
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Expiry Optimizer Renderer ──────────────────────────────────────────────
+  function renderExpiryOpt() {
+    const exp = tradingState.expiry
+    if (!exp || !exp.recommended) return '<div style="color:#a5a0ff;padding:4px">Analyzing optimal expiry…</div>'
+    const r = exp.recommended
+    const lines = []
+    lines.push(`<div style="font-weight:600;font-size:12px;color:#6c63ff;margin-bottom:4px">Recommended: ${r.label}</div>`)
+    lines.push(`<div style="font-size:10px;color:#9aa0c0">Score: ${r.score}/100 · Vol: ${exp.volatility || "—"}</div>`)
+    if (exp.all?.length) {
+      const top3 = exp.all.slice(0, 3)
+      lines.push(`<div style="display:flex;gap:4px;margin-top:4px">`)
+      for (const e of top3) {
+        const barW = Math.max(10, e.score)
+        lines.push(`<div style="flex:1;text-align:center;font-size:9px"><div style="margin-bottom:2px">${e.label}</div><div style="background:#1a1a2e;border-radius:2px;height:4px;overflow:hidden"><div style="height:100%;width:${barW}%;background:#6c63ff;border-radius:2px"></div></div><div style="color:#9aa0c0;margin-top:1px">${e.score}</div></div>`)
+      }
+      lines.push(`</div>`)
+    }
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Sentiment Renderer ─────────────────────────────────────────────────────
+  function renderSentiment() {
+    const sent = tradingState.sentiment
+    if (!sent || !sent.composite) return '<div style="color:#a5a0ff;padding:4px">Loading sentiment…</div>'
+    const c = sent.composite
+    const lines = []
+    const scoreColor = c.score > 0.2 ? "#4ade80" : c.score < -0.2 ? "#ff6b6b" : "#f59e0b"
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:12px;color:${scoreColor}">${c.label || "Neutral"}</span><span style="font-size:10px;color:#9aa0c0">Score: ${c.score}</span>${c.extreme ? '<span style="font-size:8px;padding:1px 3px;border-radius:3px;background:#ff6b6b30;color:#ff6b6b">EXTREME</span>' : ""}</div>`)
+    if (sent.news) lines.push(`<div style="font-size:10px;color:#9aa0c0">News: ${sent.news.bullish}🟢 ${sent.news.bearish}🔴 ${sent.news.neutral}⚪ (${sent.news.sampleSize})</div>`)
+    if (sent.social) lines.push(`<div style="font-size:10px;color:#9aa0c0">Social velocity: ${sent.social.velocity > 0 ? "+" : ""}${sent.social.velocity}</div>`)
     return `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
@@ -768,6 +945,15 @@
         tradingState.assets = live.watched.map((w) => ({ id: w, name: w, price: null, changePct: null, change: null }))
       }
       tradingState.lastUpdate = Date.now()
+      // Fetch advanced trading data
+      const [kelly, regime, orderFlow] = await Promise.all([
+        serverFetch("/api/trading/kelly"),
+        serverFetch("/api/trading/orderflow", { method: "POST", body: { candles: tradingState.lastCandles || [] } }),
+        serverFetch("/api/trading/sentiment", { method: "POST", body: { symbol: "EURUSD" } }),
+      ])
+      if (kelly?.ok) tradingState.kelly = kelly
+      if (regime?.ok) tradingState.regime = regime
+      if (orderFlow?.ok) tradingState.orderFlow = orderFlow
     } catch {
       // Server not reachable — keep last state
     }
@@ -779,7 +965,12 @@
       "portfolio": renderPortfolio,
       "ai-signals": renderAISignals,
       "risk-mgr": renderRiskManager,
-      "autopilot": renderAutopilot
+      "autopilot": renderAutopilot,
+      "kelly-sizing": renderKellySizing,
+      "regime-detect": renderRegimeDetect,
+      "order-flow": renderOrderFlow,
+      "expiry-opt": renderExpiryOpt,
+      "sentiment": renderSentiment,
     }
     for (const [id, renderer] of Object.entries(panels)) {
       const dock = shadowRoot.getElementById(`__PICC_DOCK_${id}__`)
@@ -1264,6 +1455,12 @@
       else playAlertSound("info")
       showToast(msg.title, msg.message, msg.type)
     }
+    if (msg.action === "extract-content") return extractPageContent(msg.selectors)
+    if (msg.action === "detect-forms") return detectForms()
+    if (msg.action === "read-storage") return readWebStorage()
+    if (msg.action === "fill-field") return fillField(msg.selector, msg.value)
+    if (msg.action === "click-element") return clickElement(msg.selector)
+    if (msg.action === "navigate") return navigateTo(msg.url)
   })
 
   // ── Server check on load ────────────────────────────────────────────────────

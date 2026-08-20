@@ -12,7 +12,8 @@
     "alarms",
     "notifications",
     "contextMenus",
-    "sidePanel"
+    "sidePanel",
+    "downloads"
   ],
   "host_permissions": [
     "http://localhost:*/*",

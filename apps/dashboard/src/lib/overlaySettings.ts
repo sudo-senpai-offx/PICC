@@ -84,6 +84,11 @@ export const SUITE_DOCKABLES: Record<string, DockableConfig[]> = {
     { id: "ai-signals", title: "AI Signals", icon: "🧠", defaultPosition: "right", defaultSize: { width: 260, height: 260 }, defaultCollapsed: true },
     { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultCollapsed: true },
     { id: "autopilot", title: "Autopilot", icon: "🤖", defaultPosition: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false },
+    { id: "kelly-sizing", title: "Kelly Sizing", icon: "🎯", defaultPosition: "left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: true },
+    { id: "regime-detect", title: "Regime Detection", icon: "📡", defaultPosition: "top-left", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
+    { id: "order-flow", title: "Order Flow", icon: "🌊", defaultPosition: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultCollapsed: true },
+    { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", defaultPosition: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
+    { id: "sentiment", title: "Sentiment", icon: "🎭", defaultPosition: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
   ],
   bandwidth: [
     { id: "speed", title: "Speed Monitor", icon: "📡", defaultPosition: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },

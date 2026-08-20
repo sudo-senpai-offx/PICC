@@ -80,9 +80,11 @@ const STRATEGY_PROFILES = [
 
 type StrategyId = typeof STRATEGY_PROFILES[number]["id"]
 
-function fmtMoney(n: number | null | undefined): string {
-  if (n == null) return "—"
-  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
+function fmtMoney(n: number | null | undefined, currency?: string | null): string {
+  if (n == null) return "\u2014"
+  const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (currency || "$") + " "
+  return sym + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /** Human duration from a millisecond span (e.g. "3m 12s"). */
@@ -338,7 +340,7 @@ export function AutopilotSuite() {
       <div className="grid grid-4">
         <Card className="pad">
           <div className="stat-label muted">Today PnL</div>
-          <div className="stat-value">{fmtMoney(demo?.todayPnl)}</div>
+          <div className="stat-value">{fmtMoney(demo?.todayPnl, demo?.currency)}</div>
           <div className="muted small">{demo?.todayTrades ?? 0} trades today</div>
         </Card>
         <Card className="pad">
@@ -348,7 +350,7 @@ export function AutopilotSuite() {
         </Card>
         <Card className="pad">
           <div className="stat-label muted">Balance</div>
-          <div className="stat-value">{fmtMoney(demo?.balance)}</div>
+          <div className="stat-value">{fmtMoney(demo?.balance, demo?.currency)}</div>
           <div className="muted small">{demo?.currency ?? "USD"} · {demo?.demo ? "demo" : "live"}</div>
         </Card>
         <Card className="pad">
@@ -496,7 +498,7 @@ export function AutopilotSuite() {
             demo.openDeals.map((d) => (
               <div key={d.serverId || d.requestId} className="row-between">
                 <span className="muted small">
-                  {d.asset} {d.type.toUpperCase()} {fmtMoney(d.amount)} · {d.status}
+                  {d.asset} {d.type.toUpperCase()} {fmtMoney(d.amount, demo?.currency)} · {d.status}
                 </span>
                 <span className="muted small">{d.expiresAt ? `exp ${new Date(d.expiresAt).toLocaleTimeString()}` : ""}</span>
               </div>
@@ -511,7 +513,7 @@ export function AutopilotSuite() {
             demo.settled.slice(0, 8).map((d, i) => (
               <div key={d.serverId || `${d.closedAt}-${i}`} className="row-between">
                 <span className="muted small">
-                  {d.asset} {d.type.toUpperCase()} {fmtMoney(d.amount)}
+                  {d.asset} {d.type.toUpperCase()} {fmtMoney(d.amount, demo?.currency)}
                 </span>
                 <Badge tone={d.result === "win" ? "success" : d.result === "loss" ? "danger" : "muted"}>
                   {d.result ?? "—"} {d.profit != null ? (d.profit >= 0 ? "+" : "") + d.profit.toFixed(2) : ""}
@@ -534,7 +536,7 @@ export function AutopilotSuite() {
           <div className="grid grid-4">
             <div>
               <div className="stat-label muted">Net Profit</div>
-              <strong>{fmtMoney(analytics.overview.netProfit)}</strong>
+              <strong>{fmtMoney(analytics.overview.netProfit, demo?.currency)}</strong>
             </div>
             <div>
               <div className="stat-label muted">Win Rate</div>
@@ -542,11 +544,11 @@ export function AutopilotSuite() {
             </div>
             <div>
               <div className="stat-label muted">Balance</div>
-              <strong>{fmtMoney(analytics.overview.balance)}</strong>
+              <strong>{fmtMoney(analytics.overview.balance, demo?.currency)}</strong>
             </div>
             <div>
               <div className="stat-label muted">Starting</div>
-              <strong>{fmtMoney(analytics.overview.starting)}</strong>
+              <strong>{fmtMoney(analytics.overview.starting, demo?.currency)}</strong>
             </div>
           </div>
           {analytics.metrics.equity.length > 1 ? (
@@ -561,7 +563,7 @@ export function AutopilotSuite() {
                   return eq.map((p, i) => (
                     <div
                       key={i}
-                      title={`${p.t ?? "start"} · ${fmtMoney(p.equity)}`}
+                      title={`${p.t ?? "start"} · ${fmtMoney(p.equity, demo?.currency)}`}
                       className={p.pnl >= 0 ? "bar-fill" : "bar-fill bar-danger"}
                       style={{ height: `${Math.max(4, ((p.equity - min) / range) * 100)}%`, flex: 1, minWidth: 3 }}
                     />
@@ -583,7 +585,7 @@ export function AutopilotSuite() {
                       <tr key={d.serverId || d.requestId}>
                         <td>{d.asset}</td>
                         <td>{d.type.toUpperCase()}</td>
-                        <td>{fmtMoney(d.amount)}</td>
+                        <td>{fmtMoney(d.amount, demo?.currency)}</td>
                         <td>{d.openPrice}</td>
                         <td>{d.result ?? (d.status === "active" ? "active" : "—")}</td>
                         <td className={d.profit != null && d.profit < 0 ? "danger-text" : ""}>
@@ -669,7 +671,7 @@ function StatusCards({
       <Card className="pad">
         <div className="stat-label muted">Today</div>
         <div className="stat-value">
-          {fmtMoney(demo?.todayPnl)}
+          {fmtMoney(demo?.todayPnl, demo?.currency)}
           {demo?.todayTrades ? <span className="muted small"> · {demo.todayTrades} deal{demo.todayTrades === 1 ? "" : "s"}</span> : null}
         </div>
         <div className="muted small">
@@ -684,10 +686,10 @@ function StatusCards({
         <div className="stat-label muted">ExpertOption account</div>
         {liveAccount ? (
           <div className="stat-value" style={{ fontSize: "0.95rem" }}>
-            demo {fmtMoney(liveAccount.demoWallet?.balance)} · real {fmtMoney(liveAccount.realWallet?.balance)}
+            demo {fmtMoney(liveAccount.demoWallet?.balance, liveAccount.demoWallet?.currency ?? liveAccount.currency)} · real {fmtMoney(liveAccount.realWallet?.balance, liveAccount.realWallet?.currency ?? liveAccount.currency)}
           </div>
         ) : (
-          <div className="stat-value">{demo?.connected ? fmtMoney(demo.balance) : "—"}</div>
+          <div className="stat-value">{demo?.connected ? fmtMoney(demo.balance, demo?.currency) : "—"}</div>
         )}
         <div className="muted small">
           {liveAccount
@@ -835,8 +837,7 @@ function PredictionResultView({ result }: { result: PredictionResult }) {
       <p className="muted small">{result.note}</p>
       {result.account?.balance != null ? (
         <p className="muted small">
-          ExpertOption {result.account.demo ? "demo" : "live"} balance: {fmtMoney(result.account.balance)}{" "}
-          {result.account.currency}
+          ExpertOption {result.account.demo ? "demo" : "live"} balance: {fmtMoney(result.account.balance, result.account.currency)}
         </p>
       ) : null}
       {result.advisory ? <p className="muted small">{result.advisory}</p> : null}
@@ -1368,7 +1369,7 @@ function WatchlistScannerCard() {
             {q.error ? (
               <span className="muted small" title={q.error}>quote unavailable</span>
             ) : q.last != null ? (
-              <span className="muted small">{fmtMoney(q.last)}{q.currency ? ` ${q.currency}` : ""}</span>
+              <span className="muted small">{fmtMoney(q.last, q.currency)}</span>
             ) : null}
             <Button variant="ghost" onClick={() => remove(q.symbol)}>✕</Button>
           </div>

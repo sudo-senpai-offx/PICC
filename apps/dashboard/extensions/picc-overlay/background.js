@@ -384,6 +384,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     checkServer().then((online) => sendResponse({ online, port: detectedPort }))
     return true
   }
+
+  if (msg.action === "capture-screenshot") {
+    try {
+      chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+        if (chrome.runtime.lastError) sendResponse({ error: chrome.runtime.lastError.message })
+        else sendResponse({ ok: true, image: dataUrl })
+      })
+    } catch (err) { sendResponse({ error: err.message }) }
+    return true
+  }
+
+  if (msg.action === "relay-cookies") {
+    const url = msg.url
+    if (!url) { sendResponse({ ok: false }); return false }
+    ;(async () => {
+      try {
+        const u = new URL(url)
+        const cookies = await chrome.cookies?.getAll({ domain: u.hostname }) || []
+        await serverFetch("/api/browser/cookies", { method: "POST", body: { url, cookies: cookies.map(c => ({ name: c.name, value: c.value, domain: c.domain, path: c.path, expires: c.expires })) } })
+        sendResponse({ ok: true, count: cookies.length })
+      } catch (err) { sendResponse({ ok: false, error: err.message }) }
+    })()
+    return true
+  }
 })
 
 // ── Context menu ─────────────────────────────────────────────────────────────

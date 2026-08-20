@@ -1823,6 +1823,50 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  if (path === "/api/trading/kelly") {
+    if (!(await requireAuth(req, res))) return true
+    const { computeKelly, kellySnapshot, getKellySettings, saveKellySettings } = await import("./services/kellyCriterion.mjs")
+    if (req.method === "GET") { writeJson(res, 200, { ok: true, ...kellySnapshot() }); return true }
+    if (req.method === "POST") {
+      if (body.settings) { writeJson(res, 200, { ok: true, settings: saveKellySettings(body.settings) }); return true }
+      if (body.winRate != null && body.avgPayout != null) { writeJson(res, 200, { ok: true, kelly: computeKelly(body.winRate, body.avgPayout, body.mode) }); return true }
+    }
+    return false
+  }
+  if (path === "/api/trading/regime") {
+    if (!(await requireAuth(req, res))) return true
+    if (req.method !== "POST") return false
+    const { detectRegime } = await import("./services/regimeDetection.mjs")
+    const candles = body?.candles || []
+    writeJson(res, 200, { ok: true, ...detectRegime(candles, body?.timeframe) })
+    return true
+  }
+  if (path === "/api/trading/expiry") {
+    if (!(await requireAuth(req, res))) return true
+    if (req.method !== "POST") return false
+    const { optimizeExpiry } = await import("./services/expiryOptimizer.mjs")
+    const candles = body?.candles || []
+    writeJson(res, 200, { ok: true, ...optimizeExpiry(candles, body?.regime, body?.signalStrength) })
+    return true
+  }
+  if (path === "/api/trading/sentiment") {
+    if (!(await requireAuth(req, res))) return true
+    if (req.method !== "POST") return false
+    const { getSentiment } = await import("./services/sentimentEngine.mjs")
+    const symbol = body?.symbol
+    if (!symbol) { writeJson(res, 400, { ok: false, error: "symbol required" }); return true }
+    writeJson(res, 200, { ok: true, ...(await getSentiment(symbol)) })
+    return true
+  }
+  if (path === "/api/trading/orderflow") {
+    if (!(await requireAuth(req, res))) return true
+    if (req.method !== "POST") return false
+    const { analyzeOrderFlow } = await import("./services/orderFlow.mjs")
+    const candles = body?.candles || []
+    writeJson(res, 200, { ok: true, ...analyzeOrderFlow(candles, body?.lookback) })
+    return true
+  }
+
   if (path === "/api/collectors/honeygain" && req.method === "POST") {
     if (!(await verifyUser(auth)) && (await hasUsers())) {
       return writeJson(res, 401, { error: "authentication required" })
