@@ -2,6 +2,13 @@
 
 const CACHED_PORT = "piccCachedPort"
 
+async function getAuthToken() {
+  try {
+    const data = await chrome.storage.local.get(["piccAuthToken"])
+    return data.piccAuthToken || null
+  } catch { return null }
+}
+
 async function serverFetch(path) {
   let port = null
   try {
@@ -9,9 +16,12 @@ async function serverFetch(path) {
     port = data[CACHED_PORT]
   } catch {}
   const ports = port ? [port, ...[5173, 3000, 5174, 3001].filter((p) => p !== port)] : [5173, 3000, 5174, 3001]
+  const token = await getAuthToken()
+  const headers = {}
+  if (token) headers["Authorization"] = `Bearer ${token}`
   for (const p of ports) {
     try {
-      const r = await fetch(`http://127.0.0.1:${p}/api${path}`, { signal: AbortSignal.timeout(3000) })
+      const r = await fetch(`http://127.0.0.1:${p}/api${path}`, { signal: AbortSignal.timeout(3000), headers })
       if (r.ok) {
         if (p !== port) chrome.storage.local.set({ [CACHED_PORT]: p })
         return await r.json()

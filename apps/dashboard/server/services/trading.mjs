@@ -521,6 +521,7 @@ async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, s
 
   const position = {
     id: randomBytes(6).toString("hex"),
+    correlationId: randomBytes(8).toString("hex"),
     signalId: signalId || null,
     symbol: symbolName,
     side: sideName,
@@ -860,5 +861,42 @@ export async function tradingAssist(question = "", context = {}) {
     return { ok: true, source: "llm", advice }
   } catch (err) {
     return { ok: true, source: "local", advice: `LLM unavailable (${err.message}). Rule of thumb: 1-2% risk per trade, paper-trade first, and expect most short-dated options to expire worthless.` }
+  }
+}
+
+/**
+ * Risk-of-ruin calculator using the classic formula:
+ *   RoR = ((1 - edge) / (1 + edge)) ^ units
+ * where edge = (winRate * avgPayout - (1 - winRate)) / (avgPayout + 1)
+ * and units = balance / riskPerTrade.
+ *
+ * For binary options the payout is fixed (typically 0.70-0.90x), so we use
+ * the actual avgPayout from the paper ledger when available.
+ */
+export function riskOfRuin({ winRate, avgPayout, riskPct, balance } = {}) {
+  const wr = clamp(Number(winRate) || 50, 1, 99) / 100
+  const ap = Math.max(0.01, Number(avgPayout) || 0.8)
+  const risk = Math.max(0.001, Math.min(1, (Number(riskPct) || 2) / 100))
+  const bal = Math.max(1, Number(balance) || 1000)
+
+  const units = Math.floor(bal * risk > 0 ? 1 / risk : 1000)
+  const edge = (wr * ap - (1 - wr)) / (ap + 1)
+  const base = Math.max(0, Math.min(1, (1 - edge) / (1 + edge)))
+  const ror = Math.pow(base, units)
+
+  const expectedGrowth = wr * Math.log(1 + ap * risk) + (1 - wr) * Math.log(1 - risk)
+  const kellyFraction = ap > 0 ? (wr * (1 + ap) - 1) / ap : 0
+  const halfKelly = Math.max(0, kellyFraction / 2)
+
+  return {
+    ok: true,
+    riskOfRuin: Math.round(ror * 10000) / 10000,
+    riskOfRuinPct: Math.round(ror * 10000) / 100 + "%",
+    edge: Math.round(edge * 10000) / 100 + "%",
+    unitsToRuin: units,
+    expectedGrowthPct: Math.round(expectedGrowth * 10000) / 100 + "%",
+    kellyFraction: Math.round(kellyFraction * 10000) / 100 + "%",
+    halfKellyPct: Math.round(halfKelly * 10000) / 100 + "%",
+    inputs: { winRate: Math.round(wr * 100), avgPayout: ap, riskPct: Math.round(risk * 10000) / 100, balance: bal }
   }
 }

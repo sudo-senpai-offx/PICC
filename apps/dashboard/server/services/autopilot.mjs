@@ -45,7 +45,8 @@ const DEFAULTS = {
   count: 120,
   stopReason: null,
   dayKey: null,
-  dayStartBalance: null
+  dayStartBalance: null,
+  lastEntryAt: 0
 }
 
 const state = {
@@ -54,8 +55,7 @@ const state = {
   sessionError: null,
   loopTimer: null,
   lastRun: null,
-  lastDecision: null,
-  lastEntryAt: 0
+  lastDecision: null
 }
 
 function clamp(n, lo, hi) {
@@ -122,6 +122,7 @@ export async function saveAutopilotConfig(patch) {
   next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
   next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
   if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
+  next.lastEntryAt = Math.max(0, Number(next.lastEntryAt) || 0)
   await writeJSON(CONFIG_FILE, next)
   return getAutopilotConfig()
 }
@@ -423,7 +424,7 @@ export async function autopilotTick() {
     pred,
     pro,
     openCount: open.length,
-    lastEntryAt: state.lastEntryAt,
+    lastEntryAt: config.lastEntryAt || 0,
     now: Date.now(),
     dailyPnl: pnl,
     dayStartBalance: config.dayStartBalance,
@@ -456,7 +457,8 @@ export async function autopilotTick() {
     amount,
     duration: config.duration
   })
-  state.lastEntryAt = Date.now()
+  const now = Date.now()
+  await saveAutopilotConfig({ lastEntryAt: now })
   state.lastRun.deal = deal.serverId
   state.lastRun.amount = amount
   return { ok: true, reason: decision.reason, deal, amount, direction: decision.direction }
@@ -530,7 +532,6 @@ export async function _resetAutopilotData() {
   await writeJSON(DEALS_FILE, { deals: [] })
   state.lastRun = null
   state.lastDecision = null
-  state.lastEntryAt = 0
 }
 
 // ---------------------------------------------------------------------

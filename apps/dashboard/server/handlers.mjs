@@ -73,6 +73,7 @@ import {
   marketNews,
   scanSymbols,
   tradingAssist,
+  riskOfRuin,
   getCredentials as getTradingCredentials,
   saveCredentials as saveTradingCredentials
 } from "./services/trading.mjs"
@@ -2029,6 +2030,53 @@ export async function handleApi(req, res, url) {
       console.warn("[picc] walk-forward failed:", err.message)
       writeJson(res, 502, { ok: false, error: err.message })
     }
+    return true
+  }
+
+  if (path === "/api/trading/risk-of-ruin" && req.method === "POST") {
+    const winRate = Number(body?.winRate)
+    const avgPayout = Number(body?.avgPayout)
+    const riskPct = Number(body?.riskPct)
+    const balance = Number(body?.balance)
+    try {
+      const { signalAccuracy } = await import("./services/trading.mjs")
+      const acc = signalAccuracy()
+      const wr = Number.isFinite(winRate) ? winRate : (acc.winRate ?? 50)
+      const ap = Number.isFinite(avgPayout) ? avgPayout : 0.8
+      const rp = Number.isFinite(riskPct) ? riskPct : 2
+      const bal = Number.isFinite(balance) ? balance : (acc.balance ?? 1000)
+      writeJson(res, 200, riskOfRuin({ winRate: wr, avgPayout: ap, riskPct: rp, balance: bal }))
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  if (path === "/api/trading/health" && (req.method === "GET" || req.method === "POST")) {
+    const autopilot = await import("./services/autopilot.mjs").catch(() => null)
+    const result = { ok: true, timestamp: new Date().toISOString() }
+    try {
+      const liveStats = liveEOStats()
+      result.expertOption = {
+        connected: liveStats?.connected ?? false,
+        mode: liveStats?.mode ?? "disconnected",
+        viewedAssets: liveStats?.viewedAssets ?? 0,
+        lastCandleAt: liveStats?.lastCandleAt ?? null
+      }
+    } catch { result.expertOption = { connected: false, error: "failed" } }
+    try {
+      if (autopilot) {
+        const config = await autopilot.getAutopilotConfig()
+        result.autopilot = {
+          enabled: config.enabled,
+          lastEntryAt: config.lastEntryAt ?? 0,
+          cooldownMs: config.cooldownMs ?? 0,
+          dailyLossLimitPct: config.dailyLossLimitPct ?? 10,
+          maxDailyTrades: config.maxDailyTrades ?? 0
+        }
+      }
+    } catch { result.autopilot = { enabled: false, error: "failed" } }
+    writeJson(res, 200, result)
     return true
   }
 
