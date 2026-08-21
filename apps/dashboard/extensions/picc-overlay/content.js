@@ -50,6 +50,14 @@
     rebuildGroupContainer(groupId)
   }
 
+  function addDockToGroup(dockId, groupId) {
+    if (!dockGroups[groupId]) return
+    if (dockGroups[groupId].includes(dockId)) return
+    dockGroups[groupId].push(dockId)
+    dockGroupMap[dockId] = groupId
+    rebuildGroupContainer(groupId)
+  }
+
   function ungroupDock(dockId) {
     const groupId = dockGroupMap[dockId]
     if (!groupId) return
@@ -132,6 +140,35 @@
       })
       // Double-click tab to ungroup
       tab.addEventListener("dblclick", (e) => { e.stopPropagation(); ungroupDock(dId) })
+      // Drag tab out to ungroup
+      tab.addEventListener("mousedown", (e) => {
+        if (e.target.tagName === "BUTTON") return
+        e.stopPropagation()
+        const startX = e.clientX
+        const startY = e.clientY
+        const onMove = (ev) => {
+          const dx = Math.abs(ev.clientX - startX)
+          const dy = Math.abs(ev.clientY - startY)
+          if (dx > 30 || dy > 30) {
+            document.removeEventListener("mousemove", onMove)
+            document.removeEventListener("mouseup", onUp)
+            ungroupDock(dId)
+            const el = shadowRoot.getElementById(`__PICC_DOCK_${dId}__`)
+            if (el) {
+              el.style.display = ""
+              el.style.left = ev.clientX - 40 + "px"
+              el.style.top = ev.clientY - 18 + "px"
+              el.style.right = "auto"
+              el.style.bottom = "auto"
+              dockablePositions[dId] = { x: Math.round(ev.clientX - 40), y: Math.round(ev.clientY - 18) }
+              saveDockableLayout()
+            }
+          }
+        }
+        const onUp = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp) }
+        document.addEventListener("mousemove", onMove)
+        document.addEventListener("mouseup", onUp)
+      })
       tabEls[dId] = tab
       tabBar.appendChild(tab)
     }
@@ -180,6 +217,50 @@
       document.addEventListener("mousemove", onMove)
       document.addEventListener("mouseup", onUp)
     })
+
+    // Resize handles for group (horizontal + vertical + diagonal)
+    const RESIZE_CSS_G = "position:absolute;opacity:.3;z-index:1;"
+    const makeGResizeHandler = (direction) => {
+      const el = document.createElement("div")
+      el.setAttribute("data-picc-resize", direction)
+      const isH = direction === "horizontal"
+      const isV = direction === "vertical"
+      const isD = direction === "diagonal"
+      el.style.cssText = RESIZE_CSS_G +
+        (isD ? "bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize;" :
+         isH ? "bottom:0;right:0;top:36px;width:5px;cursor:ew-resize;" :
+         "bottom:0;right:0;left:36px;height:5px;cursor:ns-resize;")
+      let isResizing = false, rsx, rsy, rw, rh
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        isResizing = true
+        rsx = e.clientX; rsy = e.clientY
+        rw = gc.offsetWidth; rh = gc.offsetHeight
+        gc.style.transition = "none"
+        const onMove = (ev) => {
+          if (!isResizing) return
+          if (isH || isD) gc.style.width = Math.max(200, rw + ev.clientX - rsx) + "px"
+          if (isV || isD) gc.style.maxHeight = Math.max(100, rh + ev.clientY - rsy) + "px"
+        }
+        const onUp = () => {
+          isResizing = false
+          gc.style.transition = ""
+          document.removeEventListener("mousemove", onMove)
+          document.removeEventListener("mouseup", onUp)
+          for (const dId of members) {
+            dockableSizes[dId] = { width: Math.round(gc.offsetWidth), height: Math.round(gc.offsetHeight) }
+          }
+          saveDockableLayout()
+        }
+        document.addEventListener("mousemove", onMove)
+        document.addEventListener("mouseup", onUp)
+      })
+      return el
+    }
+    gc.appendChild(makeGResizeHandler("diagonal"))
+    gc.appendChild(makeGResizeHandler("horizontal"))
+    gc.appendChild(makeGResizeHandler("vertical"))
 
     shadowRoot.appendChild(gc)
   }
@@ -276,22 +357,6 @@
     panel.appendChild(sec)
   }
 
-  function addRow(parent, label, value, onChange) {
-    const row = document.createElement("div")
-    row.style.cssText = "display:flex;align-items:center;gap:6px;margin:3px 0;"
-    const lbl = document.createElement("span")
-    lbl.style.cssText = "font-size:10px;color:#9aa0c0;min-width:20px;"
-    lbl.textContent = label
-    const input = document.createElement("input")
-    input.type = "number"
-    input.value = String(value)
-    input.style.cssText = "flex:1;padding:2px 6px;font-size:10px;background:#1a1a2e;border:1px solid #6c63ff40;color:#eef0ff;border-radius:3px;"
-    input.addEventListener("change", () => onChange(input.value))
-    row.appendChild(lbl)
-    row.appendChild(input)
-    parent.appendChild(row)
-  }
-
   // ── Shadow DOM isolation ────────────────────────────────────────────────────
   const shadowHost = document.createElement("div")
   shadowHost.id = "__PICC_SHADOW_HOST__"
@@ -302,7 +367,7 @@
   // ── Site detection ──────────────────────────────────────────────────────────
   const SITE_PROFILES = [
     // Trading
-    { hosts: ["expertoption.com", "expert-option.com"], id: "expertoption", label: "ExpertOption", category: "trading", suite: "trading" },
+    { hosts: ["expertoption.com", "expert-option.com", "expertoption.finance"], id: "expertoption", label: "ExpertOption", category: "trading", suite: "trading" },
     { hosts: ["binance.com", "www.binance.com"], id: "binance", label: "Binance", category: "trading", suite: "trading" },
     { hosts: ["coinbase.com", "www.coinbase.com"], id: "coinbase", label: "Coinbase", category: "trading", suite: "trading" },
     { hosts: ["kraken.com", "www.kraken.com"], id: "kraken", label: "Kraken", category: "trading", suite: "trading" },
@@ -678,7 +743,7 @@
     if (content) {
       body = document.createElement("div")
       body.style.cssText = "padding:6px 8px;font-size:11px;color:#a5a0ff;"
-      if (typeof content === "string") body.textContent = content
+      if (typeof content === "string") body.innerHTML = content
       else if (content instanceof HTMLElement) body.appendChild(content)
       if (collapsed) body.style.display = "none"
       dock.appendChild(body)
@@ -742,20 +807,36 @@
           // Persist position
           const r = dock.getBoundingClientRect()
           dockablePositions[id] = { x: Math.round(r.left), y: Math.round(r.top) }
-          // Check for grouping — if overlapping another dock's title bar, stack them
+          // Check for grouping — if overlapping another dock or a group container
           const myRect = dock.getBoundingClientRect()
           let grouped = false
-          for (const otherDock of shadowRoot.querySelectorAll("[data-picc-dock]")) {
-            if (otherDock === dock) continue
-            if (otherDock.style.display === "none") continue
-            const otherRect = otherDock.getBoundingClientRect()
-            // Check if the title bar areas overlap
-            const titleOverlap = !(myRect.right < otherRect.left || otherRect.right < myRect.left ||
-              myRect.bottom < otherRect.top || otherRect.top + 36 < myRect.top)
+          // First: check overlap with existing group containers (tab bar area)
+          for (const gc of shadowRoot.querySelectorAll("[data-picc-group]")) {
+            const gcRect = gc.getBoundingClientRect()
+            const tabBarEl = gc.querySelector("div")
+            const tabBarBottom = tabBarEl ? gcRect.top + tabBarEl.offsetHeight : gcRect.top + 36
+            const titleOverlap = !(myRect.right < gcRect.left || gcRect.right < myRect.left ||
+              myRect.bottom < gcRect.top || tabBarBottom < myRect.top)
             if (titleOverlap) {
-              groupDocks(id, otherDock.id.replace(/^__PICC_DOCK_/, "").replace(/__$/, ""))
+              const groupId = gc.getAttribute("data-picc-group")
+              addDockToGroup(id, groupId)
               grouped = true
               break
+            }
+          }
+          // Second: check overlap with individual docks
+          if (!grouped) {
+            for (const otherDock of shadowRoot.querySelectorAll("[data-picc-dock]")) {
+              if (otherDock === dock) continue
+              if (otherDock.style.display === "none") continue
+              const otherRect = otherDock.getBoundingClientRect()
+              const titleOverlap = !(myRect.right < otherRect.left || otherRect.right < myRect.left ||
+                myRect.bottom < otherRect.top || otherRect.top + 36 < myRect.top)
+              if (titleOverlap) {
+                groupDocks(id, otherDock.id.replace(/^__PICC_DOCK_/, "").replace(/__$/, ""))
+                grouped = true
+                break
+              }
             }
           }
           if (!grouped) saveDockableLayout()
@@ -803,16 +884,22 @@
         saveDockableLayout()
       })
 
-      // ── Resize handle ──
+      // ── Resize handles (horizontal + vertical + diagonal) ──
       const handle = shadowRoot.getElementById(`__PICC_RESIZE_${id}__`)
-      const resizeHandle = document.createElement("div")
-      resizeHandle.id = `__PICC_RESIZE_${id}__`
-      resizeHandle.style.cssText = "position:absolute;bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize;opacity:.3;"
       if (handle) handle.remove()
-      {
-        let isResizing = false
-        let rsx, rsy, rw, rh
-        resizeHandle.addEventListener("mousedown", (e) => {
+      const RESIZE_CSS = "position:absolute;opacity:.3;z-index:1;"
+      const makeResizeHandler = (direction) => {
+        const el = document.createElement("div")
+        el.setAttribute("data-picc-resize", direction)
+        const isH = direction === "horizontal"
+        const isV = direction === "vertical"
+        const isD = direction === "diagonal"
+        el.style.cssText = RESIZE_CSS +
+          (isD ? "bottom:0;right:0;width:14px;height:14px;cursor:nwse-resize;" :
+           isH ? "bottom:0;right:0;top:36px;width:5px;cursor:ew-resize;" :
+           "bottom:0;right:0;left:36px;height:5px;cursor:ns-resize;")
+        let isResizing = false, rsx, rsy, rw, rh
+        el.addEventListener("mousedown", (e) => {
           e.preventDefault()
           e.stopPropagation()
           isResizing = true
@@ -821,46 +908,25 @@
           dock.style.transition = "none"
           const onMove = (ev) => {
             if (!isResizing) return
-            const nw = Math.max(200, rw + ev.clientX - rsx)
-            const nh = Math.max(100, rh + ev.clientY - rsy)
-            dock.style.width = nw + "px"
-            dock.style.maxHeight = nh + "px"
+            if (isH || isD) dock.style.width = Math.max(200, rw + ev.clientX - rsx) + "px"
+            if (isV || isD) dock.style.maxHeight = Math.max(100, rh + ev.clientY - rsy) + "px"
           }
           const onUp = () => {
             isResizing = false
             dock.style.transition = ""
             document.removeEventListener("mousemove", onMove)
             document.removeEventListener("mouseup", onUp)
-            const r = dock.getBoundingClientRect()
-            dockableSizes[id] = { width: Math.round(r.width), height: Math.round(r.height) }
+            dockableSizes[id] = { width: Math.round(dock.offsetWidth), height: Math.round(dock.offsetHeight) }
             saveDockableLayout()
           }
           document.addEventListener("mousemove", onMove)
           document.addEventListener("mouseup", onUp)
         })
+        return el
       }
-      dock.appendChild(resizeHandle)
-
-      // ── Opacity slider ──
-      const opacityRow = document.createElement("div")
-      opacityRow.style.cssText = "display:flex;align-items:center;gap:4px;padding:2px 8px;font-size:9px;color:#9aa0c0;"
-      const opacityLabel = document.createElement("span")
-      opacityLabel.textContent = "Opacity"
-      const opacitySlider = document.createElement("input")
-      opacitySlider.type = "range"
-      opacitySlider.min = "20"
-      opacitySlider.max = "100"
-      opacitySlider.value = String(Math.round((dockableOpacities[id] ?? 0.92) * 100))
-      opacitySlider.style.cssText = "flex:1;height:3px;cursor:pointer;"
-      opacitySlider.addEventListener("input", () => {
-        const val = Number(opacitySlider.value) / 100
-        dock.style.opacity = String(val)
-        dockableOpacities[id] = val
-      })
-      opacitySlider.addEventListener("change", () => saveDockableLayout())
-      opacityRow.appendChild(opacityLabel)
-      opacityRow.appendChild(opacitySlider)
-      dock.insertBefore(opacityRow, dock.children[1]) // after title bar, before content
+      dock.appendChild(makeResizeHandler("diagonal"))
+      dock.appendChild(makeResizeHandler("horizontal"))
+      dock.appendChild(makeResizeHandler("vertical"))
 
     return dock
   }
@@ -879,8 +945,7 @@
     orderFlow: null,
     expiry: null,
     sentiment: null,
-    lastCandles: [],
-    lastUpdate: 0
+    lastCandles: []
   }
 
   const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
@@ -899,10 +964,52 @@
     return "#a5a0ff"
   }
 
+  // Normalize a scraped asset name for server API calls and Yahoo Finance.
+  // "EUR/USD" → "EURUSD", "Gold" → "GOLD", "BTC/USD" → "BTCUSD", "EUR/USD (OTC)" → "EURUSD"
+  function normalizeAssetId(raw) {
+    if (!raw) return "EURUSD"
+    let s = raw.replace(/\s*\(otc\)/gi, "").replace(/\s+/g, "").toUpperCase()
+    if (/^[A-Z]{3}\/[A-Z]{3}$/.test(s)) s = s.replace("/", "")
+    if (/^[A-Z]{3}\.[A-Z]{3}$/.test(s)) s = s.replace(".", "")
+    if (s.length > 6) {
+      // Try to extract a 3/3 currency pair: "EURUSDGBP" → "EURUSD"? No, take first 6
+      const pair = s.slice(0, 6)
+      if (/^[A-Z]{3}[A-Z]{3}$/.test(pair)) return pair
+    }
+    if (s.length === 6 && /^[A-Z]{6}$/.test(s)) return s
+    // Known commodity/crypto mappings
+    const MAP = { GOLD: "GOLD", SILVER: "SILVER", BTCUSD: "BTCUSD", ETHUSD: "ETHUSD", XAUUSD: "GOLD", XAGUSD: "SILVER" }
+    return MAP[s] || s.slice(0, 12) || "EURUSD"
+  }
+
+  // ── Feature-aware helpers ──────────────────────────────────────────────────
+  const DOCKABLE_FEATURES = {
+    "price-ticker": ["analysis"],
+    "portfolio": [],
+    "ai-signals": ["ai", "decisionSupport", "analysis"],
+    "risk-mgr": ["decisionSupport", "analysis"],
+    "autopilot": ["autopilot", "automation", "decisionSupport"],
+    "kelly-sizing": ["analysis"],
+    "regime-detect": ["analysis"],
+    "order-flow": ["analysis"],
+    "expiry-opt": ["analysis"],
+    "sentiment": ["analysis"],
+  }
+  function checkFeatures(dockId) {
+    const needed = DOCKABLE_FEATURES[dockId]
+    if (!needed || !needed.length) return ""
+    const disabled = needed.filter((f) => !currentSettings.features?.[f])
+    if (!disabled.length) return ""
+    const label = disabled.map((f) => f.replace(/([A-Z])/g, " $1").trim()).join(", ")
+    return `<div style="background:#f59e0b15;border:1px solid #f59e0b40;border-radius:4px;padding:4px 6px;margin-bottom:4px;font-size:10px;color:#f59e0b">` +
+      `<span style="font-weight:600">⚠ Feature disabled:</span> ${label}. Enable in pill ⚙ settings.</div>`
+  }
+
   // ── Price Ticker Renderer ──────────────────────────────────────────────────
   function renderPriceTicker() {
     const assets = tradingState.assets
-    if (!assets.length) return '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
+    const banner = checkFeatures("price-ticker")
+    if (!assets.length) return banner + '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
     const rows = assets.slice(0, 6).map((a) => {
       const c = tone(a.changePct)
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #6c63ff20">` +
@@ -913,7 +1020,7 @@
     }).join("")
     const acct = tradingState.account
     const bal = acct ? fmt$(acct.balance, acct.currency) : ""
-    return `<div style="font-size:11px">${rows}</div>` +
+    return banner + `<div style="font-size:11px">${rows}</div>` +
       (bal ? `<div style="margin-top:4px;font-size:10px;color:#a5a0ff">Balance: ${bal}</div>` : "")
   }
 
@@ -921,6 +1028,7 @@
   function renderPortfolio() {
     const paper = tradingState.paper
     const demo = tradingState.demo
+    const banner = checkFeatures("portfolio")
     const lines = []
     if (paper) {
       lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin-bottom:2px">Paper Trading</div>`)
@@ -935,14 +1043,15 @@
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Today</span><span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, demo.currency)}</span></div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Trades</span><span>${demo.todayTrades ?? 0}</span></div>`)
     }
-    if (!lines.length) return '<div style="color:#a5a0ff;padding:4px">No position data yet\u2026</div>'
-    return `<div style="padding:2px 0">${lines.join("")}</div>`
+    if (!lines.length) return banner + '<div style="color:#a5a0ff;padding:4px">No position data yet\u2026</div>'
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
   // ── AI Signals Renderer ────────────────────────────────────────────────────
   function renderAISignals() {
     const d = tradingState.decisions
-    if (!d.length) return '<div style="color:#a5a0ff;padding:4px">Waiting for AI analysis\u2026</div>'
+    const banner = checkFeatures("ai-signals")
+    if (!d.length) return banner + '<div style="color:#a5a0ff;padding:4px">Waiting for AI analysis\u2026</div>'
     const rows = d.slice(0, 5).map((dec) => {
       const verdictColor = dec.verdict === "TRADE" ? "#4ade80" : dec.verdict === "OBSERVE" ? "#f59e0b" : "#a5a0ff"
       const gates = dec.gates || {}
@@ -957,37 +1066,44 @@
           `<span>${gIcon(gates.winProb)} prob</span>` +
           `<span>${gIcon(gates.payout)} pay</span>` +
           `<span>${dec.confidence != null ? dec.confidence.toFixed(0) + "%" : ""}</span>` +
-          `<span style="color:${tone(0, dec.direction === "up" ? "#4ade80" : "#ff6b6b")}">${(dec.direction || "").toUpperCase()}</span>` +
+          `<span style="color:${dec.direction === "up" ? "#4ade80" : dec.direction === "down" ? "#ff6b6b" : "#a5a0ff"}">${(dec.direction || "").toUpperCase()}</span>` +
         `</div>` +
         `</div>`
     }).join("")
-    return `<div style="padding:2px 0">${rows}</div>`
+    return banner + `<div style="padding:2px 0">${rows}</div>`
   }
 
   // ── Risk Manager Renderer ──────────────────────────────────────────────────
   function renderRiskManager() {
     const demo = tradingState.demo
     const auto = tradingState.autopilot
-    if (!demo && !auto) return '<div style="color:#a5a0ff;padding:4px">Risk metrics loading\u2026</div>'
+    const banner = checkFeatures("risk-mgr")
+    if (!demo && !auto) return banner + '<div style="color:#a5a0ff;padding:4px">Risk metrics loading\u2026</div>'
     const lines = []
     if (auto) {
-      const maxLoss = auto.dailyLossLimitPct ?? 10
-      const todayLoss = auto.dailyLoss != null ? Math.abs(auto.dailyLoss) : 0
-      const pct = maxLoss > 0 ? Math.min(100, (todayLoss / maxLoss) * 100) : 0
+      const maxLossPct = auto.dailyLossLimitPct ?? 10
+      const todayPnl = demo?.todayPnl ?? 0
+      const todayLoss = todayPnl < 0 ? Math.abs(todayPnl) : 0
+      // Show as PnL vs limit: use dollar amounts
+      const pct = maxLossPct > 0 && todayLoss > 0 ? Math.min(100, (todayLoss / (maxLossPct / 100)) * 100) : 0
       const barColor = pct > 80 ? "#ff6b6b" : pct > 50 ? "#f59e0b" : "#4ade80"
       lines.push(`<div style="font-size:11px;font-weight:600;color:#6c63ff;margin-bottom:2px">Daily Loss Limit</div>`)
       lines.push(`<div style="background:#1a1a2e;border-radius:3px;height:8px;overflow:hidden;margin-bottom:2px">` +
         `<div style="height:100%;width:${pct}%;background:${barColor};border-radius:3px;transition:width .3s"></div></div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;color:#a5a0ff"><span>${fmtPct(todayLoss)} used</span><span>${fmtPct(maxLoss)} limit</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;color:#a5a0ff"><span>${fmt$(todayLoss, demo?.currency)} lost</span><span>${maxLossPct}% limit</span></div>`)
     }
     if (demo?.autopilot) {
       const ap = demo.autopilot
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:4px"><span>Concurrent</span><span>${ap.concurrent ?? 0}/${ap.maxConcurrent ?? 1}</span></div>`)
+      const openPos = demo.openDeals?.length ?? 0
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:4px"><span>Open positions</span><span>${openPos}/${ap.maxConcurrent ?? 1}</span></div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Trades today</span><span>${demo.todayTrades ?? 0}/${ap.maxDailyTrades ?? "\u221e"}</span></div>`)
-      const cdLeft = ap.cooldownRemainingMs ? Math.ceil(ap.cooldownRemainingMs / 1000) + "s" : "ready"
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cooldown</span><span>${cdLeft}</span></div>`)
+      const cdMs = ap.cooldownMs ?? 0
+      const lastRunAt = ap.lastRun?.at ?? (typeof ap.lastRun === "number" ? ap.lastRun : 0)
+      const lastRun = lastRunAt ? new Date(lastRunAt).getTime() : 0
+      const cdLeft = lastRun > 0 && cdMs > 0 ? Math.max(0, Math.ceil((cdMs - (Date.now() - lastRun)) / 1000)) : 0
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cooldown</span><span>${cdLeft > 0 ? cdLeft + "s" : "ready"}</span></div>`)
     }
-    return `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
   // ── Autopilot Control Renderer ─────────────────────────────────────────────
@@ -995,14 +1111,16 @@
     const auto = tradingState.autopilot
     const running = auto?.enabled ?? false
     const statusColor = running ? "#4ade80" : "#a5a0ff"
+    const banner = checkFeatures("autopilot")
     const lines = []
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">`)
     lines.push(`<div style="width:8px;height:8px;border-radius:50%;background:${statusColor}"></div>`)
     lines.push(`<span style="font-weight:600;font-size:11px">${running ? "Running" : "Stopped"}</span>`)
     lines.push(`</div>`)
-    if (auto?.strategy) lines.push(`<div style="font-size:11px">Strategy: <b>${auto.strategy}</b></div>`)
+    if (auto?.minConfidence != null) lines.push(`<div style="font-size:11px">Min confidence: <b>${auto.minConfidence}%</b></div>`)
     if (auto?.assetId) lines.push(`<div style="font-size:11px">Asset: <b>${auto.assetId}</b></div>`)
-    if (auto?.lastDecision) lines.push(`<div style="font-size:10px;color:#a5a0ff">Last: ${auto.lastDecision}</div>`)
+    const lastDec = tradingState.demo?.autopilot?.lastDecision
+    if (lastDec) lines.push(`<div style="font-size:10px;color:#a5a0ff">Last: ${lastDec}</div>`)
     const demo = tradingState.demo
     if (demo?.todayPnl != null) {
       lines.push(`<div style="font-size:11px;margin-top:2px">Today PnL: <span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, demo.currency)}</span></div>`)
@@ -1029,13 +1147,14 @@
     lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
     lines.push(`<button data-picc-action="autopilot-kill" style="background:#ff6b6b30;border:1px solid #ff6b6b;color:#ff6b6b;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">Kill</button>`)
     lines.push(`</div>`)
-    return `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
   // ── Kelly Sizing Renderer ──────────────────────────────────────────────────
   function renderKellySizing() {
     const kelly = tradingState.kelly
-    if (!kelly) return '<div style="color:#a5a0ff;padding:4px">Loading Kelly data…</div>'
+    const banner = checkFeatures("kelly-sizing")
+    if (!kelly) return banner + '<div style="color:#a5a0ff;padding:4px">Loading Kelly data\u2026</div>'
     const stats = kelly.stats || {}
     const k = kelly.kelly || {}
     const lines = []
@@ -1045,13 +1164,14 @@
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Full Kelly</span><span style="color:#6c63ff">${k.fullKelly != null ? k.fullKelly + "%" : "—"}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Suggested (${k.mode || "half"})</span><span style="font-weight:600;color:#4ade80">${k.suggested != null ? k.suggested + "%" : "—"}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Break-even WR</span><span>${k.breakEven != null ? k.breakEven + "%" : "—"}</span></div>`)
-    return `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
   // ── Regime Detection Renderer ──────────────────────────────────────────────
   function renderRegimeDetect() {
     const regime = tradingState.regime
-    if (!regime || regime.regime === "unknown") return '<div style="color:#a5a0ff;padding:4px">Analyzing market regime…</div>'
+    const banner = checkFeatures("regime-detect")
+    if (!regime || regime.regime === "unknown") return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing market regime\u2026</div>'
     const colors = { trending: "#4ade80", ranging: "#f59e0b", volatile: "#ff6b6b", breakout: "#6c63ff" }
     const c = colors[regime.regime] || "#a5a0ff"
     const lines = []
@@ -1059,13 +1179,14 @@
     if (regime.metrics) lines.push(`<div style="font-size:10px;color:#9aa0c0">ADX: ${regime.metrics.adx} · ATR ratio: ${regime.metrics.atrRatio}x</div>`)
     if (regime.suggestedStrategy) lines.push(`<div style="font-size:10px;margin-top:4px">Strategy: <b style="color:#6c63ff">${regime.suggestedStrategy}</b></div>`)
     if (regime.factors?.length) lines.push(`<div style="font-size:9px;color:#9aa0c0;margin-top:2px">${regime.factors.join(" · ")}</div>`)
-    return `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
   // ── Order Flow Renderer ────────────────────────────────────────────────────
   function renderOrderFlow() {
     const of = tradingState.orderFlow
-    if (!of || !of.delta?.length) return '<div style="color:#a5a0ff;padding:4px">Loading order flow…</div>'
+    const banner = checkFeatures("order-flow")
+    if (!of || !of.delta?.length) return banner + '<div style="color:#a5a0ff;padding:4px">Loading order flow\u2026</div>'
     const lines = []
     const imbColor = of.imbalance === "buy-heavy" ? "#4ade80" : of.imbalance === "sell-heavy" ? "#ff6b6b" : "#f59e0b"
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:11px">Net Delta</span><span style="color:${of.cumulative >= 0 ? "#4ade80" : "#ff6b6b"};font-weight:600">${of.cumulative >= 0 ? "+" : ""}${of.cumulative}</span><span style="font-size:9px;padding:1px 4px;border-radius:3px;background:${imbColor}30;color:${imbColor}">${of.imbalance}</span></div>`)
@@ -1075,13 +1196,14 @@
         lines.push(`<div style="font-size:9px;color:${sig.type === "divergence" ? "#f59e0b" : "#6c63ff"};margin-top:2px">⚡ ${sig.desc}</div>`)
       }
     }
-    return `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
   // ── Expiry Optimizer Renderer ──────────────────────────────────────────────
   function renderExpiryOpt() {
     const exp = tradingState.expiry
-    if (!exp || !exp.recommended) return '<div style="color:#a5a0ff;padding:4px">Analyzing optimal expiry…</div>'
+    const banner = checkFeatures("expiry-opt")
+    if (!exp || !exp.recommended) return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing optimal expiry\u2026</div>'
     const r = exp.recommended
     const lines = []
     lines.push(`<div style="font-weight:600;font-size:12px;color:#6c63ff;margin-bottom:4px">Recommended: ${r.label}</div>`)
@@ -1095,20 +1217,438 @@
       }
       lines.push(`</div>`)
     }
-    return `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
   // ── Sentiment Renderer ─────────────────────────────────────────────────────
   function renderSentiment() {
     const sent = tradingState.sentiment
-    if (!sent || !sent.composite) return '<div style="color:#a5a0ff;padding:4px">Loading sentiment…</div>'
+    const banner = checkFeatures("sentiment")
+    if (!sent || !sent.composite) return banner + '<div style="color:#a5a0ff;padding:4px">Loading sentiment\u2026</div>'
     const c = sent.composite
     const lines = []
     const scoreColor = c.score > 0.2 ? "#4ade80" : c.score < -0.2 ? "#ff6b6b" : "#f59e0b"
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:12px;color:${scoreColor}">${c.label || "Neutral"}</span><span style="font-size:10px;color:#9aa0c0">Score: ${c.score}</span>${c.extreme ? '<span style="font-size:8px;padding:1px 3px;border-radius:3px;background:#ff6b6b30;color:#ff6b6b">EXTREME</span>' : ""}</div>`)
     if (sent.news) lines.push(`<div style="font-size:10px;color:#9aa0c0">News: ${sent.news.bullish}🟢 ${sent.news.bearish}🔴 ${sent.news.neutral}⚪ (${sent.news.sampleSize})</div>`)
     if (sent.social) lines.push(`<div style="font-size:10px;color:#9aa0c0">Social velocity: ${sent.social.velocity > 0 ? "+" : ""}${sent.social.velocity}</div>`)
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Generic renderers (work on ANY site) ───────────────────────────────────
+  function renderPageOverview() {
+    const pm = tradingState.pageMetrics
+    const assets = tradingState.assets
+    const lines = []
+    if (pm) {
+      lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin-bottom:4px">${pm.title || window.location.hostname}</div>`)
+      lines.push(`<div style="font-size:10px;color:#9aa0c0;word-break:break-all;margin-bottom:4px">${window.location.href.substring(0, 60)}…</div>`)
+      if (pm.loadTime != null) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Load time</span><span style="color:${pm.loadTime < 2000 ? "#4ade80" : pm.loadTime < 5000 ? "#f59e0b" : "#ff6b6b"}">${pm.loadTime}ms</span></div>`)
+      if (pm.domContentLoaded != null) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>DOM ready</span><span>${pm.domContentLoaded}ms</span></div>`)
+      if (pm.firstPaint != null) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>First paint</span><span>${pm.firstPaint}ms</span></div>`)
+      if (pm.domElements) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>DOM elements</span><span>${pm.domElements.toLocaleString()}</span></div>`)
+      if (pm.images) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Images</span><span>${pm.images}</span></div>`)
+      if (pm.links) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Links</span><span>${pm.links}</span></div>`)
+      if (pm.scripts) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Scripts</span><span>${pm.scripts}</span></div>`)
+      if (pm.forms) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Forms</span><span>${pm.forms}</span></div>`)
+    }
+    if (assets.length > 0) {
+      lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
+      lines.push(`<div style="font-weight:600;font-size:10px;color:#6c63ff;margin-bottom:2px">Detected Prices</div>`)
+      for (const a of assets.slice(0, 5)) {
+        const c = tone(a.changePct)
+        lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px">` +
+          `<span>${a.name}</span>` +
+          `<span>${a.price != null ? a.price : "\u2014"} ${a.changePct != null ? `<span style="color:${c}">${a.changePct >= 0 ? "+" : ""}${a.changePct.toFixed(2)}%</span>` : ""}</span></div>`)
+      }
+    }
+    if (!lines.length) return '<div style="color:#a5a0ff;padding:4px">Analyzing page\u2026</div>'
     return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  function renderPageContent() {
+    const pm = tradingState.pageMetrics
+    const lines = []
+    if (pm?.description) {
+      lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-bottom:4px"><b style="color:#eef0ff">Description:</b> ${pm.description.substring(0, 120)}${pm.description.length > 120 ? "…" : ""}</div>`)
+    }
+    // Extract headings
+    try {
+      const headings = []
+      for (const h of document.querySelectorAll("h1, h2, h3")) {
+        const text = h.textContent.trim()
+        if (text && text.length < 100) headings.push({ level: h.tagName, text })
+        if (headings.length >= 6) break
+      }
+      if (headings.length > 0) {
+        lines.push(`<div style="font-weight:600;font-size:10px;color:#6c63ff;margin-bottom:2px">Headings</div>`)
+        for (const h of headings) {
+          const indent = h.level === "H1" ? 0 : h.level === "H2" ? 4 : 8
+          lines.push(`<div style="font-size:10px;color:#eef0ff;padding-left:${indent}px">${h.text.substring(0, 50)}${h.text.length > 50 ? "…" : ""}</div>`)
+        }
+      }
+    } catch {}
+    // Extract key links
+    try {
+      const links = []
+      for (const a of document.querySelectorAll("a[href]")) {
+        const text = a.textContent.trim()
+        if (text && text.length > 2 && text.length < 60) links.push(text)
+        if (links.length >= 5) break
+      }
+      if (links.length > 0) {
+        lines.push(`<div style="font-weight:600;font-size:10px;color:#6c63ff;margin-top:4px;margin-bottom:2px">Key Links</div>`)
+        for (const l of links) {
+          lines.push(`<div style="font-size:10px;color:#9aa0c0">→ ${l}</div>`)
+        }
+      }
+    } catch {}
+    if (!lines.length) return '<div style="color:#a5a0ff;padding:4px">Scanning page content\u2026</div>'
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  function renderServerStatus() {
+    const lines = []
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">`)
+    lines.push(`<div style="width:8px;height:8px;border-radius:50%;background:${serverOnline ? "#4ade80" : serverOnline === false ? "#ff6b6b" : "#f59e0b"}"></div>`)
+    lines.push(`<span style="font-weight:600;font-size:11px">${serverOnline ? "Server Online" : serverOnline === false ? "Server Offline" : "Checking…"}</span>`)
+    lines.push(`</div>`)
+    if (serverPort) lines.push(`<div style="font-size:10px;color:#9aa0c0">Port: ${serverPort}</div>`)
+    if (!serverOnline) {
+      lines.push(`<div style="font-size:10px;color:#f59e0b;margin-top:4px">Start the server for full features:</div>`)
+      lines.push(`<code style="font-size:9px;color:#6c63ff;background:#0d0d1a;padding:2px 4px;border-radius:3px;display:block;margin-top:2px">npm run serve</code>`)
+    }
+    const assets = tradingState.assets
+    if (assets.length > 0) {
+      lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
+      lines.push(`<div style="font-weight:600;font-size:10px;color:#6c63ff;margin-bottom:2px">Live Data</div>`)
+      for (const a of assets.slice(0, 4)) {
+        const c = tone(a.changePct)
+        lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px">` +
+          `<span>${a.name}</span>` +
+          `<span style="font-weight:600">${a.price != null ? a.price : "…"}</span></div>`)
+      }
+    }
+    if (!serverOnline && assets.length === 0) {
+      lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-top:4px">Extension will still detect page data, prices, and content.</div>`)
+    }
+    return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Universal page data extraction (works on ANY site) ────────────────────
+  let eoObserver = null
+  let eoLastPrice = null
+  let eoLastAsset = null
+
+  function scrapePageData() {
+    const result = { assets: [], balance: null, pageMetrics: null }
+    try {
+      const data = extractPageData()
+      if (data.prices.length > 0) {
+        for (const p of data.prices.slice(0, 5)) {
+          const old = result.assets.find((a) => a.name === p.name)
+          if (old) {
+            const oldPrice = old.price
+            old.price = p.value
+            if (oldPrice > 0) {
+              old.changePct = ((p.value - oldPrice) / oldPrice) * 100
+              old.change = p.value - oldPrice
+            }
+          } else {
+            result.assets.push({
+              id: p.name || "asset-" + result.assets.length,
+              name: p.name || "Asset " + (result.assets.length + 1),
+              price: p.value,
+              changePct: 0,
+              change: 0,
+            })
+          }
+        }
+      }
+      if (data.balance != null) result.balance = data.balance
+      if (data.assetName && result.assets.length === 0) {
+        result.assets.push({ id: data.assetName, name: data.assetName, price: null, changePct: null, change: null })
+      }
+      result.pageMetrics = collectPageMetricsLocal()
+    } catch {}
+    // Start real-time observer on any site
+    if (!eoObserver) startEOObserver()
+    return result
+  }
+
+  // Parse a text string into a numeric price, handling various formats.
+  function parsePrice(text) {
+    if (!text || text.length > 30) return null
+    const cleaned = text.replace(/[\$\u20AC\u00A3\u00A5\u20A9\u20B9]/g, "").replace(/balance[:\s]*/gi, "").replace(/[\u2248\u2249]/g, "").trim()
+    let m = cleaned.match(/^(\d{1,10}\.\d{2,8})$/)
+    if (m) return parseFloat(m[1])
+    m = cleaned.match(/^(\d{1,3}(?:,\d{3})*\.\d{2,8})$/)
+    if (m) return parseFloat(m[1].replace(/,/g, ""))
+    m = cleaned.match(/^(\d{4,10})$/)
+    if (m) return parseFloat(m[1])
+    return null
+  }
+
+  function extractPageData() {
+    const out = { prices: [], balance: null, assetName: null }
+    const isEO = /expertoption\.(com|finance)/i.test(window.location.hostname)
+    // ── ExpertOption-specific selectors first (fallback for React apps) ──
+    if (isEO) {
+      try {
+        const priceSelectors = [
+          '[class*="price"]', '[class*="Price"]', '[class*="quote"]', '[class*="Quote"]',
+          '[class*="current-value"]', '[class*="asset-price"]',
+          '[data-value]', '[data-price]'
+        ]
+        for (const sel of priceSelectors) {
+          const els = document.querySelectorAll(sel)
+          for (const el of els) {
+            if (el.closest("[data-picc-overlay], [data-picc-dock]")) continue
+            const text = el.textContent.trim()
+            if (!text || text.length > 30) continue
+            const val = parsePrice(text)
+            if (val != null && val > 0) {
+              const rect = el.getBoundingClientRect()
+              if (rect.width >= 5 && rect.height >= 5 && rect.top < window.innerHeight) {
+                const name = findNearbyAssetName(el) || out.assetName
+                if (name && !out.assetName) out.assetName = name
+                const score = 50 + (parseFloat(getComputedStyle(el).fontSize) || 12)
+                if (!out.prices.find((p) => Math.abs(p.value - val) / val < 0.001))
+                  out.prices.push({ value: val, name: name || "Asset", score })
+              }
+            }
+          }
+          if (out.prices.length >= 3) break
+        }
+        const balSelectors = [
+          '[class*="balance"]', '[class*="Balance"]', '[class*="wallet"]', '[class*="Wallet"]',
+          '[class*="deposit"]', '[class*="account-amount"]'
+        ]
+        for (const sel of balSelectors) {
+          if (out.balance != null) break
+          for (const el of document.querySelectorAll(sel)) {
+            if (el.closest("[data-picc-overlay], [data-picc-dock]")) continue
+            const m = el.textContent.trim().match(/([\d,]+\.?\d{0,2})/)
+            if (m) {
+              const val = parseFloat(m[1].replace(/,/g, ""))
+              if (val > 0 && val < 9999999) { out.balance = val; break }
+            }
+          }
+        }
+        const nameSelectors = [
+          '[class*="asset-name"]', '[class*="AssetName"]', '[class*="instrument"]',
+          '[class*="pair-name"]', '[class*="symbol"]'
+        ]
+        if (!out.assetName) for (const sel of nameSelectors) {
+          const el = document.querySelector(sel)
+          if (el && !el.closest("[data-picc-overlay], [data-picc-dock]")) {
+            const t = el.textContent.trim()
+            if (t && t.length < 30) {
+              const cleaned = t.replace(/\s*\(otc\)/gi, "").replace(/\s+/g, "").toUpperCase()
+              if (/^[A-Z]{3}\/[A-Z]{3}$/.test(cleaned) || /^[A-Z]{3,6}$/.test(cleaned)) {
+                out.assetName = cleaned; break
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+    // ── Universal TreeWalker: scan every text node in the document ──
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement
+        if (!parent) return NodeFilter.FILTER_REJECT
+        if (parent.closest("script, style, noscript, [data-picc-overlay], [data-picc-dock], [data-picc-settings]"))
+          return NodeFilter.FILTER_REJECT
+        const text = node.textContent.trim()
+        if (!text || text.length > 30) return NodeFilter.FILTER_REJECT
+        return NodeFilter.FILTER_ACCEPT
+      }
+    })
+    const priceCandidates = []
+    let node
+    while ((node = walker.nextNode())) {
+      const text = node.textContent.trim()
+      const parent = node.parentElement
+      if (!parent) continue
+      // Match decimal prices: 1.09234, $1,234.56, 24567, 1,092.34
+      const val = parsePrice(text)
+      if (val == null || val <= 0 || val > 99999999) continue
+      const rect = parent.getBoundingClientRect()
+      if (rect.width < 5 || rect.height < 5) continue
+      if (rect.top > window.innerHeight || rect.left > window.innerWidth) continue
+      const cs = getComputedStyle(parent)
+      const fontSize = parseFloat(cs.fontSize) || 12
+      const fontWeight = parseInt(cs.fontWeight) || 400
+      const color = cs.color
+      // Score: larger font + bolder = more likely THE price
+      let score = fontSize * 2 + fontWeight * 0.05
+      // Bonus for being in the top 2/3 of the page (trading interfaces put price there)
+      if (rect.top < window.innerHeight * 0.66) score += 5
+      // Bonus for being near the horizontal center (chart prices are centered)
+      const centerDist = Math.abs((rect.left + rect.width / 2) - window.innerWidth / 2)
+      if (centerDist < window.innerWidth * 0.3) score += 8
+      // Bonus for high-contrast colors (white/bright on dark = price display)
+      const brightness = parseColorBrightness(color)
+      if (brightness > 180) score += 4
+      priceCandidates.push({ val, score, fontSize, parent, text, rect })
+    }
+    // Sort by score descending
+    priceCandidates.sort((a, b) => b.score - a.score)
+    // Deduplicate: if two candidates have very close values (< 0.1% diff), keep the higher-scored one
+    const seen = new Set()
+    for (const c of priceCandidates) {
+      const key = Math.round(c.val * 1000)
+      if (seen.has(key)) continue
+      seen.add(key)
+      // Find the asset name near this price
+      let assetName = findNearbyAssetName(c.parent)
+      if (!assetName) assetName = out.assetName
+      out.prices.push({ value: c.val, name: assetName || "Asset " + (out.prices.length + 1), score: c.score })
+      if (out.prices.length >= 5) break
+    }
+    // ── Balance: scan for currency-formatted numbers (only if not found via EO selectors) ──
+    if (out.balance == null) {
+      const balWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement
+        if (!p || p.closest("script, style, noscript, [data-picc-overlay], [data-picc-dock]"))
+          return NodeFilter.FILTER_REJECT
+        return /\d/.test(n.textContent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      }
+    })
+    while ((node = balWalker.nextNode())) {
+      const text = node.textContent.trim()
+      // Match: $1,234.56 / $1234 / 1234.56 USD / Balance: 5000.00
+      const m = text.match(/(?:\$\s*|balance[:\s]*|≈\s*)([\d,]+\.?\d{0,2})/i)
+      if (m) {
+        const val = parseFloat(m[1].replace(/,/g, ""))
+        const rect = node.parentElement?.getBoundingClientRect()
+        if (rect && val > 0 && val < 9999999 && rect.top < 100) {
+          out.balance = val
+          break
+        }
+      }
+    }
+    } // end if (out.balance == null)
+    // ── Asset name: look for XXX/XXX or known asset patterns (only if not found via EO selectors) ──
+    if (!out.assetName) {
+    const nameWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement
+        if (!p || p.closest("script, style, noscript, [data-picc-overlay], [data-picc-dock]"))
+          return NodeFilter.FILTER_REJECT
+        const t = n.textContent.trim()
+        return /^[A-Z]{3}\s*\/\s*[A-Z]{3}$/.test(t) || /^[A-Z]{3,6}\s*\/\s*[A-Z]{3,6}$/.test(t)
+          ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      }
+    })
+    node = nameWalker.nextNode()
+    if (node) out.assetName = node.textContent.trim().replace(/\s+/g, "")
+    } // end if (!out.assetName)
+    return out
+  }
+
+  function findNearbyAssetName(el) {
+    let search = el
+    for (let depth = 0; depth < 8 && search; depth++) {
+      const textNodes = []
+      const tw = document.createTreeWalker(search, NodeFilter.SHOW_TEXT)
+      let n
+      while ((n = tw.nextNode())) {
+        const t = n.textContent.trim()
+        if (t && t.length < 40) textNodes.push(t)
+      }
+      const combined = textNodes.join(" ")
+      const m = combined.match(/([A-Z]{3}\s*\/\s*[A-Z]{3})/)
+      if (m) return m[1].replace(/\s+/g, "")
+      // Also try commodity/crypto names
+      const nm = combined.match(/\b(Gold|Silver|Bitcoin|Ethereum|Oil|EUR|GBP|JPY|USD|AUD|CAD|CHF|NZD)\b/i)
+      if (nm) return nm[1]
+      search = search.parentElement
+    }
+    return null
+  }
+
+  function parseColorBrightness(colorStr) {
+    try {
+      const m = colorStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+      if (!m) return 0
+      return (parseInt(m[1]) * 299 + parseInt(m[2]) * 587 + parseInt(m[3]) * 114) / 1000
+    } catch { return 0 }
+  }
+
+  function collectPageMetricsLocal() {
+    try {
+      const perf = performance.getEntriesByType("navigation")[0]
+      const paint = performance.getEntriesByType("paint")
+      return {
+        url: window.location.href,
+        title: document.title,
+        loadTime: perf ? Math.round(perf.loadEventEnd - perf.startTime) : null,
+        domContentLoaded: perf ? Math.round(perf.domContentLoadedEventEnd - perf.startTime) : null,
+        firstPaint: paint.find((p) => p.name === "first-paint")?.startTime
+          ? Math.round(paint.find((p) => p.name === "first-paint").startTime) : null,
+        domElements: document.getElementsByTagName("*").length,
+        images: document.images.length,
+        links: document.links.length,
+        scripts: document.scripts.length,
+        forms: document.forms.length,
+        iframes: document.querySelectorAll("iframe").length,
+        description: document.querySelector('meta[name="description"]')?.content || null,
+        ogImage: document.querySelector('meta[property="og:image"]')?.content || null,
+        charset: document.characterEncoding,
+        readyState: document.readyState,
+      }
+    } catch { return null }
+  }
+
+  // ── EO-specific observer (uses universal extraction) ───────────────────────
+  function startEOObserver() {
+    if (eoObserver) return
+    // Start on ANY page — the observer drives real-time price tracking everywhere
+    let debounceTimer = null
+    eoObserver = new MutationObserver(() => {
+      if (debounceTimer) return
+      debounceTimer = setTimeout(() => { debounceTimer = null }, 500)
+      try {
+        const data = extractPageData()
+        const primary = data.prices[0]
+        if (primary && primary.value != null && primary.value !== eoLastPrice) {
+          const oldPrice = eoLastPrice || primary.value
+          eoLastPrice = primary.value
+          const assetId = primary.name || eoLastAsset || "LIVE_ASSET"
+          const existing = tradingState.assets.find((a) => a.id === assetId || a.id === "LIVE_ASSET")
+          if (existing) {
+            existing.price = primary.value
+            existing.changePct = oldPrice > 0 ? ((primary.value - oldPrice) / oldPrice) * 100 : 0
+            existing.change = primary.value - oldPrice
+            if (primary.name && existing.id !== primary.name) {
+              existing.id = primary.name
+              existing.name = primary.name
+            }
+          } else {
+            tradingState.assets.push({
+              id: assetId,
+              name: primary.name || "Live Asset",
+              price: primary.value,
+              changePct: 0,
+              change: 0,
+            })
+          }
+          if (typeof updateAllDockables === "function") updateAllDockables()
+        }
+        if (data.balance != null) {
+          if (tradingState.demo) tradingState.demo.balance = data.balance
+          if (tradingState.account) tradingState.account.balance = data.balance
+        }
+        if (primary?.name) eoLastAsset = primary.name
+      } catch {}
+    })
+    eoObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
   }
 
   // ── Fetch and update all trading data ──────────────────────────────────────
@@ -1116,33 +1656,75 @@
 
   async function fetchTradingData() {
     try {
+      // Always scrape live data from the page DOM (works on ANY site)
+      const scraped = scrapePageData()
+      if (scraped && scraped.assets.length) {
+        for (const sa of scraped.assets) {
+          const existing = tradingState.assets.find((a) => a.id === sa.id)
+          if (existing) {
+            if (sa.price > 0) {
+              const oldPrice = existing.price || sa.price
+              existing.price = sa.price
+              existing.name = sa.name || existing.name
+              if (oldPrice > 0) existing.changePct = ((sa.price - oldPrice) / oldPrice) * 100
+              existing.change = sa.price - oldPrice
+            }
+          } else {
+            tradingState.assets.push(sa)
+          }
+        }
+        if (scraped.balance != null) {
+          if (!tradingState.demo) tradingState.demo = {}
+          tradingState.demo.balance = scraped.balance
+          if (tradingState.account) tradingState.account.balance = scraped.balance
+        }
+      }
+      if (scraped?.pageMetrics) tradingState.pageMetrics = scraped.pageMetrics
+      // Also refresh pageMetrics every poll to keep DOM element counts current
+      tradingState.pageMetrics = collectPageMetricsLocal()
+      // Then fetch server-side data for analysis, autopilot, etc.
       const [status, autopilot, demo, decisions] = await Promise.all([
         serverFetch("/api/trading/status"),
-        serverFetch("/api/autopilot/config"),
-        serverFetch("/api/expertoption/demo/status"),
-        serverFetch("/api/decisions")
+        serverFetch("/api/trading/autopilot"),
+        serverFetch("/api/trading/demo"),
+        serverFetch("/api/trading/decisions")
       ])
       if (status?.ok) {
         tradingState.paper = status.paper || null
-        tradingState.account = status.live || null
+        // Map account from the actual response (expertOption sub-object has balance)
+        if (status.expertOption) {
+          tradingState.account = { balance: status.expertOption.balance, currency: status.expertOption.currency || "USD", demo: status.expertOption.demo }
+        }
       }
-      if (autopilot?.ok) tradingState.autopilot = autopilot.config || null
+      if (autopilot?.ok) tradingState.autopilot = autopilot.config || autopilot
       if (demo) tradingState.demo = demo
-      if (decisions?.decisions) tradingState.decisions = decisions.decisions
-      // Fetch live asset prices
-      const live = await serverFetch("/api/live/stats")
-      if (live?.watched) {
-        tradingState.assets = live.watched.map((w) => ({ id: w, name: w, price: null, changePct: null, change: null }))
+      if (decisions?.ok && decisions.decisions) tradingState.decisions = decisions.decisions
+      // Fetch candles for the primary asset to feed regime/orderflow/expiry
+      const primaryRaw = tradingState.assets?.[0]?.name || tradingState.assets?.[0]?.id || "EURUSD"
+      const primaryAsset = normalizeAssetId(primaryRaw)
+      const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: primaryAsset, timeframe: 60, count: 100 } })
+      if (candleResp?.ok && candleResp.candles?.length) {
+        tradingState.lastCandles = candleResp.candles
+        // Only update price from candle if we don't have live scraped data
+        const last = candleResp.candles[candleResp.candles.length - 1]
+        const prev = candleResp.candles[candleResp.candles.length - 2]
+        if (tradingState.assets[0] && !tradingState.assets[0].price) {
+          tradingState.assets[0].price = last.close
+          if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
+        }
       }
-      tradingState.lastUpdate = Date.now()
-      // Fetch advanced trading data
-      const [kelly, regime, orderFlow] = await Promise.all([
+      // Fetch advanced trading data with candles
+      const [kelly, regime, expiry, sentiment, orderFlow] = await Promise.all([
         serverFetch("/api/trading/kelly"),
-        serverFetch("/api/trading/orderflow", { method: "POST", body: { candles: tradingState.lastCandles || [] } }),
-        serverFetch("/api/trading/sentiment", { method: "POST", body: { symbol: "EURUSD" } }),
+        serverFetch("/api/trading/regime", { method: "POST", body: { candles: tradingState.lastCandles } }),
+        serverFetch("/api/trading/expiry", { method: "POST", body: { candles: tradingState.lastCandles } }),
+        serverFetch("/api/trading/sentiment", { method: "POST", body: { symbol: primaryAsset } }),
+        serverFetch("/api/trading/orderflow", { method: "POST", body: { candles: tradingState.lastCandles } }),
       ])
       if (kelly?.ok) tradingState.kelly = kelly
       if (regime?.ok) tradingState.regime = regime
+      if (expiry?.ok) tradingState.expiry = expiry
+      if (sentiment?.ok) tradingState.sentiment = sentiment
       if (orderFlow?.ok) tradingState.orderFlow = orderFlow
     } catch {
       // Server not reachable — keep last state
@@ -1161,6 +1743,18 @@
       "order-flow": renderOrderFlow,
       "expiry-opt": renderExpiryOpt,
       "sentiment": renderSentiment,
+      "page-overview": renderPageOverview,
+      "page-content": renderPageContent,
+      "server-status": renderServerStatus,
+      "speed": renderPageOverview,
+      "connectors": renderServerStatus,
+      "tracker": renderPageOverview,
+      "optimizer": renderServerStatus,
+      "analytics": renderPageOverview,
+      "scheduler": renderServerStatus,
+      "yield": renderPageOverview,
+      "gas": renderServerStatus,
+      "general": renderPageOverview,
     }
     for (const [id, renderer] of Object.entries(panels)) {
       const dock = shadowRoot.getElementById(`__PICC_DOCK_${id}__`)
@@ -1183,13 +1777,6 @@
   // ── Create dockables with live-rendered content ────────────────────────────
   function createTradingDockables(siteInfo) {
     const presets = SUITE_DOCKABLE_PRESETS.trading
-    const renderers = {
-      "price-ticker": renderPriceTicker,
-      "portfolio": renderPortfolio,
-      "ai-signals": renderAISignals,
-      "risk-mgr": renderRiskManager,
-      "autopilot": renderAutopilot
-    }
     const dockables = presets.map((preset) => {
       const body = document.createElement("div")
       body.setAttribute("data-picc-body", "")
@@ -1217,15 +1804,25 @@
     return dockables
   }
 
-  // ── Generic suite dockables ────────────────────────────────────────────────
+  // ── Generic suite dockables (work on ANY site) ─────────────────────────────
   function createGenericDockables(siteInfo) {
-    const presets = SUITE_DOCKABLE_PRESETS[siteInfo?.suite] || SUITE_DOCKABLE_PRESETS.generic
-    return presets.map((preset) => {
+    const isUnrecognized = !siteInfo?.suite
+    // For unrecognized sites, use enhanced generic presets
+    const genericPresets = isUnrecognized ? [
+      { id: "page-overview", title: "Page Overview", icon: "📊", description: "Page metrics, detected prices, and content", defaultPos: "top-right", defaultSize: { width: 300, height: 220 }, defaultCollapsed: false },
+      { id: "page-content", title: "Page Content", icon: "📝", description: "Headings, links, and page structure", defaultPos: "right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
+      { id: "server-status", title: "PICC Status", icon: "🧠", description: "Server connection and live data feed", defaultPos: "bottom-right", defaultSize: { width: 260, height: 160 }, defaultCollapsed: false },
+    ] : (SUITE_DOCKABLE_PRESETS[siteInfo?.suite] || SUITE_DOCKABLE_PRESETS.generic)
+    return genericPresets.map((preset) => {
+      const body = document.createElement("div")
+      body.setAttribute("data-picc-body", "")
+      body.style.cssText = "padding:6px 8px;font-size:11px;color:#eef0ff;min-height:30px;"
+      body.innerHTML = '<div style="color:#a5a0ff">Loading\u2026</div>'
       const dock = createDockable({
         id: preset.id,
         title: preset.title,
         icon: preset.icon,
-        content: `PICC active on ${siteInfo?.label || window.location.hostname}`,
+        content: body,
         position: preset.defaultPos,
         width: preset.defaultSize.width,
         height: preset.defaultSize.height,
@@ -1411,7 +2008,7 @@
           }
           const meta = document.createElement("p")
           meta.style.cssText = "font-size:9px;color:#666;margin:1px 0 0;"
-          meta.textContent = `${d.defaultSize.width}×${d.defaultSize.height} · ${d.defaultPosition}`
+          meta.textContent = `${d.defaultSize.width}×${d.defaultSize.height} · ${d.defaultPos}`
           info.appendChild(meta)
 
           row.appendChild(cb)
@@ -1484,11 +2081,12 @@
       e.stopPropagation()
       overlayVisible = false
       stopTradingPoll()
+      // Save current config on close so defaults persist for next open
+      if (siteInfo?.id) savePrefsForSite(siteInfo.id, { overlay: false, overlaySettings: currentSettings })
       el.remove()
       activeDockables.forEach((d) => { const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
       cleanupGroups()
       activeDockables = []
-      if (siteInfo?.id) savePrefsForSite(siteInfo.id, { overlay: false })
     })
 
     btnRow.appendChild(toggleBtn)
@@ -1522,10 +2120,16 @@
       ? createTradingDockables(siteInfo)
       : createGenericDockables(siteInfo)
 
+    // Start polling for all suites (not just trading)
+    startTradingPoll()
+
     activeDockables = docks.map((d) => {
       const rawId = d.id || ""
       return { id: rawId.replace(/^__PICC_DOCK_/, "").replace(/__$/, "") }
     })
+
+    // Apply saved settings to dockable visibility/opacity on creation
+    applySettings(currentSettings)
 
     return el
   }
@@ -1543,18 +2147,15 @@
     }
 
     const siteInfo = detectSite(window.location.href)
-    if (siteInfo?.id) {
-      const prefs = await getPrefs()
-      const sitePrefs = prefs[siteInfo.id]
-      if (sitePrefs?.overlay === false) {
-        await savePrefsForSite(siteInfo.id, { overlay: true })
-      }
-    }
-
     let overlaySettings = {}
     if (siteInfo?.id) {
       const prefs = await getPrefs()
       const sitePrefs = prefs[siteInfo.id]
+      // Re-enable overlay if it was disabled
+      if (sitePrefs?.overlay === false) {
+        await savePrefsForSite(siteInfo.id, { overlay: true })
+      }
+      // Load saved site-specific settings; otherwise use suite defaults
       if (sitePrefs?.overlaySettings) {
         overlaySettings = sitePrefs.overlaySettings
         overlaySettings._siteSpecific = true
@@ -1583,7 +2184,7 @@
       btn.textContent = "..."
       try {
         const running = tradingState.autopilot?.enabled
-        const path = running ? "/api/autopilot/stop" : "/api/autopilot/start"
+        const path = running ? "/api/trading/autopilot/stop" : "/api/trading/autopilot/start"
         const method = running ? "POST" : "POST"
         await serverFetch(path, { method, body: { reason: "user" } })
         await fetchTradingData()
@@ -1594,7 +2195,7 @@
     if (action === "autopilot-kill") {
       btn.disabled = true
       try {
-        await serverFetch("/api/autopilot/stop", { method: "POST", body: { reason: "emergency-kill-switch" } })
+        await serverFetch("/api/trading/autopilot/stop", { method: "POST", body: { reason: "emergency-kill-switch" } })
         await fetchTradingData()
         updateAllDockables()
         playAlertSound("danger")
@@ -1605,27 +2206,28 @@
   })
 
   // ── Message listener from background/popup ──────────────────────────────────
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.action === "toggle-overlay") toggleOverlay()
-    if (msg.action === "get-metrics") return collectPageMetrics()
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.action === "toggle-overlay") { toggleOverlay(); return false }
+    if (msg.action === "get-metrics") { sendResponse(collectPageMetrics()); return false }
     if (msg.action === "server-status") {
       serverOnline = msg.online
       serverPort = msg.port || null
       updateServerStatus()
+      return false
     }
     if (msg.action === "show-notification") {
-      // Show in-page toast notification
       if (msg.type === "error" || msg.type === "danger") playAlertSound("danger")
       else if (msg.type === "success") playAlertSound("success")
       else playAlertSound("info")
       showToast(msg.title, msg.message, msg.type)
+      return false
     }
-    if (msg.action === "extract-content") return extractPageContent(msg.selectors)
-    if (msg.action === "detect-forms") return detectForms()
-    if (msg.action === "read-storage") return readWebStorage()
-    if (msg.action === "fill-field") return fillField(msg.selector, msg.value)
-    if (msg.action === "click-element") return clickElement(msg.selector)
-    if (msg.action === "navigate") return navigateTo(msg.url)
+    if (msg.action === "extract-content") { sendResponse(extractPageContent(msg.selectors)); return false }
+    if (msg.action === "detect-forms") { sendResponse(detectForms()); return false }
+    if (msg.action === "read-storage") { sendResponse(readWebStorage()); return false }
+    if (msg.action === "fill-field") { sendResponse(fillField(msg.selector, msg.value)); return false }
+    if (msg.action === "click-element") { sendResponse(clickElement(msg.selector)); return false }
+    if (msg.action === "navigate") { sendResponse(navigateTo(msg.url)); return false }
   })
 
   // ── Server check on load ────────────────────────────────────────────────────

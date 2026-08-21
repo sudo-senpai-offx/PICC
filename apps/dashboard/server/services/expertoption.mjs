@@ -24,8 +24,8 @@ export const DEFAULT_WS_URL = "wss://fr24g1eu.expertoption.com/ws/v45"
 // The browser app sends these headers; without them the broker closes the
 // socket with "socketNotAllowed".
 export const BROWSER_HEADERS = {
-  Origin: "https://app.expertoption.com",
-  Referer: "https://app.expertoption.com/",
+  Origin: "https://app.expertoption.finance",
+  Referer: "https://app.expertoption.finance/",
   "Accept-Language": "en-US,en;q=0.9"
 }
 
@@ -38,7 +38,13 @@ export const REGION_URLS = [
   "wss://fr24g1hk.expertoption.com/ws/v45",
   "wss://fr24g1sg.expertoption.com/ws/v45",
   "wss://fr24g1us.expertoption.com/ws/v45",
-  "wss://ws.expertoption.com/ws"
+  "wss://ws.expertoption.com/ws",
+  "wss://fr24g1eu.expertoption.finance/ws/v45",
+  "wss://fr24g1in.expertoption.finance/ws/v45",
+  "wss://fr24g1hk.expertoption.finance/ws/v45",
+  "wss://fr24g1sg.expertoption.finance/ws/v45",
+  "wss://fr24g1us.expertoption.finance/ws/v45",
+  "wss://ws.expertoption.finance/ws"
 ]
 
 // The browser app signs every socket URL with its app fingerprint; the v45

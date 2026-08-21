@@ -294,6 +294,6 @@ describe("detectLoginState — heuristics", () => {
   it("refuses to capture from a non-ExpertOption page", async () => {
     const p = page()
     p.setUrl("https://example.com/")
-    await expect(m.captureExpertOptionSession(p)).rejects.toThrow(/app\.expertoption\.com/)
+    await expect(m.captureExpertOptionSession(p)).rejects.toThrow(/app\.expertoption\.(com|finance)/)
   })
 })

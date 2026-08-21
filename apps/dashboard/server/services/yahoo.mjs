@@ -24,7 +24,7 @@ const CRYPTO_BASES = new Set([
  * as-is. Anything else 6-letter uppercase is treated as a currency pair.
  */
 export function normalizeYahooSymbol(symbol) {
-  const s = String(symbol ?? "").trim().toUpperCase()
+  const s = String(symbol ?? "").trim().toUpperCase().replace(/[/\s.]+/g, "")
   if (!s) return s
   if (s === "GOLD") return "GC=F"
   if (s === "SILVER") return "SI=F"

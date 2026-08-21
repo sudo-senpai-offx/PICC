@@ -427,7 +427,7 @@ registerConnector({
   label: "ExpertOption",
   category: "trading",
   transports: ["ws", "browser"],
-  url: "https://app.expertoption.com/",
+  url: "https://app.expertoption.finance/",
   defaults: { label: "ExpertOption" },
   selectors: {
     balance: "input[placeholder*='balance'], [class*='balance']",

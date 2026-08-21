@@ -498,7 +498,7 @@ const SITE_INDEX = [
   ["pitik.ai", "pitik", "Pitik.ai", "p2p", 0, "https://pitik.ai", "SC-licensed agritech P2P (MY)."],
   ["aigen.dev", "aigen", "AIGEN Protocol", "agent", 0, "https://aigen.dev", "On-chain bounty protocol for AI agents."],
   ["agora.xyz", "agora", "Agora", "agent", 0, "https://agora.xyz", "Living agent + human economy ($THREE)."],
-  ["app.expertoption.com,expertoption.com", "expertoption", "ExpertOption", "trading", 0, "https://app.expertoption.com/", "Read-only trading bridge."],
+  ["app.expertoption.com,app.expertoption.finance,expertoption.com,expertoption.finance", "expertoption", "ExpertOption", "trading", 0, "https://app.expertoption.finance/", "Read-only trading bridge."],
   ["binance.com,www.binance.com", "binance", "Binance", "trading", 0, "https://www.binance.com", "Crypto spot/futures exchange."],
   ["bybit.com,www.bybit.com", "bybit", "Bybit", "trading", 0, "https://www.bybit.com", "Crypto derivatives exchange."],
   ["kucoin.com,www.kucoin.com", "kucoin", "KuCoin", "trading", 0, "https://www.kucoin.com", "Crypto spot exchange."],
@@ -3478,8 +3478,8 @@ export async function studioGoogleSession({ navigate = false } = {}) {
 export async function captureExpertOptionSession(page) {
   ensureOpen()
   const target = page && livePage(page) ? page : activePage()
-  if (!/expertoption\.com/i.test(target.url())) {
-    throw new Error("open an app.expertoption.com tab first")
+  if (!/expertoption\.(com|finance)/i.test(target.url())) {
+    throw new Error("open an app.expertoption.finance tab first")
   }
   const hits = await target.evaluate(() => {
     // Current platform: a 32-hex cookie token (`token` = the session the app is

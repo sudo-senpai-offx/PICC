@@ -377,7 +377,7 @@ async function ensureBrowserStream() {
     try {
       const status = studio.studioStatus()
       const active = status?.tabs?.find((t) => t.id === status.activeTabId)
-      return active && /app\.expertoption\.com/i.test(active.url ?? "")
+      return active && /app\.expertoption\.(com|finance)/i.test(active.url ?? "")
     } catch {
       return false
     }
@@ -390,7 +390,7 @@ async function ensureBrowserStream() {
       await studio.openStudio({ headless: true, homepage: "" })
     }
     if (!onEO()) {
-      await studio.studioGoto("https://app.expertoption.com/").catch(() => {})
+      await studio.studioGoto("https://app.expertoption.finance/").catch(() => {})
     }
   } catch {
     /* browser unavailable — headless history still works */
@@ -419,7 +419,7 @@ async function openLiveSession(gen) {
 
   if (!token) {
     throw new Error(
-      "No ExpertOption session — open app.expertoption.com in the PICC browser (or save a token in Trading Suite settings), then retry."
+      "No ExpertOption session — open app.expertoption.finance in the PICC browser (or save a token in Trading Suite settings), then retry."
     )
   }
 

@@ -3331,6 +3331,41 @@ const BROWSER_ROUTES = {
     return true
   },
 
+  // Screen casting frame ingestion (from extension)
+  "/api/casting/frame": async (req, res, parsed) => {
+    if (req.method !== "POST") return false
+    const body = parsed.body || {}
+    if (!body.image) return writeJson(res, 400, { error: "missing image" })
+    if (!globalThis.__picc_casting) globalThis.__picc_casting = { active: false, frames: [], maxFrames: 10, lastFrame: null }
+    const casting = globalThis.__picc_casting
+    casting.active = true
+    const frame = {
+      image: String(body.image).slice(0, 4_000_000),
+      site: String(body.site || "").slice(0, 128),
+      url: String(body.url || "").slice(0, 2048),
+      frameIndex: Number(body.frameIndex) || 0,
+      timestamp: Number(body.timestamp) || Date.now(),
+      receivedAt: Date.now()
+    }
+    casting.lastFrame = frame
+    casting.frames.push(frame)
+    if (casting.frames.length > casting.maxFrames) casting.frames.shift()
+    writeJson(res, 200, { ok: true, frameIndex: frame.frameIndex })
+    return true
+  },
+
+  // Casting status
+  "/api/casting/status": async (req, res, parsed) => {
+    const casting = globalThis.__picc_casting || { active: false, frames: [], lastFrame: null }
+    writeJson(res, 200, {
+      ok: true,
+      active: casting.active,
+      frameCount: casting.frames.length,
+      lastFrame: casting.lastFrame ? { site: casting.lastFrame.site, frameIndex: casting.lastFrame.frameIndex, timestamp: casting.lastFrame.timestamp } : null
+    })
+    return true
+  },
+
   // Extension installation status
   "/api/extension/status": async (req, res) => {
     const lastHeartbeat = globalThis.__picc_ext_heartbeat || null
