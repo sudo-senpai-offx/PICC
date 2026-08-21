@@ -25,7 +25,7 @@ import { liveEOData, subscribeLiveEO } from "./liveEO.mjs"
 import { recordSignal } from "./trading.mjs"
 import { recordDecision } from "./accuracyLedger.mjs"
 import { getSentiment } from "./sentimentEngine.mjs"
-import { quickMtfCheck, multiTimeframeConfluence } from "./multiTimeframe.mjs"
+import { quickMtfCheck } from "./multiTimeframe.mjs"
 
 export const CANDIDATE_EXPIRIES = [60, 120, 300, 900] // seconds (15s excluded: 60s bar resolution can't estimate it honestly)
 export const ASSUMED_PAYOUT = { 60: 82, 120: 85, 300: 88, 900: 90 } // % per expiry, conservative

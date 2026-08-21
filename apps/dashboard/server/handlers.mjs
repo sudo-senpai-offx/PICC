@@ -516,6 +516,55 @@ const SCHEMAS = {
   signalResolve: {
     id: [required, isString()],
     resultPrice: [required, isNumber(0, 1e12)]
+  },
+  twinRun: {
+    ticker: [required, isString(), maxLength(10)],
+    capital: [(v) => v != null && v !== "" && (Number(v) <= 0 || !Number.isFinite(Number(v))) ? "must be positive" : null],
+    horizonYears: [(v) => v != null && v !== "" && (!Number.isFinite(Number(v)) || Number(v) < 0) ? "must be a positive number" : null],
+    simulations: [(v) => v != null && v !== "" && (!Number.isFinite(Number(v)) || Number(v) < 0) ? "must be a positive number" : null]
+  },
+  listingAnalyze: {
+    currentTitle: [isString(), maxLength(500)]
+  },
+  contentGenerate: {
+    topic: [required, isString(), maxLength(500)],
+    kind: [oneOf("blog", "youtube_script", "short_video", "tiktok_script", "x_thread", "newsletter", "affiliate_review", "social")],
+    tone: [oneOf("professional", "casual", "hype", "minimal")],
+    length: [oneOf("short", "standard", "long")]
+  },
+  extensionSuggest: {
+    platform: [oneOf("amazon", "youtube", "brokerage")],
+    url: [(v) => v != null && typeof v === "string" && v.length > 2000 ? "max 2000 chars" : null]
+  },
+  predict: {
+    symbol: [required, isString(), maxLength(10)],
+    days: [isNumber(1, 30)]
+  },
+  analyze: {
+    assetId: [required, maxLength(20)],
+    timeframe: [isNumber(5, 3600)],
+    count: [isNumber(30, 500)],
+    days: [isNumber(1, 30)]
+  },
+  journal: {
+    symbol: [required, isString()],
+    side: [oneOf("up", "down")],
+    entry: [required, isNumber(0, 1e12)],
+    exit: [(v) => v != null && v !== "" && Number(v) <= 0 ? "must be positive" : null],
+    strategy: [isString(), maxLength(100)]
+  },
+  watchlistAdd: {
+    symbol: [required, isString(), maxLength(10)]
+  },
+  watchlistRemove: {
+    symbol: [required, isString(), maxLength(10)]
+  },
+  forecast: {
+    ticker: [required, isString(), maxLength(10)],
+    days: [isNumber(5, 365)]
+  },
+  quote: {
+    tickers: [required]
   }
 }
 
@@ -877,6 +926,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/twin/run" && req.method === "POST") {
+    if (validateOr400(res, body, "twinRun")) return true
     try {
       writeJson(res, 200, await handleTwinRun(body))
     } catch (err) {
@@ -904,6 +954,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/finance/forecast" && req.method === "POST") {
+    if (validateOr400(res, body, "forecast")) return true
     const ticker = String(body.ticker || "").trim().toUpperCase()
     if (!ticker) return writeJson(res, 400, { error: "ticker required" })
     try {
@@ -1133,6 +1184,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/trading/predict" && req.method === "POST") {
+    if (validateOr400(res, body, "predict")) return true
     const symbol = String(body?.symbol ?? "").trim()
     if (!symbol) return writeJson(res, 400, { error: "symbol required" })
     try {
@@ -1145,6 +1197,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/trading/analyze" && req.method === "POST") {
+    if (validateOr400(res, body, "analyze")) return true
     const assetId = String(body?.assetId ?? "").trim()
     if (!assetId) return writeJson(res, 400, { error: "asset id required (e.g. EURUSD)" })
     try {
@@ -1911,6 +1964,105 @@ export async function handleApi(req, res, url) {
     return
   }
 
+  if (path === "/api/trading/correlation" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      const { getWatchlist, watchlistQuotes } = await import("./services/trading.mjs")
+      const { getHistory } = await import("./services/yahoo.mjs")
+      const symbols = Array.isArray(body?.symbols) ? body.symbols.map(String).map((s) => s.trim().toUpperCase()).filter(Boolean) : null
+      const list = symbols || (await getWatchlist())
+      if (!list.length) return writeJson(res, 200, { ok: true, symbols: [], matrix: [], pairs: [] })
+      const priceHistories = {}
+      await Promise.all(list.map(async (s) => {
+        try {
+          const h = await withTimeout(getHistory(s, "3mo"), 10000)
+          if (h?.closes?.length >= 20) priceHistories[s] = h.closes
+        } catch { /* skip */ }
+      }))
+      const { correlationMatrix, pairwiseCorrelation, highlyCorrelated, diversificationScore } = await import("./services/correlation.mjs")
+      const corr = correlationMatrix(priceHistories)
+      const pairs = pairwiseCorrelation(priceHistories)
+      const hot = highlyCorrelated(priceHistories, 0.8)
+      const equalW = corr.symbols.map(() => 1 / corr.symbols.length)
+      const divScore = diversificationScore(equalW, corr.matrix)
+      writeJson(res, 200, { ok: true, symbols: corr.symbols, matrix: corr.matrix, pairs, highlyCorrelated: hot, diversificationScore: divScore })
+    } catch (err) {
+      console.warn("[picc] correlation failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  if (path === "/api/trading/volatility" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return true
+    const symbol = String(body?.symbol ?? parsed.searchParams.get("symbol") ?? "").trim().toUpperCase()
+    if (!symbol) return writeJson(res, 400, { error: "symbol required" })
+    try {
+      const { getHistory } = await import("./services/yahoo.mjs")
+      const { volatilitySnapshot } = await import("./services/volatility.mjs")
+      const history = await withTimeout(getHistory(symbol, "3mo"), 10000)
+      const candles = (history.closes ?? []).map((c, i) => ({
+        close: c,
+        open: history.opens?.[i] ?? c,
+        high: history.highs?.[i] ?? c,
+        low: history.lows?.[i] ?? c
+      })).filter((c) => c.close > 0)
+      const snap = volatilitySnapshot(candles)
+      writeJson(res, 200, { ok: true, symbol: history.symbol, name: history.name, ...snap })
+    } catch (err) {
+      console.warn("[picc] volatility failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  if (path === "/api/trading/risk-parity" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      const { getWatchlist } = await import("./services/trading.mjs")
+      const { getHistory } = await import("./services/yahoo.mjs")
+      const { riskParityAllocation } = await import("./services/riskParity.mjs")
+      const method = String(body?.method || "inverse-vol")
+      const symbols = Array.isArray(body?.symbols) ? body.symbols.map(String).map((s) => s.trim().toUpperCase()).filter(Boolean) : null
+      const list = symbols || (await getWatchlist())
+      if (!list.length) return writeJson(res, 200, { ok: false, error: "no symbols" })
+      const priceHistories = {}
+      await Promise.all(list.map(async (s) => {
+        try {
+          const h = await withTimeout(getHistory(s, "3mo"), 10000)
+          if (h?.closes?.length >= 30) priceHistories[s] = h.closes
+        } catch { /* skip */ }
+      }))
+      const result = riskParityAllocation(priceHistories, { method })
+      writeJson(res, 200, { ok: true, ...result })
+    } catch (err) {
+      console.warn("[picc] risk-parity failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  if (path === "/api/trading/notifications" && (req.method === "GET" || req.method === "POST")) {
+    const { notify, getNotifications, markRead, markAllRead, clearOld, unreadCount, notificationStats } = await import("./services/notificationCenter.mjs")
+    if (req.method === "GET") {
+      const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 50), 1), 200)
+      const unreadOnly = parsed.searchParams.get("unread") === "true"
+      writeJson(res, 200, { ok: true, notifications: getNotifications({ limit, unreadOnly }), unread: unreadCount(), stats: notificationStats() })
+      return true
+    }
+    if (req.method === "POST") {
+      if (body.action === "read" && body.id) { markRead(body.id); writeJson(res, 200, { ok: true }); return true }
+      if (body.action === "read-all") { markAllRead(); writeJson(res, 200, { ok: true }); return true }
+      if (body.action === "clear") { const age = Number(body.olderThanMs) || 7 * 24 * 60 * 60 * 1000; clearOld(age); writeJson(res, 200, { ok: true }); return true }
+      if (body.title && body.body) {
+        const n = notify({ title: body.title, body: body.body, level: body.level || "info", channel: body.channel || "in-app", meta: body.meta })
+        writeJson(res, 200, { ok: true, notification: n })
+        return true
+      }
+    }
+    return false
+  }
+
   if (path === "/api/trading/kelly") {
     if (!(await requireAuth(req, res))) return true
     const { computeKelly, kellySnapshot, getKellySettings, saveKellySettings } = await import("./services/kellyCriterion.mjs")
@@ -2486,6 +2638,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/listing/analyze" && req.method === "POST") {
+    if (validateOr400(res, body, "listingAnalyze")) return true
     writeJson(res, 200, await handleListingAnalyze(body))
     return
   }
@@ -2515,6 +2668,7 @@ export async function handleApi(req, res, url) {
   }
 
   if (path === "/api/content/generate" && req.method === "POST") {
+    if (validateOr400(res, body, "contentGenerate")) return true
     writeJson(res, 200, await handleContentGenerate(body))
     return
   }

@@ -17,6 +17,7 @@ import { proAnalyzeCandles } from "./proanalysis.mjs"
 import { metricsFrom } from "./analytics.mjs"
 import { appendRow } from "./localstore.mjs"
 import { chatText, llmConfigured } from "./llm.mjs"
+import { volatilityPositionSize, realizedVolatility } from "./volatility.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -259,7 +260,27 @@ async function todayTradeCount() {
   return file.deals.filter((d) => (d.recordAt ?? "").startsWith(today)).length
 }
 
-async function defaultAmount(balance, riskPct) {
+async function defaultAmount(balance, riskPct, closes) {
+  // Volatility-adjusted sizing: use GARCH/realized vol to scale position inversely
+  if (Array.isArray(closes) && closes.length >= 30) {
+    try {
+      const rv = realizedVolatility(closes, { period: 20 })
+      const currentVol = rv.annual || 0.30
+      const sizing = volatilityPositionSize({
+        capital: balance,
+        riskPct: (Number(riskPct) || 2) / 100,
+        currentVol,
+        targetVol: 0.20,
+        entryPrice: closes[closes.length - 1]
+      })
+      // Use vol-scaled amount but fallback to simple pct if units < 1
+      if (sizing.units >= 1 && Number.isFinite(sizing.riskBudget)) {
+        return clamp(round2(sizing.riskBudget), 1, 1000)
+      }
+    } catch {
+      // fallback to simple sizing
+    }
+  }
   return clamp(round2((Number(balance) || 0) * (Number(riskPct) || 2) / 100), 1, 1000)
 }
 
@@ -450,7 +471,7 @@ export async function autopilotTick() {
 
   if (!decision.trade) return { ok: false, reason: decision.reason }
 
-  const amount = await defaultAmount(balance, creds.riskPerTradePct)
+  const amount = await defaultAmount(balance, creds.riskPerTradePct, closes)
   const deal = await session.buy({
     assetId: config.assetId,
     type: decision.direction,

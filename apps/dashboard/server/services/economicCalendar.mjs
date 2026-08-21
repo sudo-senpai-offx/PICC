@@ -1,79 +1,113 @@
-// Economic calendar — fetches upcoming economic events from free sources.
-// Uses FRED + manual fallback. No API key required for basic data.
+// Economic calendar — fetches this week's economic events from the free
+// ForexFactory mirror (faireconomy). No API key required. Falls back to a
+// generic recurring schedule if the feed is unreachable.
 
+const CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 const CACHE_TTL = 30 * 60 * 1000 // 30 minutes
 let cache = { at: 0, events: [] }
 
-// Hardcoded upcoming major events (updated periodically)
-const STATIC_EVENTS = [
-  { date: "2026-01-29", time: "14:00", currency: "USD", event: "FOMC Interest Rate Decision", impact: "high", forecast: "4.50%", previous: "4.50%" },
-  { date: "2026-01-30", time: "08:30", currency: "USD", event: "GDP (QoQ)", impact: "high", forecast: "2.8%", previous: "2.6%" },
-  { date: "2026-02-07", time: "08:30", currency: "USD", event: "Non-Farm Payrolls", impact: "high", forecast: "180K", previous: "256K" },
-  { date: "2026-02-12", time: "08:30", currency: "USD", event: "CPI (YoY)", impact: "high", forecast: "2.9%", previous: "2.9%" },
-  { date: "2026-02-19", time: "14:00", currency: "USD", event: "FOMC Meeting Minutes", impact: "medium", forecast: "", previous: "" },
-  { date: "2026-03-07", time: "08:30", currency: "USD", event: "Non-Farm Payrolls", impact: "high", forecast: "190K", previous: "143K" },
-  { date: "2026-03-11", time: "08:30", currency: "USD", event: "CPI (YoY)", impact: "high", forecast: "2.8%", previous: "2.9%" },
-  { date: "2026-03-18", time: "14:00", currency: "USD", event: "FOMC Interest Rate Decision", impact: "high", forecast: "4.50%", previous: "4.50%" },
-  { date: "2026-04-04", time: "08:30", currency: "USD", event: "Non-Farm Payrolls", impact: "high", forecast: "175K", previous: "151K" },
-  { date: "2026-04-10", time: "08:30", currency: "USD", event: "CPI (YoY)", impact: "high", forecast: "2.8%", previous: "2.8%" },
-  { date: "2026-01-29", time: "04:30", currency: "EUR", event: "ECB Interest Rate Decision", impact: "high", forecast: "2.65%", previous: "2.65%" },
-  { date: "2026-01-30", time: "07:00", currency: "EUR", event: "GDP (QoQ)", impact: "high", forecast: "0.2%", previous: "0.4%" },
-  { date: "2026-02-06", time: "07:45", currency: "EUR", event: "ECB Rate Decision", impact: "high", forecast: "2.65%", previous: "2.65%" },
-  { date: "2026-01-29", time: "07:00", currency: "GBP", event: "BOE Interest Rate Decision", impact: "high", forecast: "4.50%", previous: "4.75%" },
-  { date: "2026-02-14", time: "19:00", currency: "JPY", event: "BOJ Interest Rate Decision", impact: "high", forecast: "0.50%", previous: "0.25%" },
-  { date: "2026-01-28", time: "21:30", currency: "AUD", event: "CPI (YoY)", impact: "high", forecast: "2.3%", previous: "2.1%" },
-  { date: "2026-02-05", time: "00:30", currency: "AUD", event: "RBA Interest Rate Decision", impact: "high", forecast: "4.10%", previous: "4.35%" },
-]
+function normalizeImpact(raw) {
+  const v = String(raw ?? "").toLowerCase()
+  if (v === "high") return "high"
+  if (v === "medium") return "medium"
+  return "low"
+}
 
-// Try fetching from Financial Modeling Prep (free tier)
-async function fetchFMPEvents() {
+function parseFeedEvent(e) {
+  if (!e || typeof e !== "object") return null
+  const title = String(e.title ?? e.event ?? "").trim()
+  if (!title) return null
+  const when = new Date(e.date ?? "")
+  if (Number.isNaN(when.getTime())) return null
+  const pad = (n) => String(n).padStart(2, "0")
+  return {
+    date: `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`,
+    time: `${pad(when.getHours())}:${pad(when.getMinutes())}`,
+    currency: String(e.country ?? e.currency ?? "").toUpperCase(),
+    impact: normalizeImpact(e.impact),
+    event: title,
+    actual: e.actual != null ? String(e.actual) : "",
+    forecast: e.forecast != null ? String(e.forecast) : "",
+    previous: e.previous != null ? String(e.previous) : ""
+  }
+}
+
+async function fetchFaireconomyEvents() {
   try {
-    const res = await fetch("https://financialmodelingprep.com/api/v3/economic_calendar?from=2026-01-01&to=2026-12-31&apikey=demo", {
+    const res = await fetch(CALENDAR_URL, {
+      headers: { accept: "application/json" },
       signal: AbortSignal.timeout(8000)
     })
     if (!res.ok) return []
     const data = await res.json()
     if (!Array.isArray(data)) return []
-    return data.slice(0, 50).map((e) => ({
-      date: e.date?.slice(0, 10) ?? "",
-      time: e.time ?? "",
-      currency: e.country === "United States" ? "USD" : e.country === "Euro Zone" ? "EUR" : e.currency ?? "",
-      event: e.event ?? "",
-      impact: e.impact?.toLowerCase() === "high" ? "high" : e.impact?.toLowerCase() === "medium" ? "medium" : "low",
-      forecast: e.forecast != null ? String(e.forecast) : "",
-      previous: e.previous != null ? String(e.previous) : "",
-      actual: e.actual != null ? String(e.actual) : ""
-    }))
-  } catch { return [] }
+    return data.map(parseFeedEvent).filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
-export async function getEconomicEvents({ days = 7, currency = null } = {}) {
+// Generic recurring schedule relative to today — used only when the live
+// feed is unavailable. Deliberately not tied to specific calendar dates.
+function staticFallbackEvents() {
+  const now = new Date()
+  const mk = (offsetDays, time, currency, event, impact) => {
+    const d = new Date(now)
+    d.setDate(d.getDate() + offsetDays)
+    return {
+      date: d.toISOString().slice(0, 10),
+      time,
+      currency,
+      impact,
+      event,
+      actual: "",
+      forecast: "",
+      previous: ""
+    }
+  }
+  return [
+    mk(1, "08:30", "USD", "Initial Jobless Claims", "medium"),
+    mk(2, "08:30", "USD", "CPI (YoY)", "high"),
+    mk(3, "14:00", "USD", "FOMC Interest Rate Decision", "high"),
+    mk(3, "21:30", "AUD", "RBA Interest Rate Decision", "high"),
+    mk(4, "08:30", "USD", "Non-Farm Payrolls", "high"),
+    mk(4, "07:45", "EUR", "ECB Interest Rate Decision", "high"),
+    mk(5, "07:00", "GBP", "BOE Interest Rate Decision", "high"),
+    mk(6, "19:00", "JPY", "BOJ Interest Rate Decision", "high"),
+    mk(7, "08:30", "USD", "Retail Sales (MoM)", "medium"),
+    mk(8, "08:30", "USD", "PPI (YoY)", "medium")
+  ]
+}
+
+function withinWindow(events, days) {
+  const startStr = new Date().toISOString().slice(0, 10)
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() + days)
+  const endStr = cutoff.toISOString().slice(0, 10)
+  return events
+    .filter((e) => e.date >= startStr && e.date <= endStr)
+    .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
+}
+
+export async function getEconomicCalendar({ days = 7, currency = null } = {}) {
   const now = Date.now()
   if (now - cache.at < CACHE_TTL && cache.events.length) {
-    let events = cache.events
+    let events = withinWindow(cache.events, days)
     if (currency) events = events.filter((e) => e.currency === currency.toUpperCase())
     return events
   }
 
-  let events = await fetchFMPEvents()
-  if (!events.length) events = [...STATIC_EVENTS]
-
-  // Filter to upcoming events within `days`
-  const cutoff = new Date()
-  cutoff.setDate(cutoff.getDate() + days)
-  const startStr = new Date().toISOString().slice(0, 10)
-  const endStr = cutoff.toISOString().slice(0, 10)
-  events = events.filter((e) => e.date >= startStr && e.date <= endStr)
-
-  // Sort by date/time
-  events.sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
+  let events = await fetchFaireconomyEvents()
+  if (!events.length) events = staticFallbackEvents()
 
   cache = { at: now, events }
-  if (currency) events = events.filter((e) => e.currency === currency.toUpperCase())
-  return events
+
+  let result = withinWindow(events, days)
+  if (currency) result = result.filter((e) => e.currency === currency.toUpperCase())
+  return result
 }
 
-export function getImpactSummary(events) {
+export function calendarImpactSummary(events) {
   const high = events.filter((e) => e.impact === "high").length
   const medium = events.filter((e) => e.impact === "medium").length
   const low = events.filter((e) => e.impact === "low").length
@@ -81,3 +115,11 @@ export function getImpactSummary(events) {
   const nextHigh = events.find((e) => e.impact === "high")
   return { total: events.length, high, medium, low, currencies, nextHigh }
 }
+
+export function upcomingHighImpact(events, { days = 7 } = {}) {
+  return withinWindow(events.filter((e) => e.impact === "high"), days)
+}
+
+// Back-compat aliases used by handlers.mjs
+export const getEconomicEvents = getEconomicCalendar
+export const getImpactSummary = calendarImpactSummary

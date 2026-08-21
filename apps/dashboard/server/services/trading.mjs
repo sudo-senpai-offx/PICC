@@ -174,6 +174,7 @@ export async function paperHistory(limit = 50) {
   return ledger.closed.slice(-limit).reverse()
 }
 
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 const round2 = (x) => Math.round(x * 100) / 100
 
 /**
