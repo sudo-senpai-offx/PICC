@@ -268,14 +268,15 @@ describe("autopilotTick (integration with mocked broker)", () => {
     expect(status.todayTrades).toBe(1)
   })
 
-  it("stops itself when demo mode is disabled", async () => {
+  it("refuses to trade when demo mode is disabled but stays enabled", async () => {
     await trading.saveCredentials({ expertoptionToken: "demo-token", expertoptionDemo: false })
     await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50 })
 
     const out = await autopilot.autopilotTick()
     expect(out.ok).toBe(false)
+    expect(out.reason).toMatch(/demo mode disabled/)
     const config = await autopilot.getAutopilotConfig()
-    expect(config.enabled).toBe(false)
+    expect(config.enabled).toBe(true)
   })
 })
 

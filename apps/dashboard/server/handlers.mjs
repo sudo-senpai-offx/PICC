@@ -53,6 +53,7 @@ import {
 import { isTable, listRows, appendRow, upsertRow, removeRow } from "./services/localstore.mjs"
 import { syncSubscription } from "./services/supabase.mjs"
 import { runMonteCarlo } from "./monteCarlo.mjs"
+import { log, createRequestId, bindRequest, unbindRequest, recordRequest, getMetrics, prometheusMetrics } from "./logger.mjs"
 import {
   tradingStatus,
   predictSymbol,
@@ -78,7 +79,7 @@ import {
   saveCredentials as saveTradingCredentials
 } from "./services/trading.mjs"
 import { proAnalyzeSymbol, proAnalyzeExpertOption, summarizeProAnalysis } from "./services/proanalysis.mjs"
-import { subscribeLiveEO, liveEOStats, liveSnapshot } from "./services/liveEO.mjs"
+import { subscribeLiveEO, liveEOStats, liveSnapshot, liveEOData } from "./services/liveEO.mjs"
 import { tradingSuiteSnapshot, bustRealtimeSuite } from "./services/realtimeSuite.mjs"
 import { subscribeDecisions, getDecisions, observedPayouts } from "./services/adaptiveConfluence.mjs"
 import { getMarketIntel } from "./services/marketIntel.mjs"
@@ -290,6 +291,12 @@ setInterval(() => {
 
 function clientIp(req) {
   return req.socket?.remoteAddress ?? "unknown"
+}
+
+/** True when the TCP connection originates from localhost (the extension's background.js). */
+function isLocalhostRequest(req) {
+  const ip = clientIp(req).replace(/^::ffff:/, "")
+  return ip === "127.0.0.1" || ip === "::1" || ip === "localhost"
 }
 
 function isHttpUrl(value) {
@@ -884,6 +891,24 @@ export function isApiRequest(url) {
 }
 
 export async function handleApi(req, res, url) {
+  // Request-ID correlation: accept client ID or generate one
+  const reqId = req.headers["x-request-id"] || createRequestId()
+  req.__reqId = reqId
+  const startTime = Date.now()
+  bindRequest(reqId, { method: req.method, path: new URL(url, "http://localhost").pathname })
+  if (typeof res.setHeader === "function") res.setHeader("X-Request-Id", reqId)
+
+  try {
+    await _handleApiInner(req, res, url, reqId)
+  } finally {
+    const durationMs = Date.now() - startTime
+    recordRequest(durationMs, res.statusCode || 200, new URL(url, "http://localhost").pathname)
+    unbindRequest(reqId)
+    log.debug("request completed", { reqId, method: req.method, path: new URL(url, "http://localhost").pathname, durationMs, status: res.statusCode })
+  }
+}
+
+async function _handleApiInner(req, res, url, reqId) {
   // CSRF protection for state-changing requests
   if (!checkCsrf(req)) {
     writeJson(res, 403, { error: "CSRF rejected: cross-origin state-changing request blocked" })
@@ -3063,6 +3088,114 @@ export async function handleApi(req, res, url) {
     if (handled) return
   }
 
+  // ── Consolidated extension trading-data endpoint ──────────────────────────
+  // Single call that returns all data the overlay dockables need.
+  // Auth-free for localhost extension requests.
+  if (path === "/api/extension/trading-data" && req.method === "POST") {
+    if (!isLocalhostRequest(req) && !(await requireAuth(req, res))) return true
+    try {
+      const primaryRaw = String(body?.assetId || "EURUSD").trim()
+      const primaryAsset = primaryRaw.toUpperCase() || "EURUSD"
+      const candleCount = Math.min(Math.max(Number(body?.candleCount) || 100, 30), 300)
+
+      const [status, autopilot, demo, decisions] = await Promise.allSettled([
+        withTimeout(tradingStatus(), 6000),
+        getAutopilotConfig(),
+        withTimeout(expertOptionDemoStatus(), 6000),
+        withTimeout(getDecisions(), 15000)
+      ])
+
+      const statusVal = status.status === "fulfilled" ? status.value : null
+      const autopilotVal = autopilot.status === "fulfilled" ? autopilot.value : null
+      const demoVal = demo.status === "fulfilled" ? demo.value : null
+      const decisionsVal = decisions.status === "fulfilled" ? decisions.value : null
+
+      let candles = []
+      try {
+        const { liveEOData } = await import("./services/liveEO.mjs")
+        const eoData = liveEOData()
+        const asset = eoData.assets.find((a) => a.id === primaryAsset)
+        if (asset && asset.periods[60]) {
+          candles = asset.periods[60].slice(-candleCount)
+        }
+      } catch { /* liveEO not available */ }
+      if (!candles.length) {
+        try {
+          const { getHistory } = await import("./services/yahoo.mjs")
+          const history = await withTimeout(getHistory(primaryAsset, "6mo"), 10000)
+          candles = (history.dates ?? []).map((ts, i) => ({
+            time: Math.floor(ts / 1000),
+            open: Number(history.opens?.[i]) || 0,
+            high: Number(history.highs?.[i]) || 0,
+            low: Number(history.lows?.[i]) || 0,
+            close: Number(history.closes?.[i]) || 0
+          })).filter((c) => c.close > 0 && c.time > 0).slice(-candleCount)
+        } catch { /* Yahoo failed too */ }
+      }
+
+      const kellyProm = candles.length ? withTimeout((async () => {
+        const { kellySnapshot } = await import("./services/kellyCriterion.mjs")
+        return kellySnapshot()
+      })(), 4000).catch(() => null) : Promise.resolve(null)
+
+      const regimeProm = candles.length ? withTimeout((async () => {
+        const { detectRegime } = await import("./services/regimeDetection.mjs")
+        return detectRegime(candles, body?.timeframe)
+      })(), 4000).catch(() => null) : Promise.resolve(null)
+
+      const expiryProm = candles.length ? withTimeout((async () => {
+        const { optimizeExpiry } = await import("./services/expiryOptimizer.mjs")
+        return optimizeExpiry(candles)
+      })(), 4000).catch(() => null) : Promise.resolve(null)
+
+      const sentimentProm = withTimeout((async () => {
+        const { getSentiment } = await import("./services/sentimentEngine.mjs")
+        return getSentiment(primaryAsset)
+      })(), 4000).catch(() => null)
+
+      const orderFlowProm = candles.length ? withTimeout((async () => {
+        const { analyzeOrderFlow } = await import("./services/orderFlow.mjs")
+        return analyzeOrderFlow(candles)
+      })(), 4000).catch(() => null) : Promise.resolve(null)
+
+      const [kelly, regime, expiry, sentiment, orderFlow] = await Promise.all([
+        kellyProm, regimeProm, expiryProm, sentimentProm, orderFlowProm
+      ])
+
+      writeJson(res, 200, {
+        ok: true,
+        status: statusVal,
+        autopilot: autopilotVal,
+        demo: demoVal,
+        decisions: decisionsVal?.decisions ?? decisionsVal,
+        candles,
+        kelly,
+        regime,
+        expiry,
+        sentiment,
+        orderFlow
+      })
+    } catch (err) {
+      log.warn("extension trading-data failed", { error: err.message })
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // ── Prometheus metrics endpoint ───────────────────────────────────────────
+  if (path === "/api/metrics" && req.method === "GET") {
+    const accept = req.headers.accept ?? ""
+    if (accept.includes("text/plain") || accept.includes("text/markdown")) {
+      const m = getMetrics()
+      writeJson(res, 200, m)
+    } else {
+      const text = prometheusMetrics()
+      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" })
+      res.end(text)
+    }
+    return
+  }
+
   writeJson(res, 404, { error: "Not found" })
 }
 
@@ -3577,6 +3710,7 @@ const BROWSER_ROUTES = {
 }
 
 async function requireAuth(req, res) {
+  if (isLocalhostRequest(req)) return true
   if ((await verifyUser(req.headers.authorization)) || !(await hasUsers())) return true
   writeJson(res, 401, { error: "authentication required" })
   return false

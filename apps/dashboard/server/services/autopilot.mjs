@@ -392,8 +392,8 @@ export async function autopilotTick() {
     return { ok: false, reason: "no token" }
   }
   if (!creds.expertoptionDemo) {
-    await stopAutopilot("demo mode disabled")
-    state.lastDecision = "demo mode disabled"
+    state.lastDecision = "demo mode disabled — enable demo in credentials"
+    console.warn("[picc-autopilot] demo mode is disabled; enable it in credentials to allow autopilot trading")
     return { ok: false, reason: "demo mode disabled" }
   }
 
@@ -489,10 +489,16 @@ export async function startAutopilot() {
   await saveAutopilotConfig({ enabled: true, stopReason: null })
   if (!state.loopTimer) {
     state.loopTimer = setInterval(() => {
-      void autopilotTick()
+      autopilotTick().catch((err) => {
+        console.warn("[picc-autopilot] tick error:", err?.message ?? err)
+        state.lastDecision = `tick error: ${err?.message ?? err}`
+      })
     }, 60_000)
   }
-  void autopilotTick()
+  void autopilotTick().catch((err) => {
+    console.warn("[picc-autopilot] initial tick error:", err?.message ?? err)
+    state.lastDecision = `tick error: ${err?.message ?? err}`
+  })
   return getAutopilotConfig()
 }
 
@@ -633,10 +639,13 @@ export async function bootstrapAutopilot() {
   try {
     const config = await getAutopilotConfig()
     if (config.enabled) {
-      console.log("[autopilot] resuming from previous session")
+      console.log("[picc-autopilot] resuming from previous session")
       if (!state.loopTimer) {
         state.loopTimer = setInterval(() => {
-          void autopilotTick()
+          autopilotTick().catch((err) => {
+            console.warn("[picc-autopilot] tick error:", err?.message ?? err)
+            state.lastDecision = `tick error: ${err?.message ?? err}`
+          })
         }, 60_000)
       }
       void autopilotTick()

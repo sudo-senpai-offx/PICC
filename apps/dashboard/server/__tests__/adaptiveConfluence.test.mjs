@@ -210,24 +210,24 @@ describe("evaluateAsset", () => {
 })
 
 describe("decideAssets", () => {
-  test("empty data produces an empty decision set", () => {
-    expect(decideAssets({ data: {} })).toEqual([])
-    expect(decideAssets({ data: { assets: [] } })).toEqual([])
+  test("empty data produces an empty decision set", async () => {
+    expect(await decideAssets({ data: {} })).toEqual([])
+    expect(await decideAssets({ data: { assets: [] } })).toEqual([])
   })
 
-  test("under-filled buffers are skipped, not guessed on", () => {
+  test("under-filled buffers are skipped, not guessed on", async () => {
     const data = { assets: [{ id: "1", name: "Thin", periods: { 60: trendCandles(10) }, ticks: {} }] }
-    expect(decideAssets({ data })).toEqual([])
+    expect(await decideAssets({ data })).toEqual([])
   })
 
-  test("decides each adequately-seeded asset", () => {
+  test("decides each adequately-seeded asset", async () => {
     const data = {
       assets: [
         { id: "142", name: "EUR / USD", periods: { 60: trendCandles() }, ticks: {} },
         { id: "9", name: "GOLD", periods: { 60: wavyCandles() }, ticks: {} }
       ]
     }
-    const out = decideAssets({ data })
+    const out = await decideAssets({ data })
     expect(out.length).toBe(2)
     expect(out.find((d) => d.assetId === "142").verdict).toBe("TRADE")
     expect(out.find((d) => d.assetId === "9").verdict).not.toBe("TRADE")

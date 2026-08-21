@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import { isApiRequest, handleApi, writeJson } from "./handlers.mjs"
 import { startScheduler } from "./services/scheduler.mjs"
 import { startLedger } from "./services/accuracyLedger.mjs"
+import { log } from "./logger.mjs"
 
 const ROOT = process.env.PICC_DIST_DIR || fileURLToPath(new URL("../dist", import.meta.url))
 const PORT = Number(process.env.PORT ?? 3000)
@@ -47,6 +48,7 @@ const server = createServer(async (req, res) => {
       await handleApi(req, res, url)
     } catch (err) {
       console.error("[picc-server] API error:", err)
+      log.error("API error", { error: err.message })
       writeJson(res, 500, { error: "internal error" })
     }
     return
@@ -88,6 +90,7 @@ if (!process.env.PICC_NO_LISTEN) {
     if (shuttingDown) return
     shuttingDown = true
     console.log(`[picc-server] ${signal} received — shutting down gracefully...`)
+    log.info("shutdown initiated", { signal })
 
     const shutdownFns = []
     try {
@@ -116,7 +119,7 @@ if (!process.env.PICC_NO_LISTEN) {
     }
 
     server.close(() => {
-      console.log("[picc-server] HTTP server closed")
+      log.info("HTTP server closed")
       process.exit(0)
     })
 
@@ -130,7 +133,7 @@ if (!process.env.PICC_NO_LISTEN) {
   process.on("SIGINT", () => gracefulShutdown("SIGINT"))
 
   server.listen(PORT, () => {
-    console.log(`PICC dashboard + API serving dist/ on http://localhost:${PORT}`)
+    log.info("server started", { port: PORT, dist: ROOT })
     if (startScheduler()) {
       console.log("[picc-scheduler] started")
     }
@@ -138,6 +141,10 @@ if (!process.env.PICC_NO_LISTEN) {
     console.log("[picc-accuracy-ledger] auto-resolving trading decisions")
     import("./services/autopilot.mjs").then(({ bootstrapAutopilot }) => {
       bootstrapAutopilot()
+    }).catch(() => {})
+    import("./services/adaptiveConfluence.mjs").then(({ startDecisionEngine }) => {
+      startDecisionEngine()
+      console.log("[picc-decision-engine] started — AI signals + liveEO active")
     }).catch(() => {})
   })
 }

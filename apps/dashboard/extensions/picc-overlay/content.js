@@ -31,10 +31,11 @@
         opacity: dockableOpacities[d.id] ?? null
       }
     }
-    // Save via server
     try {
-      const data = { dockableLayout: layout, groups: dockGroups }
-      chrome.runtime.sendMessage({ action: "save-prefs", data })
+      if (currentSite?.id) {
+        const settings = { ...currentSettings, dockableLayout: layout, groups: dockGroups }
+        savePrefsForSite(currentSite.id, { overlaySettings: settings }).catch(() => {})
+      }
     } catch {}
   }
 
@@ -1009,7 +1010,12 @@
   function renderPriceTicker() {
     const assets = tradingState.assets
     const banner = checkFeatures("price-ticker")
-    if (!assets.length) return banner + '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
+    const statusDot = serverOnline === true ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;margin-right:4px"></span>' :
+      serverOnline === false ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff6b6b;margin-right:4px"></span>' :
+      '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f59e0b;margin-right:4px"></span>'
+    const statusLabel = serverOnline === true ? 'Connected' : serverOnline === false ? 'Offline' : 'Checking'
+    const header = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:9px;color:#9aa0c0"><span>${statusDot}${statusLabel}</span><span>${new Date().toLocaleTimeString()}</span></div>`
+    if (!assets.length) return banner + header + '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
     const rows = assets.slice(0, 6).map((a) => {
       const c = tone(a.changePct)
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #6c63ff20">` +
@@ -1019,8 +1025,8 @@
         `</div>`
     }).join("")
     const acct = tradingState.account
-    const bal = acct ? fmt$(acct.balance, acct.currency) : ""
-    return banner + `<div style="font-size:11px">${rows}</div>` +
+    const bal = acct?.balance != null ? fmt$(acct.balance, acct.currency) : ""
+    return banner + header + `<div style="font-size:11px">${rows}</div>` +
       (bal ? `<div style="margin-top:4px;font-size:10px;color:#a5a0ff">Balance: ${bal}</div>` : "")
   }
 
@@ -1310,9 +1316,22 @@
     const lines = []
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">`)
     lines.push(`<div style="width:8px;height:8px;border-radius:50%;background:${serverOnline ? "#4ade80" : serverOnline === false ? "#ff6b6b" : "#f59e0b"}"></div>`)
-    lines.push(`<span style="font-weight:600;font-size:11px">${serverOnline ? "Server Online" : serverOnline === false ? "Server Offline" : "Checking…"}</span>`)
+    lines.push(`<span style="font-weight:600;font-size:11px">${serverOnline ? "Server Online" : serverOnline === false ? "Server Offline" : "Checking\u2026"}</span>`)
     lines.push(`</div>`)
     if (serverPort) lines.push(`<div style="font-size:10px;color:#9aa0c0">Port: ${serverPort}</div>`)
+    if (tradingState.lastCandles?.length) lines.push(`<div style="font-size:10px;color:#9aa0c0">Candles: ${tradingState.lastCandles.length}</div>`)
+    const dataFlags = [
+      tradingState.kelly ? "Kelly" : null,
+      tradingState.regime ? "Regime" : null,
+      tradingState.expiry ? "Expiry" : null,
+      tradingState.sentiment ? "Sentiment" : null,
+      tradingState.orderFlow ? "OrderFlow" : null,
+      tradingState.autopilot ? "Autopilot" : null,
+      tradingState.decisions?.length ? "AI" : null
+    ].filter(Boolean)
+    if (dataFlags.length) {
+      lines.push(`<div style="font-size:9px;color:#4ade80;margin-top:2px">${dataFlags.join(" \u00b7 ")}</div>`)
+    }
     if (!serverOnline) {
       lines.push(`<div style="font-size:10px;color:#f59e0b;margin-top:4px">Start the server for full features:</div>`)
       lines.push(`<code style="font-size:9px;color:#6c63ff;background:#0d0d1a;padding:2px 4px;border-radius:3px;display:block;margin-top:2px">npm run serve</code>`)
@@ -1325,7 +1344,7 @@
         const c = tone(a.changePct)
         lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px">` +
           `<span>${a.name}</span>` +
-          `<span style="font-weight:600">${a.price != null ? a.price : "…"}</span></div>`)
+          `<span style="font-weight:600">${a.price != null ? a.price : "\u2026"}</span></div>`)
       }
     }
     if (!serverOnline && assets.length === 0) {
@@ -1656,7 +1675,7 @@
 
   async function fetchTradingData() {
     try {
-      // Always scrape live data from the page DOM (works on ANY site)
+      // Always try DOM scraping first (gives live prices on ANY site)
       const scraped = scrapePageData()
       if (scraped && scraped.assets.length) {
         for (const sa of scraped.assets) {
@@ -1680,52 +1699,110 @@
         }
       }
       if (scraped?.pageMetrics) tradingState.pageMetrics = scraped.pageMetrics
-      // Also refresh pageMetrics every poll to keep DOM element counts current
       tradingState.pageMetrics = collectPageMetricsLocal()
-      // Then fetch server-side data for analysis, autopilot, etc.
-      const [status, autopilot, demo, decisions] = await Promise.all([
-        serverFetch("/api/trading/status"),
-        serverFetch("/api/trading/autopilot"),
-        serverFetch("/api/trading/demo"),
-        serverFetch("/api/trading/decisions")
-      ])
-      if (status?.ok) {
-        tradingState.paper = status.paper || null
-        // Map account from the actual response (expertOption sub-object has balance)
-        if (status.expertOption) {
-          tradingState.account = { balance: status.expertOption.balance, currency: status.expertOption.currency || "USD", demo: status.expertOption.demo }
-        }
-      }
-      if (autopilot?.ok) tradingState.autopilot = autopilot.config || autopilot
-      if (demo) tradingState.demo = demo
-      if (decisions?.ok && decisions.decisions) tradingState.decisions = decisions.decisions
-      // Fetch candles for the primary asset to feed regime/orderflow/expiry
+
+      // Use the consolidated server endpoint — returns ALL dockable data in one call
       const primaryRaw = tradingState.assets?.[0]?.name || tradingState.assets?.[0]?.id || "EURUSD"
       const primaryAsset = normalizeAssetId(primaryRaw)
-      const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: primaryAsset, timeframe: 60, count: 100 } })
-      if (candleResp?.ok && candleResp.candles?.length) {
-        tradingState.lastCandles = candleResp.candles
-        // Only update price from candle if we don't have live scraped data
-        const last = candleResp.candles[candleResp.candles.length - 1]
-        const prev = candleResp.candles[candleResp.candles.length - 2]
-        if (tradingState.assets[0] && !tradingState.assets[0].price) {
-          tradingState.assets[0].price = last.close
-          if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
+      const resp = await serverFetch("/api/extension/trading-data", {
+        method: "POST",
+        body: { assetId: primaryAsset, candleCount: 100 }
+      })
+      if (resp && resp.ok) {
+        // Status / account
+        if (resp.status?.ok) {
+          tradingState.paper = resp.status.paper || null
+          if (resp.status.expertOption) {
+            const eo = resp.status.expertOption
+            tradingState.account = {
+              balance: eo.balance ?? tradingState.account?.balance ?? null,
+              currency: eo.currency || "USD",
+              demo: eo.demo
+            }
+          }
+        }
+        // Autopilot
+        if (resp.autopilot) tradingState.autopilot = resp.autopilot.config || resp.autopilot
+        // Demo
+        if (resp.demo) tradingState.demo = resp.demo
+        // Decisions
+        if (resp.decisions) tradingState.decisions = Array.isArray(resp.decisions) ? resp.decisions : (resp.decisions.decisions || [])
+        // Candles
+        if (resp.candles?.length) {
+          tradingState.lastCandles = resp.candles
+          // Populate price from candles if DOM scraping failed
+          const last = resp.candles[resp.candles.length - 1]
+          const prev = resp.candles[resp.candles.length - 2]
+          if (last && tradingState.assets[0] && !tradingState.assets[0].price) {
+            tradingState.assets[0].price = last.close
+            if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
+          }
+          // If no assets found at all, create one from the server response
+          if (!tradingState.assets.length && last) {
+            tradingState.assets.push({
+              id: primaryAsset,
+              name: primaryAsset,
+              price: last.close,
+              changePct: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
+              change: prev ? last.close - prev.close : 0
+            })
+          }
+        }
+        // Advanced analytics
+        if (resp.kelly) tradingState.kelly = resp.kelly
+        if (resp.regime) tradingState.regime = resp.regime
+        if (resp.expiry) tradingState.expiry = resp.expiry
+        if (resp.sentiment) tradingState.sentiment = resp.sentiment
+        if (resp.orderFlow) tradingState.orderFlow = resp.orderFlow
+      } else {
+        // Consolidated endpoint failed — fallback to individual endpoints
+        const [status, autopilot, demo, decisions] = await Promise.allSettled([
+          serverFetch("/api/trading/status"),
+          serverFetch("/api/trading/autopilot"),
+          serverFetch("/api/trading/demo"),
+          serverFetch("/api/trading/decisions")
+        ])
+        const statusVal = status.status === "fulfilled" ? status.value : null
+        const autopilotVal = autopilot.status === "fulfilled" ? autopilot.value : null
+        const demoVal = demo.status === "fulfilled" ? demo.value : null
+        const decisionsVal = decisions.status === "fulfilled" ? decisions.value : null
+        if (statusVal?.ok) {
+          tradingState.paper = statusVal.paper || null
+          if (statusVal.expertOption) {
+            tradingState.account = {
+              balance: statusVal.expertOption.balance ?? tradingState.account?.balance ?? null,
+              currency: statusVal.expertOption.currency || "USD",
+              demo: statusVal.expertOption.demo
+            }
+          }
+        }
+        if (autopilotVal?.ok) tradingState.autopilot = autopilotVal.config || autopilotVal
+        if (demoVal?.ok) tradingState.demo = demoVal
+        if (decisionsVal?.ok && decisionsVal.decisions) tradingState.decisions = decisionsVal.decisions
+
+        // Fetch candles + advanced analytics individually
+        const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: primaryAsset, timeframe: 60, count: 100 } })
+        if (candleResp?.ok && candleResp.candles?.length) {
+          tradingState.lastCandles = candleResp.candles
+          const last = candleResp.candles[candleResp.candles.length - 1]
+          const prev = candleResp.candles[candleResp.candles.length - 2]
+          if (tradingState.assets[0] && !tradingState.assets[0].price) {
+            tradingState.assets[0].price = last.close
+            if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
+          }
+        }
+        const [kelly, regime, expiry, sentiment, orderFlow] = await Promise.allSettled([
+          serverFetch("/api/trading/kelly"),
+          serverFetch("/api/trading/regime", { method: "POST", body: { candles: tradingState.lastCandles } }),
+          serverFetch("/api/trading/expiry", { method: "POST", body: { candles: tradingState.lastCandles } }),
+          serverFetch("/api/trading/sentiment", { method: "POST", body: { symbol: primaryAsset } }),
+          serverFetch("/api/trading/orderflow", { method: "POST", body: { candles: tradingState.lastCandles } }),
+        ])
+        for (const [key, val] of [["kelly", kelly], ["regime", regime], ["expiry", expiry], ["sentiment", sentiment], ["orderFlow", orderFlow]]) {
+          const v = val.status === "fulfilled" ? val.value : null
+          if (v?.ok) tradingState[key] = v
         }
       }
-      // Fetch advanced trading data with candles
-      const [kelly, regime, expiry, sentiment, orderFlow] = await Promise.all([
-        serverFetch("/api/trading/kelly"),
-        serverFetch("/api/trading/regime", { method: "POST", body: { candles: tradingState.lastCandles } }),
-        serverFetch("/api/trading/expiry", { method: "POST", body: { candles: tradingState.lastCandles } }),
-        serverFetch("/api/trading/sentiment", { method: "POST", body: { symbol: primaryAsset } }),
-        serverFetch("/api/trading/orderflow", { method: "POST", body: { candles: tradingState.lastCandles } }),
-      ])
-      if (kelly?.ok) tradingState.kelly = kelly
-      if (regime?.ok) tradingState.regime = regime
-      if (expiry?.ok) tradingState.expiry = expiry
-      if (sentiment?.ok) tradingState.sentiment = sentiment
-      if (orderFlow?.ok) tradingState.orderFlow = orderFlow
     } catch {
       // Server not reachable — keep last state
     }
@@ -1766,8 +1843,8 @@
 
   function startTradingPoll() {
     if (tradingPollTimer) return
-    fetchTradingData().then(updateAllDockables)
-    tradingPollTimer = setInterval(() => { fetchTradingData().then(updateAllDockables) }, 5000)
+    fetchTradingData().then(updateAllDockables).catch(() => {})
+    tradingPollTimer = setInterval(() => { fetchTradingData().then(updateAllDockables).catch(() => {}) }, 5000)
   }
 
   function stopTradingPoll() {
@@ -2137,6 +2214,7 @@
   // ── Toggle overlay ──────────────────────────────────────────────────────────
   async function toggleOverlay() {
     if (overlayVisible) {
+      stopTradingPoll()
       const el = shadowRoot.getElementById(OVERLAY_ID)
       if (el) el.remove()
       activeDockables.forEach((d) => { const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
@@ -2185,21 +2263,26 @@
       try {
         const running = tradingState.autopilot?.enabled
         const path = running ? "/api/trading/autopilot/stop" : "/api/trading/autopilot/start"
-        const method = running ? "POST" : "POST"
-        await serverFetch(path, { method, body: { reason: "user" } })
-        await fetchTradingData()
-        updateAllDockables()
+        const result = await serverFetch(path, { method: "POST", body: { reason: "user" } })
+        if (result?.ok) {
+          await fetchTradingData()
+          updateAllDockables()
+        }
       } catch { /* ignore */ }
       btn.disabled = false
     }
     if (action === "autopilot-kill") {
       btn.disabled = true
       try {
-        await serverFetch("/api/trading/autopilot/stop", { method: "POST", body: { reason: "emergency-kill-switch" } })
-        await fetchTradingData()
-        updateAllDockables()
-        playAlertSound("danger")
-        showToast("Kill Switch", "Emergency stop executed. All autopilot activity halted.", "error")
+        const result = await serverFetch("/api/trading/autopilot/stop", { method: "POST", body: { reason: "emergency-kill-switch" } })
+        if (result?.ok) {
+          await fetchTradingData()
+          updateAllDockables()
+          playAlertSound("danger")
+          showToast("Kill Switch", "Emergency stop executed. All autopilot activity halted.", "error")
+        } else {
+          showToast("Kill Switch", "Failed to stop autopilot — server unreachable or auth required.", "error")
+        }
       } catch { /* ignore */ }
       btn.disabled = false
     }

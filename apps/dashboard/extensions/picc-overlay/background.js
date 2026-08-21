@@ -282,6 +282,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "picc-server-fetch" || msg.action === "server-request") {
     serverFetch(msg.path, { method: msg.method, body: msg.body, timeout: msg.timeout })
       .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, data: null, error: err.message }))
     return true
   }
 

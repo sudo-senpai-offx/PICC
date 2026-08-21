@@ -739,6 +739,18 @@ export async function _resetTradingData() {
 export async function tradingStatus() {
   const creds = await getCredentials()
   const overview = await paperOverview()
+  let eoBalance = null
+  let eoCurrency = null
+  let eoConnected = false
+  try {
+    const { liveSnapshot } = await import("./liveEO.mjs")
+    const snap = liveSnapshot()
+    eoConnected = snap.status === "connected"
+    if (snap.account?.balance != null) {
+      eoBalance = snap.account.balance
+      eoCurrency = snap.account.currency || "USD"
+    }
+  } catch { /* liveEO not loaded */ }
   return {
     ok: true,
     mode: "paper",
@@ -747,7 +759,10 @@ export async function tradingStatus() {
     expertOption: {
       configured: Boolean(creds.expertoptionToken),
       demo: creds.expertoptionDemo,
-      wsUrl: creds.expertoptionWsUrl
+      wsUrl: creds.expertoptionWsUrl,
+      connected: eoConnected,
+      balance: eoBalance,
+      currency: eoCurrency
     },
     paper: overview
   }

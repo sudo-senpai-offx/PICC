@@ -580,27 +580,27 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
 // Watch-set decisions
 // ---------------------------------------------------------------------
 
-export function decideAssets({ data, observedPayout = null, now = Date.now() } = {}) {
+export async function decideAssets({ data, observedPayout = null, now = Date.now() } = {}) {
   const assets = Array.isArray(data?.assets) ? data.assets : []
-  // Pre-fetch sentiment for all assets (best-effort, non-blocking)
-  const sentimentPromises = assets.map(async (a) => {
-    try {
-      return { id: a.id, ...(await sentimentScore(a.name || a.id)) }
-    } catch {
-      return { id: a.id, score: 0, source: "error" }
-    }
-  })
-  // Resolve sentiments (fire-and-forget pattern: if they fail, defaults to 0)
-  let sentiments = {}
-  Promise.all(sentimentPromises).then((list) => {
-    for (const s of list) sentiments[s.id] = s
-  }).catch(() => {})
+  const sentimentMap = await Promise.all(
+    assets.map(async (a) => {
+      try {
+        return { id: a.id, ...(await sentimentScore(a.name || a.id)) }
+      } catch {
+        return { id: a.id, score: 0, source: "error" }
+      }
+    })
+  ).then((list) => {
+    const map = {}
+    for (const s of list) map[s.id] = s
+    return map
+  }).catch(() => ({}))
 
   const out = assets
     .map((a) => {
       const candles = a?.periods?.[ANALYSIS_PERIOD] ?? []
       if (!Array.isArray(candles) || candles.length < MIN_BARS) return null
-      return evaluateAsset({ id: a.id, name: a.name, candles, volume: a.ticks, observedPayout, now, asset: a, sentimentOverride: sentiments[a.id] || null })
+      return evaluateAsset({ id: a.id, name: a.name, candles, volume: a.ticks, observedPayout, now, asset: a, sentimentOverride: sentimentMap[a.id] || null })
     })
     .filter(Boolean)
   const rank = { TRADE: 0, OBSERVE: 1, NEUTRAL: 2 }
@@ -713,7 +713,7 @@ async function logTradeVerdicts(decisions) {
 async function computeNow() {
   const data = liveEOData()
   const observedPayout = await loadObservedPayouts()
-  const decisions = decideAssets({ data, observedPayout, now: Date.now() })
+  const decisions = await decideAssets({ data, observedPayout, now: Date.now() })
   cached = {
     ts: Date.now(),
     status: data.status,
@@ -746,6 +746,11 @@ function startEngine() {
   liveOff = subscribeLiveEO(() => {}) // keep the live layer warm
   void computeNow().catch(() => {})
   schedule()
+}
+
+/** Boot-time entry point — keeps the decision engine running unconditionally. */
+export function startDecisionEngine() {
+  startEngine()
 }
 
 export function stopDecisionEngine() {
