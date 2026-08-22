@@ -18,6 +18,8 @@ import { metricsFrom } from "./analytics.mjs"
 import { appendRow } from "./localstore.mjs"
 import { chatText, llmConfigured } from "./llm.mjs"
 import { volatilityPositionSize, realizedVolatility } from "./volatility.mjs"
+import { quickMtfCheck } from "./multiTimeframe.mjs"
+import { liveEOData } from "./liveEO.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -42,6 +44,7 @@ const DEFAULTS = {
   maxDailyTrades: 0, // 0 = unlimited
   aiGate: false,
   proGate: false,
+  mtfGate: true,
   timeframe: 60,
   count: 120,
   stopReason: null,
@@ -120,6 +123,7 @@ export async function saveAutopilotConfig(patch) {
   next.maxDailyTrades = clamp(Math.round(Number(next.maxDailyTrades) || 0), 0, 100)
   next.aiGate = Boolean(next.aiGate)
   next.proGate = Boolean(next.proGate)
+  next.mtfGate = next.mtfGate !== false
   next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
   next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
   if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
@@ -327,7 +331,7 @@ export async function placeDemoTrade({ assetId, type, amount, duration }) {
  * `pro` is the optional proAnalyzeCandles report; when config.proGate is on the
  * trade is refused unless pro agrees with the ensemble.
  */
-export function decideAutopilot({ config, pred, pro = null, openCount = 0, lastEntryAt = 0, now = Date.now(), dailyPnl = 0, dayStartBalance = null, todayTrades = 0, aiVeto = false }) {
+export function decideAutopilot({ config, pred, pro = null, mtf = null, openCount = 0, lastEntryAt = 0, now = Date.now(), dailyPnl = 0, dayStartBalance = null, todayTrades = 0, aiVeto = false }) {
   const refuse = (reason) => ({ trade: false, reason })
   if (!config.enabled) return refuse("autopilot disabled")
   if (!pred || !pred.direction || pred.direction === "flat") return refuse("no directional signal")
@@ -341,6 +345,12 @@ export function decideAutopilot({ config, pred, pro = null, openCount = 0, lastE
     return refuse(`daily trade cap ${config.maxDailyTrades} reached`)
   }
   if (aiVeto) return refuse("AI gate vetoed the signal")
+
+  // Multi-timeframe confluence gate: higher timeframes (5m, 15m) must
+  // agree with the entry direction. Mismatches indicate noise/counter-trend.
+  if (mtf && mtf.total > 0 && mtf.agree === 0) {
+    return refuse(`MTF gate: no higher-TF agreement (${mtf.total} checked, 0 agree)`)
+  }
 
   // Pro-analysis confluence gate: the ensemble signal must survive the full
   // indicator read before any (demo) order is considered.
@@ -440,10 +450,28 @@ export async function autopilotTick() {
   const pnl = await todayPnl()
   const todayTrades = await todayTradeCount()
   const aiVeto = config.aiGate ? !(await aiConsents(pred)) : false
+
+  // Multi-timeframe confluence gate: check if higher timeframes agree with
+  // the entry signal direction. Uses liveEO's candle buffers when available.
+  let mtf = null
+  if (config.mtfGate !== false) {
+    try {
+      const eoData = liveEOData()
+      const asset = (eoData.assets || []).find((a) => a.id === config.assetId)
+      if (asset) {
+        const dir = pred.direction === "down" ? -1 : pred.direction === "up" ? 1 : 0
+        mtf = quickMtfCheck(asset, dir)
+      }
+    } catch {
+      /* best-effort: skip MTF gate on failure */
+    }
+  }
+
   const decision = decideAutopilot({
     config,
     pred,
     pro,
+    mtf,
     openCount: open.length,
     lastEntryAt: config.lastEntryAt || 0,
     now: Date.now(),
@@ -462,6 +490,9 @@ export async function autopilotTick() {
     proVerdict: pro?.confluence?.verdict ?? null,
     proConfidence: pro?.confluence?.confidence ?? null,
     proPhase: pro?.phase?.phase ?? null,
+    mtfAgree: mtf?.agree ?? null,
+    mtfTotal: mtf?.total ?? null,
+    mtfBoost: mtf?.boost ?? null,
     balance,
     open: open.length
   }
