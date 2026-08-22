@@ -53,19 +53,34 @@ async function setSoundEnabled(enabled) {
 }
 
 let _audioCtx = null
+function getAudioCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+  return _audioCtx
+}
+
+function resumeAudio() {
+  try {
+    const ctx = getAudioCtx()
+    if (ctx.state === "suspended") ctx.resume()
+  } catch { /* ignore */ }
+}
+document.addEventListener("click", resumeAudio, { once: true })
+document.addEventListener("keydown", resumeAudio, { once: true })
+
 function playSideAlert() {
   try {
-    if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)()
-    const osc = _audioCtx.createOscillator()
-    const gain = _audioCtx.createGain()
+    const ctx = getAudioCtx()
+    if (ctx.state !== "running") return
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
     osc.connect(gain)
-    gain.connect(_audioCtx.destination)
+    gain.connect(ctx.destination)
     osc.frequency.value = 880
     gain.gain.value = 0.15
     osc.type = "square"
     osc.start()
-    gain.gain.exponentialRampToValueAtTime(0.001, _audioCtx.currentTime + 0.3)
-    osc.stop(_audioCtx.currentTime + 0.3)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
+    osc.stop(ctx.currentTime + 0.3)
   } catch { /* ignore */ }
 }
 

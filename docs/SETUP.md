@@ -195,9 +195,14 @@ The Trading Suite needs **no keys**: the prediction engine runs on public market
   in `apps/dashboard/server/data/`.
 - **ExpertOption bridge (optional)** — read-only WebSocket client that shows your balance, profile,
   and candles for assets you already own on ExpertOption. It never places, modifies, or cancels a
-  trade. To enable, set these in `apps/dashboard/.env` (values match your ExpertOption account):
-  `EXPERTOPTION_USER_ID`, `EXPERT_OPTION_TOKEN` (a Personal Access Token from your profile). When
-  unset, the Trading Suite still works in local/paper mode and labels itself honestly.
+  trade. Setup needs **no `.env` keys** — the session token is captured automatically:
+  1. Run `npm run dev` to start the dashboard server.
+  2. In Chrome/Edge, navigate to ExpertOption and log in to your demo account.
+  3. The browser extension (or `scripts/capture-eo-session.mjs`) auto-captures the session token.
+  4. The token is stored server-side in `server/data/trading-credentials.json`.
+  5. Verify via `GET /api/trading/status` — it should show `expertOption.configured: true`.
+
+  Until configured, the Trading Suite still works in local/paper mode and labels itself honestly.
 - To get AI commentary on a signal, point `PICC_AGENTS_URL` at the agents service and the Trading
   Suite will ask the trading crew (falling back to the local engine when the crew is offline).
 

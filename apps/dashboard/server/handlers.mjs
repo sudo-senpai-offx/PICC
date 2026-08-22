@@ -2239,11 +2239,22 @@ async function _handleApiInner(req, res, url, reqId) {
     const result = { ok: true, timestamp: new Date().toISOString() }
     try {
       const liveStats = liveEOStats()
+      const lastTickAge = Number(liveStats?.lastSeen) > 0 ? Math.round((Date.now() - Number(liveStats.lastSeen)) / 1000) : null
+      let sessionAge = null
+      try {
+        const creds = await getTradingCredentials()
+        const capturedAt = Date.parse(creds?.expertoptionTokenCapturedAt ?? "")
+        if (Number.isFinite(capturedAt)) sessionAge = Math.max(0, Math.round((Date.now() - capturedAt) / 1000))
+      } catch { /* credentials unreadable — leave sessionAge null */ }
       result.expertOption = {
         connected: liveStats?.status === "connected",
         status: liveStats?.status ?? "idle",
         viewed: liveStats?.viewed ?? null,
-        lastSeen: Number(liveStats?.lastSeen) > 0 ? new Date(liveStats.lastSeen).toISOString() : null
+        lastSeen: Number(liveStats?.lastSeen) > 0 ? new Date(liveStats.lastSeen).toISOString() : null,
+        sessionAge,
+        lastTickAge,
+        stalenessWarning: liveStats?.status === "connected" && lastTickAge != null && lastTickAge > 60,
+        connectorTuned: Boolean(getConnector("expertoption")?.tuned)
       }
     } catch { result.expertOption = { connected: false, error: "failed" } }
     try {

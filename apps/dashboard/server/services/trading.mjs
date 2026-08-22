@@ -100,6 +100,7 @@ function sanitizePatch(patch) {
   // the user pastes a replacement, and never sends back the masked one.
   if (typeof patch.expertoptionToken === "string" && patch.expertoptionToken.trim()) {
     out.expertoptionToken = patch.expertoptionToken.trim()
+    out.expertoptionTokenCapturedAt = new Date().toISOString()
   }
   if (typeof patch.expertoptionWsUrl === "string" && patch.expertoptionWsUrl.trim()) {
     out.expertoptionWsUrl = patch.expertoptionWsUrl.trim()

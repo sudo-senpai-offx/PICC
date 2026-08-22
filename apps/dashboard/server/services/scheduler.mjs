@@ -19,6 +19,10 @@ import { yieldSnapshot } from "./yields.mjs"
 import { appendRow, listRows } from "./localstore.mjs"
 import { rateLimitStatus } from "./rateLimit.mjs"
 import { paperAnalytics } from "./trading.mjs"
+import { liveEOStats, setLiveEOStale } from "./liveEO.mjs"
+import { createLogger } from "../logger.mjs"
+
+const log = createLogger("picc-scheduler")
 
 const jobs = []
 const intervals = []
@@ -199,4 +203,26 @@ every(
     }
   },
   { staggerMs: 60_000 }
+)
+
+// Honest "connected but stale" signal: the session claims to be connected but
+// no frame has been consumed for over a minute. Flags the liveEO state so the
+// health endpoint and UI can show it instead of trusting a silent socket.
+every(
+  "eo-staleness",
+  30 * 1000,
+  async () => {
+    const st = liveEOStats() ?? {}
+    if (st.status !== "connected" || !Number(st.lastSeen)) {
+      setLiveEOStale(false)
+      return
+    }
+    const tickAgeSec = Math.round((Date.now() - Number(st.lastSeen)) / 1000)
+    const stale = tickAgeSec > 60
+    setLiveEOStale(stale)
+    if (stale) {
+      log.warn("ExpertOption stream is connected but stale", { lastTickAgeSec: tickAgeSec, viewed: st.viewed ?? null })
+    }
+  },
+  { staggerMs: 15_000 }
 )

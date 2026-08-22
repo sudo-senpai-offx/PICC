@@ -24,6 +24,10 @@
 import { connectSession, assetsFrom, balanceFrom, accountFrom, mergeBalanceIntoAccount } from "./expertoption.mjs"
 import { getCredentials } from "./trading.mjs"
 import { STATIC_ASSETS } from "./expertoption.mjs"
+import { createLogger } from "../logger.mjs"
+
+const log = createLogger("picc-live")
+const AUTH_FAIL_RE = /(unauthorized|auth_failed|authfail|token_expired|tokenexpire|forbidden|rejected the session token|session token rejected)/i
 
 const BASE_PERIOD = 60 // board display / sparkline timeframe (seconds)
 const WATCH_PERIODS = [60, 300, 900, 3600] // 1m, 5m, 15m, 1h
@@ -47,6 +51,8 @@ let currentMode = "demo"
 let account = null
 let viewedAssetId = null
 let lastSeen = 0 // last time any frame was consumed
+let degraded = null // { kind: "expired"|"unconfigured", reason, at } — sticky until a session connects again
+let staleFlag = false // "connected but no ticks for >60s" (set by the scheduler staleness job)
 
 const subscribers = new Set()
 const buffers = new Map() // `${assetId}:${period}` -> { ohlc, prevClose, tickedAt }
@@ -68,6 +74,34 @@ function emit(type, payload) {
 
 function modeLabel(demo) {
   return demo ? "demo" : "live"
+}
+
+function currentStatus() {
+  if (session) return "connected"
+  if (degraded) return degraded.kind
+  if (starting) return "connecting"
+  return "idle"
+}
+
+/** True when a message/close reason looks like an auth rejection by the gateway. */
+function isAuthRejection(text) {
+  return AUTH_FAIL_RE.test(String(text ?? ""))
+}
+
+/**
+ * Mark the session as expired/unconfigured: sticky state that survives until a
+ * fresh token connects, an honest status event for the UI, and a warning log.
+ */
+function markAuthRejected(reason) {
+  const kind = /no expertoption session/i.test(String(reason)) ? "unconfigured" : "expired"
+  degraded = { kind, reason: String(reason).slice(0, 300), at: Date.now() }
+  emit("status", { status: kind, mode: currentMode, error: degraded.reason })
+  log.warn(`ExpertOption session ${kind}`, { reason: degraded.reason })
+}
+
+/** Scheduler hook: flip the "connected but stale" warning flag. */
+export function setLiveEOStale(v) {
+  staleFlag = Boolean(v)
 }
 
 function bufferKey(assetId, period) {
@@ -224,6 +258,20 @@ function handleAppFrame(f) {
   const obj = parseFrame(f)
   if (!obj) return
   lastSeen = Date.now()
+  if (obj.action === "error") {
+    const text = JSON.stringify(obj.message ?? obj)
+    if (isAuthRejection(text)) {
+      const reason = String(obj.message?.message ?? obj.message?.error ?? "gateway rejected the session token")
+      if (session) {
+        try { session.close() } catch { /* ignore */ }
+        session = null
+        clearTimeout(reseedTimer)
+        reseedTimer = null
+      }
+      markAuthRejected(reason)
+    }
+    return
+  }
   if (obj.action === "candles") {
     const assetId = String(obj.message?.assetId ?? "")
     const rows = Array.isArray(obj.message?.candles) ? obj.message.candles : []
@@ -491,6 +539,8 @@ async function openLiveSession(gen) {
   }
 
   startedAt = Date.now()
+  degraded = null
+  staleFlag = false
   emit("status", { status: "connected", mode: currentMode, account })
   emit("snapshot", buildSnapshot())
   reseedLoop()
@@ -528,9 +578,8 @@ function buildSnapshot() {
 }
 
 export function liveSnapshot() {
-  const alive = session != null
   return {
-    status: alive ? "connected" : "idle",
+    status: currentStatus(),
     mode: currentMode,
     startedAt,
     error: lastError,
@@ -573,7 +622,7 @@ export function liveEOData() {
     }
   })
   return {
-    status: session ? "connected" : starting ? "connecting" : "idle",
+    status: currentStatus(),
     mode: currentMode,
     account,
     viewed: viewedAssetId,
@@ -595,7 +644,13 @@ export async function startLiveEO() {
     } catch (err) {
       if (gen !== generation) return
       lastError = String(err?.message ?? err)
-      emit("status", { status: "error", error: lastError })
+      const kind = /no expertoption session/i.test(lastError)
+        ? "unconfigured"
+        : isAuthRejection(lastError)
+          ? "expired"
+          : null
+      if (kind) markAuthRejected(lastError)
+      else emit("status", { status: "error", error: lastError })
       console.warn("[picc-live] ExpertOption session error:", lastError)
     } finally {
       if (starting === run) starting = null
@@ -639,6 +694,8 @@ export async function stopLiveEO() {
   viewedAssetId = null
   account = null
   startedAt = 0
+  degraded = null
+  staleFlag = false
   emit("status", { status: "idle" })
 }
 
@@ -661,11 +718,12 @@ export async function softReconnectLiveEO() {
     session = null
     try { s.close() } catch { /* ignore */ }
   }
-  // Deliberately keep buffers/lastTick/assetTicks/watching/byId intact so
-  // MTF checks and price renderers continue to show stale-but-useful data
-  // while the new session seeds fresh candles.
-  startedAt = 0
-  emit("status", { status: "reconnecting" })
+   // Deliberately keep buffers/lastTick/assetTicks/watching/byId intact so
+   // MTF checks and price renderers continue to show stale-but-useful data
+   // while the new session seeds fresh candles.
+   startedAt = 0
+   staleFlag = false
+   emit("status", { status: "reconnecting" })
   void startLiveEO()
 }
 
@@ -709,7 +767,7 @@ export async function restartLiveEO({ force = false } = {}) {
 
 export function liveEOStats() {
   return {
-    status: session ? "connected" : starting ? "connecting" : "idle",
+    status: currentStatus(),
     error: lastError,
     startedAt,
     watched: watching.map((w) => w.name),
@@ -718,6 +776,8 @@ export function liveEOStats() {
     subscribers: subscribers.size,
     viewed: viewedAssetId,
     lastSeen,
+    stale: staleFlag,
+    degraded: degraded ? { kind: degraded.kind, reason: degraded.reason, at: degraded.at } : null,
     account
   }
 }

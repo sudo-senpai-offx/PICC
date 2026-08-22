@@ -1043,8 +1043,11 @@
     if (!tradingState.lastFetchAt) return ""
     const ago = Math.round((Date.now() - tradingState.lastFetchAt) / 1000)
     if (ago < 5) return ""
-    const color = ago > 60 ? "#ff6b6b" : ago > 15 ? "#f59e0b" : "#9aa0c0"
-    return `<div style="font-size:9px;color:${color};margin-top:2px">Last update ${ago}s ago</div>`
+    const color = ago > 60 ? "#ff6b6b" : ago > 30 ? "#f59e0b" : "#9aa0c0"
+    const badge = ago > 30
+      ? `<span style="font-weight:700;color:${color};background:${color}22;border:1px solid ${color}55;border-radius:3px;padding:0 4px;margin-left:4px">\u25cf STALE</span>`
+      : ""
+    return `<div style="font-size:9px;color:${color};margin-top:2px">Last update ${ago}s ago${badge}</div>`
   }
   function staleRow() {
     if (!tradingState.lastFetchAt) return ""
@@ -1052,6 +1055,9 @@
     if (ago < 5) return ""
     const color = ago > 60 ? "#ff6b6b" : ago > 15 ? "#f59e0b" : "#9aa0c0"
     return `<div style="display:flex;justify-content:space-between;font-size:9px;color:${color};margin-top:2px"><span>Stale</span><span>${ago}s ago</span></div>`
+  }
+  function sourceLabel(text) {
+    return `<div style="font-size:9px;color:#9aa0c0;margin-top:2px">source: ${text}</div>`
   }
 
   // Normalize a scraped asset name for server API calls and Yahoo Finance.
@@ -1099,11 +1105,12 @@
   function renderPriceTicker() {
     const assets = tradingState.assets
     const banner = checkFeatures("price-ticker")
-    const statusDot = serverOnline === true ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;margin-right:4px"></span>' :
-      serverOnline === false ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff6b6b;margin-right:4px"></span>' :
-      '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f59e0b;margin-right:4px"></span>'
-    const statusLabel = serverOnline === true ? 'Connected' : serverOnline === false ? 'Offline' : 'Checking'
-    const header = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:9px;color:#9aa0c0"><span>${statusDot}${statusLabel}</span><span>${new Date().toLocaleTimeString()}</span></div>`
+    const staleAgo = tradingState.lastFetchAt ? Math.round((Date.now() - tradingState.lastFetchAt) / 1000) : 0
+    const isStale = staleAgo > 30
+    const dotColor = serverOnline === false || isStale ? "#ff6b6b" : serverOnline === true ? "#4ade80" : "#f59e0b"
+    const statusDot = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor};margin-right:4px"></span>`
+    const statusLabel = isStale ? 'Stale' : serverOnline === true ? 'Connected' : serverOnline === false ? 'Offline' : 'Checking'
+    const header = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:9px;color:#9aa0c0"><span style="${isStale ? 'color:' + (staleAgo > 60 ? '#ff6b6b' : '#f59e0b') + ';font-weight:600' : ''}">${statusDot}${statusLabel}</span><span>${new Date().toLocaleTimeString()}</span></div>`
     if (!assets.length) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner() + header
       return banner + header + '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
@@ -1275,7 +1282,7 @@
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Full Kelly</span><span style="color:#6c63ff">${k.fullKelly != null ? k.fullKelly + "%" : "—"}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Suggested (${k.mode || "half"})</span><span style="font-weight:600;color:#4ade80">${k.suggested != null ? k.suggested + "%" : "—"}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Break-even WR</span><span>${k.breakEven != null ? k.breakEven + "%" : "—"}</span></div>`)
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(stats.totalTrades > 0 ? "trade history" : "using defaults (no history)")
   }
 
   // ── Regime Detection Renderer ──────────────────────────────────────────────
@@ -1284,7 +1291,7 @@
     const banner = checkFeatures("regime-detect")
     if (!regime || regime.regime === "unknown") {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
-      return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing market regime\u2026</div>'
+      return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing market regime\u2026</div>' + sourceLabel("insufficient data")
     }
     const colors = { trending: "#4ade80", ranging: "#f59e0b", volatile: "#ff6b6b", breakout: "#6c63ff" }
     const c = colors[regime.regime] || "#a5a0ff"
@@ -1293,7 +1300,7 @@
     if (regime.metrics) lines.push(`<div style="font-size:10px;color:#9aa0c0">ADX: ${regime.metrics.adx} · ATR ratio: ${regime.metrics.atrRatio}x</div>`)
     if (regime.suggestedStrategy) lines.push(`<div style="font-size:10px;margin-top:4px">Strategy: <b style="color:#6c63ff">${regime.suggestedStrategy}</b></div>`)
     if (regime.factors?.length) lines.push(`<div style="font-size:9px;color:#9aa0c0;margin-top:2px">${regime.factors.join(" · ")}</div>`)
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel("price action")
   }
 
   // ── Order Flow Renderer ────────────────────────────────────────────────────
@@ -1307,13 +1314,14 @@
     const lines = []
     const imbColor = of.imbalance === "buy-heavy" ? "#4ade80" : of.imbalance === "sell-heavy" ? "#ff6b6b" : "#f59e0b"
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:11px">Net Delta</span><span style="color:${of.cumulative >= 0 ? "#4ade80" : "#ff6b6b"};font-weight:600">${of.cumulative >= 0 ? "+" : ""}${of.cumulative}</span><span style="font-size:9px;padding:1px 4px;border-radius:3px;background:${imbColor}30;color:${imbColor}">${of.imbalance}</span></div>`)
+    const hasVolume = of.delta.some((d) => (d.volume || 0) > 0)
     if (of.avgDelta != null) lines.push(`<div style="font-size:10px;color:#9aa0c0">Avg delta: ${of.avgDelta}</div>`)
     if (of.signals?.length) {
       for (const sig of of.signals.slice(0, 3)) {
         lines.push(`<div style="font-size:9px;color:${sig.type === "divergence" ? "#f59e0b" : "#6c63ff"};margin-top:2px">⚡ ${sig.desc}</div>`)
       }
     }
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(hasVolume ? "live candles" : "no volume data")
   }
 
   // ── Expiry Optimizer Renderer ──────────────────────────────────────────────
@@ -1337,7 +1345,7 @@
       }
       lines.push(`</div>`)
     }
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(exp.volatility != null ? "volatility model" : "using defaults")
   }
 
   // ── Sentiment Renderer ─────────────────────────────────────────────────────
@@ -1354,7 +1362,7 @@
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:12px;color:${scoreColor}">${c.label || "Neutral"}</span><span style="font-size:10px;color:#9aa0c0">Score: ${c.score}</span>${c.extreme ? '<span style="font-size:8px;padding:1px 3px;border-radius:3px;background:#ff6b6b30;color:#ff6b6b">EXTREME</span>' : ""}</div>`)
     if (sent.news) lines.push(`<div style="font-size:10px;color:#9aa0c0">News: ${sent.news.bullish}🟢 ${sent.news.bearish}🔴 ${sent.news.neutral}⚪ (${sent.news.sampleSize})</div>`)
     if (sent.social) lines.push(`<div style="font-size:10px;color:#9aa0c0">Social velocity: ${sent.social.velocity > 0 ? "+" : ""}${sent.social.velocity}</div>`)
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(sent.news?.sampleSize > 0 ? "news+social" : "unavailable")
   }
 
   // ── Generic renderers (work on ANY site) ───────────────────────────────────
