@@ -12,8 +12,8 @@ npm install
 ```
 
 This installs the dashboard workspace (React, Vite, Supabase, plus the server-side `openai`,
-`stripe`, `@supabase/supabase-js` packages). The extension installs separately (see step 5) so
-Plasmo gets its own dependency tree.
+`stripe`, `@supabase/supabase-js` packages). The browser extension (step 5) requires no
+separate install — it's loaded unpacked directly.
 
 ## 2. Environment variables
 
@@ -115,19 +115,20 @@ Open http://localhost:5173. The Vite dev server runs the same `/api/*` backend a
 
 ## 5. Run the browser extension
 
-The extension has its own `node_modules` (Plasmo requires its own install). From `apps/extension`:
+The extension is a zero-build MV3 extension in `apps/dashboard/extensions/picc-overlay/`.
+No `npm install` or build step needed — load it directly:
 
-```bash
-npm install        # installs plasmo + react in apps/extension
-npm run dev        # build in watch mode (dev)
-```
+1. Open Chrome or Edge, navigate to `chrome://extensions`
+2. Enable **Developer mode** (toggle in top-right)
+3. Click **Load unpacked**
+4. Select the folder: `apps/dashboard/extensions/picc-overlay/`
 
-Load the generated `build/chrome-mv3-dev` folder via chrome://extensions (Developer mode → Load unpacked).
+The extension will appear in your toolbar. Navigate to a supported trading site
+(ExpertOption, Binance, Coinbase, etc.) and click the PICC pill (bottom-left) to open
+the overlay with trading dockables.
 
-For production: `npm run build` and load `build/chrome-mv3-prod`. To produce a zip for the store: `npm run package`.
-
-> Note: the repo root uses npm workspaces for the dashboard. The extension is intentionally installed
-> separately so Plasmo gets its own dependency tree.
+> The extension communicates with the local dashboard backend via the background service worker.
+> Make sure `npm run dev` is running on port 5173 (or 3000) before loading the extension.
 
 ## 6. Payments — no bank, no business needed
 
@@ -254,9 +255,9 @@ Production checklist:
   `PICC_APP_URL` to the production origin, and add the production URL to Stripe's allowed domains.
 - Payments: for PayPal set `PAYPAL_MODE=live` with a live REST app; for BTCPay point the URL at your
   VPS instance (expose it on HTTPS).
-- Extension: `npm run package` then upload the zip to the Chrome Web Store ($5 one-time developer fee).
+- Extension: the extension is zero-build MV3 — load unpacked from `apps/dashboard/extensions/picc-overlay/`.
   Before going to production, add your real dashboard origin to `host_permissions` in
-  `apps/extension/package.json` (the `manifest` field) and set it as the popup's dashboard URL.
+  `apps/dashboard/extensions/picc-overlay/manifest.json` and set it as the popup's dashboard URL.
 - Domain: register via Cloudflare/Namecheap and point at the frontend host.
 - Amazon SP-API (optional): without keys the Listing Optimizer uses live Serper Google Shopping
   results (free). For SP-API buy-box data, fill the five `SP_AMAZON_*` vars in `apps/dashboard/.env`

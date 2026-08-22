@@ -10,10 +10,7 @@
     "dev": "node scripts/dev.mjs",
     "start:all": "node scripts/start-all.mjs",
     "build": "npm run build --workspace @picc/dashboard",
-    "build:extension": "cd apps/extension && npm run build",
-    "build:all": "npm run build && npm run build:extension",
-    "typecheck": "npm run typecheck --workspace @picc/dashboard",
-    "typecheck:all": "npm run typecheck && cd apps/extension && npm run typecheck"
+    "typecheck": "npm run typecheck --workspace @picc/dashboard"
   },
   "engines": {
     "node": ">=22"

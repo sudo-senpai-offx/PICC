@@ -49,7 +49,7 @@ the user always performs the final action on the external platform.
    nft_royalty_earnings, depin_nodes, agent_configs, agent_earnings,
    agent_bounties, predictions, human_review_logs (infra/supabase/v2.sql)
 
-   Browser Extension (Plasmo) ◀── overlay suggestions (extension/confirm logs)
+   Browser Extension (MV3) ◀── overlay suggestions + live trading data (extension/confirm logs)
    External platforms (Amazon, YouTube, brokerages) — user clicks, PICC never does
 ```
 
@@ -212,9 +212,9 @@ config and the full endpoint list live in `server/handlers.mjs`.
 
 The service worker forwards page context to `/api/extension/suggest` and expects
 `{ suggestions: [{ id, title, body, confidence }], source }`. Copy confirmations go to
-`/api/extension/confirm`. The popup stores settings in `chrome.storage.sync`. Tier-0/Tier-1 overlays
-(`apps/extension/src/content.tsx`) also read `GET /api/connectors` and may trigger
-`POST /api/connectors/:slug/collect` to surface live balances on the source's own page.
+`/api/extension/confirm`. The popup stores settings in `chrome.storage.sync`. The trading
+extension (`apps/dashboard/extensions/picc-overlay/`) also reads trading endpoints and may
+trigger `POST /api/connectors/:slug/collect` to surface live balances on the source's own page.
 
 ### Agents → backend
 

@@ -7,7 +7,8 @@ An AI-assisted **planning** platform for exploring and optimizing passive income
 | Directory | What it is | Stack |
 | :-- | :-- | :-- |
 | `apps/dashboard` | Web dashboard (auth, simulators, trading suite, agents, overlay settings) | React + TypeScript + Vite + Supabase |
-| `apps/extension` | Browser extension that overlays AI suggestions on external platforms | Plasmo (React + TS) |
+| `apps/dashboard/extensions/picc-overlay` | Browser extension — trading dockables, AI signals, autopilot overlay, live data feed | MV3 vanilla JS (no bundler, load unpacked) |
+| `apps/extension` | **Deprecated** — Plasmo skeleton, no trading features, superseded by picc-overlay | Plasmo (unused) |
 | `agents/picc_agents` | Multi-agent research / content / listing / trading / investment crews | CrewAI (Python) |
 | `infra/supabase` | Database schema with Row Level Security | SQL |
 | `infra/n8n` | Orchestration (docker-compose + workflow templates) | n8n |
@@ -29,10 +30,9 @@ npm install
 cp apps/dashboard/.env.example apps/dashboard/.env   # add Supabase + LLM + Serper + payment keys
 npm run dev
 
-# Browser extension
-cd apps/extension
-npm install
-npm run dev
+# Browser extension (no build step — load unpacked)
+# In Chrome/Edge: chrome://extensions → Developer mode → Load unpacked
+# Select: apps/dashboard/extensions/picc-overlay/
 ```
 
 ## Architecture
@@ -49,7 +49,7 @@ User → Dashboard (React) ──same-origin /api/*──▶ Node backend
                                                   │  Payments: PayPal | Touch 'n Go |
                                                   │    BTCPay | Stripe (no bank, no business)
                                                   │  (optional) CrewAI microservice
-Browser Extension (Plasmo) ◀── suggestions ───────┘
+Browser Extension (MV3) ◀── suggestions + live data ──┘
 External platforms (Amazon, YouTube, brokerages) — user clicks, PICC never does
 ```
 
@@ -85,6 +85,7 @@ See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for Malaysia PDPA (effective 30 Apr
 | Supabase schema + RLS (incl. trading_signals, defi_holdings, depin_holdings) | ✅ |
 | v2 schema — income-classification model (financial_accounts, income_streams, nft_holdings, depin_nodes, agent_configs/earnings/bounties, predictions, human_review_logs) | ✅ |
 | Trading Suite — multi-model signals, paper ledger, ExpertOption read-only bridge | ✅ |
+| MV3 extension — trading dockables, AI signals, autopilot, live data, shadow DOM | ✅ |
 | Stream catalog — bandwidth/DePIN/storage/GPU/crypto/DeFi/NFT/P2P/AI-agent channels | ✅ |
 | Income classification (Category A passive · B semi-passive · C active) + Interest/Dividend/Rental/Content catalog tabs | ✅ |
 | Node backend (same-origin `/api/*`) | ✅ |
@@ -100,9 +101,9 @@ See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for Malaysia PDPA (effective 30 Apr
 | Amazon SP-API (read-only competitor data) | ✅ (live when keys set) |
 | Production deployment (Docker · PM2 · systemd + reverse proxy) | ✅ |
 
-## Known issue
+## Known issues
 
-`npm audit` reports a high-severity advisory (GHSA-qwww-vcr4-c8h2) for react-router-dom ≤ 7.18.2.
-It only affects React Router's **RSC mode** (server action CSRF). PICC uses client-side
-`BrowserRouter` only and is not exposed to that path; the fix (v8) isn't available on the
-configured registry yet. Revisit when v8 is resolvable.
+- `apps/extension/` (Plasmo) is a deprecated skeleton with no trading features — use
+  `apps/dashboard/extensions/picc-overlay/` instead.
+- ExpertOption session token is stored in `server/data/trading-credentials.json` (runtime),
+  not via environment variables. Use `scripts/capture-eo-session.mjs` or the API to capture it.
