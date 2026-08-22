@@ -210,6 +210,54 @@ describe("decideAutopilot (pure logic)", () => {
     expect(d.trade).toBe(false)
     expect(d.reason).toMatch(/loss limit/)
   })
+
+  it("blocks a bullish signal when the sentiment gate sees strongly bearish sentiment", () => {
+    const d = autopilot.decideAutopilot({
+      config: { ...config, sentimentGate: true, minSentimentAlignment: 0.3 },
+      pred: { direction: "up", confidence: 85, reason: "momentum" },
+      sentiment: { score: -0.7, source: "news" },
+      now: 1000000,
+      lastEntryAt: 0
+    })
+    expect(d.trade).toBe(false)
+    expect(d.reason).toMatch(/sentiment gate/)
+  })
+
+  it("allows a bullish signal when the sentiment gate sees aligned bullish sentiment", () => {
+    const d = autopilot.decideAutopilot({
+      config: { ...config, sentimentGate: true, minSentimentAlignment: 0.3 },
+      pred: { direction: "up", confidence: 85, reason: "momentum" },
+      sentiment: { score: 0.6, source: "news" },
+      now: 1000000,
+      lastEntryAt: 0
+    })
+    expect(d.trade).toBe(true)
+    expect(d.direction).toBe("call")
+  })
+
+  it("ignores opposing sentiment when the sentiment gate is disabled", () => {
+    const d = autopilot.decideAutopilot({
+      config: { ...config, sentimentGate: false },
+      pred: { direction: "up", confidence: 85, reason: "momentum" },
+      sentiment: { score: -0.8, source: "news" },
+      now: 1000000,
+      lastEntryAt: 0
+    })
+    expect(d.trade).toBe(true)
+    expect(d.direction).toBe("call")
+  })
+
+  it("does not veto neutral sentiment under the alignment threshold", () => {
+    const d = autopilot.decideAutopilot({
+      config: { ...config, sentimentGate: true, minSentimentAlignment: 0.3 },
+      pred: { direction: "up", confidence: 85, reason: "momentum" },
+      sentiment: { score: 0.05, source: "news" },
+      now: 1000000,
+      lastEntryAt: 0
+    })
+    expect(d.trade).toBe(true)
+    expect(d.direction).toBe("call")
+  })
 })
 
 describe("autopilotTick (integration with mocked broker)", () => {

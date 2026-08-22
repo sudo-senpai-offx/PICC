@@ -475,7 +475,7 @@ async function openLiveSession(gen) {
     } catch {
       /* ignore */
     }
-    session = null
+    if (session === s) session = null
     return
   }
   await ensureBrowserStream()
@@ -486,7 +486,7 @@ async function openLiveSession(gen) {
     } catch {
       /* ignore */
     }
-    session = null
+    if (session === s) session = null
     return
   }
 

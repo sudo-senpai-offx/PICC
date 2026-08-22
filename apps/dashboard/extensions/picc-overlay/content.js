@@ -309,6 +309,7 @@
       { id: "order-flow", title: "Order Flow", icon: "🌊", description: "Cumulative delta, imbalance, and divergence signals", defaultPos: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultCollapsed: true },
       { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", description: "Optimal expiry selection with volatility analysis", defaultPos: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
       { id: "sentiment", title: "Sentiment", icon: "🎭", description: "News + social sentiment fusion with extremes", defaultPos: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
+      { id: "server-status", title: "PICC Status", icon: "🔌", description: "Server connection health and data pipeline status", defaultPos: "bottom-right", defaultSize: { width: 260, height: 160 }, defaultCollapsed: true },
     ],
     bandwidth: [
       { id: "speed", title: "Speed Monitor", icon: "📡", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
@@ -439,11 +440,12 @@
         body: opts?.body || null,
         timeout: opts?.timeout || 8000
       })
-      if (!resp || !resp.ok) return null
-      return resp.data
+      if (!resp || !resp.ok) {
+        return { ok: false, error: resp?.error || resp?.status || "unknown", data: null }
+      }
+      return { ok: true, data: resp.data, status: resp.status }
     } catch {
-      // Extension context invalidated or background not ready
-      return null
+      return { ok: false, error: "extension-context-invalidated", data: null }
     }
   }
 
@@ -480,11 +482,13 @@
   }
 
   async function getPrefs() {
-    return await serverFetch("/api/browser/prefs") || {}
+    const resp = await serverFetch("/api/browser/prefs")
+    return resp.ok ? (resp.data || {}) : {}
   }
 
   async function savePrefsForSite(siteId, prefs) {
-    return await serverFetch("/api/browser/prefs", { method: "POST", body: { site: siteId, ...prefs } })
+    const resp = await serverFetch("/api/browser/prefs", { method: "POST", body: { site: siteId, ...prefs } })
+    return resp.ok ? resp.data : null
   }
 
   // ── Metrics collection (supplies data to PICC web app) ─────────────────────
@@ -946,7 +950,11 @@
     orderFlow: null,
     expiry: null,
     sentiment: null,
-    lastCandles: []
+    lastCandles: [],
+    lastFetchError: null,
+    lastFetchAt: 0,
+    loadingSince: Date.now(),
+    serverReachable: null
   }
 
   const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
@@ -963,6 +971,32 @@
     if (val > 0) return pos || "#4ade80"
     if (val < 0) return neg || "#ff6b6b"
     return "#a5a0ff"
+  }
+
+  // ── Offline / staleness / timeout helpers ──
+  const OFFLINE_TIMEOUT_MS = 10000
+  function isTimedOut() {
+    return tradingState.loadingSince > 0 && Date.now() - tradingState.loadingSince > OFFLINE_TIMEOUT_MS
+  }
+  function offlineBanner() {
+    return '<div style="background:#ff6b6b12;border:1px solid #ff6b6b40;border-radius:4px;padding:6px 8px;margin-bottom:4px;font-size:10px;color:#ff6b6b">' +
+      '<span style="font-weight:600">Server offline</span> — can\'t reach PICC backend.' +
+      '<div style="margin-top:3px;color:#9aa0c0">Run: <code style="color:#6c63ff;background:#0d0d1a;padding:1px 3px;border-radius:2px">npm run dev</code></div>' +
+      '</div>'
+  }
+  function staleLabel() {
+    if (!tradingState.lastFetchAt) return ""
+    const ago = Math.round((Date.now() - tradingState.lastFetchAt) / 1000)
+    if (ago < 5) return ""
+    const color = ago > 60 ? "#ff6b6b" : ago > 15 ? "#f59e0b" : "#9aa0c0"
+    return `<div style="font-size:9px;color:${color};margin-top:2px">Last update ${ago}s ago</div>`
+  }
+  function staleRow() {
+    if (!tradingState.lastFetchAt) return ""
+    const ago = Math.round((Date.now() - tradingState.lastFetchAt) / 1000)
+    if (ago < 5) return ""
+    const color = ago > 60 ? "#ff6b6b" : ago > 15 ? "#f59e0b" : "#9aa0c0"
+    return `<div style="display:flex;justify-content:space-between;font-size:9px;color:${color};margin-top:2px"><span>Stale</span><span>${ago}s ago</span></div>`
   }
 
   // Normalize a scraped asset name for server API calls and Yahoo Finance.
@@ -1015,7 +1049,10 @@
       '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f59e0b;margin-right:4px"></span>'
     const statusLabel = serverOnline === true ? 'Connected' : serverOnline === false ? 'Offline' : 'Checking'
     const header = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:9px;color:#9aa0c0"><span>${statusDot}${statusLabel}</span><span>${new Date().toLocaleTimeString()}</span></div>`
-    if (!assets.length) return banner + header + '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
+    if (!assets.length) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner() + header
+      return banner + header + '<div style="color:#a5a0ff;padding:4px">Waiting for market data\u2026</div>'
+    }
     const rows = assets.slice(0, 6).map((a) => {
       const c = tone(a.changePct)
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #6c63ff20">` +
@@ -1027,7 +1064,8 @@
     const acct = tradingState.account
     const bal = acct?.balance != null ? fmt$(acct.balance, acct.currency) : ""
     return banner + header + `<div style="font-size:11px">${rows}</div>` +
-      (bal ? `<div style="margin-top:4px;font-size:10px;color:#a5a0ff">Balance: ${bal}</div>` : "")
+      (bal ? `<div style="margin-top:4px;font-size:10px;color:#a5a0ff">Balance: ${bal}</div>` : "") +
+      staleLabel()
   }
 
   // ── Portfolio Renderer ─────────────────────────────────────────────────────
@@ -1049,7 +1087,10 @@
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Today</span><span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, demo.currency)}</span></div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Trades</span><span>${demo.todayTrades ?? 0}</span></div>`)
     }
-    if (!lines.length) return banner + '<div style="color:#a5a0ff;padding:4px">No position data yet\u2026</div>'
+    if (!lines.length) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">No position data yet\u2026</div>'
+    }
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
   }
 
@@ -1057,7 +1098,10 @@
   function renderAISignals() {
     const d = tradingState.decisions
     const banner = checkFeatures("ai-signals")
-    if (!d.length) return banner + '<div style="color:#a5a0ff;padding:4px">Waiting for AI analysis\u2026</div>'
+    if (!d.length) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Waiting for AI analysis\u2026</div>'
+    }
     const rows = d.slice(0, 5).map((dec) => {
       const verdictColor = dec.verdict === "TRADE" ? "#4ade80" : dec.verdict === "OBSERVE" ? "#f59e0b" : "#a5a0ff"
       const gates = dec.gates || {}
@@ -1084,7 +1128,10 @@
     const demo = tradingState.demo
     const auto = tradingState.autopilot
     const banner = checkFeatures("risk-mgr")
-    if (!demo && !auto) return banner + '<div style="color:#a5a0ff;padding:4px">Risk metrics loading\u2026</div>'
+    if (!demo && !auto) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Risk metrics loading\u2026</div>'
+    }
     const lines = []
     if (auto) {
       const maxLossPct = auto.dailyLossLimitPct ?? 10
@@ -1153,14 +1200,17 @@
     lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
     lines.push(`<button data-picc-action="autopilot-kill" style="background:#ff6b6b30;border:1px solid #ff6b6b;color:#ff6b6b;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">Kill</button>`)
     lines.push(`</div>`)
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + staleLabel()
   }
 
   // ── Kelly Sizing Renderer ──────────────────────────────────────────────────
   function renderKellySizing() {
     const kelly = tradingState.kelly
     const banner = checkFeatures("kelly-sizing")
-    if (!kelly) return banner + '<div style="color:#a5a0ff;padding:4px">Loading Kelly data\u2026</div>'
+    if (!kelly) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Loading Kelly data\u2026</div>'
+    }
     const stats = kelly.stats || {}
     const k = kelly.kelly || {}
     const lines = []
@@ -1177,7 +1227,10 @@
   function renderRegimeDetect() {
     const regime = tradingState.regime
     const banner = checkFeatures("regime-detect")
-    if (!regime || regime.regime === "unknown") return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing market regime\u2026</div>'
+    if (!regime || regime.regime === "unknown") {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing market regime\u2026</div>'
+    }
     const colors = { trending: "#4ade80", ranging: "#f59e0b", volatile: "#ff6b6b", breakout: "#6c63ff" }
     const c = colors[regime.regime] || "#a5a0ff"
     const lines = []
@@ -1192,7 +1245,10 @@
   function renderOrderFlow() {
     const of = tradingState.orderFlow
     const banner = checkFeatures("order-flow")
-    if (!of || !of.delta?.length) return banner + '<div style="color:#a5a0ff;padding:4px">Loading order flow\u2026</div>'
+    if (!of || !of.delta?.length) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Loading order flow\u2026</div>'
+    }
     const lines = []
     const imbColor = of.imbalance === "buy-heavy" ? "#4ade80" : of.imbalance === "sell-heavy" ? "#ff6b6b" : "#f59e0b"
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:11px">Net Delta</span><span style="color:${of.cumulative >= 0 ? "#4ade80" : "#ff6b6b"};font-weight:600">${of.cumulative >= 0 ? "+" : ""}${of.cumulative}</span><span style="font-size:9px;padding:1px 4px;border-radius:3px;background:${imbColor}30;color:${imbColor}">${of.imbalance}</span></div>`)
@@ -1209,7 +1265,10 @@
   function renderExpiryOpt() {
     const exp = tradingState.expiry
     const banner = checkFeatures("expiry-opt")
-    if (!exp || !exp.recommended) return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing optimal expiry\u2026</div>'
+    if (!exp || !exp.recommended) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Analyzing optimal expiry\u2026</div>'
+    }
     const r = exp.recommended
     const lines = []
     lines.push(`<div style="font-weight:600;font-size:12px;color:#6c63ff;margin-bottom:4px">Recommended: ${r.label}</div>`)
@@ -1230,7 +1289,10 @@
   function renderSentiment() {
     const sent = tradingState.sentiment
     const banner = checkFeatures("sentiment")
-    if (!sent || !sent.composite) return banner + '<div style="color:#a5a0ff;padding:4px">Loading sentiment\u2026</div>'
+    if (!sent || !sent.composite) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Loading sentiment\u2026</div>'
+    }
     const c = sent.composite
     const lines = []
     const scoreColor = c.score > 0.2 ? "#4ade80" : c.score < -0.2 ? "#ff6b6b" : "#f59e0b"
@@ -1334,7 +1396,7 @@
     }
     if (!serverOnline) {
       lines.push(`<div style="font-size:10px;color:#f59e0b;margin-top:4px">Start the server for full features:</div>`)
-      lines.push(`<code style="font-size:9px;color:#6c63ff;background:#0d0d1a;padding:2px 4px;border-radius:3px;display:block;margin-top:2px">npm run serve</code>`)
+      lines.push(`<code style="font-size:9px;color:#6c63ff;background:#0d0d1a;padding:2px 4px;border-radius:3px;display:block;margin-top:2px">npm run dev</code>`)
     }
     const assets = tradingState.assets
     if (assets.length > 0) {
@@ -1675,6 +1737,7 @@
 
   async function fetchTradingData() {
     try {
+      if (!tradingState.loadingSince) tradingState.loadingSince = Date.now()
       // Always try DOM scraping first (gives live prices on ANY site)
       const scraped = scrapePageData()
       if (scraped && scraped.assets.length) {
@@ -1709,11 +1772,16 @@
         body: { assetId: primaryAsset, candleCount: 100 }
       })
       if (resp && resp.ok) {
+        tradingState.serverReachable = true
+        tradingState.lastFetchError = null
+        tradingState.lastFetchAt = Date.now()
+        tradingState.loadingSince = 0
         // Status / account
-        if (resp.status?.ok) {
-          tradingState.paper = resp.status.paper || null
-          if (resp.status.expertOption) {
-            const eo = resp.status.expertOption
+        const d = resp.data
+        if (d?.status?.ok) {
+          tradingState.paper = d.status.paper || null
+          if (d.status.expertOption) {
+            const eo = d.status.expertOption
             tradingState.account = {
               balance: eo.balance ?? tradingState.account?.balance ?? null,
               currency: eo.currency || "USD",
@@ -1722,17 +1790,17 @@
           }
         }
         // Autopilot
-        if (resp.autopilot) tradingState.autopilot = resp.autopilot.config || resp.autopilot
+        if (d?.autopilot) tradingState.autopilot = d.autopilot.config || d.autopilot
         // Demo
-        if (resp.demo) tradingState.demo = resp.demo
+        if (d?.demo) tradingState.demo = d.demo
         // Decisions
-        if (resp.decisions) tradingState.decisions = Array.isArray(resp.decisions) ? resp.decisions : (resp.decisions.decisions || [])
+        if (d?.decisions) tradingState.decisions = Array.isArray(d.decisions) ? d.decisions : (d.decisions.decisions || [])
         // Candles
-        if (resp.candles?.length) {
-          tradingState.lastCandles = resp.candles
+        if (d?.candles?.length) {
+          tradingState.lastCandles = d.candles
           // Populate price from candles if DOM scraping failed
-          const last = resp.candles[resp.candles.length - 1]
-          const prev = resp.candles[resp.candles.length - 2]
+          const last = d.candles[d.candles.length - 1]
+          const prev = d.candles[d.candles.length - 2]
           if (last && tradingState.assets[0] && !tradingState.assets[0].price) {
             tradingState.assets[0].price = last.close
             if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
@@ -1749,13 +1817,15 @@
           }
         }
         // Advanced analytics
-        if (resp.kelly) tradingState.kelly = resp.kelly
-        if (resp.regime) tradingState.regime = resp.regime
-        if (resp.expiry) tradingState.expiry = resp.expiry
-        if (resp.sentiment) tradingState.sentiment = resp.sentiment
-        if (resp.orderFlow) tradingState.orderFlow = resp.orderFlow
+        if (d?.kelly) tradingState.kelly = d.kelly
+        if (d?.regime) tradingState.regime = d.regime
+        if (d?.expiry) tradingState.expiry = d.expiry
+        if (d?.sentiment) tradingState.sentiment = d.sentiment
+        if (d?.orderFlow) tradingState.orderFlow = d.orderFlow
       } else {
         // Consolidated endpoint failed — fallback to individual endpoints
+        tradingState.serverReachable = false
+        tradingState.lastFetchError = resp?.error || "consolidated-failed"
         const [status, autopilot, demo, decisions] = await Promise.allSettled([
           serverFetch("/api/trading/status"),
           serverFetch("/api/trading/autopilot"),
@@ -1767,25 +1837,29 @@
         const demoVal = demo.status === "fulfilled" ? demo.value : null
         const decisionsVal = decisions.status === "fulfilled" ? decisions.value : null
         if (statusVal?.ok) {
-          tradingState.paper = statusVal.paper || null
-          if (statusVal.expertOption) {
+          tradingState.serverReachable = true
+          tradingState.lastFetchError = null
+          tradingState.lastFetchAt = Date.now()
+          tradingState.loadingSince = 0
+          tradingState.paper = statusVal.data?.paper || null
+          if (statusVal.data?.expertOption) {
             tradingState.account = {
-              balance: statusVal.expertOption.balance ?? tradingState.account?.balance ?? null,
-              currency: statusVal.expertOption.currency || "USD",
-              demo: statusVal.expertOption.demo
+              balance: statusVal.data.expertOption.balance ?? tradingState.account?.balance ?? null,
+              currency: statusVal.data.expertOption.currency || "USD",
+              demo: statusVal.data.expertOption.demo
             }
           }
         }
-        if (autopilotVal?.ok) tradingState.autopilot = autopilotVal.config || autopilotVal
-        if (demoVal?.ok) tradingState.demo = demoVal
-        if (decisionsVal?.ok && decisionsVal.decisions) tradingState.decisions = decisionsVal.decisions
+        if (autopilotVal?.ok) tradingState.autopilot = autopilotVal.data?.config || autopilotVal.data
+        if (demoVal?.ok) tradingState.demo = demoVal.data
+        if (decisionsVal?.ok && decisionsVal.data?.decisions) tradingState.decisions = decisionsVal.data.decisions
 
         // Fetch candles + advanced analytics individually
         const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: primaryAsset, timeframe: 60, count: 100 } })
-        if (candleResp?.ok && candleResp.candles?.length) {
-          tradingState.lastCandles = candleResp.candles
-          const last = candleResp.candles[candleResp.candles.length - 1]
-          const prev = candleResp.candles[candleResp.candles.length - 2]
+        if (candleResp?.ok && candleResp.data?.candles?.length) {
+          tradingState.lastCandles = candleResp.data.candles
+          const last = candleResp.data.candles[candleResp.data.candles.length - 1]
+          const prev = candleResp.data.candles[candleResp.data.candles.length - 2]
           if (tradingState.assets[0] && !tradingState.assets[0].price) {
             tradingState.assets[0].price = last.close
             if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
@@ -1800,11 +1874,12 @@
         ])
         for (const [key, val] of [["kelly", kelly], ["regime", regime], ["expiry", expiry], ["sentiment", sentiment], ["orderFlow", orderFlow]]) {
           const v = val.status === "fulfilled" ? val.value : null
-          if (v?.ok) tradingState[key] = v
+          if (v?.ok) tradingState[key] = v.data
         }
       }
     } catch {
-      // Server not reachable — keep last state
+      tradingState.serverReachable = false
+      tradingState.lastFetchError = "fetch-exception"
     }
   }
 
@@ -2267,8 +2342,14 @@
         if (result?.ok) {
           await fetchTradingData()
           updateAllDockables()
+          playAlertSound("success")
+          showToast("Autopilot", running ? "Stopped" : "Started", "success")
+        } else {
+          showToast("Autopilot", result?.error || "Server unreachable — try again", "error")
         }
-      } catch { /* ignore */ }
+      } catch {
+        showToast("Autopilot", "Failed to toggle — server unreachable", "error")
+      }
       btn.disabled = false
     }
     if (action === "autopilot-kill") {
@@ -2293,9 +2374,18 @@
     if (msg.action === "toggle-overlay") { toggleOverlay(); return false }
     if (msg.action === "get-metrics") { sendResponse(collectPageMetrics()); return false }
     if (msg.action === "server-status") {
+      const prevOnline = serverOnline
       serverOnline = msg.online
       serverPort = msg.port || null
       updateServerStatus()
+      // Toast on status transitions (not on initial load)
+      if (prevOnline !== null && prevOnline !== msg.online) {
+        if (msg.online) {
+          showToast("Server Online", "PICC backend reconnected on port " + (msg.port || "?"), "success")
+        } else {
+          showToast("Server Offline", "PICC backend unreachable — panels may show stale data.", "warning")
+        }
+      }
       return false
     }
     if (msg.action === "show-notification") {

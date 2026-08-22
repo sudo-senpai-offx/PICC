@@ -3102,7 +3102,7 @@ async function _handleApiInner(req, res, url, reqId) {
         withTimeout(tradingStatus(), 6000),
         getAutopilotConfig(),
         withTimeout(expertOptionDemoStatus(), 6000),
-        withTimeout(getDecisions(), 15000)
+        withTimeout(getDecisions(), 20000)
       ])
 
       const statusVal = status.status === "fulfilled" ? status.value : null

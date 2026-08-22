@@ -290,16 +290,22 @@ export function mtfConfirm({ asset, primaryDirection, primaryPeriod = 60 } = {})
  * Fetch current sentiment for an asset symbol and return a confluence weight.
  * Positive = bullish alignment, negative = bearish, 0 = neutral/no data.
  */
-async function sentimentScore(symbol) {
+async function sentimentScore(symbol, { timeoutMs = 4000 } = {}) {
   if (!symbol) return { score: 0, source: "none", detail: null }
+  let timer = null
   try {
-    const result = await getSentiment(String(symbol).toUpperCase())
-    if (!result) return { score: 0, source: "none", detail: null }
-    // getSentiment returns { symbol, composite: { score, label }, news, social }
+    timer = setTimeout(() => {}, timeoutMs)
+    const result = await Promise.race([
+      getSentiment(String(symbol).toUpperCase()),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs) })
+    ])
+    if (!result) return { score: 0, source: "timeout", detail: null }
     const compositeScore = result.composite?.score ?? 0
     return { score: clamp(compositeScore, -1, 1), source: result.composite?.label || "fusion", detail: result }
   } catch {
     return { score: 0, source: "error", detail: null }
+  } finally {
+    clearTimeout(timer)
   }
 }
 

@@ -309,8 +309,12 @@ export async function paperAnalytics() {
       hit = { reason: "sl", level: Number(p.stopLoss) }
     }
     if (hit) {
-      const closed = await closePaperTradeLocked({ id: p.id, exit: hit.level, reason: hit.reason, exitSource: "mark" })
-      autoClosed.push(closed)
+      try {
+        const closed = await closePaperTradeLocked({ id: p.id, exit: hit.level, reason: hit.reason, exitSource: "mark" })
+        autoClosed.push(closed)
+      } catch {
+        // Position may have been closed concurrently — skip and continue
+      }
     }
   }
 

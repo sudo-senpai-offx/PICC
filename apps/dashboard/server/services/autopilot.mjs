@@ -46,7 +46,9 @@ const DEFAULTS = {
   aiGate: false,
   proGate: false,
   mtfGate: true,
-  minMtfAgree: 0, // 0 = skip MTF veto when data is sparse; 1 = require at least 1 TF agreement
+  minMtfAgree: 0,
+  sentimentGate: false, // when true, block trades if sentiment strongly opposes signal direction
+  minSentimentAlignment: 0.3, // minimum sentiment alignment threshold (0-1) for sentimentGate
   timeframe: 60,
   count: 120,
   stopReason: null,
@@ -127,6 +129,8 @@ export async function saveAutopilotConfig(patch) {
   next.proGate = Boolean(next.proGate)
   next.mtfGate = next.mtfGate !== false
   next.minMtfAgree = clamp(Math.round(Number(next.minMtfAgree) || 0), 0, 3)
+  next.sentimentGate = Boolean(next.sentimentGate)
+  next.minSentimentAlignment = clamp(Number(next.minSentimentAlignment) || 0.3, 0, 1)
   next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
   next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
   if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
@@ -334,7 +338,7 @@ export async function placeDemoTrade({ assetId, type, amount, duration }) {
  * `pro` is the optional proAnalyzeCandles report; when config.proGate is on the
  * trade is refused unless pro agrees with the ensemble.
  */
-export function decideAutopilot({ config, pred, pro = null, mtf = null, openCount = 0, lastEntryAt = 0, now = Date.now(), dailyPnl = 0, dayStartBalance = null, todayTrades = 0, aiVeto = false }) {
+export function decideAutopilot({ config, pred, pro = null, mtf = null, sentiment = null, openCount = 0, lastEntryAt = 0, now = Date.now(), dailyPnl = 0, dayStartBalance = null, todayTrades = 0, aiVeto = false }) {
   const refuse = (reason) => ({ trade: false, reason })
   if (!config.enabled) return refuse("autopilot disabled")
   if (!pred || !pred.direction || pred.direction === "flat") return refuse("no directional signal")
@@ -370,6 +374,18 @@ export function decideAutopilot({ config, pred, pro = null, mtf = null, openCoun
       return refuse(`pro analysis (${proDir}) and ensemble (${pred.direction}) disagree`)
     }
     if (pro.phase?.phase === "volatile_range") return refuse("pro analysis flags a whipsaw range")
+  }
+
+  // Sentiment gate: when enabled, block trades if sentiment strongly opposes
+  // the signal direction. Only active when sentiment data is available.
+  if (config.sentimentGate && sentiment) {
+    const score = Number(sentiment.score) || 0
+    const dirSign = pred.direction === "up" ? 1 : pred.direction === "down" ? -1 : 0
+    const aligned = score * dirSign > 0
+    const minAlign = Number(config.minSentimentAlignment) || 0.3
+    if (Math.abs(score) >= minAlign && !aligned) {
+      return refuse(`sentiment gate: ${score > 0 ? "bullish" : "bearish"} sentiment opposes ${pred.direction} signal (score ${score.toFixed(2)})`)
+    }
   }
 
   const start = Number(dayStartBalance)
@@ -475,11 +491,26 @@ export async function autopilotTick() {
     }
   }
 
+  // Sentiment gate: fetch current sentiment for the asset
+  let sent = null
+  if (config.sentimentGate) {
+    try {
+      const { getSentiment } = await import("./sentimentEngine.mjs")
+      const raw = await getSentiment(config.assetId)
+      if (raw?.composite) {
+        sent = { score: raw.composite.score ?? 0, source: raw.composite.label || "fusion" }
+      }
+    } catch {
+      /* sentiment unavailable — skip gate */
+    }
+  }
+
   const decision = decideAutopilot({
     config,
     pred,
     pro,
     mtf,
+    sentiment: sent,
     openCount: open.length,
     lastEntryAt: config.lastEntryAt || 0,
     now: Date.now(),
