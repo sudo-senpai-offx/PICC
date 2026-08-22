@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   parseMessage,
-  dataToText,
   balanceFrom,
   accountFrom,
   mergeBalanceIntoAccount,
@@ -35,21 +34,6 @@ describe("parseMessage", () => {
     const f = parseMessage('{"id":"x","success":false,"error":"bad token"}')
     expect(f.success).toBe(false)
     expect(f.error).toBe("bad token")
-  })
-})
-
-describe("dataToText", () => {
-  it("passes strings through", async () => {
-    expect(await dataToText('{"a":1}')).toBe('{"a":1}')
-  })
-
-  it("decodes an ArrayBuffer payload", async () => {
-    const buf = new TextEncoder().encode('{"a":1}').buffer
-    expect(await dataToText({ arrayBuffer: async () => buf })).toBe('{"a":1}')
-  })
-
-  it("stringifies anything else", async () => {
-    expect(await dataToText(123)).toBe("123")
   })
 })
 

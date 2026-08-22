@@ -271,11 +271,11 @@ async function todayTradeCount() {
   return file.deals.filter((d) => (d.recordAt ?? "").startsWith(today)).length
 }
 
-async function defaultAmount(balance, riskPct, closes) {
+async function defaultAmount(balance, riskPct, closes, times) {
   // Volatility-adjusted sizing: use GARCH/realized vol to scale position inversely
   if (Array.isArray(closes) && closes.length >= 30) {
     try {
-      const rv = realizedVolatility(closes, { period: 20 })
+      const rv = realizedVolatility(closes, { period: 20, times })
       const currentVol = rv.annual || 0.30
       const sizing = volatilityPositionSize({
         capital: balance,
@@ -415,7 +415,19 @@ async function aiConsents(pred) {
   }
 }
 
+let tickInFlight = false
+
 export async function autopilotTick() {
+  if (tickInFlight) return { ok: false, reason: "tick already in flight" }
+  tickInFlight = true
+  try {
+    return await runAutopilotTick()
+  } finally {
+    tickInFlight = false
+  }
+}
+
+async function runAutopilotTick() {
   const tickId = randomBytes(4).toString("hex")
   const config = await getAutopilotConfig()
   if (!config.enabled) return { ok: false, reason: "autopilot disabled" }
@@ -542,7 +554,7 @@ export async function autopilotTick() {
 
   if (!decision.trade) return { ok: false, reason: decision.reason }
 
-  const amount = await defaultAmount(balance, creds.riskPerTradePct, closes)
+  const amount = await defaultAmount(balance, creds.riskPerTradePct, closes, ohlc.map((c) => c.time))
   const deal = await session.buy({
     assetId: config.assetId,
     type: decision.direction,

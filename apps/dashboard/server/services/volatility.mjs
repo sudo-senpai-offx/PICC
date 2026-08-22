@@ -10,16 +10,36 @@ const mean = (arr) => {
   return a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0
 }
 const stddev = (arr) => {
-  const m = mean(arr)
-  const v = arr.filter((x) => Number.isFinite(x)).reduce((s, x) => s + (x - m) ** 2, 0)
-  return Math.sqrt(v / Math.max(1, arr.length - 1))
+  const a = arr.filter((x) => Number.isFinite(x))
+  if (!a.length) return 0
+  const m = mean(a)
+  const v = a.reduce((s, x) => s + (x - m) ** 2, 0)
+  return Math.sqrt(v / Math.max(1, a.length - 1))
+}
+
+const DAY_SECONDS = 86400
+
+function inferPeriodsPerYear(times) {
+  const ts = Array.isArray(times)
+    ? times.map((t) => Number(t)).filter((t) => Number.isFinite(t) && t > 0)
+    : []
+  const gaps = []
+  for (let i = 1; i < ts.length; i++) {
+    const d = ts[i] - ts[i - 1]
+    if (d > 0) gaps.push(d / 1000)
+  }
+  if (!gaps.length) return 252
+  gaps.sort((a, b) => a - b)
+  const stepSec = gaps[Math.floor(gaps.length / 2)]
+  if (stepSec >= DAY_SECONDS / 4) return 252
+  return 252 * Math.round(DAY_SECONDS / stepSec)
 }
 
 // ---------------------------------------------------------------------
 // Realized volatility (annualized from log returns)
 // ---------------------------------------------------------------------
 
-export function realizedVolatility(closes, { period = 20, annualize = 252 } = {}) {
+export function realizedVolatility(closes, { period = 20, annualize, times } = {}) {
   if (!Array.isArray(closes) || closes.length < period + 1) {
     return { daily: null, annual: null, period }
   }
@@ -34,7 +54,8 @@ export function realizedVolatility(closes, { period = 20, annualize = 252 } = {}
   }
   const recent = logReturns.slice(-period)
   const daily = stddev(recent)
-  const annual = daily * Math.sqrt(annualize)
+  const periodsPerYear = Number.isFinite(annualize) ? annualize : inferPeriodsPerYear(times)
+  const annual = daily * Math.sqrt(periodsPerYear)
   return {
     daily: Math.round(daily * 10000) / 10000,
     annual: Math.round(annual * 10000) / 10000,
@@ -285,7 +306,7 @@ export function volatilitySnapshot(candles, { atrPeriod = 14, rvPeriod = 20, gar
   return {
     ok: true,
     atr: volatilityRegime(candles, { period: atrPeriod }),
-    realized: realizedVolatility(closes, { period: rvPeriod }),
+    realized: realizedVolatility(closes, { period: rvPeriod, times: candles.map((c) => c.time) }),
     parkinson: parkinsonVolatility(candles, { period: rvPeriod }),
     garch: garchEstimate(closes, { period: garchPeriod, forecast: garchForecast }),
     lastPrice: closes[closes.length - 1],

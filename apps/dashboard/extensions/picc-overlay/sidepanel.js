@@ -106,24 +106,34 @@ async function loadSignals() {
   const data = await serverFetch("/trading/intel")
   if (!data || !data.ok) { el.innerHTML = '<div class="empty">No signal data</div>'; return }
   const d = data.data || data
+  const rec = d.recommendation || null
+  const best = d.best || null
+  if (!rec && !best) { el.innerHTML = `<div class="empty">${d.honesty || "No signal data"}</div>`; return }
+  const verdict = rec ? "TRADE" : (best.verdict || "N/A")
+  const confidence = rec?.confidence ?? best.confidence ?? "N/A"
+  const direction = rec ? rec.action : (best.direction || best.action || "N/A")
+  const score = best?.intelScore ?? "N/A"
+  const asset = rec ? rec.market : (best.asset || best.assetId || "N/A")
   el.innerHTML = `
-    <div class="metric"><span class="metric-label">Verdict</span><span class="metric-value" style="color:${d.verdict === "TRADE" ? "#4ade80" : d.verdict === "OBSERVE" ? "#f59e0b" : "#9aa0c0"}">${d.verdict || "N/A"}</span></div>
-    <div class="metric"><span class="metric-label">Confidence</span><span class="metric-value">${d.confidence ?? "N/A"}%</span></div>
-    <div class="metric"><span class="metric-label">Direction</span><span class="metric-value">${d.direction || "N/A"}</span></div>
-    <div class="metric"><span class="metric-label">Score</span><span class="metric-value">${d.score ?? "N/A"}</span></div>
-    <div class="metric"><span class="metric-label">Asset</span><span class="metric-value">${d.asset || d.symbol || "N/A"}</span></div>
+    <div class="metric"><span class="metric-label">Verdict</span><span class="metric-value" style="color:${verdict === "TRADE" ? "#4ade80" : verdict === "OBSERVE" ? "#f59e0b" : "#9aa0c0"}">${verdict}</span></div>
+    <div class="metric"><span class="metric-label">Confidence</span><span class="metric-value">${confidence ?? "N/A"}%</span></div>
+    <div class="metric"><span class="metric-label">Direction</span><span class="metric-value">${direction}</span></div>
+    <div class="metric"><span class="metric-label">Score</span><span class="metric-value">${score}</span></div>
+    <div class="metric"><span class="metric-label">Asset</span><span class="metric-value">${asset}</span></div>
   `
 }
 
 async function loadPortfolio() {
   const el = document.getElementById("portfolio-content")
   const data = await serverFetch("/trading/status")
-  if (!data) { el.innerHTML = '<div class="empty">No portfolio data</div>'; return }
+  if (!data || !data.ok) { el.innerHTML = '<div class="empty">No portfolio data</div>'; return }
+  const eo = data.expertOption || {}
+  const paper = data.paper || {}
   el.innerHTML = `
-    <div class="metric"><span class="metric-label">Balance</span><span class="metric-value">${fmt$(data.balance, data.currency)}</span></div>
-    <div class="metric"><span class="metric-label">Equity</span><span class="metric-value">${fmt$(data.equity, data.currency)}</span></div>
-    <div class="metric"><span class="metric-label">Today P&L</span><span class="metric-value" style="color:${(data.todayPnl ?? 0) >= 0 ? "#4ade80" : "#ff6b6b"}">${fmt$(data.todayPnl, data.currency)}</span></div>
-    <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value">${data.openPositions ?? 0}</span></div>
+    <div class="metric"><span class="metric-label">Balance</span><span class="metric-value">${fmt$(eo.balance, eo.currency)}</span></div>
+    <div class="metric"><span class="metric-label">Paper Cash</span><span class="metric-value">${fmt$(paper.cash, eo.currency)}</span></div>
+    <div class="metric"><span class="metric-label">Realized P&L</span><span class="metric-value" style="color:${(paper.realizedPnl ?? 0) >= 0 ? "#4ade80" : "#ff6b6b"}">${fmt$(paper.realizedPnl, eo.currency)}</span></div>
+    <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value">${paper.openCount ?? 0}</span></div>
   `
 }
 

@@ -58,6 +58,7 @@
   // ── Dock grouping state ──
   const dockGroups = {} // groupId → [dockId, dockId, ...]
   const dockGroupMap = {} // dockId → groupId
+  const groupActiveTab = {} // groupId → currently visible dockId
 
   function saveDockableLayout() {
     const layout = {}
@@ -151,6 +152,7 @@
     const tabBar = document.createElement("div")
     tabBar.style.cssText = "display:flex;align-items:center;background:rgba(26,26,46,0.6);border-bottom:1px solid rgba(42,42,74,0.4);overflow-x:auto;user-select:none;"
     let activeTab = members[0]
+    groupActiveTab[groupId] = activeTab
     const tabEls = {}
 
     for (const dId of members) {
@@ -162,6 +164,7 @@
       tab.textContent = `${preset?.icon || "?"} ${preset?.title || dId}`
       tab.addEventListener("click", () => {
         activeTab = dId
+        groupActiveTab[groupId] = dId
         // Update tab styles
         for (const [tid, tel] of Object.entries(tabEls)) {
           const isActive2 = tid === dId
@@ -332,6 +335,7 @@
     }
     Object.keys(dockGroups).forEach((k) => delete dockGroups[k])
     Object.keys(dockGroupMap).forEach((k) => delete dockGroupMap[k])
+    Object.keys(groupActiveTab).forEach((k) => delete groupActiveTab[k])
   }
 
   // Default dockable presets per suite type
@@ -475,19 +479,26 @@
   // is the ONLY entity that touches the network. This is by design.
   async function serverFetch(path, opts) {
     try {
-      const resp = await chrome.runtime.sendMessage({
+      if (opts?.signal?.aborted) return { ok: false, error: "aborted", data: null }
+      const send = () => chrome.runtime.sendMessage({
         type: "picc-server-fetch",
         path,
         method: opts?.method || "GET",
         body: opts?.body || null,
-        timeout: opts?.timeout || 8000
+        timeout: opts?.timeout || 20000
       })
+      const resp = opts?.signal
+        ? await Promise.race([
+            send(),
+            new Promise((_, rej) => opts.signal.addEventListener("abort", () => rej(new Error("picc-abort")), { once: true }))
+          ])
+        : await send()
       if (!resp || !resp.ok) {
         return { ok: false, error: resp?.error || resp?.status || "unknown", data: null }
       }
       return { ok: true, data: resp.data, status: resp.status }
-    } catch {
-      return { ok: false, error: "extension-context-invalidated", data: null }
+    } catch (err) {
+      return { ok: false, error: err?.message === "picc-abort" ? "aborted" : "extension-context-invalidated", data: null }
     }
   }
 
@@ -525,11 +536,12 @@
 
   async function getPrefs() {
     const resp = await serverFetch("/api/browser/prefs")
-    return resp.ok ? (resp.data || {}) : {}
+    return resp.ok ? (resp.data?.prefs || {}) : {}
   }
 
   async function savePrefsForSite(siteId, prefs) {
-    const resp = await serverFetch("/api/browser/prefs", { method: "POST", body: { site: siteId, ...prefs } })
+    if (!siteId) return null
+    const resp = await serverFetch("/api/browser/prefs", { method: "POST", body: { site: siteId, prefs: prefs || {} } })
     return resp.ok ? resp.data : null
   }
 
@@ -776,8 +788,9 @@
     closeBtn.style.cssText = "background:none;border:none;color:#a5a0ff;cursor:pointer;font-size:10px;padding:1px 4px;border-radius:3px;opacity:.6;"
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation()
-      dock.remove()
       activeDockables = activeDockables.filter((d) => d.id !== id)
+      if (dockGroupMap[id]) ungroupDock(id)
+      dock.remove()
     })
 
     dockBtns.appendChild(toggleBtn)
@@ -1776,8 +1789,14 @@
 
   // ── Fetch and update all trading data ──────────────────────────────────────
   let tradingPollTimer = null
+  let tradingFetchInFlight = false
+  let tradingAbortController = null
 
   async function fetchTradingData() {
+    if (tradingFetchInFlight) return
+    tradingFetchInFlight = true
+    tradingAbortController = new AbortController()
+    const signal = tradingAbortController.signal
     try {
       if (!tradingState.loadingSince) tradingState.loadingSince = Date.now()
       // Always try DOM scraping first (gives live prices on ANY site)
@@ -1811,8 +1830,10 @@
       const primaryAsset = normalizeAssetId(primaryRaw)
       const resp = await serverFetch("/api/extension/trading-data", {
         method: "POST",
-        body: { assetId: primaryAsset, candleCount: 100 }
+        body: { assetId: primaryAsset, candleCount: 100 },
+        signal
       })
+      if (signal.aborted) return
       if (resp && resp.ok) {
         tradingState.serverReachable = true
         tradingState.lastFetchError = null
@@ -1868,6 +1889,7 @@
         // Consolidated endpoint failed — fallback to individual endpoints
         tradingState.serverReachable = false
         tradingState.lastFetchError = resp?.error || "consolidated-failed"
+        if (signal.aborted) return
         const [status, autopilot, demo, decisions] = await Promise.allSettled([
           serverFetch("/api/trading/status"),
           serverFetch("/api/trading/autopilot"),
@@ -1897,7 +1919,8 @@
         if (decisionsVal?.ok && decisionsVal.data?.decisions) tradingState.decisions = decisionsVal.data.decisions
 
         // Fetch candles + advanced analytics individually
-        const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: primaryAsset, timeframe: 60, count: 100 } })
+        const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: primaryAsset, timeframe: 60, count: 100 }, signal })
+        if (signal.aborted) return
         if (candleResp?.ok && candleResp.data?.candles?.length) {
           tradingState.lastCandles = candleResp.data.candles
           const last = candleResp.data.candles[candleResp.data.candles.length - 1]
@@ -1922,6 +1945,9 @@
     } catch {
       tradingState.serverReachable = false
       tradingState.lastFetchError = "fetch-exception"
+    } finally {
+      tradingFetchInFlight = false
+      if (tradingAbortController?.signal === signal) tradingAbortController = null
     }
   }
 
@@ -1955,6 +1981,12 @@
       if (!dock) continue
       const body = dock.querySelector("[data-picc-body]")
       if (body) body.innerHTML = renderer()
+      const gid = dockGroupMap[id]
+      if (gid && groupActiveTab[gid] === id) {
+        const gc = shadowRoot.getElementById(`__PICC_GROUP_${gid}__`)
+        const gBody = gc?.querySelector("[data-picc-group-body]")
+        if (gBody) gBody.innerHTML = renderer()
+      }
     }
   }
 
@@ -1966,6 +1998,7 @@
 
   function stopTradingPoll() {
     if (tradingPollTimer) { clearInterval(tradingPollTimer); tradingPollTimer = null }
+    if (tradingAbortController) { tradingAbortController.abort(); tradingAbortController = null }
   }
 
   // ── Create dockables with live-rendered content ────────────────────────────

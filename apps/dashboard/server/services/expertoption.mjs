@@ -141,17 +141,6 @@ function dedupe(list) {
   return [...new Set(list.filter(Boolean))]
 }
 
-/** Coerce a WebSocket message payload into text (handles Blob/ArrayBuffer). */
-export async function dataToText(data) {
-  if (typeof data === "string") return data
-  if (data == null) return ""
-  if (typeof data === "object" && typeof data.arrayBuffer === "function") {
-    const buf = await data.arrayBuffer()
-    return Buffer.from(buf).toString("utf8")
-  }
-  return String(data)
-}
-
 /** Parse one incoming WS frame into { action, msg, id, ok, success, error, payload }. Loose by design. */
 export function parseMessage(raw) {
   let obj
@@ -435,12 +424,8 @@ export function expirationShift({ duration = 60, assetId = null, now = Math.floo
   const step = MINUTE_BOUNDARY_ASSETS.has(Number(assetId)) ? 60 : 5
   const purchaseTime = now % step
   const durationShift = Math.max(5, Math.round(Number(duration) || 60)) - 5
-  let shift
-  if (purchaseTime >= 55) shift = step - purchaseTime + durationShift
-  else if (purchaseTime > 45) shift = step - purchaseTime + durationShift
-  else if (purchaseTime >= durationShift) shift = step - purchaseTime + durationShift
-  else if (purchaseTime > durationShift - 5) shift = step - purchaseTime + durationShift
-  else shift = durationShift - purchaseTime
+  const missedCycle = purchaseTime > 45 || purchaseTime >= durationShift || purchaseTime > durationShift - 5
+  const shift = missedCycle ? step - purchaseTime + durationShift : durationShift - purchaseTime
   return Math.max(1, Math.min(Number(maxSec), Math.round(shift)))
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { computeAdaptiveStops } from "../services/trading.mjs"
 import { predictDirection, backtestModels } from "../services/prediction.mjs"
 import { detectRegime } from "../services/regimeDetection.mjs"
-import { confluenceRead, winProbEstimate, pricePathRR, evGate, mtfConfirm, mttdEstimate } from "../services/adaptiveConfluence.mjs"
+import { confluenceRead, winProbEstimate, pricePathRR, evGate, mttdEstimate } from "../services/adaptiveConfluence.mjs"
 import { computeKelly, kellySnapshot } from "../services/kellyCriterion.mjs"
 import { optimizeExpiry } from "../services/expiryOptimizer.mjs"
 import { analyzeOrderFlow } from "../services/orderFlow.mjs"
@@ -145,14 +145,6 @@ describe("EV Gate", () => {
   it("rejects negative EV", () => {
     const gate = evGate({ winProb: 0.4, payoutPct: 80 })
     expect(gate.ev).toBeLessThan(0)
-  })
-})
-
-describe("MTF Confirm", () => {
-  it("returns 0 agree for missing asset", () => {
-    const result = mtfConfirm({ asset: null, primaryDirection: 1 })
-    expect(result.agree).toBe(0)
-    expect(result.total).toBe(0)
   })
 })
 

@@ -242,47 +242,6 @@ export function winProbEstimate({ closes, times = null, period = ANALYSIS_PERIOD
 }
 
 // ---------------------------------------------------------------------
-// Multi-timeframe confirmation
-// ---------------------------------------------------------------------
-
-/**
- * Check if higher timeframes agree with the primary (60s) direction.
- * Uses the liveEO asset's periods map: [60, 300, 900] (1m, 5m, 15m).
- * Returns a confidence boost/penalty and a list of agreeing TFs.
- */
-export function mtfConfirm({ asset, primaryDirection, primaryPeriod = 60 } = {}) {
-  if (!asset || primaryDirection === 0) return { agree: 0, total: 0, boost: 0, tfDetails: [] }
-  const periods = asset.periods || {}
-  const tfSeconds = [300, 900] // check 5m and 15m against the 1m primary
-  const details = []
-  let agree = 0
-  let checked = 0
-  for (const tf of tfSeconds) {
-    const candles = periods[tf]
-    if (!Array.isArray(candles) || candles.length < 12) continue
-    checked += 1
-    const closes = candles.map((c) => Number(c.close ?? c.c)).filter((v) => Number.isFinite(v) && v > 0)
-    if (closes.length < 12) continue
-    // Simple EMA-12 direction on higher TF
-    let sum = 0
-    let weight = 0
-    const alpha = 2 / (12 + 1)
-    let ema = closes[0]
-    for (let i = 1; i < closes.length; i++) {
-      ema = alpha * closes[i] + (1 - alpha) * ema
-    }
-    const emaShort = (() => { let e = closes[0]; for (let i = 1; i < closes.length; i++) { e = 2 / (5 + 1) * closes[i] + (1 - 2 / (5 + 1)) * e } return e })()
-    const tfDir = Math.abs(emaShort - ema) < 1e-12 ? 0 : emaShort > ema ? 1 : -1
-    const matches = tfDir === primaryDirection
-    if (matches) agree += 1
-    details.push({ tf, dir: tfDir, matches })
-  }
-  // Boost: +0.05 per agreeing higher TF, -0.03 per disagreeing
-  const boost = checked > 0 ? (agree * 0.05 - (checked - agree) * 0.03) : 0
-  return { agree, total: checked, boost: round(boost, 4), tfDetails: details }
-}
-
-// ---------------------------------------------------------------------
 // Sentiment scoring (news + social)
 // ---------------------------------------------------------------------
 
@@ -623,6 +582,7 @@ let timer = null
 let cached = null
 let cachedAt = 0
 let inflight = null
+let bootStarted = false
 const decisionSubs = new Set()
 const logCooldowns = new Map()
 
@@ -718,6 +678,19 @@ async function logTradeVerdicts(decisions) {
 
 async function computeNow() {
   const data = liveEOData()
+  if (!Array.isArray(data?.assets) || data.assets.length === 0) {
+    cached = {
+      ts: Date.now(),
+      status: data.status,
+      mode: data.mode,
+      account: data.account,
+      viewed: data.viewed,
+      decisions: []
+    }
+    cachedAt = cached.ts
+    emitDecisions()
+    return cached
+  }
   const observedPayout = await loadObservedPayouts()
   const decisions = await decideAssets({ data, observedPayout, now: Date.now() })
   cached = {
@@ -756,10 +729,12 @@ function startEngine() {
 
 /** Boot-time entry point — keeps the decision engine running unconditionally. */
 export function startDecisionEngine() {
+  bootStarted = true
   startEngine()
 }
 
 export function stopDecisionEngine() {
+  bootStarted = false
   clearTimeout(timer)
   timer = null
   if (liveOff) {
@@ -787,7 +762,7 @@ export function subscribeDecisions(cb) {
   }
   return () => {
     decisionSubs.delete(cb)
-    if (decisionSubs.size === 0) stopDecisionEngine()
+    if (decisionSubs.size === 0 && !bootStarted) stopDecisionEngine()
   }
 }
 

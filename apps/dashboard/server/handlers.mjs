@@ -185,7 +185,11 @@ function validTier(tier) {
 }
 
 function withTimeout(promise, ms) {
-  return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))])
+  let timer
+  const timeout = new Promise((_, rej) => {
+    timer = setTimeout(() => rej(new Error("timeout")), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 const AUTOMATOR_SECRET_FIELDS = [
@@ -1863,7 +1867,8 @@ async function _handleApiInner(req, res, url, reqId) {
     try {
       const { getHistory } = await import("./services/yahoo.mjs")
       const { detectPatterns, patternSummary } = await import("./services/patterns.mjs")
-      const hist = await getHistory(symbol, count)
+      const range = count > 500 ? "5y" : count > 200 ? "2y" : count > 100 ? "1y" : "6mo"
+      const hist = await getHistory(symbol, range)
       if (!hist || !hist.closes?.length) return writeJson(res, 404, { error: "No data" })
       const candles = hist.dates.map((time, i) => ({
         time,
@@ -2235,10 +2240,10 @@ async function _handleApiInner(req, res, url, reqId) {
     try {
       const liveStats = liveEOStats()
       result.expertOption = {
-        connected: liveStats?.connected ?? false,
-        mode: liveStats?.mode ?? "disconnected",
-        viewedAssets: liveStats?.viewedAssets ?? 0,
-        lastCandleAt: liveStats?.lastCandleAt ?? null
+        connected: liveStats?.status === "connected",
+        status: liveStats?.status ?? "idle",
+        viewed: liveStats?.viewed ?? null,
+        lastSeen: Number(liveStats?.lastSeen) > 0 ? new Date(liveStats.lastSeen).toISOString() : null
       }
     } catch { result.expertOption = { connected: false, error: "failed" } }
     try {
