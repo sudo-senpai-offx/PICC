@@ -18,6 +18,43 @@
   const dockableSizes = {}
   const dockableOpacities = {}
 
+  // ── MV3 state persistence (chrome.storage.local) ──
+  // Saves overlay state so it survives service worker restarts and loads instantly.
+  const MV3_STATE_KEY = "piccOverlayState"
+  let mv3SaveTimer = null
+
+  function saveOverlayStateLocal() {
+    clearTimeout(mv3SaveTimer)
+    mv3SaveTimer = setTimeout(() => {
+      try {
+        const layout = {}
+        for (const d of activeDockables) {
+          layout[d.id] = {
+            position: dockablePositions[d.id] || null,
+            size: dockableSizes[d.id] || null,
+            opacity: dockableOpacities[d.id] ?? null
+          }
+        }
+        const state = {
+          settings: currentSettings,
+          layout,
+          groups: dockGroups,
+          siteId: currentSite?.id || null,
+          siteSuite: currentSite?.suite || null,
+          timestamp: Date.now()
+        }
+        chrome.storage.local.set({ [MV3_STATE_KEY]: state })
+      } catch { /* storage quota or context destroyed */ }
+    }, 300)
+  }
+
+  function loadOverlayStateLocal() {
+    try {
+      const raw = localStorage.getItem(MV3_STATE_KEY)
+      return raw ? JSON.parse(raw) : null
+    } catch { return null }
+  }
+
   // ── Dock grouping state ──
   const dockGroups = {} // groupId → [dockId, dockId, ...]
   const dockGroupMap = {} // dockId → groupId
@@ -37,6 +74,7 @@
         savePrefsForSite(currentSite.id, { overlaySettings: settings }).catch(() => {})
       }
     } catch {}
+    saveOverlayStateLocal()
   }
 
   // ── Dock grouping (Krita/Photoshop-style tab stacking) ──
@@ -364,7 +402,11 @@
   shadowHost.id = "__PICC_SHADOW_HOST__"
   shadowHost.style.cssText = "all:initial;position:fixed;z-index:2147483647;top:0;left:0;width:0;height:0;"
   document.body.appendChild(shadowHost)
-  const shadowRoot = shadowHost.attachShadow({ mode: "open" })
+  const shadowRoot = shadowHost.attachShadow({ mode: "closed" })
+  // Prevent host styles from leaking into shadow DOM
+  const hostStyle = document.createElement("style")
+  hostStyle.textContent = ":host{all:initial;position:fixed;z-index:2147483647;top:0;left:0;width:0;height:0;}"
+  shadowRoot.appendChild(hostStyle)
 
   // ── Site detection ──────────────────────────────────────────────────────────
   const SITE_PROFILES = [
@@ -2234,6 +2276,7 @@
       overlayVisible = false
       stopTradingPoll()
       // Save current config on close so defaults persist for next open
+      saveOverlayStateLocal()
       if (siteInfo?.id) savePrefsForSite(siteInfo.id, { overlay: false, overlaySettings: currentSettings })
       el.remove()
       activeDockables.forEach((d) => { const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`); if (dockEl) dockEl.remove() })
@@ -2301,6 +2344,31 @@
 
     const siteInfo = detectSite(window.location.href)
     let overlaySettings = {}
+
+    // MV3 fast-path: load local state instantly (no server roundtrip)
+    try {
+      const localState = await new Promise((resolve) => {
+        chrome.storage.local.get(MV3_STATE_KEY, (data) => resolve(data[MV3_STATE_KEY] || null))
+      })
+      if (localState?.settings && localState.siteId === siteInfo?.id) {
+        overlaySettings = { ...localState.settings, dockableLayout: localState.layout || {}, _siteSpecific: true }
+        // Apply immediately, then refresh from server in background
+        createOverlay(siteInfo, overlaySettings)
+        // Background refresh from server (updates local if different)
+        getPrefs().then((prefs) => {
+          const sitePrefs = prefs[siteInfo?.id]
+          if (sitePrefs?.overlaySettings) {
+            const serverSettings = sitePrefs.overlaySettings
+            // Only re-create if server has different settings
+            if (JSON.stringify(serverSettings) !== JSON.stringify(overlaySettings)) {
+              createOverlay(siteInfo, { ...serverSettings, _siteSpecific: true })
+            }
+          }
+        }).catch(() => {})
+        return
+      }
+    } catch { /* chrome.storage unavailable */ }
+
     if (siteInfo?.id) {
       const prefs = await getPrefs()
       const sitePrefs = prefs[siteInfo.id]
