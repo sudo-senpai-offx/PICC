@@ -57,17 +57,26 @@ export function PortfolioPanel() {
   const [symbols, setSymbols] = useState(DEFAULT_SYMBOLS.join(", "))
   const [data, setData] = useState<PortfolioAnalytics | null>(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [days, setDays] = useState(90)
 
   const refresh = useCallback(async () => {
+    const syms = symbols.split(/[,;\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean)
+    if (syms.length === 0) {
+      setError("Enter at least one symbol.")
+      return
+    }
     setLoading(true)
+    setError(null)
     try {
-      const syms = symbols.split(/[,;\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean)
-      if (syms.length === 0) return
       const res = await getPortfolioAnalytics(syms, undefined, days)
       if (res.ok) setData(res)
-    } catch { /* ignore */ }
-    setLoading(false)
+      else setError("Analytics request failed")
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load portfolio analytics")
+    } finally {
+      setLoading(false)
+    }
   }, [symbols, days])
 
   useEffect(() => { refresh() }, [])
@@ -220,7 +229,13 @@ export function PortfolioPanel() {
         </>
       )}
 
-      {!data && !loading && (
+      {error && (
+        <div style={{ fontSize: 11, color: "var(--danger)", textAlign: "center", padding: 8 }}>
+          {error}
+        </div>
+      )}
+
+      {!data && !error && !loading && (
         <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", padding: 20 }}>
           Enter symbols above and click Analyze
         </div>

@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Badge, Button, Card, Field, Input, Select, Spinner } from "@/components/ui"
 import { getAutopilotConfig, saveAutopilotConfig, startAutopilot, stopAutopilot, getExpertOptionDemoStatus } from "@/lib/trading"
 import type { AutopilotConfig, ExpertOptionDemoStatus } from "@/lib/trading"
 
 const REFRESH_MS = 10_000
+const SAVE_DEBOUNCE_MS = 600
 
 export function AutopilotControls() {
   const [config, setConfig] = useState<AutopilotConfig | null>(null)
   const [status, setStatus] = useState<ExpertOptionDemoStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingPatchRef = useRef<Record<string, unknown>>({})
+  const saveSeqRef = useRef(0)
 
   const refresh = useCallback(async () => {
     try {
@@ -27,29 +32,60 @@ export function AutopilotControls() {
     return () => clearInterval(timer)
   }, [refresh])
 
+  // Best-effort flush of unsaved edits on unmount.
+  useEffect(() => () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    const patch = pendingPatchRef.current
+    pendingPatchRef.current = {}
+    if (Object.keys(patch).length > 0) {
+      void saveAutopilotConfig(patch).catch(() => { /* unmounting — nothing to surface */ })
+    }
+  }, [])
+
   const toggleAutopilot = async () => {
     if (!config) return
     setSaving(true)
+    setError(null)
     try {
       const res = config.enabled ? await stopAutopilot("manual") : await startAutopilot()
       setConfig(res.config)
-    } catch {
-      /* best effort */
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to toggle autopilot")
     } finally {
       setSaving(false)
     }
   }
 
-  const updateField = async (field: string, value: unknown) => {
+  const updateField = (field: string, value: unknown) => {
     if (!config) return
+    setError(null)
+    // Optimistic local update so inputs stay responsive while typing.
+    setConfig({ ...config, [field]: value } as AutopilotConfig)
+    // Coalesce edits and save once the user pauses (a POST per keystroke raced
+    // with itself and flooded the server).
+    pendingPatchRef.current = { ...pendingPatchRef.current, [field]: value }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      const patch = pendingPatchRef.current
+      pendingPatchRef.current = {}
+      void flushSave(patch)
+    }, SAVE_DEBOUNCE_MS)
+  }
+
+  const flushSave = async (patch: Record<string, unknown>) => {
+    if (Object.keys(patch).length === 0) return
+    const seq = ++saveSeqRef.current
     setSaving(true)
     try {
-      const res = await saveAutopilotConfig({ [field]: value })
+      const res = await saveAutopilotConfig(patch as Partial<AutopilotConfig>)
+      if (seq !== saveSeqRef.current) return // a newer save superseded this one
       setConfig(res.config)
-    } catch {
-      /* best effort */
+    } catch (e) {
+      if (seq === saveSeqRef.current) {
+        setError(e instanceof Error ? e.message : "Failed to save configuration")
+      }
     } finally {
-      setSaving(false)
+      if (seq === saveSeqRef.current) setSaving(false)
     }
   }
 
@@ -105,6 +141,11 @@ export function AutopilotControls() {
       {config && (
         <Card className="pad">
           <strong className="small" style={{ marginBottom: 8, display: "block" }}>Configuration</strong>
+          {error && (
+            <div className="small" style={{ marginBottom: 8, padding: 6, background: "var(--bg)", borderRadius: 4, color: "var(--danger)" }}>
+              {error}
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <Field label="Asset">
               <Input

@@ -34,6 +34,7 @@ interface UseCandleDataResult {
   kcLower: EmaDatum[]
   loading: boolean
   error: string | null
+  streamError: string | null
   lastPrice: number | null
   timeframe: Timeframe
   setTimeframe: (tf: Timeframe) => void
@@ -166,6 +167,7 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
   const [candles, setCandles] = useState<CandleDatum[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [streamError, setStreamError] = useState<string | null>(null)
   const [lastPrice, setLastPrice] = useState<number | null>(null)
   const [timeframe, setTimeframe] = useState<Timeframe>(initialTf)
   const candlesRef = useRef<CandleDatum[]>([])
@@ -191,78 +193,98 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     return () => { alive = false }
   }, [assetId, timeframe, count])
 
-  // Subscribe to SSE live ticks for real-time updates
+  // Subscribe to SSE live ticks for real-time updates. Reconnects with capped
+  // exponential backoff — a dropped stream used to freeze the chart silently.
+  // `timeframe` is a dependency on purpose: tick bucketing must track it or the
+  // current candle gets built for a stale timeframe after a switch.
   useEffect(() => {
     const ctrl = new AbortController()
-    const headers: Record<string, string> = {}
-    const token = getToken()
-    if (token) headers.Authorization = `Bearer ${token}`
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let attempt = 0
 
-    fetch(`${BASE}/trading/realtime`, { headers, signal: ctrl.signal })
-      .then(async (res) => {
-        if (!res.ok || !res.body) return
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ""
-        let lastEvent = ""
+    const connect = () => {
+      const headers: Record<string, string> = {}
+      const token = getToken()
+      if (token) headers.Authorization = `Bearer ${token}`
 
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const parts = buffer.split("\n\n")
-          buffer = parts.pop() ?? ""
+      fetch(`${BASE}/trading/realtime`, { headers, signal: ctrl.signal })
+        .then(async (res) => {
+          if (!res.ok || !res.body) throw new Error(`realtime stream failed (${res.status})`)
+          attempt = 0
+          setStreamError(null)
+          const reader = res.body.getReader()
+          const decoder = new TextDecoder()
+          let buffer = ""
+          let lastEvent = ""
 
-          for (const part of parts) {
-            const evLine = part.split("\n").find((l) => l.startsWith("event:"))
-            const dataLine = part.split("\n").find((l) => l.startsWith("data:"))
-            if (evLine) lastEvent = evLine.slice(6).trim()
-            if (!dataLine) continue
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const parts = buffer.split("\n\n")
+            buffer = parts.pop() ?? ""
 
-            if (lastEvent === "tick") {
-              try {
-                const tick = JSON.parse(dataLine.slice(5).trim()) as LiveTick
-                if (tick.assetId === assetId && typeof tick.price === "number" && tick.price > 0) {
-                  setLastPrice(tick.price)
-                  const tfSec = timeframe
-                  const bucket = Math.floor(tick.ts / 1000 / tfSec) * tfSec
-                  setCandles((prev) => {
-                    const next = [...prev]
-                    const last = next[next.length - 1]
-                    if (last && (last.time as unknown as number) === bucket) {
-                      next[next.length - 1] = {
-                        ...last,
-                        high: Math.max(last.high, tick.price),
-                        low: Math.min(last.low, tick.price),
-                        close: tick.price
+            for (const part of parts) {
+              const evLine = part.split("\n").find((l) => l.startsWith("event:"))
+              const dataLine = part.split("\n").find((l) => l.startsWith("data:"))
+              if (evLine) lastEvent = evLine.slice(6).trim()
+              if (!dataLine) continue
+
+              if (lastEvent === "tick") {
+                try {
+                  const tick = JSON.parse(dataLine.slice(5).trim()) as LiveTick
+                  if (tick.assetId === assetId && typeof tick.price === "number" && tick.price > 0) {
+                    setLastPrice(tick.price)
+                    const tfSec = timeframe
+                    const bucket = Math.floor(tick.ts / 1000 / tfSec) * tfSec
+                    setCandles((prev) => {
+                      const next = [...prev]
+                      const last = next[next.length - 1]
+                      if (last && (last.time as unknown as number) === bucket) {
+                        next[next.length - 1] = {
+                          ...last,
+                          high: Math.max(last.high, tick.price),
+                          low: Math.min(last.low, tick.price),
+                          close: tick.price
+                        }
+                      } else if (!last || (last.time as unknown as number) < bucket) {
+                        next.push({
+                          time: bucket as unknown as import("lightweight-charts").Time,
+                          open: tick.price,
+                          high: tick.price,
+                          low: tick.price,
+                          close: tick.price
+                        })
+                        if (next.length > count) next.shift()
                       }
-                    } else if (!last || (last.time as unknown as number) < bucket) {
-                      next.push({
-                        time: bucket as unknown as import("lightweight-charts").Time,
-                        open: tick.price,
-                        high: tick.price,
-                        low: tick.price,
-                        close: tick.price
-                      })
-                      if (next.length > count) next.shift()
-                    }
-                    candlesRef.current = next
-                    return next
-                  })
+                      candlesRef.current = next
+                      return next
+                    })
+                  }
+                } catch {
+                  /* ignore malformed ticks */
                 }
-              } catch {
-                /* ignore malformed ticks */
               }
             }
           }
-        }
-      })
-      .catch(() => {
-        /* stream ended or aborted — not an error */
-      })
+          // Clean server-side close still counts as stream death so we reconnect.
+          throw new Error("realtime stream ended")
+        })
+        .catch((err) => {
+          if (ctrl.signal.aborted) return // intentional close — not a failure
+          setStreamError(err instanceof Error ? err.message : "realtime stream failed")
+          const delay = Math.min(15000, 1000 * 2 ** attempt)
+          attempt += 1
+          retryTimer = setTimeout(connect, delay)
+        })
+    }
 
-    return () => ctrl.abort()
-  }, [assetId, count])
+    connect()
+    return () => {
+      ctrl.abort()
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }, [assetId, count, timeframe])
 
   const volumes = computeVolumes(candles)
   const ema20 = computeEma(candles, 20)
@@ -274,5 +296,5 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     setTimeframe(tf)
   }, [])
 
-  return { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, lastPrice, timeframe, setTimeframe: handleSetTimeframe }
+  return { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe }
 }

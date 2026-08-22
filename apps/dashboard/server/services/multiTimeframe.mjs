@@ -289,7 +289,7 @@ export function multiTimeframeConfluence(opts = {}) {
 
 /**
  * Quick MTF check using only LiveEO periods (for the decision engine).
- * Returns a simple { agree, total, boost } compatible with mtfConfirm().
+ * Returns a simple { agree, total, boost } shape.
  */
 export function quickMtfCheck(asset, primaryDirection) {
   if (!asset || primaryDirection === 0) return { agree: 0, total: 0, boost: 0, tfDetails: [] }

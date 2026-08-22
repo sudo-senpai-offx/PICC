@@ -75,6 +75,7 @@ function CandlestickChartInner({
   senkouA,
   senkouB,
   kcUpper,
+  kcMiddle,
   kcLower,
   height = 360,
   onCrosshair,
@@ -91,6 +92,7 @@ function CandlestickChartInner({
   const senkouASeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const senkouBSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const kcUpperSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const kcMiddleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const kcLowerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const onCrosshairRef = useRef(onCrosshair)
   onCrosshairRef.current = onCrosshair
@@ -158,6 +160,9 @@ function CandlestickChartInner({
     const kl = chart.addSeries(LineSeries, {
       color: "rgba(236, 72, 153, 0.5)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false
     })
+    const km = chart.addSeries(LineSeries, {
+      color: "rgba(236, 72, 153, 0.8)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false
+    })
 
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.time || !param.seriesData) {
@@ -186,6 +191,7 @@ function CandlestickChartInner({
     senkouASeriesRef.current = sA
     senkouBSeriesRef.current = sB
     kcUpperSeriesRef.current = ku
+    kcMiddleSeriesRef.current = km
     kcLowerSeriesRef.current = kl
 
     return () => {
@@ -200,6 +206,7 @@ function CandlestickChartInner({
       senkouASeriesRef.current = null
       senkouBSeriesRef.current = null
       kcUpperSeriesRef.current = null
+      kcMiddleSeriesRef.current = null
       kcLowerSeriesRef.current = null
     }
   }, []) // Only create chart once on mount
@@ -254,19 +261,8 @@ function CandlestickChartInner({
   useEffect(() => { if (senkouASeriesRef.current && senkouA?.length) senkouASeriesRef.current.setData(senkouA as never[]) }, [senkouA])
   useEffect(() => { if (senkouBSeriesRef.current && senkouB?.length) senkouBSeriesRef.current.setData(senkouB as never[]) }, [senkouB])
   useEffect(() => { if (kcUpperSeriesRef.current && kcUpper?.length) kcUpperSeriesRef.current.setData(kcUpper as never[]) }, [kcUpper])
+  useEffect(() => { if (kcMiddleSeriesRef.current && kcMiddle?.length) kcMiddleSeriesRef.current.setData(kcMiddle as never[]) }, [kcMiddle])
   useEffect(() => { if (kcLowerSeriesRef.current && kcLower?.length) kcLowerSeriesRef.current.setData(kcLower as never[]) }, [kcLower])
-
-  // Handle resize
-  useEffect(() => {
-    if (!containerRef.current || !chartRef.current) return
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({ width: containerRef.current.clientWidth })
-      }
-    })
-    ro.observe(containerRef.current)
-    return () => ro.disconnect()
-  }, [])
 
   const refFn = useCallback((el: HTMLDivElement | null) => {
     containerRef.current = el

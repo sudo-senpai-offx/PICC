@@ -19,7 +19,7 @@ function fmtPrice(n: number | null): string {
 }
 
 export function TradingChart({ assetId, label, height = 380, onCrosshair }: TradingChartProps) {
-  const { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, lastPrice, timeframe, setTimeframe } = useCandleData({
+  const { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, streamError, lastPrice, timeframe, setTimeframe } = useCandleData({
     assetId,
     timeframe: 300
   })
@@ -52,6 +52,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
               {isUp ? "+" : ""}{change.toFixed(4)} ({isUp ? "+" : ""}{changePct.toFixed(2)}%)
             </Badge>
           ) : null}
+          {streamError ? <Badge tone="warn">stream offline — retrying</Badge> : null}
         </div>
         <div className="row gap" style={{ alignItems: "center" }}>
           {display ? (

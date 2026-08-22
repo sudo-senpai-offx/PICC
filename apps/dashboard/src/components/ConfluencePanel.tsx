@@ -1,27 +1,8 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Badge, Card, Spinner } from "@/components/ui"
+import { getTradingDecisions, type LiveDecision } from "@/lib/liveTrading"
 
 const REFRESH_MS = 20_000
-
-interface Decision {
-  assetId: string
-  asset: string
-  verdict: "TRADE" | "OBSERVE" | "NEUTRAL"
-  direction: string
-  score: number
-  confidence: number
-  phase: string
-  phaseLabel: string
-  expiry: number | null
-  winProb: number | null
-  ev: number | null
-  payout: number | null
-  gates: Record<string, boolean>
-  groups: { trend: number; momentum: number; volatility: number; volume: number }
-  mtf?: { agree: number; total: number; details: { tf: number; dir: number; matches: boolean }[] }
-  sentiment?: { score: number; source: string; aligned: boolean }
-  reasons: string[]
-}
 
 function verdictBadge(v: string) {
   if (v === "TRADE") return <Badge tone="success">TRADE</Badge>
@@ -38,8 +19,8 @@ function GaugeBar({ value, max = 1, color = "var(--accent)" }: { value: number; 
   )
 }
 
-function DecisionCard({ d }: { d: Decision }) {
-  const groups = d.groups || {}
+function DecisionCard({ d }: { d: LiveDecision }) {
+  const groups: Record<string, number> = d.groups ?? {}
   return (
     <div style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
       <div className="row-between" style={{ marginBottom: 4 }}>
@@ -55,7 +36,7 @@ function DecisionCard({ d }: { d: Decision }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 12px", fontSize: 11, color: "var(--text-muted)" }}>
         <div>Score: {d.score?.toFixed(3)}</div>
-        <div>Phase: {d.phase}</div>
+        <div>Phase: {d.phase ?? "—"}</div>
         {d.winProb != null && <div>Win prob: {(d.winProb * 100).toFixed(1)}%</div>}
         {d.ev != null && <div>EV: {(d.ev * 100).toFixed(1)}%</div>}
         {d.payout != null && <div>Payout: {d.payout}%</div>}
@@ -86,22 +67,27 @@ function DecisionCard({ d }: { d: Decision }) {
 }
 
 export function ConfluencePanel({ maxItems = 8 }: { maxItems?: number }) {
-  const [decisions, setDecisions] = useState<Decision[]>([])
+  const [decisions, setDecisions] = useState<LiveDecision[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const hasDataRef = useRef(false)
 
   useEffect(() => {
     let active = true
     async function load() {
       try {
-        const res = await fetch("/api/trading/decisions")
-        if (!res.ok) throw new Error(`${res.status}`)
-        const data = await res.json()
+        const data = await getTradingDecisions()
         if (!active) return
         setDecisions((data.decisions ?? []).slice(0, maxItems))
+        hasDataRef.current = true
         setError(null)
-      } catch (e: any) {
-        if (active) setError(e?.message ?? "failed")
+      } catch (e) {
+        // Keep stale rows visible after the first successful load — a single
+        // failed poll should not blank the panel. Only surface failures while
+        // there is nothing to render.
+        if (active && !hasDataRef.current) {
+          setError(e instanceof Error ? e.message : "failed to load decisions")
+        }
       } finally {
         if (active) setLoading(false)
       }

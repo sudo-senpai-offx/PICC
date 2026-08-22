@@ -8,6 +8,7 @@
  * re-seeds the whole watch set (~20s) so every card stays fresh.
  */
 
+import { getToken } from "@/lib/auth"
 import type {
   ClosedTrade,
   DemoAnalyticsResult,
@@ -129,6 +130,14 @@ export interface LiveDecision {
   bars: number
   reasons: string[]
   ts: number
+  // Adaptive-confluence extras attached server-side (REST snapshots and the
+  // enriched SSE "decision" event carry them; see adaptiveConfluence.mjs).
+  quadrant?: string | null
+  adx?: number | null
+  atrPct?: number | null
+  groups?: { trend: number; momentum: number; volatility: number; volume: number }
+  mtf?: { agree: number; total: number; details: { tf: number; dir: number; matches: boolean }[] }
+  sentiment?: { score: number; source: string; aligned: boolean }
 }
 
 export interface LiveDecisions {
@@ -380,12 +389,3 @@ export async function getMarketIntel(): Promise<MarketIntel> {
   return (await res.json()) as MarketIntel
 }
 
-function getToken(): string | null {
-  try {
-    const raw = localStorage.getItem("picc.auth")
-    if (!raw) return null
-    return (JSON.parse(raw) as { access_token?: string }).access_token ?? null
-  } catch {
-    return null
-  }
-}

@@ -258,9 +258,9 @@ function GroupContainer({
 }) {
   const groupRef = useRef<HTMLDivElement>(null)
   const activeDock = docks.find((d) => d.tabActive) || docks[0]
-  if (!activeDock) return null
 
-  // Tab drag listeners
+  // Tab drag listeners. Declared before any conditional return — hook order
+  // must stay stable across renders, including when a group is transiently empty.
   useEffect(() => {
     const draggingTab = docks.find((d) => (d as any)._tabDragging)
     if (!draggingTab) return
@@ -270,6 +270,8 @@ function GroupContainer({
     window.addEventListener("mouseup", onUp)
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp) }
   }, [docks, onTabDrag, onTabDragEnd])
+
+  if (!activeDock) return null
 
   return (
     <div

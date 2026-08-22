@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Badge, Button, Card, Input, Select } from "@/components/ui"
-import { openPaperTrade, placeDemoTrade, getExpertOptionDemoStatus } from "@/lib/trading"
+import { openPaperTrade, placeDemoTrade, getExpertOptionDemoStatus, getWatchlistQuotes } from "@/lib/trading"
 
 interface TradeOrderFormProps {
   prefill?: {
@@ -28,6 +28,23 @@ export function TradeOrderForm({ prefill, onPlaced }: TradeOrderFormProps) {
   const [mode, setMode] = useState<"paper" | "demo">("paper")
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [entryPrice, setEntryPrice] = useState("")
+  const entryTouchedRef = useRef(false)
+
+  // Best-effort prefill of the paper entry price from the watchlist quotes.
+  useEffect(() => {
+    let alive = true
+    getWatchlistQuotes()
+      .then((res) => {
+        if (!alive) return
+        const q = res.symbols?.find((s) => s.symbol === symbol)
+        if (q && typeof q.last === "number" && q.last > 0 && !entryTouchedRef.current) {
+          setEntryPrice(String(q.last))
+        }
+      })
+      .catch(() => { /* prefill is optional */ })
+    return () => { alive = false }
+  }, [symbol])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -46,12 +63,18 @@ export function TradeOrderForm({ prefill, onPlaced }: TradeOrderFormProps) {
         const res = await placeDemoTrade({ assetId: symbol, type, amount: amt, duration: exp })
         setResult({ ok: true, message: `Demo trade placed: ${res.deal?.asset ?? symbol} ${type} $${amt} @ ${exp}s` })
       } else {
-        const res = await openPaperTrade({ symbol, side, entry: 0, amount: amt })
-        setResult({ ok: true, message: `Paper trade opened: ${res.position?.symbol ?? symbol} ${side} $${amt}` })
+        // The server rejects paper trades with a non-positive entry price.
+        const entry = Number(entryPrice)
+        if (!Number.isFinite(entry) || entry <= 0) {
+          setResult({ ok: false, message: "Paper trades need an entry price above 0." })
+          return
+        }
+        const res = await openPaperTrade({ symbol, side, entry, amount: amt })
+        setResult({ ok: true, message: `Paper trade opened: ${res.position?.symbol ?? symbol} ${side} $${amt} @ ${entry}` })
       }
       onPlaced?.()
-    } catch (err: any) {
-      setResult({ ok: false, message: err?.message ?? "Trade failed" })
+    } catch (err) {
+      setResult({ ok: false, message: err instanceof Error ? err.message : "Trade failed" })
     } finally {
       setLoading(false)
     }
@@ -115,6 +138,21 @@ export function TradeOrderForm({ prefill, onPlaced }: TradeOrderFormProps) {
             </div>
           </div>
         </div>
+
+        {mode === "paper" && (
+          <label className="field" style={{ margin: 0 }}>
+            <span className="field-label" style={{ fontSize: 11 }}>Entry Price</span>
+            <Input
+              type="number"
+              step="any"
+              min={0}
+              value={entryPrice}
+              onChange={(e) => { entryTouchedRef.current = true; setEntryPrice(e.target.value) }}
+              placeholder="Current market price"
+              style={{ fontSize: 12 }}
+            />
+          </label>
+        )}
 
         <div>
           <span className="field-label" style={{ fontSize: 11, display: "block", marginBottom: 2 }}>Direction</span>

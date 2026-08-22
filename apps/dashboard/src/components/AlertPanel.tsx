@@ -16,7 +16,7 @@ const QUICK_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "GOLD", "BTCUSD", "AAPL", "
 export function AlertPanel() {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [stats, setStats] = useState<AlertStats | null>(null)
-  const [, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [symbol, setSymbol] = useState("EURUSD")
   const [condition, setCondition] = useState("price_above")
   const [value, setValue] = useState("")
@@ -24,35 +24,48 @@ export function AlertPanel() {
   const [recurring, setRecurring] = useState(false)
 
   const refresh = useCallback(async () => {
-    setLoading(true)
     try {
       const res = await getAlerts()
       setAlerts(res.alerts)
       setStats(res.stats)
-    } catch { /* ignore */ }
-    setLoading(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load alerts")
+    }
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
 
   const handleCreate = async () => {
-    if (!symbol || !value) return
+    if (!symbol || !value || !Number.isFinite(Number(value))) return
+    setError(null)
     try {
       await createAlert({ symbol, condition, value: Number(value), message, recurring })
       setValue("")
       setMessage("")
       refresh()
-    } catch { /* ignore */ }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create alert")
+    }
   }
 
   const handleDelete = async (id: string) => {
-    await deleteAlert(id)
-    refresh()
+    setError(null)
+    try {
+      await deleteAlert(id)
+      refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete alert")
+    }
   }
 
   const handleToggle = async (id: string, enabled: boolean) => {
-    await toggleAlert(id, enabled)
-    refresh()
+    setError(null)
+    try {
+      await toggleAlert(id, enabled)
+      refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update alert")
+    }
   }
 
   const statusColor = (s: string) => s === "armed" ? "success" : s === "triggered" ? "warn" : "muted"
@@ -122,6 +135,10 @@ export function AlertPanel() {
         </label>
         <Button variant="primary" onClick={handleCreate} style={{ fontSize: 10, padding: "3px 10px" }}>Add</Button>
       </div>
+
+      {error && (
+        <div style={{ fontSize: 10, color: "var(--danger)", marginBottom: 6 }}>{error}</div>
+      )}
 
       <div style={{ maxHeight: 200, overflowY: "auto" }}>
         {alerts.length === 0 ? (

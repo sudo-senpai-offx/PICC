@@ -5,55 +5,68 @@ import { getJournal, addJournalEntry, closeJournalEntry, deleteJournalEntry, typ
 export function TradeJournalPanel() {
   const [entries, setEntries] = useState<TradeJournalEntry[]>([])
   const [stats, setStats] = useState<JournalStats | null>(null)
-  const [, setTotal] = useState(0)
-  const [, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // New trade form
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ symbol: "EURUSD", side: "long", entryPrice: "", quantity: "1", reason: "", confidence: "50", strategy: "", tags: "", timeframe: "", pattern: "" })
 
   const refresh = useCallback(async () => {
-    setLoading(true)
     try {
       const res = await getJournal({ limit: 50 })
       setEntries(res.entries)
       setStats(res.stats)
-      setTotal(res.total)
-    } catch { /* ignore */ }
-    setLoading(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load journal")
+    }
   }, [])
 
   useEffect(() => { refresh() }, [])
 
   const handleAdd = async () => {
-    if (!form.entryPrice) return
-    await addJournalEntry({
-      symbol: form.symbol.toUpperCase(),
-      side: form.side,
-      entryPrice: Number(form.entryPrice),
-      quantity: Number(form.quantity),
-      reason: form.reason,
-      confidence: Number(form.confidence),
-      strategy: form.strategy,
-      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
-      timeframe: form.timeframe,
-      pattern: form.pattern
-    })
-    setShowForm(false)
-    setForm({ symbol: "EURUSD", side: "long", entryPrice: "", quantity: "1", reason: "", confidence: "50", strategy: "", tags: "", timeframe: "", pattern: "" })
-    refresh()
+    if (!form.entryPrice || !Number.isFinite(Number(form.entryPrice))) return
+    setError(null)
+    try {
+      await addJournalEntry({
+        symbol: form.symbol.toUpperCase(),
+        side: form.side,
+        entryPrice: Number(form.entryPrice),
+        quantity: Number(form.quantity),
+        reason: form.reason,
+        confidence: Number(form.confidence),
+        strategy: form.strategy,
+        tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+        timeframe: form.timeframe,
+        pattern: form.pattern
+      })
+      setShowForm(false)
+      setForm({ symbol: "EURUSD", side: "long", entryPrice: "", quantity: "1", reason: "", confidence: "50", strategy: "", tags: "", timeframe: "", pattern: "" })
+      refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to log trade")
+    }
   }
 
   const handleClose = async (id: string) => {
     const price = prompt("Exit price:")
-    if (!price) return
-    await closeJournalEntry(id, Number(price))
-    refresh()
+    if (!price || !Number.isFinite(Number(price))) return
+    setError(null)
+    try {
+      await closeJournalEntry(id, Number(price))
+      refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to close trade")
+    }
   }
 
   const handleDelete = async (id: string) => {
-    await deleteJournalEntry(id)
-    refresh()
+    setError(null)
+    try {
+      await deleteJournalEntry(id)
+      refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete trade")
+    }
   }
 
   const inputStyle = { padding: "3px 6px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)", width: "100%" }
@@ -96,6 +109,9 @@ export function TradeJournalPanel() {
       )}
 
       {/* New Trade Form */}
+      {error && (
+        <div style={{ fontSize: 10, color: "var(--danger)", marginBottom: 6 }}>{error}</div>
+      )}
       {showForm && (
         <div style={{ padding: 8, marginBottom: 8, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>

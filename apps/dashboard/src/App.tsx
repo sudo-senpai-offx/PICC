@@ -14,6 +14,7 @@ import { Settings } from "@/pages/Settings"
 import { useAuth } from "@/hooks/useAuth"
 import { isFeatureOn } from "@/lib/settings"
 import type { FeatureKey } from "@/lib/settings"
+import { AppErrorBoundary } from "@/components/AppErrorBoundary"
 import { Spinner } from "@/components/ui"
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -32,7 +33,8 @@ function RequireFeature({ feature, children }: { feature: FeatureKey; children: 
 
 export default function App() {
   return (
-    <Routes>
+    <AppErrorBoundary>
+      <Routes>
       <Route path="/login" element={<Login />} />
       <Route
         path="/"
@@ -97,6 +99,7 @@ export default function App() {
         <Route path="profile" element={<Profile />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </AppErrorBoundary>
   )
 }
