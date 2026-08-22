@@ -10,6 +10,7 @@ import { mkdirSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { randomBytes } from "node:crypto"
 import { connectTradingSession, candlesFrom } from "./expertoption.mjs"
 import { getCredentials, recordSignal, resolveSignal } from "./trading.mjs"
 import { predictDirection } from "./prediction.mjs"
@@ -45,6 +46,7 @@ const DEFAULTS = {
   aiGate: false,
   proGate: false,
   mtfGate: true,
+  minMtfAgree: 0, // 0 = skip MTF veto when data is sparse; 1 = require at least 1 TF agreement
   timeframe: 60,
   count: 120,
   stopReason: null,
@@ -124,6 +126,7 @@ export async function saveAutopilotConfig(patch) {
   next.aiGate = Boolean(next.aiGate)
   next.proGate = Boolean(next.proGate)
   next.mtfGate = next.mtfGate !== false
+  next.minMtfAgree = clamp(Math.round(Number(next.minMtfAgree) || 0), 0, 3)
   next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
   next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
   if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
@@ -348,8 +351,12 @@ export function decideAutopilot({ config, pred, pro = null, mtf = null, openCoun
 
   // Multi-timeframe confluence gate: higher timeframes (5m, 15m) must
   // agree with the entry direction. Mismatches indicate noise/counter-trend.
-  if (mtf && mtf.total > 0 && mtf.agree === 0) {
-    return refuse(`MTF gate: no higher-TF agreement (${mtf.total} checked, 0 agree)`)
+  // When minMtfAgree is 0 (default), the gate passes if no MTF data is available
+  // (e.g., after restart while buffers are seeding). Set minMtfAgree >= 1 to
+  // require at least one higher-TF confirmation before trading.
+  const minAgree = Number(config.minMtfAgree) || 0
+  if (mtf && mtf.total > 0 && mtf.agree < minAgree) {
+    return refuse(`MTF gate: insufficient higher-TF agreement (${mtf.agree}/${mtf.total} agree, min ${minAgree})`)
   }
 
   // Pro-analysis confluence gate: the ensemble signal must survive the full
@@ -393,6 +400,7 @@ async function aiConsents(pred) {
 }
 
 export async function autopilotTick() {
+  const tickId = randomBytes(4).toString("hex")
   const config = await getAutopilotConfig()
   if (!config.enabled) return { ok: false, reason: "autopilot disabled" }
 
@@ -482,6 +490,7 @@ export async function autopilotTick() {
   })
 
   state.lastRun = {
+    tickId,
     at: new Date().toISOString(),
     ok: decision.trade,
     reason: decision.reason,

@@ -642,6 +642,33 @@ export async function stopLiveEO() {
   emit("status", { status: "idle" })
 }
 
+/**
+ * Soft reconnect: closes the current session but preserves candle buffers so
+ * higher-timeframe analysis (MTF) doesn't lose context during reconnection.
+ * Buffers are re-seeded from the new session once it connects.
+ */
+export async function softReconnectLiveEO() {
+  generation += 1
+  starting = null
+  clearTimeout(reseedTimer)
+  reseedTimer = null
+  if (studioOff) {
+    try { studioOff() } catch { /* ignore */ }
+    studioOff = null
+  }
+  if (session) {
+    const s = session
+    session = null
+    try { s.close() } catch { /* ignore */ }
+  }
+  // Deliberately keep buffers/lastTick/assetTicks/watching/byId intact so
+  // MTF checks and price renderers continue to show stale-but-useful data
+  // while the new session seeds fresh candles.
+  startedAt = 0
+  emit("status", { status: "reconnecting" })
+  void startLiveEO()
+}
+
 export function subscribeLiveEO(cb) {
   subscribers.add(cb)
   clearTimeout(idleTimer)
@@ -668,9 +695,15 @@ export function subscribeLiveEO(cb) {
 export async function restartLiveEO({ force = false } = {}) {
   const broken = lastError !== null
   if (session && !force && !broken) return false // healthy — keep it running
-  const hadSubscribers = subscribers.size > 0
-  await stopLiveEO()
-  if (hadSubscribers) void startLiveEO()
+  // Use soft reconnect to preserve candle buffers during token changes and
+  // connection drops — stale data is better than no data for MTF analysis.
+  if (force || broken) {
+    await softReconnectLiveEO()
+  } else {
+    const hadSubscribers = subscribers.size > 0
+    await stopLiveEO()
+    if (hadSubscribers) void startLiveEO()
+  }
   return true
 }
 
