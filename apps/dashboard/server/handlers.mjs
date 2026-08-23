@@ -3180,9 +3180,11 @@ async function _handleApiInner(req, res, url, reqId) {
       let candles = []
       let candleSource = "none"
       let eoBalance = null
+      let viewedAsset = primaryAsset
       try {
         const { liveEOData, fetchAssetCandles, fetchFreshAccount, ensureWatchingAsset } = await import("./services/liveEO.mjs")
         const eoData = liveEOData()
+        if (eoData.viewed) viewedAsset = eoData.viewed
         const asset = eoData.assets.find((a) => eoAssetMatches(a, primaryAsset))
         if (asset && asset.periods[60]?.length) {
           candles = asset.periods[60].slice(-candleCount)
@@ -3257,11 +3259,23 @@ async function _handleApiInner(req, res, url, reqId) {
         statusVal.expertOption.realWallet = eoBalance.realWallet
       }
 
+      const openDeals = demoVal?.openDeals || []
+      const openDealsWithPnl = openDeals.map((d) => {
+        const lastPrice = d.lastPrice ?? d.currentPrice ?? null
+        const strike = d.strike ?? d.entryPrice ?? null
+        const diff = lastPrice != null && strike != null ? lastPrice - strike : null
+        const direction = (d.direction || d.type || "").toLowerCase()
+        const pnl = diff != null ? (direction === "call" ? diff : direction === "put" ? -diff : diff) : null
+        return { ...d, livePnl: pnl, strike, lastPrice }
+      })
+
       writeJson(res, 200, {
         ok: true,
+        viewed: viewedAsset,
         status: statusVal,
         autopilot: autopilotVal,
         demo: demoVal,
+        openDeals: openDealsWithPnl,
         decisions: decisionsVal?.decisions ?? decisionsVal,
         candles,
         candleSource,

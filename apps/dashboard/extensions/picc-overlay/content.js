@@ -342,6 +342,7 @@
   const SUITE_DOCKABLE_PRESETS = {
     trading: [
       { id: "price-ticker", title: "Price Ticker", icon: "📈", description: "Real-time asset prices with percentage change", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
+      { id: "positions", title: "Positions", icon: "💹", description: "Active trades across all asset pairs with live PnL", defaultPos: "top-right", defaultSize: { width: 280, height: 220 }, defaultCollapsed: false },
       { id: "ai-signals", title: "AI Signals", icon: "🧠", description: "Live confluence decisions with verdict badges", defaultPos: "right", defaultSize: { width: 260, height: 260 }, defaultCollapsed: false },
       { id: "autopilot", title: "Autopilot", icon: "🤖", description: "Start/stop autopilot, status, today PnL", defaultPos: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultCollapsed: false },
       { id: "portfolio", title: "Portfolio", icon: "📊", description: "Paper trading balance, PnL, and win rate", defaultPos: "top-left", defaultSize: { width: 300, height: 180 }, defaultCollapsed: true },
@@ -388,7 +389,8 @@
       collapsed: false,
       dockables: Object.fromEntries(dockables.map((id) => [id, true])),
       features: { assistance: true, decisionSupport: true, automation: false, autopilot: false, analysis: true, ai: true },
-      dockableLayout: {}
+      dockableLayout: {},
+      positions: []
     }
   }
 
@@ -997,6 +999,8 @@
   // Live data state for all trading panels
   const tradingState = {
     assets: [],
+    activeAsset: "",
+    openDeals: [],
     account: null,
     decisions: [],
     autopilot: null,
@@ -1127,6 +1131,7 @@
   // ── Feature-aware helpers ──────────────────────────────────────────────────
   const DOCKABLE_FEATURES = {
     "price-ticker": ["analysis"],
+    "positions": ["autopilot", "automation", "decisionSupport"],
     "portfolio": [],
     "ai-signals": ["ai", "decisionSupport", "analysis"],
     "risk-mgr": ["decisionSupport", "analysis"],
@@ -1151,6 +1156,7 @@
   // ── Price Ticker Renderer ──────────────────────────────────────────────────
   function renderPriceTicker() {
     const assets = tradingState.assets
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("price-ticker")
     const staleAgo = tradingState.lastFetchAt ? Math.round((Date.now() - tradingState.lastFetchAt) / 1000) : 0
     const isStale = staleAgo > 30
@@ -1164,8 +1170,9 @@
     }
     const rows = assets.slice(0, 6).map((a) => {
       const c = tone(a.changePct)
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #6c63ff20">` +
-        `<span style="font-weight:600;font-size:11px">${a.name || a.id}</span>` +
+      const isActive = activeAsset && normalizeAssetId(a.name || a.id) === activeAsset
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #6c63ff20${isActive ? ';background:#6c63ff10;border-radius:3px' : ''}">` +
+        `<span style="font-weight:${isActive ? '700' : '600'};font-size:11px${isActive ? ';color:#6c63ff' : ''}">${a.name || a.id}${isActive ? ' \u25cf' : ''}</span>` +
         `<span style="font-size:11px;color:${c}">${a.price != null ? a.price.toFixed(4) : "\u2014"}</span>` +
         `<span style="font-size:10px;color:${c}">${a.changePct != null ? (a.changePct >= 0 ? "+" : "") + a.changePct.toFixed(2) + "%" : ""}</span>` +
         `</div>`
@@ -1222,6 +1229,7 @@
   // ── AI Signals Renderer ────────────────────────────────────────────────────
   function renderAISignals() {
     const d = tradingState.decisions
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("ai-signals")
     if (!d.length) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
@@ -1231,9 +1239,11 @@
       const verdictColor = dec.verdict === "TRADE" ? "#4ade80" : dec.verdict === "OBSERVE" ? "#f59e0b" : "#a5a0ff"
       const gates = dec.gates || {}
       const gIcon = (ok) => ok ? '<span style="color:#4ade80">\u2713</span>' : '<span style="color:#ff6b6b">\u2717</span>'
-      return `<div style="border-bottom:1px solid #6c63ff15;padding:3px 0">` +
+      const decAsset = dec.asset || dec.assetId || ""
+      const isActive = activeAsset && decAsset.toUpperCase() === activeAsset.toUpperCase()
+      return `<div style="border-bottom:1px solid #6c63ff15;padding:3px 0${isActive ? ';background:#6c63ff08;border-radius:3px' : ''}">` +
         `<div style="display:flex;justify-content:space-between;align-items:center">` +
-          `<span style="font-weight:600;font-size:11px">${dec.asset || dec.assetId}</span>` +
+          `<span style="font-weight:600;font-size:11px${isActive ? ';color:#6c63ff' : ''}">${decAsset}${isActive ? ' \u25cf' : ''}</span>` +
           `<span style="font-size:10px;font-weight:600;color:${verdictColor}">${dec.verdict}</span>` +
         `</div>` +
         `<div style="display:flex;gap:6px;font-size:9px;color:#a5a0ff">` +
@@ -1299,17 +1309,19 @@
     const body = typeof piccRenderAutopilotPanel === "function"
       ? piccRenderAutopilotPanel({ auto, demo: tradingState.demo })
       : ""
+    const assetLabel = auto?.assetId ? `<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${String(auto.assetId).toUpperCase()} \u25cf</div>` : ""
     const lines = []
     lines.push(`<div style="display:flex;gap:4px;margin-top:6px">`)
     lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
     lines.push(`<button data-picc-action="autopilot-kill" style="background:#ff6b6b30;border:1px solid #ff6b6b;color:#ff6b6b;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">Kill</button>`)
     lines.push(`</div>`)
-    return banner + `<div style="padding:2px 0">${body}${lines.join("")}</div>` + staleLabel()
+    return banner + `<div style="padding:2px 0">${assetLabel}${body}${lines.join("")}</div>` + staleLabel()
   }
 
   // ── Kelly Sizing Renderer ──────────────────────────────────────────────────
   function renderKellySizing() {
     const kelly = tradingState.kelly
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("kelly-sizing")
     if (!kelly) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
@@ -1318,7 +1330,8 @@
     const stats = kelly.stats || {}
     const k = kelly.kelly || {}
     const lines = []
-    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${stats.winRate != null ? stats.winRate + "%" : "—"}</span></div>`)
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${stats.winRate != null ? stats.winRate + "%" : "\u2014"}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Avg payout</span><span>${stats.avgPayout != null ? stats.avgPayout + "x" : "—"}</span></div>`)
     lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Full Kelly</span><span style="color:#6c63ff">${k.fullKelly != null ? k.fullKelly + "%" : "—"}</span></div>`)
@@ -1330,6 +1343,7 @@
   // ── Regime Detection Renderer ──────────────────────────────────────────────
   function renderRegimeDetect() {
     const regime = tradingState.regime
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("regime-detect")
     if (!regime || regime.regime === "unknown") {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
@@ -1338,6 +1352,7 @@
     const colors = { trending: "#4ade80", ranging: "#f59e0b", volatile: "#ff6b6b", breakout: "#6c63ff" }
     const c = colors[regime.regime] || "#a5a0ff"
     const lines = []
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><div style="width:8px;height:8px;border-radius:50%;background:${c}"></div><span style="font-weight:600;font-size:12px;color:${c}">${(regime.regime || "").toUpperCase()}</span><span style="font-size:10px;color:#9aa0c0">${regime.confidence || 0}%</span></div>`)
     if (regime.metrics) lines.push(`<div style="font-size:10px;color:#9aa0c0">ADX: ${regime.metrics.adx} · ATR ratio: ${regime.metrics.atrRatio}x</div>`)
     if (regime.suggestedStrategy) lines.push(`<div style="font-size:10px;margin-top:4px">Strategy: <b style="color:#6c63ff">${regime.suggestedStrategy}</b></div>`)
@@ -1348,12 +1363,14 @@
   // ── Order Flow Renderer ────────────────────────────────────────────────────
   function renderOrderFlow() {
     const of = tradingState.orderFlow
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("order-flow")
     if (!of || !of.delta?.length) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
       return banner + '<div style="color:#a5a0ff;padding:4px">Loading order flow\u2026</div>'
     }
     const lines = []
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
     const imbColor = of.imbalance === "buy-heavy" ? "#4ade80" : of.imbalance === "sell-heavy" ? "#ff6b6b" : "#f59e0b"
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:11px">Net Delta</span><span style="color:${of.cumulative >= 0 ? "#4ade80" : "#ff6b6b"};font-weight:600">${of.cumulative >= 0 ? "+" : ""}${of.cumulative}</span><span style="font-size:9px;padding:1px 4px;border-radius:3px;background:${imbColor}30;color:${imbColor}">${of.imbalance}</span></div>`)
     const hasVolume = of.delta.some((d) => (d.volume || 0) > 0)
@@ -1369,6 +1386,7 @@
   // ── Expiry Optimizer Renderer ──────────────────────────────────────────────
   function renderExpiryOpt() {
     const exp = tradingState.expiry
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("expiry-opt")
     if (!exp || !exp.recommended) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
@@ -1376,6 +1394,7 @@
     }
     const r = exp.recommended
     const lines = []
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
     lines.push(`<div style="font-weight:600;font-size:12px;color:#6c63ff;margin-bottom:4px">Recommended: ${r.label}</div>`)
     lines.push(`<div style="font-size:10px;color:#9aa0c0">Score: ${r.score}/100 · Vol: ${exp.volatility || "—"}</div>`)
     if (exp.all?.length) {
@@ -1393,6 +1412,7 @@
   // ── Sentiment Renderer ─────────────────────────────────────────────────────
   function renderSentiment() {
     const sent = tradingState.sentiment
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("sentiment")
     if (!sent || !sent.composite) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
@@ -1400,6 +1420,7 @@
     }
     const c = sent.composite
     const lines = []
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
     const scoreColor = c.score > 0.2 ? "#4ade80" : c.score < -0.2 ? "#ff6b6b" : "#f59e0b"
     lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:12px;color:${scoreColor}">${c.label || "Neutral"}</span><span style="font-size:10px;color:#9aa0c0">Score: ${c.score}</span>${c.extreme ? '<span style="font-size:8px;padding:1px 3px;border-radius:3px;background:#ff6b6b30;color:#ff6b6b">EXTREME</span>' : ""}</div>`)
     if (sent.news) lines.push(`<div style="font-size:10px;color:#9aa0c0">News: ${sent.news.bullish}🟢 ${sent.news.bearish}🔴 ${sent.news.neutral}⚪ (${sent.news.sampleSize})</div>`)
@@ -1456,6 +1477,61 @@
       `<span style="color:${adeqColor};font-weight:600">${adequacy}</span></div>`)
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` +
       sourceLabel(cal.totalResolved > 0 ? "trade history" : "insufficient data") + staleLabel()
+  }
+
+  // ── Positions Renderer (multi-trade tracker) ──────────────────────────────
+  function renderPositions() {
+    const openDeals = tradingState.openDeals || []
+    const banner = checkFeatures("positions")
+    const activeAsset = tradingState.activeAsset || ""
+    if (!openDeals.length) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">No open positions</div>'
+    }
+    const lines = []
+    lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-bottom:4px">${openDeals.length} open position${openDeals.length !== 1 ? "s" : ""}</div>`)
+    for (const deal of openDeals) {
+      const dir = (deal.direction || deal.type || "").toLowerCase()
+      const dirColor = dir === "call" ? "#4ade80" : dir === "put" ? "#ff6b6b" : "#f59e0b"
+      const dirLabel = dir === "call" ? "CALL" : dir === "put" ? "PUT" : (deal.direction || deal.type || "\u2014")
+      const dealAsset = deal.asset || deal.assetId || ""
+      const isActive = activeAsset && dealAsset.toUpperCase() === activeAsset.toUpperCase()
+      const strike = deal.strike ?? deal.entryPrice ?? null
+      const lastPrice = deal.lastPrice ?? deal.currentPrice ?? null
+      const pnl = deal.livePnl
+      const pnlColor = pnl != null ? (pnl > 0 ? "#4ade80" : pnl < 0 ? "#ff6b6b" : "#a5a0ff") : "#a5a0ff"
+      const amount = deal.amount != null ? fmt$(deal.amount, tradingState.account?.currency) : "\u2014"
+      const strikeStr = strike != null ? strike.toFixed(4) : "\u2014"
+      const lastStr = lastPrice != null ? lastPrice.toFixed(4) : "\u2014"
+      const pnlStr = pnl != null ? (pnl >= 0 ? "+" : "") + pnl.toFixed(4) : "\u2014"
+      const duration = deal.duration ?? deal.expiry ?? null
+      const durationStr = duration ? duration + "s" : "\u2014"
+      const createdAt = deal.createdAt ?? deal.openedAt ?? null
+      const ageStr = createdAt ? formatDuration(Date.now() - createdAt) : ""
+      lines.push(`<div style="padding:4px 0;border-bottom:1px solid #6c63ff15${isActive ? ';background:#6c63ff08;border-radius:3px' : ''}">`)
+      lines.push(`<div style="display:flex;justify-content:space-between;align-items:center">`)
+      lines.push(`<span style="font-weight:600;font-size:11px${isActive ? ';color:#6c63ff' : ''}">${dealAsset || "\u2014"}${isActive ? ' \u25cf' : ''}</span>`)
+      lines.push(`<span style="font-size:10px;font-weight:600;color:${dirColor};padding:0 4px;border:1px solid ${dirColor}44;border-radius:3px">${dirLabel}</span>`)
+      lines.push(`</div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;color:#9aa0c0">`)
+      lines.push(`<span>${amount} \u00b7 ${durationStr}</span>`)
+      lines.push(`<span style="color:${pnlColor};font-weight:600">${pnlStr}</span>`)
+      lines.push(`</div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:9px;color:#9aa0c0">`)
+      lines.push(`<span>strike: ${strikeStr} \u2192 now: ${lastStr}</span>`)
+      lines.push(`<span>${ageStr}</span>`)
+      lines.push(`</div>`)
+      lines.push(`</div>`)
+    }
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  function formatDuration(ms) {
+    if (ms < 0 || !Number.isFinite(ms)) return ""
+    const s = Math.floor(ms / 1000)
+    if (s < 60) return s + "s"
+    const m = Math.floor(s / 60)
+    return m + "m " + (s % 60) + "s"
   }
 
   // ── Generic renderers (work on ANY site) ───────────────────────────────────
@@ -2023,6 +2099,19 @@
         tradingState.lastFetchError = null
         tradingState.lastFetchAt = Date.now()
         tradingState.loadingSince = 0
+        // Use server-authoritative viewed asset (from EO's own WS stream)
+        const serverViewed = resp.data?.viewed
+        const activeAsset = serverViewed ? normalizeAssetId(serverViewed) : primaryAsset
+        if (serverViewed && activeAsset !== tradingState.activeAsset) {
+          // Asset switched — invalidate per-asset caches
+          tradingState.regime = null
+          tradingState.expiry = null
+          tradingState.orderFlow = null
+          tradingState.sentiment = null
+          tradingState.lastCandles = null
+          tradingState.decisions = []
+        }
+        tradingState.activeAsset = activeAsset
         // Status / account — server balance is canonical when available
         const d = resp.data
         if (d?.status?.ok) {
@@ -2043,8 +2132,19 @@
         if (d?.autopilot) tradingState.autopilot = d.autopilot.config || d.autopilot
         // Demo
         if (d?.demo) tradingState.demo = d.demo
-        // Decisions
-        if (d?.decisions) tradingState.decisions = Array.isArray(d.decisions) ? d.decisions : (d.decisions.decisions || [])
+        // Open deals (multi-trade)
+        if (d?.openDeals) tradingState.openDeals = d.openDeals
+        // Decisions — sort: viewed asset first, then by EV
+        if (d?.decisions) {
+          const raw = Array.isArray(d.decisions) ? d.decisions : (d.decisions.decisions || [])
+          raw.sort((a, b) => {
+            const aMatch = (a.asset || a.assetId || "").toUpperCase() === activeAsset.toUpperCase()
+            const bMatch = (b.asset || b.assetId || "").toUpperCase() === activeAsset.toUpperCase()
+            if (aMatch !== bMatch) return aMatch ? -1 : 1
+            return (b.ev || 0) - (a.ev || 0)
+          })
+          tradingState.decisions = raw
+        }
         // Candles
         if (d?.candles?.length) {
           tradingState.lastCandles = d.candles
@@ -2052,22 +2152,25 @@
           const last = d.candles[d.candles.length - 1]
           const prev = d.candles[d.candles.length - 2]
           if (last) {
-            if (tradingState.assets[0]) {
-              tradingState.assets[0].price = last.close
+            const targetAsset = tradingState.activeAsset || primaryAsset
+            const existing = tradingState.assets.find((a) => normalizeAssetId(a.name || a.id) === targetAsset)
+            if (existing) {
+              existing.price = last.close
               if (prev && prev.close) {
-                tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
-                tradingState.assets[0].change = last.close - prev.close
+                existing.changePct = ((last.close - prev.close) / prev.close) * 100
+                existing.change = last.close - prev.close
               }
-            }
-            if (!tradingState.assets.length) {
-              tradingState.assets.push({
-                id: primaryAsset,
-                name: primaryAsset,
+            } else if (!tradingState.assets.find((a) => a.id === targetAsset)) {
+              tradingState.assets.unshift({
+                id: targetAsset,
+                name: targetAsset,
                 price: last.close,
                 changePct: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
                 change: prev ? last.close - prev.close : 0
               })
             }
+            // Cap assets array to prevent unbounded growth
+            if (tradingState.assets.length > 8) tradingState.assets.length = 8
           }
         }
         // Advanced analytics
@@ -2126,7 +2229,8 @@
         if (decisionsVal?.ok && decisionsVal.data?.decisions) tradingState.decisions = decisionsVal.data.decisions
 
         // Fetch candles + advanced analytics individually
-        const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: primaryAsset, timeframe: 60, count: 100 }, signal })
+        const useAsset = tradingState.activeAsset || primaryAsset
+        const candleResp = await serverFetch("/api/trading/candles", { method: "POST", body: { assetId: useAsset, timeframe: 60, count: 100 }, signal })
         if (signal.aborted) return
         if (candleResp?.ok && candleResp.data?.candles?.length) {
           tradingState.lastCandles = candleResp.data.candles
@@ -2134,29 +2238,31 @@
           const last = candleResp.data.candles[candleResp.data.candles.length - 1]
           const prev = candleResp.data.candles[candleResp.data.candles.length - 2]
           if (last) {
-            if (tradingState.assets[0]) {
-              tradingState.assets[0].price = last.close
+            const targetAsset = tradingState.activeAsset || primaryAsset
+            const existing = tradingState.assets.find((a) => normalizeAssetId(a.name || a.id) === targetAsset)
+            if (existing) {
+              existing.price = last.close
               if (prev && prev.close) {
-                tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
-                tradingState.assets[0].change = last.close - prev.close
+                existing.changePct = ((last.close - prev.close) / prev.close) * 100
+                existing.change = last.close - prev.close
               }
-            }
-            if (!tradingState.assets.length) {
-              tradingState.assets.push({
-                id: primaryAsset,
-                name: primaryAsset,
+            } else if (!tradingState.assets.find((a) => a.id === targetAsset)) {
+              tradingState.assets.unshift({
+                id: targetAsset,
+                name: targetAsset,
                 price: last.close,
                 changePct: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
                 change: prev ? last.close - prev.close : 0
               })
             }
+            if (tradingState.assets.length > 8) tradingState.assets.length = 8
           }
         }
         const [kelly, regime, expiry, sentiment, orderFlow] = await Promise.allSettled([
           serverFetch("/api/trading/kelly"),
           serverFetch("/api/trading/regime", { method: "POST", body: { candles: tradingState.lastCandles } }),
           serverFetch("/api/trading/expiry", { method: "POST", body: { candles: tradingState.lastCandles } }),
-          serverFetch("/api/trading/sentiment", { method: "POST", body: { symbol: primaryAsset } }),
+          serverFetch("/api/trading/sentiment", { method: "POST", body: { symbol: useAsset } }),
           serverFetch("/api/trading/orderflow", { method: "POST", body: { candles: tradingState.lastCandles } }),
         ])
         for (const [key, val] of [["kelly", kelly], ["regime", regime], ["expiry", expiry], ["sentiment", sentiment], ["orderFlow", orderFlow]]) {
@@ -2185,6 +2291,7 @@
   function updateAllDockables() {
     const panels = {
       "price-ticker": renderPriceTicker,
+      "positions": renderPositions,
       "portfolio": renderPortfolio,
       "ai-signals": renderAISignals,
       "risk-mgr": renderRiskManager,
