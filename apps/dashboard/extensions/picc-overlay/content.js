@@ -420,35 +420,35 @@
   const SITE_PROFILES = [
     // Trading
     { hosts: ["expertoption.com", "expert-option.com", "expertoption.finance"], id: "expertoption", label: "ExpertOption", category: "trading", suite: "trading" },
-    { hosts: ["binance.com", "www.binance.com"], id: "binance", label: "Binance", category: "trading", suite: "trading" },
-    { hosts: ["coinbase.com", "www.coinbase.com"], id: "coinbase", label: "Coinbase", category: "trading", suite: "trading" },
-    { hosts: ["kraken.com", "www.kraken.com"], id: "kraken", label: "Kraken", category: "trading", suite: "trading" },
-    { hosts: ["robinhood.com", "www.robinhood.com"], id: "robinhood", label: "Robinhood", category: "trading", suite: "trading" },
-    { hosts: ["tastytrade.com", "www.tastytrade.com"], id: "tastytrade", label: "Tastytrade", category: "trading", suite: "trading" },
-    { hosts: ["webull.com", "www.webull.com"], id: "webull", label: "Webull", category: "trading", suite: "trading" },
-    { hosts: ["etoro.com", "www.etoro.com"], id: "etoro", label: "eToro", category: "trading", suite: "trading" },
-    { hosts: ["tradingview.com", "www.tradingview.com"], id: "tradingview", label: "TradingView", category: "trading", suite: "trading" },
+    { hosts: ["binance.com"], id: "binance", label: "Binance", category: "trading", suite: "trading" },
+    { hosts: ["coinbase.com"], id: "coinbase", label: "Coinbase", category: "trading", suite: "trading" },
+    { hosts: ["kraken.com"], id: "kraken", label: "Kraken", category: "trading", suite: "trading" },
+    { hosts: ["robinhood.com"], id: "robinhood", label: "Robinhood", category: "trading", suite: "trading" },
+    { hosts: ["tastytrade.com"], id: "tastytrade", label: "Tastytrade", category: "trading", suite: "trading" },
+    { hosts: ["webull.com"], id: "webull", label: "Webull", category: "trading", suite: "trading" },
+    { hosts: ["etoro.com"], id: "etoro", label: "eToro", category: "trading", suite: "trading" },
+    { hosts: ["tradingview.com"], id: "tradingview", label: "TradingView", category: "trading", suite: "trading" },
     { hosts: ["mt4.metaquotes.net", "mt5.metaquotes.net"], id: "metatrader", label: "MetaTrader", category: "trading", suite: "trading" },
-    { hosts: ["deriv.com", "www.deriv.com"], id: "deriv", label: "Deriv", category: "trading", suite: "trading" },
-    { hosts: ["olymptrade.com", "www.olymptrade.com"], id: "olymptrade", label: "OlympTrade", category: "trading", suite: "trading" },
-    { hosts: ["quotex.com", "www.quotex.com"], id: "quotex", label: "Quotex", category: "trading", suite: "trading" },
-    { hosts: ["iqoption.com", "www.iqoption.com"], id: "iqoption", label: "IQ Option", category: "trading", suite: "trading" },
-    { hosts: ["nadex.com", "www.nadex.com"], id: "nadex", label: "Nadex", category: "trading", suite: "trading" },
+    { hosts: ["deriv.com"], id: "deriv", label: "Deriv", category: "trading", suite: "trading" },
+    { hosts: ["olymptrade.com"], id: "olymptrade", label: "OlympTrade", category: "trading", suite: "trading" },
+    { hosts: ["quotex.com"], id: "quotex", label: "Quotex", category: "trading", suite: "trading" },
+    { hosts: ["iqoption.com"], id: "iqoption", label: "IQ Option", category: "trading", suite: "trading" },
+    { hosts: ["nadex.com"], id: "nadex", label: "Nadex", category: "trading", suite: "trading" },
     // Bandwidth
-    { hosts: ["speedtest.net", "www.speedtest.net"], id: "speedtest", label: "Speedtest", category: "bandwidth", suite: "bandwidth" },
+    { hosts: ["speedtest.net"], id: "speedtest", label: "Speedtest", category: "bandwidth", suite: "bandwidth" },
     { hosts: ["fast.com"], id: "fast", label: "Fast.com", category: "bandwidth", suite: "bandwidth" },
     { hosts: ["ipinfo.io", "ip.me", "whatismyip.com"], id: "ipinfo", label: "IP Info", category: "bandwidth", suite: "bandwidth" },
     // Dividends / Interest
-    { hosts: ["schwab.com", "www.schwab.com"], id: "schwab", label: "Schwab", category: "dividend", suite: "dividend" },
-    { hosts: ["fidelity.com", "www.fidelity.com"], id: "fidelity", label: "Fidelity", category: "dividend", suite: "dividend" },
-    { hosts: ["vanguard.com", "www.vanguard.com"], id: "vanguard", label: "Vanguard", category: "dividend", suite: "dividend" },
+    { hosts: ["schwab.com"], id: "schwab", label: "Schwab", category: "dividend", suite: "dividend" },
+    { hosts: ["fidelity.com"], id: "fidelity", label: "Fidelity", category: "dividend", suite: "dividend" },
+    { hosts: ["vanguard.com"], id: "vanguard", label: "Vanguard", category: "dividend", suite: "dividend" },
     // Affiliate
-    { hosts: ["amazon.com", "www.amazon.com"], id: "amazon", label: "Amazon", category: "affiliate", suite: "affiliate" },
+    { hosts: ["amazon.com"], id: "amazon", label: "Amazon", category: "affiliate", suite: "affiliate" },
     { hosts: ["shopee.com", "shopee.*"], id: "shopee", label: "Shopee", category: "affiliate", suite: "affiliate" },
-    { hosts: ["lazada.com", "www.lazada.com"], id: "lazada", label: "Lazada", category: "affiliate", suite: "affiliate" },
+    { hosts: ["lazada.com"], id: "lazada", label: "Lazada", category: "affiliate", suite: "affiliate" },
     // Content
-    { hosts: ["youtube.com", "www.youtube.com"], id: "youtube", label: "YouTube", category: "content", suite: "content" },
-    { hosts: ["tiktok.com", "www.tiktok.com"], id: "tiktok", label: "TikTok", category: "content", suite: "content" },
+    { hosts: ["youtube.com"], id: "youtube", label: "YouTube", category: "content", suite: "content" },
+    { hosts: ["tiktok.com"], id: "tiktok", label: "TikTok", category: "content", suite: "content" },
     { hosts: ["medium.com"], id: "medium", label: "Medium", category: "content", suite: "content" },
     // Crypto / DeFi
     { hosts: ["metamask.io", "app.uniswap.org"], id: "defi", label: "DeFi", category: "defi", suite: "defi" },
@@ -459,8 +459,8 @@
     { hosts: ["openai.com", "chat.openai.com"], id: "openai", label: "OpenAI", category: "agent", suite: "agent" },
     { hosts: ["anthropic.com"], id: "anthropic", label: "Anthropic", category: "agent", suite: "agent" },
     // Other
-    { hosts: ["google.com", "www.google.com", "accounts.google.com"], id: "google", label: "Google", category: "other", suite: null },
-    { hosts: ["github.com", "www.github.com"], id: "github", label: "GitHub", category: "other", suite: null },
+    { hosts: ["google.com", "accounts.google.com"], id: "google", label: "Google", category: "other", suite: null },
+    { hosts: ["github.com"], id: "github", label: "GitHub", category: "other", suite: null },
   ]
 
   function detectSite(url) {
@@ -2480,15 +2480,17 @@
     toggleBtn.style.cssText = "background:none;border:none;color:#eef0ff;cursor:pointer;font-size:13px;padding:2px 5px;border-radius:4px;"
     toggleBtn.addEventListener("click", (e) => {
       e.stopPropagation()
-      const allHidden = activeDockables.every((d) => {
+      // Only toggle docks that are enabled in settings (not disabled via ⚙)
+      const enabledDocks = activeDockables.filter((d) => currentSettings.dockables?.[d.id] !== false)
+      const allHidden = enabledDocks.every((d) => {
         const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
         return dockEl && dockEl.style.display === "none"
       })
-      activeDockables.forEach((d) => {
+      enabledDocks.forEach((d) => {
         const dockEl = shadowRoot.getElementById(`__PICC_DOCK_${d.id}__`)
         if (dockEl) dockEl.style.display = allHidden ? "" : "none"
       })
-      toggleBtn.textContent = allHidden ? "👁" : "👁‍🗨"
+      toggleBtn.textContent = allHidden ? "👁" : "👁\u200D\u2757"
     })
 
     // Settings button
@@ -2529,6 +2531,10 @@
           currentSettings.opacity = Number(slider.value) / 100
           shadowRoot.querySelectorAll("[id^=__PICC_DOCK_]").forEach((d) => d.style.opacity = String(currentSettings.opacity))
         })
+        slider.addEventListener("change", () => {
+          saveOverlayStateLocal()
+          if (currentSite?.id) savePrefsForSite(currentSite.id, { overlaySettings: currentSettings }).catch(() => {})
+        })
         sec.appendChild(slider)
       })
 
@@ -2555,6 +2561,9 @@
             if (dockEl) dockEl.style.display = cb.checked ? "" : "none"
             row.style.borderColor = cb.checked ? "#6c63ff" : "#2a2a4a"
             row.style.background = cb.checked ? "rgba(108,99,255,0.08)" : "transparent"
+            // Persist immediately so changes survive tab close
+            saveOverlayStateLocal()
+            if (currentSite?.id) savePrefsForSite(currentSite.id, { overlaySettings: currentSettings }).catch(() => {})
           })
 
           const icon = document.createElement("span")
@@ -2593,7 +2602,11 @@
           const cb = document.createElement("input")
           cb.type = "checkbox"
           cb.checked = val
-          cb.addEventListener("change", () => { currentSettings.features[key] = cb.checked })
+          cb.addEventListener("change", () => {
+            currentSettings.features[key] = cb.checked
+            saveOverlayStateLocal()
+            if (currentSite?.id) savePrefsForSite(currentSite.id, { overlaySettings: currentSettings }).catch(() => {})
+          })
           row.appendChild(cb)
           row.appendChild(document.createTextNode(key.replace(/([A-Z])/g, " $1").trim()))
           sec.appendChild(row)
@@ -2850,4 +2863,27 @@
   // Initial check via background. Periodic updates come from background alarms
   // pushing "server-status" messages to this content script.
   checkServer()
+
+  // ── Auto-start on trading platforms ────────────────────────────────────────
+  // On recognized trading suites, auto-create the overlay immediately — no
+  // manual keyboard shortcut or popup click required.
+  void (async function _autoStartOverlay() {
+    try {
+      const autoSite = detectSite(window.location.href)
+      if (autoSite?.suite) {
+        let shouldAutoStart = true
+        try {
+          const localState = await new Promise((resolve) => {
+            chrome.storage.local.get(MV3_STATE_KEY, (data) => resolve(data[MV3_STATE_KEY] || null))
+          })
+          if (localState?.siteId === autoSite.id && localState.settings?.overlay === false) {
+            shouldAutoStart = false
+          }
+        } catch {}
+        if (shouldAutoStart && !overlayVisible) {
+          setTimeout(() => { if (!overlayVisible) toggleOverlay() }, 800)
+        }
+      }
+    } catch {}
+  })()
 })()

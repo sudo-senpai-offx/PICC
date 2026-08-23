@@ -72,19 +72,23 @@ export const DEFAULT_OVERLAY_SETTINGS: OverlaySettings = {
   dockableLayout: {},
 }
 
-/** Default dockable presets per suite type */
+/** Default dockable presets per suite type — MUST match content.js SUITE_DOCKABLE_PRESETS exactly */
 export const SUITE_DOCKABLES: Record<string, DockableConfig[]> = {
   trading: [
     { id: "price-ticker", title: "Price Ticker", icon: "📈", defaultPosition: "top-right", defaultSize: { width: 280, height: 200 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Real-time asset prices with percentage change" },
-    { id: "portfolio", title: "Portfolio", icon: "📊", defaultPosition: "top-left", defaultSize: { width: 300, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Paper trading balance, PnL, and win rate" },
+    { id: "positions", title: "Positions", icon: "💹", defaultPosition: "top-right", defaultSize: { width: 280, height: 220 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Active trades across all asset pairs with live PnL" },
     { id: "ai-signals", title: "AI Signals", icon: "🧠", defaultPosition: "right", defaultSize: { width: 260, height: 260 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Live confluence decisions with verdict badges" },
-    { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Daily loss limit, concurrent trades, cooldown" },
     { id: "autopilot", title: "Autopilot", icon: "🤖", defaultPosition: "bottom-left", defaultSize: { width: 260, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Start/stop autopilot, status, today PnL" },
-    { id: "kelly-sizing", title: "Kelly Sizing", icon: "🎯", defaultPosition: "left", defaultSize: { width: 260, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Kelly criterion sizing with suggested positions" },
-    { id: "regime-detect", title: "Regime Detection", icon: "📡", defaultPosition: "top-left", defaultSize: { width: 280, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Market regime: trending, ranging, volatile, breakout" },
-    { id: "order-flow", title: "Order Flow", icon: "🌊", defaultPosition: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Cumulative delta, imbalance, and divergence signals" },
-    { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", defaultPosition: "right", defaultSize: { width: 260, height: 200 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Optimal expiry selection with volatility analysis" },
-    { id: "sentiment", title: "Sentiment", icon: "🎭", defaultPosition: "top-right", defaultSize: { width: 280, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "News + social sentiment fusion with extremes" },
+    { id: "portfolio", title: "Portfolio", icon: "📊", defaultPosition: "top-left", defaultSize: { width: 300, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Paper trading balance, PnL, and win rate" },
+    { id: "risk-mgr", title: "Risk Manager", icon: "⚠️", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 140 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Daily loss limit, concurrent trades, cooldown" },
+    { id: "kelly-sizing", title: "Kelly Sizing", icon: "🎯", defaultPosition: "left", defaultSize: { width: 260, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Kelly criterion sizing with suggested positions" },
+    { id: "regime-detect", title: "Regime Detection", icon: "📡", defaultPosition: "top-left", defaultSize: { width: 280, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Market regime: trending, ranging, volatile, breakout" },
+    { id: "order-flow", title: "Order Flow", icon: "🌊", defaultPosition: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Cumulative delta, imbalance, and divergence signals" },
+    { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", defaultPosition: "right", defaultSize: { width: 260, height: 200 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Optimal expiry selection with volatility analysis" },
+    { id: "sentiment", title: "Sentiment", icon: "🎭", defaultPosition: "top-right", defaultSize: { width: 280, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "News + social sentiment fusion with extremes" },
+    { id: "calibration", title: "Calibration", icon: "📐", defaultPosition: "left", defaultSize: { width: 280, height: 220 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Predicted vs realized win rate per confidence bucket, breakeven line" },
+    { id: "server-status", title: "PICC Status", icon: "🔌", defaultPosition: "bottom-right", defaultSize: { width: 260, height: 160 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Server connection health and data pipeline status" },
+    { id: "data-sources", title: "Data Sources", icon: "🩺", defaultPosition: "right", defaultSize: { width: 280, height: 260 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Honesty status of every feed: live, local, stale, unconfigured" },
   ],
   bandwidth: [
     { id: "speed", title: "Speed Monitor", icon: "📡", defaultPosition: "top-right", defaultSize: { width: 280, height: 200 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Real-time bandwidth speed tests and history" },
