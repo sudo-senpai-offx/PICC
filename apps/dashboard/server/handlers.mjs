@@ -483,7 +483,7 @@ function validate(body, schema) {
 }
 
 function required(val) { return val == null || val === "" ? "required" : null }
-function isNumber(val, lo, hi) {
+function isNumber(lo, hi) {
   return (v) => { const n = Number(v); return v != null && v !== "" && (!Number.isFinite(n) || n < lo || n > hi) ? `must be ${lo}-${hi}` : null }
 }
 function isString(val) { return (v) => v != null && typeof v !== "string" ? "must be a string" : null }
@@ -509,6 +509,7 @@ const SCHEMAS = {
     duration: [isNumber(5, 43200)],
     minConfidence: [isNumber(30, 95)],
     cooldownMs: [isNumber(10000, 86400000)],
+    humanReviewMs: [isNumber(0, 60000)],
     maxConcurrent: [isNumber(1, 10)],
     dailyLossLimitPct: [isNumber(1, 100)],
     maxDailyTrades: [isNumber(0, 100)]
@@ -2262,9 +2263,13 @@ async function _handleApiInner(req, res, url, reqId) {
         const config = await autopilot.getAutopilotConfig()
         result.autopilot = {
           enabled: config.enabled,
+          assetId: config.assetId ?? "BTCUSD",
+          minConfidence: config.minConfidence ?? 55,
           lastEntryAt: config.lastEntryAt ?? 0,
           cooldownMs: config.cooldownMs ?? 0,
+          humanReviewMs: config.humanReviewMs ?? 5000,
           dailyLossLimitPct: config.dailyLossLimitPct ?? 10,
+          dayStartBalance: config.dayStartBalance ?? null,
           maxDailyTrades: config.maxDailyTrades ?? 0
         }
       }
