@@ -496,7 +496,7 @@
           ])
         : await send()
       if (!resp || !resp.ok) {
-        return { ok: false, error: resp?.error || resp?.status || "unknown", data: null }
+        return { ok: false, error: resp?.error || resp?.data?.error || resp?.status || "unknown", data: null }
       }
       return { ok: true, data: resp.data, status: resp.status }
     } catch (err) {
@@ -1096,15 +1096,32 @@
     let s = raw.replace(/\s*\(otc\)/gi, "").replace(/\s+/g, "").toUpperCase()
     if (/^[A-Z]{3}\/[A-Z]{3}$/.test(s)) s = s.replace("/", "")
     if (/^[A-Z]{3}\.[A-Z]{3}$/.test(s)) s = s.replace(".", "")
-    if (s.length > 6) {
-      // Try to extract a 3/3 currency pair: "EURUSDGBP" → "EURUSD"? No, take first 6
-      const pair = s.slice(0, 6)
-      if (/^[A-Z]{3}[A-Z]{3}$/.test(pair)) return pair
-    }
-    if (s.length === 6 && /^[A-Z]{6}$/.test(s)) return s
-    // Known commodity/crypto mappings
     const MAP = { GOLD: "GOLD", SILVER: "SILVER", BTCUSD: "BTCUSD", ETHUSD: "ETHUSD", XAUUSD: "GOLD", XAGUSD: "SILVER" }
-    return MAP[s] || s.slice(0, 12) || "EURUSD"
+    return MAP[s] || s || "EURUSD"
+  }
+
+  // Scrape-failure placeholders must never become the primary asset key.
+  const GARBAGE_ASSET_RE = /^(asset\s*\d+|live[_\s-]*asset)$/i
+  function detectPrimaryAssetFromPage() {
+    try {
+      const m = String(document.title || "").match(/[A-Z]{3,6}\s*\/\s*[A-Z]{3,6}|\b(Bitcoin|Ethereum|Gold|Silver|Oil|Platinum)\b/i)
+      if (m && !GARBAGE_ASSET_RE.test(m[0].trim())) return m[0].replace(/\s+/g, "").trim()
+    } catch {}
+    try {
+      const m = String(window.location.href || "").match(/[?&](?:asset|symbol)=([A-Za-z0-9_%./-]+)/)
+      if (m) {
+        try { return decodeURIComponent(m[1]) } catch { return m[1] }
+      }
+    } catch {}
+    for (const el of document.querySelectorAll("[class*=asset], [class*=instrument], [class*=symbol]")) {
+      const t = (el.textContent || "").trim()
+      if (t && t.length <= 24 && !GARBAGE_ASSET_RE.test(t) && /[A-Za-z]/.test(t) && !/balance|payout|profit/i.test(t)) return t
+    }
+    for (const a of Array.isArray(tradingState.assets) ? tradingState.assets : []) {
+      const n = String(a?.name ?? "")
+      if (n && !GARBAGE_ASSET_RE.test(n)) return n
+    }
+    return null
   }
 
   // ── Feature-aware helpers ──────────────────────────────────────────────────
@@ -1946,7 +1963,8 @@
       tradingState.pageMetrics = collectPageMetricsLocal()
 
       // Use the consolidated server endpoint — returns ALL dockable data in one call
-      const primaryRaw = tradingState.assets?.[0]?.name || tradingState.assets?.[0]?.id || "EURUSD"
+      let primaryRaw = tradingState.assets?.[0]?.name || tradingState.assets?.[0]?.id || "EURUSD"
+      if (GARBAGE_ASSET_RE.test(primaryRaw)) primaryRaw = detectPrimaryAssetFromPage() || primaryRaw
       const primaryAsset = normalizeAssetId(primaryRaw)
       const resp = await serverFetch("/api/extension/trading-data", {
         method: "POST",
@@ -2606,9 +2624,11 @@
           playAlertSound("danger")
           showToast("Kill Switch", "Emergency stop executed. All autopilot activity halted.", "error")
         } else {
-          showToast("Kill Switch", "Failed to stop autopilot — server unreachable or auth required.", "error")
+          showToast("Kill Switch", result?.error ? `Failed to stop autopilot — ${result.error}` : "Failed to stop autopilot — server unreachable.", "error")
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        showToast("Kill Switch", `Kill switch failed: ${err?.message ?? err}`, "error")
+      }
       btn.disabled = false
     }
   })

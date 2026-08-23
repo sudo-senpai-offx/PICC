@@ -281,8 +281,13 @@ function handleAppFrame(f) {
     const assetId = String(obj.message?.assetId ?? "")
     const rows = Array.isArray(obj.message?.candles) ? obj.message.candles : []
     if (!assetId) return
-    // Ignore assets outside the known instrument set unless they are watched.
-    if (!byId.has(assetId) && !watching.some((w) => w.id === assetId)) return
+    // Headless not up yet? Track the asset from the frame itself instead of
+    // discarding the realtime push — the next reseed will reconcile it.
+    if (!byId.has(assetId) && !watching.some((w) => w.id === assetId)) {
+      const stub = { id: assetId, name: obj.message?.name || assetId, type: "", currency: "", visible: true }
+      byId.set(assetId, stub)
+      watching.push(stub)
+    }
     viewedAssetId = assetId
     seedViewed(assetId)
     for (const c of rows) {
@@ -372,7 +377,10 @@ async function seedAll(assetIds = watching.map((w) => w.id)) {
     for (const period of WATCH_PERIODS) {
       try {
         const hist = await session.candles(id, period, HISTORY_COUNT)
-        if (hist?.ohlc?.length) reseedBuffer(id, period, hist.ohlc)
+        if (hist?.ohlc?.length) {
+          reseedBuffer(id, period, hist.ohlc)
+          lastSeen = Date.now()
+        }
       } catch {
         /* one failed seed never blocks the loop */
       }

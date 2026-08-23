@@ -560,7 +560,7 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
   const MAX_RECONNECT_ATTEMPTS = 8
 
   const pendingNs = new Map() // ns -> { resolve, reject, timer }
-  const pendingAction = new Map() // action -> { resolve, reject, timer }
+  const pendingAction = new Map() // key (request ns or action name) -> { resolve, reject }
   const frameListeners = new Set()
   const candleListeners = new Set()
   const reconnectListeners = new Set()
@@ -632,10 +632,13 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
 
     if (action === "assets") assetCache = assetsFrom(frame.payload)
 
-    const waiter = pendingAction.get(action)
+    let waiter = null
+    if (ns && pendingAction.has(ns)) {
+      waiter = pendingAction.get(ns)
+    } else if (pendingAction.has(action)) {
+      waiter = pendingAction.get(action)
+    }
     if (waiter) {
-      clearTimeout(waiter.timer)
-      pendingAction.delete(action)
       waiter.resolve(frame.payload)
       return
     }
@@ -828,9 +831,10 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
   }
 
   /**
-   * Send a request and resolve with the payload of the next frame whose action
-   * matches any of `actions`. Server pushes (profile/assets/candles) don't echo
-   * our ns, so matching is by action.
+   * Send a request and resolve with the payload of the matching reply. Every
+   * request carries a unique ns so replies that echo it are correlated by id
+   * (concurrent same-action requests can never cross-wire); frames without an
+   * echo fall back to action-name matching for server pushes.
    */
   function requestAction(payload, actions, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
@@ -840,25 +844,25 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
         return reject(err)
       }
       const list = Array.isArray(actions) ? actions : [actions]
+      const requestId = newId()
+      const framed = { ...payload, ns: requestId }
+      const keys = [requestId, ...list]
       const timers = []
-      const cleanup = () => {
-        for (const a of list) pendingAction.delete(a)
-        for (const t of timers) clearTimeout(t)
-      }
+      const waiter = {}
       const settle = (fn, v) => {
-        cleanup()
+        for (const k of keys) {
+          if (pendingAction.get(k) === waiter) pendingAction.delete(k)
+        }
+        for (const t of timers) clearTimeout(t)
         fn(v)
       }
-      const waiter = {
-        resolve: (v) => settle(resolve, v),
-        reject: (e) => settle(reject, e)
+      waiter.resolve = (v) => settle(resolve, v)
+      waiter.reject = (e) => settle(reject, e)
+      for (const k of keys) {
+        if (!pendingAction.has(k)) pendingAction.set(k, waiter)
       }
-      for (const a of list) {
-        if (!pendingAction.has(a)) pendingAction.set(a, waiter)
-      }
-      const timer = setTimeout(() => settle(reject, new Error(`no response for "${payload.action}" (${list.join("/")})`)), timeoutMs)
-      timers.push(timer)
-      ws.sendText(JSON.stringify(payload))
+      timers.push(setTimeout(() => settle(reject, new Error(`no response for "${payload.action}" (${list.join("/")})`)), timeoutMs))
+      ws.sendText(JSON.stringify(framed))
     })
   }
 
@@ -1046,6 +1050,7 @@ export async function connectSession({ token, isDemo = true, wsUrl = DEFAULT_WS_
  *   profile():Promise<object>, assets():Promise<object>,
  *   candles(assetId,period,count):Promise<object>,
  *   buy({assetId,type,amount,duration}):Promise<deal>,
+ *   closeTrade(dealId):Promise<object>, requestOpenDeals():Promise<Array>,
  *   deals():Array, settled():Array, livePrice(serverId):number|null,
  *   onDeal(cb):unsubscribe
  * }
@@ -1137,6 +1142,50 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
     }
   })
 
+  /**
+   * Ask the broker for currently open positions and re-populate activeDeals,
+   * so settlements pushed while disconnected (or tracked by a previous
+   * session instance) are not dropped as unknown deals.
+   */
+  async function requestOpenDeals() {
+    const payload = await transport.requestAction(
+      { action: "getOptions", msg: "getOptions", message: {}, token },
+      ["getOptions", "options"],
+      10000
+    )
+    const rows =
+      (Array.isArray(payload) ? payload : null) ??
+      (Array.isArray(payload?.deals) ? payload.deals : null) ??
+      (Array.isArray(payload?.options) ? payload.options : null) ??
+      (Array.isArray(payload?.trades) ? payload.trades : null) ??
+      []
+    for (const row of rows) {
+      const deal = openDealFrom(row)
+      if (!deal || activeDeals.has(deal.serverId)) continue
+      activeDeals.set(deal.serverId, deal)
+      emit("opened", deal)
+    }
+    return [...activeDeals.values()]
+  }
+
+  void requestOpenDeals().catch(() => {})
+  transport.onReconnect(() => {
+    void requestOpenDeals().catch(() => {})
+  })
+
+  function closeTrade(dealId) {
+    return transport.requestAction(
+      {
+        action: "closeTrade",
+        msg: "closeTrade",
+        message: { trade_id: String(dealId), deal_id: String(dealId) },
+        token
+      },
+      ["closeTradeSuccessful", "closeTrade", "tradeClosed"],
+      10000
+    )
+  }
+
   function buy({ assetId, type, amount, duration = 60 }) {
     return new Promise((resolve, reject) => {
       transport.withAsset(assetId).then(
@@ -1176,7 +1225,9 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
   }
 
   return {
-    connected: transport.connected,
+    get connected() {
+      return Boolean(transport.connected)
+    },
     isDemo,
     close: () => transport.close(),
     profile: () => transport.requestAction({ action: "profile", token }, ["profile"]),
@@ -1222,6 +1273,8 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
     onCandles: (cb) => transport.onCandles(cb),
     onReconnect: (cb) => transport.onReconnect(cb),
     buy,
+    closeTrade,
+    requestOpenDeals,
     deals: () => [...activeDeals.values()],
     settled: () => settledDeals.slice(),
     livePrice: (serverId) => activeDeals.get(String(serverId))?.lastPrice ?? null,

@@ -102,7 +102,19 @@ async function serverFetch(path, opts = {}) {
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       signal: AbortSignal.timeout(opts.timeout || 8000)
     })
-    if (!resp.ok) return { ok: false, data: null, status: resp.status }
+    if (!resp.ok) {
+      let error = null
+      try {
+        const raw = await resp.text()
+        try {
+          const parsedBody = JSON.parse(raw)
+          error = parsedBody?.error ?? parsedBody?.detail ?? raw
+        } catch {
+          error = raw
+        }
+      } catch { /* body unavailable */ }
+      return { ok: false, data: null, status: resp.status, error: error || `HTTP ${resp.status}` }
+    }
     const data = await resp.json().catch(() => null)
     return { ok: true, data, status: resp.status }
   } catch (err) {

@@ -531,7 +531,7 @@ async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, s
   if (!Number.isFinite(tradeAmount) || tradeAmount <= 0) {
     const { stats, kelly } = kellySnapshot()
     const { cash } = await paperOverview()
-    const fraction = kelly.suggested > 0 ? kelly.suggested : creds.riskPerTradePct / 100
+    const fraction = kelly.suggested > 0 ? kelly.suggested / 100 : creds.riskPerTradePct / 100
     tradeAmount = Math.round(cash * fraction * 100) / 100
     tradeAmount = Math.max(1, Math.min(tradeAmount, cash)) // floor $1, cap at available cash
   }
@@ -686,9 +686,10 @@ export function recordSignal(signal) {
 async function recordSignalLocked(signal) {
   const ledger = await getLedger()
   const entry = {
+    ...signal,
     id: randomBytes(6).toString("hex"),
     createdAt: new Date().toISOString(),
-    ...signal
+    status: "pending"
   }
   ledger.signals.push(entry)
   await saveLedger(ledger)

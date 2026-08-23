@@ -10,7 +10,9 @@
     "dev": "node scripts/dev.mjs",
     "start:all": "node scripts/start-all.mjs",
     "build": "npm run build --workspace @picc/dashboard",
-    "typecheck": "npm run typecheck --workspace @picc/dashboard"
+    "typecheck": "npm run typecheck --workspace @picc/dashboard",
+    "audit:check": "npm audit --audit-level=high",
+    "test:ci": "npm run audit:check && npm run test --workspace @picc/dashboard && npm run typecheck"
   },
   "engines": {
     "node": ">=22"

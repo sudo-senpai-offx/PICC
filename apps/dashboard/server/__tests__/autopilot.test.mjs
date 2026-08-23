@@ -42,6 +42,7 @@ const fakeSession = {
 beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "picc-autopilot-"))
   process.env.PICC_TRADING_DATA_DIR = tmp
+  process.env.PICC_DATA_DIR = tmp
   trading = await import("../services/trading.mjs")
   autopilot = await import("../services/autopilot.mjs")
   const eo = await import("../services/expertoption.mjs")
@@ -67,6 +68,7 @@ afterEach(async () => {
 
 afterAll(() => {
   delete process.env.PICC_TRADING_DATA_DIR
+  delete process.env.PICC_DATA_DIR
   rmSync(tmp, { recursive: true, force: true })
 })
 
@@ -270,7 +272,7 @@ describe("autopilotTick (integration with mocked broker)", () => {
 
   it("places a demo trade on a strong signal", async () => {
     await trading.saveCredentials({ expertoptionToken: "demo-token", expertoptionDemo: true })
-    await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50, cooldownMs: 10000 })
+    await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50, cooldownMs: 10000, humanReviewMs: 0 })
 
     const out = await autopilot.autopilotTick()
     expect(out.ok).toBe(true)
@@ -285,7 +287,7 @@ describe("autopilotTick (integration with mocked broker)", () => {
   it("does not buy below the confidence threshold", async () => {
     predictDirection.mockReturnValue({ direction: "up", confidence: 40, models: {}, reason: "weak" })
     await trading.saveCredentials({ expertoptionToken: "demo-token", expertoptionDemo: true })
-    await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50, cooldownMs: 10000 })
+    await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50, cooldownMs: 10000, humanReviewMs: 0 })
 
     const out = await autopilot.autopilotTick()
     expect(out.ok).toBe(false)

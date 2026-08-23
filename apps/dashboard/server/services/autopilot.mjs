@@ -16,7 +16,7 @@ import { getCredentials, recordSignal, resolveSignal, signalAccuracy } from "./t
 import { predictDirection } from "./prediction.mjs"
 import { proAnalyzeCandles } from "./proanalysis.mjs"
 import { metricsFrom } from "./analytics.mjs"
-import { appendRow } from "./localstore.mjs"
+import { appendRow, localStore } from "./localstore.mjs"
 import { chatText, llmConfigured } from "./llm.mjs"
 import { volatilityPositionSize, realizedVolatility } from "./volatility.mjs"
 import { quickMtfCheck } from "./multiTimeframe.mjs"
@@ -393,6 +393,7 @@ function ensureSession() {
       isDemo: creds.expertoptionDemo,
       wsUrl: creds.expertoptionWsUrl
     })
+    state.session?.close?.()
     state.session = session
     state.sessionError = null
     session.onDeal((kind, deal) => {
@@ -461,6 +462,31 @@ async function recordDealLocked(deal) {
     })
   })
   await recordFeedback(deal)
+  await recordKelly(deal)
+}
+
+/**
+ * Feed every settled demo deal into the Kelly criterion history so position
+ * sizing is derived from real outcomes. Best-effort — never breaks settlement.
+ */
+async function recordKelly(deal) {
+  try {
+    const store = localStore("kelly", { history: [] })
+    if (!Array.isArray(store.data.history)) store.data.history = []
+    const profit = Number(deal.profit) || 0
+    const stake = Number(deal.amount) || 0
+    store.data.history.push({
+      outcome: profit > 0 ? "win" : profit < 0 ? "loss" : "draw",
+      win: profit > 0,
+      stake,
+      payout: profit > 0 && stake > 0 ? Math.round((profit / stake) * 100) / 100 : 0,
+      timestamp: Date.now()
+    })
+    if (store.data.history.length > 200) store.data.history = store.data.history.slice(-200)
+    store.write()
+  } catch (err) {
+    console.warn(`[picc-autopilot] kelly history write failed: ${err?.message ?? err}`)
+  }
 }
 
 /**
@@ -862,14 +888,18 @@ async function runAutopilotTick() {
   if (config.humanReviewMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, config.humanReviewMs))
   }
-  const deal = await session.buy({
-    assetId: config.assetId,
-    type: decision.direction,
-    amount,
-    duration: config.duration
-  })
   const now = Date.now()
-  await saveAutopilotConfig({ lastEntryAt: now })
+  let deal
+  try {
+    deal = await session.buy({
+      assetId: config.assetId,
+      type: decision.direction,
+      amount,
+      duration: config.duration
+    })
+  } finally {
+    await saveAutopilotConfig({ lastEntryAt: now })
+  }
   state.lastRun.deal = deal.serverId
   state.lastRun.amount = amount
   return { ok: true, reason: decision.reason, deal, amount, direction: decision.direction }
@@ -1045,7 +1075,10 @@ export async function bootstrapAutopilot() {
           })
         }, 60_000)
       }
-      void autopilotTick()
+      void autopilotTick().catch((err) => {
+        console.warn("[picc-autopilot] bootstrap tick failed:", err?.message ?? err)
+        state.lastDecision = `tick error: ${err?.message ?? err}`
+      })
     }
   } catch {
     /* config file missing — nothing to resume */

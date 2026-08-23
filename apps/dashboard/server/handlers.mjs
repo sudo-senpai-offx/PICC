@@ -304,6 +304,16 @@ function isLocalhostRequest(req) {
   return ip === "127.0.0.1" || ip === "::1" || ip === "localhost"
 }
 
+/** EO asset ids are numeric strings while clients send symbols ("EURUSD") — match either. */
+function eoAssetMatches(a, key) {
+  if (!a) return false
+  const k = String(key ?? "").toLowerCase()
+  if (!k) return false
+  if (String(a.id) === String(key)) return true
+  const norm = (s) => String(s ?? "").toLowerCase().replace(/[/\s-]/g, "")
+  return norm(a.name) === k || norm(a.displayName) === k
+}
+
 function isHttpUrl(value) {
   try {
     const u = new URL(String(value))
@@ -1061,7 +1071,7 @@ async function _handleApiInner(req, res, url, reqId) {
 
   if (path === "/api/trading/realtime" && req.method === "GET") {
     const token = parsed.searchParams.get("token") ?? ""
-    const ok = token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization))
+    const ok = isLocalhostRequest(req) || (token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization)))
     if (!ok) return writeJson(res, 401, { error: "authentication required" })
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -1146,7 +1156,7 @@ async function _handleApiInner(req, res, url, reqId) {
 
   if (path === "/api/trading/decisions" && req.method === "GET") {
     const token = parsed.searchParams.get("token") ?? ""
-    const ok = token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization))
+    const ok = isLocalhostRequest(req) || (token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization)))
     if (!ok) return writeJson(res, 401, { error: "authentication required" })
     try {
       writeJson(res, 200, { ok: true, ...(await withTimeout(getDecisions(), 20000)) })
@@ -1196,9 +1206,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/credentials" && (req.method === "GET" || req.method === "POST")) {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireAuth(req, res))) return true
     if (req.method === "GET") {
       const creds = await getTradingCredentials()
       writeJson(res, 200, {
@@ -1448,9 +1456,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/demo/place" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireAuth(req, res))) return true
     if (validateOr400(res, body, "demoPlace")) return
     try {
       const deal = await withTimeout(
@@ -1472,6 +1478,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/autopilot" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
     try {
       writeJson(res, 200, { ok: true, config: await getAutopilotConfig() })
     } catch (err) {
@@ -1481,9 +1488,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/autopilot" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireAuth(req, res))) return true
     if (validateOr400(res, body, "autopilot")) return true
     try {
       writeJson(res, 200, { ok: true, config: await saveAutopilotConfig(body) })
@@ -1496,9 +1501,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/autopilot/start" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireAuth(req, res))) return true
     try {
       writeJson(res, 200, { ok: true, config: await startAutopilot() })
       bustRealtimeSuite()
@@ -1510,9 +1513,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/autopilot/stop" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireAuth(req, res))) return true
     try {
       writeJson(res, 200, { ok: true, config: await stopAutopilot(String(body?.reason ?? "manual")) })
       bustRealtimeSuite()
@@ -1622,19 +1623,21 @@ async function _handleApiInner(req, res, url, reqId) {
     try {
       const { liveEOData } = await import("./services/liveEO.mjs")
       const data = liveEOData()
-      const asset = data.assets.find((a) => a.id === assetId)
+      const asset = data.assets.find((a) => eoAssetMatches(a, assetId))
       if (asset && asset.periods[timeframe]) {
         const ohlc = asset.periods[timeframe].slice(-count)
         return writeJson(res, 200, { ok: true, source: "live", assetId, timeframe, candles: ohlc })
       }
       const { getHistory } = await import("./services/yahoo.mjs")
+      console.warn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
       const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
       const candles = history.dates.map((ts, i) => ({
         time: Math.floor(ts / 1000),
         open: Number(history.opens[i]) || 0,
         high: Number(history.highs[i]) || 0,
         low: Number(history.lows[i]) || 0,
-        close: Number(history.closes[i]) || 0
+        close: Number(history.closes[i]) || 0,
+        timeframe: 86400
       })).filter((c) => c.close > 0 && c.time > 0).slice(-count)
       writeJson(res, 200, { ok: true, source: "yahoo", assetId, timeframe, candles, name: history.name })
     } catch (err) {
@@ -1656,7 +1659,7 @@ async function _handleApiInner(req, res, url, reqId) {
       try {
         const { liveEOData } = await import("./services/liveEO.mjs")
         const data = liveEOData()
-        const asset = data.assets?.find((a) => a.id === assetId)
+        const asset = data.assets?.find((a) => eoAssetMatches(a, assetId))
         const buffer = asset?.periods?.[timeframe] ?? []
         if (buffer.length > 0) {
           const sliced = buffer.slice(-safeCount)
@@ -1673,6 +1676,7 @@ async function _handleApiInner(req, res, url, reqId) {
 
       if (!candles.length) {
         const { getHistory } = await import("./services/yahoo.mjs")
+        console.warn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
         const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
         candles = history.dates.map((ts, i) => ({
           time: Math.floor(ts / 1000),
@@ -1680,7 +1684,8 @@ async function _handleApiInner(req, res, url, reqId) {
           high: Number(history.highs[i]) || 0,
           low: Number(history.lows[i]) || 0,
           close: Number(history.closes[i]) || 0,
-          volume: Number(history.volumes?.[i] ?? 0) || 0
+          volume: Number(history.volumes?.[i] ?? 0) || 0,
+          timeframe: 86400
         })).filter(c => c.close > 0 && c.time > 0).slice(-safeCount)
       }
 
@@ -3171,7 +3176,7 @@ async function _handleApiInner(req, res, url, reqId) {
       try {
         const { liveEOData } = await import("./services/liveEO.mjs")
         const eoData = liveEOData()
-        const asset = eoData.assets.find((a) => a.id === primaryAsset)
+        const asset = eoData.assets.find((a) => eoAssetMatches(a, primaryAsset))
         if (asset && asset.periods[60]) {
           candles = asset.periods[60].slice(-candleCount)
         }
@@ -3179,21 +3184,23 @@ async function _handleApiInner(req, res, url, reqId) {
       if (!candles.length) {
         try {
           const { getHistory } = await import("./services/yahoo.mjs")
+          console.warn(`[picc] ${primaryAsset}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
           const history = await withTimeout(getHistory(primaryAsset, "6mo"), 10000)
           candles = (history.dates ?? []).map((ts, i) => ({
             time: Math.floor(ts / 1000),
             open: Number(history.opens?.[i]) || 0,
             high: Number(history.highs?.[i]) || 0,
             low: Number(history.lows?.[i]) || 0,
-            close: Number(history.closes?.[i]) || 0
+            close: Number(history.closes?.[i]) || 0,
+            timeframe: 86400
           })).filter((c) => c.close > 0 && c.time > 0).slice(-candleCount)
         } catch { /* Yahoo failed too */ }
       }
 
-      const kellyProm = candles.length ? withTimeout((async () => {
+      const kellyProm = withTimeout((async () => {
         const { kellySnapshot } = await import("./services/kellyCriterion.mjs")
         return kellySnapshot()
-      })(), 4000).catch(() => null) : Promise.resolve(null)
+      })(), 4000).catch(() => null)
 
       const regimeProm = candles.length ? withTimeout((async () => {
         const { detectRegime } = await import("./services/regimeDetection.mjs")

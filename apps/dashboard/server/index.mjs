@@ -94,8 +94,11 @@ if (!process.env.PICC_NO_LISTEN) {
 
     const shutdownFns = []
     try {
-      const { stopAutopilot } = await import("./services/autopilot.mjs")
-      shutdownFns.push(() => stopAutopilot("server shutdown"))
+      const { stopAutopilot, _closeSession } = await import("./services/autopilot.mjs")
+      shutdownFns.push(async () => {
+        await stopAutopilot("server shutdown")
+        await _closeSession()
+      })
     } catch { /* optional */ }
     try {
       const { stopDecisionEngine } = await import("./services/adaptiveConfluence.mjs")
