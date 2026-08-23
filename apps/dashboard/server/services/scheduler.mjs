@@ -10,6 +10,12 @@
 //   credential-expiry  every 30 min  checks session JWTs for upcoming expiry and
 //                                 logs a credential_expiry entry to agent_logs
 //                                 ONCE per platform per day.
+//   ccxt-market-data   every 15 sec  polls every CCXT exchange configured in the
+//                                 credential store (trading-credentials.json →
+//                                 ccxtExchanges) for OHLCV + ticker, stores the
+//                                 normalized candles in the shared liveCCXT state
+//                                 and lets adaptiveConfluence fold them into the
+//                                 existing indicator/decision pipeline. Read-only.
 //
 // Jobs are concurrency-guarded (a slow run is skipped, not queued) and all
 // outbound work funnels through the shared polite rate limiter. startScheduler
@@ -18,8 +24,10 @@ import { automatorStatus, getCredentials, jwtInfo } from "./automator.mjs"
 import { yieldSnapshot } from "./yields.mjs"
 import { appendRow, listRows } from "./localstore.mjs"
 import { rateLimitStatus } from "./rateLimit.mjs"
-import { paperAnalytics } from "./trading.mjs"
+import { paperAnalytics, getCredentials as getTradingCredentials } from "./trading.mjs"
 import { liveEOStats, setLiveEOStale } from "./liveEO.mjs"
+import { connect, fetchCandles, fetchTicker, toCcxtSymbol } from "./ccxtConnector.mjs"
+import { recordCandles, recordTicker, timeframeSeconds, ccxtStats } from "./liveCCXT.mjs"
 import { createLogger } from "../logger.mjs"
 
 const log = createLogger("picc-scheduler")
@@ -226,3 +234,52 @@ every(
   },
   { staggerMs: 15_000 }
 )
+
+// Phase 9 — multi-exchange market data via CCXT. Every 15s (matching the
+// decision engine's cadence) poll each exchange/symbol pair configured in the
+// credential store, normalize OHLCV through the read-only connector, and store
+// it in the shared liveCCXT state. adaptiveConfluence folds that state into its
+// regular decision batch, so exchange candles flow through indicators.mjs and
+// confluenceRead with zero special-casing. No CCXT pairs configured -> this job
+// exits in one credential read.
+every(
+  "ccxt-market-data",
+  15 * 1000,
+  async () => {
+    const creds = await getTradingCredentials().catch(() => ({}))
+    const configured = Array.isArray(creds.ccxtExchanges) ? creds.ccxtExchanges : []
+    if (configured.length === 0) return
+
+    for (const cfg of configured.slice(0, 12)) {
+      if (!cfg?.exchange || !cfg?.symbol) continue
+      const symbol = toCcxtSymbol(cfg.symbol)
+      const timeframe = cfg.timeframe ?? "1m"
+      if (!symbol || !timeframeSeconds(timeframe)) continue
+      try {
+        // connect() caches per exchange id and returns a structurally
+        // read-only instance; public market data needs no API keys at all.
+        const exchange = await connect({
+          exchange: cfg.exchange,
+          apiKey: cfg.apiKey,
+          secret: cfg.secret,
+          password: cfg.password
+        })
+        const candles = await fetchCandles(exchange, symbol, timeframe, cfg.limit)
+        if (candles.length > 0) {
+          recordCandles({ exchange, symbol, timeframe, candles })
+          const ticker = await fetchTicker(exchange, symbol)
+          if (ticker) recordTicker({ exchange, symbol, ticker })
+        }
+      } catch (err) {
+        // One bad exchange must never starve the others in the loop.
+        log.warn("ccxt poll failed", { exchange: cfg.exchange, symbol, error: err.message })
+      }
+    }
+  },
+  { staggerMs: 25_000 }
+)
+
+/** Health/observability view of the CCXT collection state. */
+export function ccxtSchedulerStatus() {
+  return { ok: true, stats: ccxtStats() }
+}

@@ -72,7 +72,10 @@ const DEFAULT_CREDS = {
   expertoptionDemo: true,
   expertoptionWsUrl: DEFAULT_WS_URL,
   paperStartingBalance: 10000,
-  riskPerTradePct: 2
+  riskPerTradePct: 2,
+  // Phase 9 — read-only multi-exchange market data (CCXT). Each entry:
+  // { exchange: "binance", symbol: "BTC/USDT", timeframe?: "1m", limit?: 200 }
+  ccxtExchanges: []
 }
 
 const DEFAULT_LEDGER = { positions: [], closed: [], signals: [] }
@@ -144,6 +147,21 @@ function sanitizePatch(patch) {
   }
   if (patch.paperStartingBalance != null) out.paperStartingBalance = Number(patch.paperStartingBalance)
   if (patch.riskPerTradePct != null) out.riskPerTradePct = Number(patch.riskPerTradePct)
+  // CCXT pairs: keep only well-formed entries — the scheduler treats a
+  // malformed one as "skip this pair", not "crash the poll".
+  if (patch.ccxtExchanges != null) {
+    out.ccxtExchanges = Array.isArray(patch.ccxtExchanges)
+      ? patch.ccxtExchanges
+          .slice(0, 12)
+          .filter((p) => p && typeof p === "object" && String(p.exchange ?? "").trim() && String(p.symbol ?? "").trim())
+          .map((p) => ({
+            exchange: String(p.exchange).trim().toLowerCase(),
+            symbol: String(p.symbol).trim(),
+            ...(p.timeframe ? { timeframe: String(p.timeframe).trim() } : {}),
+            ...(p.limit != null ? { limit: Math.max(1, Math.min(Number(p.limit) || 200, 1000)) } : {})
+          }))
+      : []
+  }
   return out
 }
 

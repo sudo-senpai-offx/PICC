@@ -22,6 +22,7 @@
 
 import { computeIndicatorDashboard, detectMarketPhase } from "./indicators.mjs"
 import { liveEOData, subscribeLiveEO } from "./liveEO.mjs"
+import { mergeCCXTAssets } from "./liveCCXT.mjs"
 import { recordSignal } from "./trading.mjs"
 import { recordDecision } from "./accuracyLedger.mjs"
 import { getSentiment } from "./sentimentEngine.mjs"
@@ -677,7 +678,16 @@ async function logTradeVerdicts(decisions) {
 }
 
 async function computeNow() {
-  const data = liveEOData()
+  // Phase 9: fold the read-only CCXT exchange candles (liveCCXT.mjs, fed by the
+  // scheduler's ccxt-market-data job) into the same decision batch so exchange
+  // pairs are scored by the identical pipeline as broker assets — and so the
+  // engine still produces decisions when either source is unconfigured.
+  let data
+  try {
+    data = mergeCCXTAssets(liveEOData())
+  } catch {
+    data = liveEOData()
+  }
   if (!Array.isArray(data?.assets) || data.assets.length === 0) {
     cached = {
       ts: Date.now(),
