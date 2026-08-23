@@ -1621,12 +1621,17 @@ async function _handleApiInner(req, res, url, reqId) {
     const count = Math.min(Math.max(Number(body?.count) || 200, 20), 500)
     if (!assetId) return writeJson(res, 400, { error: "assetId required" })
     try {
-      const { liveEOData } = await import("./services/liveEO.mjs")
+      const { liveEOData, fetchAssetCandles, ensureWatchingAsset } = await import("./services/liveEO.mjs")
       const data = liveEOData()
       const asset = data.assets.find((a) => eoAssetMatches(a, assetId))
-      if (asset && asset.periods[timeframe]) {
+      if (asset && asset.periods[timeframe]?.length) {
         const ohlc = asset.periods[timeframe].slice(-count)
         return writeJson(res, 200, { ok: true, source: "live", assetId, timeframe, candles: ohlc })
+      }
+      await ensureWatchingAsset(assetId).catch(() => null)
+      const result = await withTimeout(fetchAssetCandles(assetId, timeframe, count), 10000).catch(() => ({ ohlc: [], source: null }))
+      if (result.ohlc?.length) {
+        return writeJson(res, 200, { ok: true, source: result.source || "live", assetId, timeframe, candles: result.ohlc })
       }
       const { getHistory } = await import("./services/yahoo.mjs")
       console.warn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
@@ -3173,12 +3178,29 @@ async function _handleApiInner(req, res, url, reqId) {
       const decisionsVal = decisions.status === "fulfilled" ? decisions.value : null
 
       let candles = []
+      let candleSource = "none"
+      let eoBalance = null
       try {
-        const { liveEOData } = await import("./services/liveEO.mjs")
+        const { liveEOData, fetchAssetCandles, fetchFreshAccount, ensureWatchingAsset } = await import("./services/liveEO.mjs")
         const eoData = liveEOData()
         const asset = eoData.assets.find((a) => eoAssetMatches(a, primaryAsset))
-        if (asset && asset.periods[60]) {
+        if (asset && asset.periods[60]?.length) {
           candles = asset.periods[60].slice(-candleCount)
+          candleSource = "buffer"
+        }
+        if (!candles.length) {
+          const resolved = await ensureWatchingAsset(primaryAsset).catch(() => null)
+          if (resolved) {
+            const result = await withTimeout(fetchAssetCandles(primaryAsset, 60, candleCount), 10000).catch(() => ({ ohlc: [], source: null }))
+            if (result.ohlc?.length) {
+              candles = result.ohlc
+              candleSource = result.source
+            }
+          }
+        }
+        const freshAcc = await withTimeout(fetchFreshAccount(), 5000).catch(() => null)
+        if (freshAcc?.balance != null) {
+          eoBalance = { balance: freshAcc.balance, currency: freshAcc.currency, demo: freshAcc.demo, demoWallet: freshAcc.demoWallet, realWallet: freshAcc.realWallet }
         }
       } catch { /* liveEO not available */ }
       if (!candles.length) {
@@ -3194,6 +3216,7 @@ async function _handleApiInner(req, res, url, reqId) {
             close: Number(history.closes?.[i]) || 0,
             timeframe: 86400
           })).filter((c) => c.close > 0 && c.time > 0).slice(-candleCount)
+          candleSource = "yahoo"
         } catch { /* Yahoo failed too */ }
       }
 
@@ -3226,6 +3249,14 @@ async function _handleApiInner(req, res, url, reqId) {
         kellyProm, regimeProm, expiryProm, sentimentProm, orderFlowProm
       ])
 
+      if (eoBalance && statusVal?.expertOption) {
+        statusVal.expertOption.balance = eoBalance.balance
+        statusVal.expertOption.currency = eoBalance.currency
+        statusVal.expertOption.demo = eoBalance.demo
+        statusVal.expertOption.demoWallet = eoBalance.demoWallet
+        statusVal.expertOption.realWallet = eoBalance.realWallet
+      }
+
       writeJson(res, 200, {
         ok: true,
         status: statusVal,
@@ -3233,6 +3264,7 @@ async function _handleApiInner(req, res, url, reqId) {
         demo: demoVal,
         decisions: decisionsVal?.decisions ?? decisionsVal,
         candles,
+        candleSource,
         kelly,
         regime,
         expiry,

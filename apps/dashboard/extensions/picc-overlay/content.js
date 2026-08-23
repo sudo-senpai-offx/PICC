@@ -1172,8 +1172,12 @@
     }).join("")
     const acct = tradingState.account
     const bal = acct?.balance != null ? fmt$(acct.balance, acct.currency) : ""
+    const src = tradingState.candleSource || ""
+    const srcLabel = src === "buffer" ? "live" : src === "live" ? "fetched" : src === "yahoo" ? "delayed" : ""
+    const srcColor = src === "buffer" || src === "live" ? "#4ade80" : src === "yahoo" ? "#f59e0b" : "#a5a0ff"
     return banner + header + `<div style="font-size:11px">${rows}</div>` +
       (bal ? `<div style="margin-top:4px;font-size:10px;color:#a5a0ff">Balance: ${bal}</div>` : "") +
+      (srcLabel ? `<div style="font-size:9px;color:${srcColor}">data: ${srcLabel}</div>` : "") +
       staleLabel()
   }
 
@@ -1181,19 +1185,31 @@
   function renderPortfolio() {
     const paper = tradingState.paper
     const demo = tradingState.demo
+    const acct = tradingState.account
     const banner = checkFeatures("portfolio")
     const lines = []
     if (paper) {
       lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin-bottom:2px">Paper Trading</div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cash</span><span>${fmt$(paper.cash, tradingState.account?.currency)}</span></div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Committed</span><span>${fmt$(paper.committed, tradingState.account?.currency)}</span></div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>PnL</span><span style="color:${tone(paper.realizedPnl)}">${fmt$(paper.realizedPnl, tradingState.account?.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Cash</span><span>${fmt$(paper.cash, acct?.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Committed</span><span>${fmt$(paper.committed, acct?.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>PnL</span><span style="color:${tone(paper.realizedPnl)}">${fmt$(paper.realizedPnl, acct?.currency)}</span></div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${paper.winRate != null ? paper.winRate + "%" : "\u2014"}</span></div>`)
     }
-    if (demo) {
+    if (acct?.demoWallet || acct?.realWallet) {
+      const modeLabel = acct.demo !== false ? "Demo" : "Live"
+      lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin:4px 0 2px">ExpertOption ${modeLabel}</div>`)
+      if (acct.demoWallet) {
+        const dw = acct.demoWallet
+        lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Demo</span><span>${fmt$(dw.balance, dw.currency)}</span></div>`)
+      }
+      if (acct.realWallet) {
+        const rw = acct.realWallet
+        lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Real</span><span>${fmt$(rw.balance, rw.currency)}</span></div>`)
+      }
+    } else if (demo) {
       lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin:4px 0 2px">ExpertOption Demo</div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Balance</span><span>${fmt$(demo.balance, demo.currency)}</span></div>`)
-      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Today</span><span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, demo.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Balance</span><span>${fmt$(demo.balance, acct?.currency)}</span></div>`)
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Today</span><span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, acct?.currency)}</span></div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Trades</span><span>${demo.todayTrades ?? 0}</span></div>`)
     }
     if (!lines.length) {
@@ -1664,8 +1680,38 @@
   function extractPageData() {
     const out = { prices: [], balance: null, assetName: null }
     const isEO = /expertoption\.(com|finance)/i.test(window.location.hostname)
-    // ── ExpertOption-specific selectors first (fallback for React apps) ──
     if (isEO) {
+      try {
+        const titleMatch = document.title.match(/^([A-Z0-9/.\s-]+?)\s*[-–—|]/)
+        if (titleMatch) {
+          const raw = titleMatch[1].trim()
+          const cleaned = raw.replace(/\s*\(otc\)/gi, "").replace(/\s+/g, "").toUpperCase()
+          if (cleaned.length >= 3 && cleaned.length <= 20 && /[A-Z]/.test(cleaned) && /\d/.test(cleaned)) {
+            out.assetName = cleaned.replace("/", "")
+          } else if (/^[A-Z]{2,6}$/.test(cleaned) || /^[A-Z]{3}\/[A-Z]{3}$/.test(cleaned)) {
+            out.assetName = cleaned.replace("/", "")
+          }
+        }
+      } catch {}
+      try {
+        const urlMatch = window.location.href.match(/asset[=/]([A-Za-z0-9._-]+)/i)
+        if (urlMatch && !out.assetName) out.assetName = decodeURIComponent(urlMatch[1]).toUpperCase().replace(/[^A-Z0-9]/g, "")
+      } catch {}
+      try {
+        if (!out.assetName) {
+          for (const el of document.querySelectorAll("[class*='instrument'], [class*='pair'], [class*='active-asset'], [data-asset]")) {
+            if (el.closest("[data-picc-overlay], [data-picc-dock]")) continue
+            const t = (el.textContent || el.dataset.asset || "").trim()
+            if (t && t.length >= 3 && t.length <= 24) {
+              const cleaned = t.replace(/\s*\(otc\)/gi, "").replace(/\s+/g, "").toUpperCase()
+              if (/^[A-Z]{3}\/[A-Z]{3}$/.test(cleaned) || /^[A-Z]{2,6}$/.test(cleaned)) {
+                out.assetName = cleaned.replace("/", "")
+                break
+              }
+            }
+          }
+        }
+      } catch {}
       try {
         const priceSelectors = [
           '[class*="price"]', '[class*="Price"]', '[class*="quote"]', '[class*="Quote"]',
@@ -1977,7 +2023,7 @@
         tradingState.lastFetchError = null
         tradingState.lastFetchAt = Date.now()
         tradingState.loadingSince = 0
-        // Status / account
+        // Status / account — server balance is canonical when available
         const d = resp.data
         if (d?.status?.ok) {
           tradingState.paper = d.status.paper || null
@@ -1986,8 +2032,11 @@
             tradingState.account = {
               balance: eo.balance ?? tradingState.account?.balance ?? null,
               currency: eo.currency || "USD",
-              demo: eo.demo
+              demo: eo.demo,
+              demoWallet: eo.demoWallet || null,
+              realWallet: eo.realWallet || null
             }
+            if (eo.balance != null) tradingState.demo = { ...tradingState.demo, balance: eo.balance }
           }
         }
         // Autopilot
@@ -1999,22 +2048,26 @@
         // Candles
         if (d?.candles?.length) {
           tradingState.lastCandles = d.candles
-          // Populate price from candles if DOM scraping failed
+          tradingState.candleSource = d.candleSource || "unknown"
           const last = d.candles[d.candles.length - 1]
           const prev = d.candles[d.candles.length - 2]
-          if (last && tradingState.assets[0] && !tradingState.assets[0].price) {
-            tradingState.assets[0].price = last.close
-            if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
-          }
-          // If no assets found at all, create one from the server response
-          if (!tradingState.assets.length && last) {
-            tradingState.assets.push({
-              id: primaryAsset,
-              name: primaryAsset,
-              price: last.close,
-              changePct: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
-              change: prev ? last.close - prev.close : 0
-            })
+          if (last) {
+            if (tradingState.assets[0]) {
+              tradingState.assets[0].price = last.close
+              if (prev && prev.close) {
+                tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
+                tradingState.assets[0].change = last.close - prev.close
+              }
+            }
+            if (!tradingState.assets.length) {
+              tradingState.assets.push({
+                id: primaryAsset,
+                name: primaryAsset,
+                price: last.close,
+                changePct: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
+                change: prev ? last.close - prev.close : 0
+              })
+            }
           }
         }
         // Advanced analytics
@@ -2057,11 +2110,15 @@
           tradingState.loadingSince = 0
           tradingState.paper = statusVal.data?.paper || null
           if (statusVal.data?.expertOption) {
+            const eo = statusVal.data.expertOption
             tradingState.account = {
-              balance: statusVal.data.expertOption.balance ?? tradingState.account?.balance ?? null,
-              currency: statusVal.data.expertOption.currency || "USD",
-              demo: statusVal.data.expertOption.demo
+              balance: eo.balance ?? tradingState.account?.balance ?? null,
+              currency: eo.currency || "USD",
+              demo: eo.demo,
+              demoWallet: eo.demoWallet || null,
+              realWallet: eo.realWallet || null
             }
+            if (eo.balance != null) tradingState.demo = { ...tradingState.demo, balance: eo.balance }
           }
         }
         if (autopilotVal?.ok) tradingState.autopilot = autopilotVal.data?.config || autopilotVal.data
@@ -2073,11 +2130,26 @@
         if (signal.aborted) return
         if (candleResp?.ok && candleResp.data?.candles?.length) {
           tradingState.lastCandles = candleResp.data.candles
+          tradingState.candleSource = candleResp.data.source || "unknown"
           const last = candleResp.data.candles[candleResp.data.candles.length - 1]
           const prev = candleResp.data.candles[candleResp.data.candles.length - 2]
-          if (tradingState.assets[0] && !tradingState.assets[0].price) {
-            tradingState.assets[0].price = last.close
-            if (prev && prev.close) tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
+          if (last) {
+            if (tradingState.assets[0]) {
+              tradingState.assets[0].price = last.close
+              if (prev && prev.close) {
+                tradingState.assets[0].changePct = ((last.close - prev.close) / prev.close) * 100
+                tradingState.assets[0].change = last.close - prev.close
+              }
+            }
+            if (!tradingState.assets.length) {
+              tradingState.assets.push({
+                id: primaryAsset,
+                name: primaryAsset,
+                price: last.close,
+                changePct: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
+                change: prev ? last.close - prev.close : 0
+              })
+            }
           }
         }
         const [kelly, regime, expiry, sentiment, orderFlow] = await Promise.allSettled([

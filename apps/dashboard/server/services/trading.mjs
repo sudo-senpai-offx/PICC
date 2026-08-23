@@ -803,13 +803,25 @@ export async function tradingStatus() {
   let eoBalance = null
   let eoCurrency = null
   let eoConnected = false
+  let eoDemoWallet = null
+  let eoRealWallet = null
   try {
-    const { liveSnapshot } = await import("./liveEO.mjs")
+    const { liveSnapshot, fetchFreshAccount } = await import("./liveEO.mjs")
     const snap = liveSnapshot()
     eoConnected = snap.status === "connected"
-    if (snap.account?.balance != null) {
+    if (eoConnected && fetchFreshAccount) {
+      const fresh = await fetchFreshAccount()
+      if (fresh?.balance != null) {
+        eoBalance = fresh.balance
+        eoCurrency = fresh.currency || "USD"
+        eoDemoWallet = fresh.demoWallet || null
+        eoRealWallet = fresh.realWallet || null
+      }
+    } else if (snap.account?.balance != null) {
       eoBalance = snap.account.balance
       eoCurrency = snap.account.currency || "USD"
+      eoDemoWallet = snap.account.demoWallet || null
+      eoRealWallet = snap.account.realWallet || null
     }
   } catch { /* liveEO not loaded */ }
   return {
@@ -823,7 +835,9 @@ export async function tradingStatus() {
       wsUrl: creds.expertoptionWsUrl,
       connected: eoConnected,
       balance: eoBalance,
-      currency: eoCurrency
+      currency: eoCurrency,
+      demoWallet: eoDemoWallet,
+      realWallet: eoRealWallet
     },
     paper: overview
   }

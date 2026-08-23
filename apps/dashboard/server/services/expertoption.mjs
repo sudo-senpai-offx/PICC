@@ -1235,26 +1235,20 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
       transport.requestAction({ action: "profile", token }, ["profile"]).then((p) => balanceFrom(p.profile ?? p)),
     assets: () => transport.requestAction({ action: "assets", token }, ["assets"]),
     candles: (assetId, period = 60, count = 120) =>
-      transport.withAsset(assetId).then((aid) =>
-        transport.requestAction(
-          {
-            action: "history",
-            msg: "getCandles",
-            message: {
-              asset_id: aid,
-              period,
-              count,
-              time_from: Math.floor(Date.now() / 1000) - period * count * 2,
-              time_to: Math.floor(Date.now() / 1000),
-              chunk_size: count
+      transport.withAsset(assetId).then((aid) => {
+        const now = Math.floor(Date.now() / 1000)
+        const from = now - period * count * 2
+        return transport
+          .requestNs(
+            {
+              action: "assetHistoryCandles",
+              message: { assetid: aid, periods: [[from, now]], timeframes: [period] },
+              token
             },
-            token
-          },
-          // NB: "candles" is deliberately absent — that action is reserved for
-          // live subscription pushes and must never be consumed as a reply.
-          ["assetHistoryCandles", "history"]
-        )
-      ),
+            12000
+          )
+          .then((p) => historyCandlesFrom(p))
+      }),
     subscribeCandles: (assetId, period = 60) =>
       transport.withAsset(assetId).then((aid) => {
         transport.send({

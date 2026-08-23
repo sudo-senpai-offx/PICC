@@ -794,3 +794,70 @@ export function liveEOStats() {
     account
   }
 }
+
+/**
+ * On-demand candle fetch for an arbitrary asset. Returns OHLC from the buffer
+ * if already seeded; otherwise issues a live headless request and caches the
+ * result. Returns { ohlc, source } where source is "buffer" | "live" | null.
+ */
+export async function fetchAssetCandles(assetId, period = 60, count = 120) {
+  if (!assetId) return { ohlc: [], source: null }
+  const key = bufferKey(assetId, period)
+  const buf = buffers.get(key)
+  if (buf && buf.ohlc.length >= Math.min(count, 30)) {
+    return { ohlc: buf.ohlc.slice(-count), source: "buffer" }
+  }
+  if (!session) return { ohlc: buf?.ohlc ?? [], source: buf?.ohlc?.length ? "buffer" : null }
+  try {
+    const hist = await session.candles(assetId, period, count)
+    if (hist?.ohlc?.length) {
+      reseedBuffer(assetId, period, hist.ohlc)
+      lastSeen = Date.now()
+      const updatedBuf = buffers.get(key)
+      return { ohlc: updatedBuf.ohlc.slice(-count), source: "live" }
+    }
+  } catch { /* asset may not exist on broker */ }
+  return { ohlc: buf?.ohlc ?? [], source: buf?.ohlc?.length ? "buffer" : null }
+}
+
+/**
+ * Fetch a fresh account/balance profile from the headless session. Returns the
+ * full dual-wallet account model or null if the session is unavailable.
+ */
+export async function fetchFreshAccount() {
+  if (!session) return account
+  try {
+    const acc = await session.profile()
+    if (acc && acc.balance != null) {
+      account = acc
+      return acc
+    }
+  } catch { /* profile fetch failed */ }
+  return account
+}
+
+/**
+ * Ensure a specific asset is in the watching set and seeded. Returns the
+ * resolved asset ID (numeric) or null if the asset can't be resolved.
+ */
+export async function ensureWatchingAsset(assetSymbol) {
+  if (!assetSymbol || !session) return null
+  const existing = byId.get(String(assetSymbol)) ?? watching.find((w) => w.id === assetSymbol)
+  if (existing) return String(existing.id)
+  try {
+    const assetsRaw = await session.assets()
+    const assets = assetsFrom(assetsRaw)
+    for (const a of assets) byId.set(String(a.id), a)
+    const found = assets.find((a) => {
+      const n = normName(a.name)
+      const key = normName(assetSymbol)
+      return n === key || n.includes(key) || key.includes(n)
+    })
+    if (found) {
+      const fid = String(found.id)
+      if (!watching.some((w) => w.id === fid)) watching.push(found)
+      return fid
+    }
+  } catch { /* assets fetch failed */ }
+  return null
+}
