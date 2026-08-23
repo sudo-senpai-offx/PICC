@@ -2196,7 +2196,7 @@ async function _handleApiInner(req, res, url, reqId) {
         const hitRates = bt.hitRates ?? {}
         const avgHR = Object.values(hitRates).filter((v) => v != null).reduce((s, v, _, a) => s + v / a.length, 0)
         const testSlice = closes.slice(start, start + testWindow)
-        const futureSlice = closes.slice(start, testWindow, start + testWindow + horizonDays)
+        const futureSlice = closes.slice(start + testWindow, start + testWindow + horizonDays)
         const entry = testSlice[testSlice.length - 1]
         const exit = futureSlice.length > 0 ? futureSlice[futureSlice.length - 1] : entry
         const direction = avgHR > 0.5 ? "up" : avgHR < 0.5 ? "down" : "flat"
@@ -2212,6 +2212,20 @@ async function _handleApiInner(req, res, url, reqId) {
       const totalHits = windows.filter((w) => w.hit).length
       const totalReturn = eq - 100
       const maxDD = drawdown.length ? Math.max(...drawdown.map((d) => d.v)) : 0
+      let gateHyperopt = null
+      let gateWalkForward = null
+      try {
+        const { gridSearchGateThresholds, walkForwardBacktest } = await import("./services/hyperopt.mjs")
+        const ohlc = closes.map((c, i) => ({ time: i, open: c, high: c, low: c, close: c }))
+        const payoutPct = Math.min(Math.max(Number(body?.payoutPct) || 80, 1), 500)
+        const hyperWindows = Math.min(Math.max(Number(body?.hyperoptWindows) || 5, 2), 20)
+        gateHyperopt = gridSearchGateThresholds(ohlc, { payoutPct })
+        gateWalkForward = walkForwardBacktest(ohlc, { windows: hyperWindows, payoutPct })
+      } catch (err) {
+        console.warn("[picc] gate hyperopt failed:", err.message)
+        gateHyperopt = { ok: false, error: err.message }
+        gateWalkForward = { ok: false, error: err.message }
+      }
       writeJson(res, 200, {
         ok: true,
         symbol, horizonDays, trainWindow, testWindow, stepSize,
@@ -2220,6 +2234,8 @@ async function _handleApiInner(req, res, url, reqId) {
         totalReturnPct: Math.round(totalReturn * 100) / 100,
         maxDrawdownPct: maxDD,
         equity, drawdown, windowDetails: windows,
+        gateHyperopt,
+        gateWalkForward,
         name: history.name
       })
     } catch (err) {
@@ -2314,6 +2330,10 @@ async function _handleApiInner(req, res, url, reqId) {
     try {
       result.sources = collectSourceStatuses()
     } catch { result.sources = null }
+    try {
+      const { getCalibrationSummary } = await import("./services/calibration.mjs")
+      result.calibration = getCalibrationSummary()
+    } catch { result.calibration = { error: "failed" } }
     writeJson(res, 200, result)
     return true
   }

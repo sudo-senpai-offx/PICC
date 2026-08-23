@@ -351,6 +351,7 @@
       { id: "order-flow", title: "Order Flow", icon: "🌊", description: "Cumulative delta, imbalance, and divergence signals", defaultPos: "bottom-left", defaultSize: { width: 280, height: 200 }, defaultCollapsed: true },
       { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", description: "Optimal expiry selection with volatility analysis", defaultPos: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
       { id: "sentiment", title: "Sentiment", icon: "🎭", description: "News + social sentiment fusion with extremes", defaultPos: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
+      { id: "calibration", title: "Calibration", icon: "📐", description: "Predicted vs realized win rate per confidence bucket, breakeven line", defaultPos: "left", defaultSize: { width: 280, height: 220 }, defaultCollapsed: true },
       { id: "server-status", title: "PICC Status", icon: "🔌", description: "Server connection health and data pipeline status", defaultPos: "bottom-right", defaultSize: { width: 260, height: 160 }, defaultCollapsed: true },
       { id: "data-sources", title: "Data Sources", icon: "🩺", description: "Honesty status of every feed: live, local, stale, unconfigured", defaultPos: "right", defaultSize: { width: 280, height: 260 }, defaultCollapsed: true },
     ],
@@ -1006,6 +1007,8 @@
     orderFlow: null,
     expiry: null,
     sentiment: null,
+    calibration: null,
+    calibrationFetchedAt: 0,
     lastCandles: [],
     lastFetchError: null,
     lastFetchAt: 0,
@@ -1029,6 +1032,29 @@
     if (val > 0) return pos || "#4ade80"
     if (val < 0) return neg || "#ff6b6b"
     return "#a5a0ff"
+  }
+
+  // ── Breakeven indicator (Phase 11) ─────────────────────────────────────────
+  // Minimum win rate a payout schedule demands: 1 / (1 + payout/100).
+  // Green = confidence clears the breakeven line, amber = near it, red = below.
+  function breakevenWinRate(payoutPct) {
+    const p = Number(payoutPct)
+    if (!isFinite(p) || p <= 0) return null
+    return 100 / (100 + p)
+  }
+  function breakevenTone(diffPts) {
+    if (!isFinite(diffPts)) return "#a5a0ff"
+    if (diffPts > 3) return "#4ade80"
+    if (diffPts >= -3) return "#f59e0b"
+    return "#ff6b6b"
+  }
+  function breakevenBadge(confidencePct, payoutPct) {
+    const be = breakevenWinRate(payoutPct)
+    const conf = Number(confidencePct)
+    if (be == null || !isFinite(conf)) return ""
+    const diff = conf - be
+    const color = breakevenTone(diff)
+    return `<span style="font-size:9px;color:${color}">vs ${be.toFixed(1)}% breakeven @ ${payoutPct}% payout</span>`
   }
 
   // ── Offline / staleness / timeout helpers ──
@@ -1093,6 +1119,7 @@
     "order-flow": ["analysis"],
     "expiry-opt": ["analysis"],
     "sentiment": ["analysis"],
+    "calibration": ["analysis"],
   }
   function checkFeatures(dockId) {
     const needed = DOCKABLE_FEATURES[dockId]
@@ -1183,6 +1210,13 @@
           `<span>${dec.confidence != null ? dec.confidence.toFixed(0) + "%" : ""}</span>` +
           `<span style="color:${dec.direction === "up" ? "#4ade80" : dec.direction === "down" ? "#ff6b6b" : "#a5a0ff"}">${(dec.direction || "").toUpperCase()}</span>` +
         `</div>` +
+        (dec.confidence != null || dec.ev != null
+          ? `<div style="font-size:9px;margin-top:1px">` +
+            `${dec.confidence != null ? `<span style="color:#a5a0ff">${dec.confidence.toFixed(0)}%</span> ` : ""}` +
+            breakevenBadge(dec.confidence, dec.payout) +
+            (dec.ev != null ? ` <span style="color:${dec.ev > 0 ? "#4ade80" : "#ff6b6b"}">EV ${(dec.ev * 100).toFixed(1)}%/stake</span>` : "") +
+            `</div>`
+          : "") +
         `</div>`
     }).join("")
     return banner + `<div style="padding:2px 0">${rows}</div>`
@@ -1338,6 +1372,57 @@
     if (sent.news) lines.push(`<div style="font-size:10px;color:#9aa0c0">News: ${sent.news.bullish}🟢 ${sent.news.bearish}🔴 ${sent.news.neutral}⚪ (${sent.news.sampleSize})</div>`)
     if (sent.social) lines.push(`<div style="font-size:10px;color:#9aa0c0">Social velocity: ${sent.social.velocity > 0 ? "+" : ""}${sent.social.velocity}</div>`)
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(sent.news?.sampleSize > 0 ? "news+social" : "unavailable")
+  }
+
+  // ── Calibration Renderer (Phase 11) ────────────────────────────────────────
+  function renderCalibration() {
+    const banner = checkFeatures("calibration")
+    const cal = tradingState.calibration
+    const decWithPayout = tradingState.decisions.find((d) => d.payout != null) || null
+    const payout = decWithPayout?.payout ?? 80
+    const be = breakevenWinRate(payout)
+    const lines = []
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">` +
+      `<span>Breakeven @ ${payout}% payout</span>` +
+      `<span style="font-weight:600;color:#6c63ff">${be != null ? be.toFixed(1) + "%" : "—"}</span></div>`)
+    if (!cal || cal.totalResolved === 0) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + lines.join("") +
+        '<div style="color:#a5a0ff;padding:4px">No resolved decisions yet — the ledger needs expired trades to calibrate.</div>' +
+        sourceLabel("insufficient data")
+    }
+    if (cal.buckets?.length) {
+      lines.push(`<div style="font-size:9px;color:#6c63ff;border-bottom:1px solid #6c63ff30;padding-bottom:2px;margin-bottom:2px;display:flex;justify-content:space-between"><span>bucket</span><span>pred → real</span><span>n</span></div>`)
+      for (const b of cal.buckets.slice(0, 8)) {
+        const gapColor = b.calibrationGap == null ? "#a5a0ff" : b.calibrationGap >= -0.03 ? "#4ade80" : b.calibrationGap >= -0.1 ? "#f59e0b" : "#ff6b6b"
+        lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0">` +
+          `<span style="color:#a5a0ff">${b.bucket}</span>` +
+          `<span>${b.predictedWinRate != null ? (b.predictedWinRate * 100).toFixed(0) + "%" : "—"} → ` +
+          `<span style="color:${gapColor}">${b.realizedWinRate != null ? (b.realizedWinRate * 100).toFixed(0) + "%" : "—"}</span>` +
+          `${b.calibrationGap != null ? ` <span style="color:${gapColor}">(${(b.calibrationGap * 100).toFixed(0)})</span>` : ""}</span>` +
+          `<span style="color:#9aa0c0">${b.count}</span></div>`)
+      }
+    } else {
+      lines.push('<div style="color:#a5a0ff;padding:2px">No decisions in the 55–95% confidence range yet.</div>')
+    }
+    if (cal.calibrationGap != null) {
+      const gColor = cal.calibrationGap >= -0.03 ? "#4ade80" : cal.calibrationGap >= -0.1 ? "#f59e0b" : "#ff6b6b"
+      lines.push(`<div style="border-top:1px solid #6c63ff20;margin-top:4px;padding-top:3px;font-size:10px;display:flex;justify-content:space-between">` +
+        `<span>Overall gap (real − pred)</span>` +
+        `<span style="color:${gColor};font-weight:600">${(cal.calibrationGap * 100).toFixed(1)} pts</span></div>`)
+    }
+    if (cal.hitRate != null && cal.avgPredictedConfidence != null) {
+      lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px">` +
+        `<span>Hit rate / predicted</span>` +
+        `<span>${(cal.hitRate * 100).toFixed(0)}% / ${(cal.avgPredictedConfidence * 100).toFixed(0)}%</span></div>`)
+    }
+    const adequacy = cal.adequacy || "insufficient"
+    const adeqColor = adequacy === "adequate" ? "#4ade80" : adequacy === "limited" ? "#f59e0b" : "#ff6b6b"
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;margin-top:2px">` +
+      `<span>Sample size (${cal.sampleSize})</span>` +
+      `<span style="color:${adeqColor};font-weight:600">${adequacy}</span></div>`)
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` +
+      sourceLabel(cal.totalResolved > 0 ? "trade history" : "insufficient data") + staleLabel()
   }
 
   // ── Generic renderers (work on ANY site) ───────────────────────────────────
@@ -1920,6 +2005,18 @@
         if (d?.expiry) tradingState.expiry = d.expiry
         if (d?.sentiment) tradingState.sentiment = d.sentiment
         if (d?.orderFlow) tradingState.orderFlow = d.orderFlow
+
+        // Calibration panel — daily refresh, cached for 24h
+        const CALIBRATION_REFRESH_MS = 24 * 60 * 60 * 1000
+        if (Date.now() - tradingState.calibrationFetchedAt > CALIBRATION_REFRESH_MS) {
+          tradingState.calibrationFetchedAt = Date.now()
+          void serverFetch("/api/trading/health").then((h) => {
+            if (h?.ok && h.data?.calibration) {
+              tradingState.calibration = h.data.calibration
+              updateAllDockables()
+            }
+          }).catch(() => {})
+        }
       } else {
         // Consolidated endpoint failed — fallback to individual endpoints
         tradingState.serverReachable = false
@@ -2007,6 +2104,7 @@
       "order-flow": renderOrderFlow,
       "expiry-opt": renderExpiryOpt,
       "sentiment": renderSentiment,
+      "calibration": renderCalibration,
       "page-overview": renderPageOverview,
       "page-content": renderPageContent,
       "server-status": renderServerStatus,
