@@ -3776,6 +3776,37 @@ const BROWSER_ROUTES = {
     return true
   },
 
+  // Upstream bridge: broker frames sniffed by the extension in the user's own
+  // browser session. Feeds the SAME candle buffers as the studio bridge, so
+  // whichever source is live (studio browser or user's real browser) drives
+  // realtime data. Localhost-only + rate limited; each frame is validated.
+  "/api/extension/ingest": async (req, res, parsed) => {
+    if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }
+    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
+    const ip = clientIp(req)
+    if (rateLimited(`ext-ingest:${ip}`, 240, 60_000)) {
+      writeJson(res, 429, { error: "rate limited" })
+      return true
+    }
+    const body = parsed?.body || {}
+    const frames = Array.isArray(body.frames) ? body.frames : (body.frame ? [body.frame] : [])
+    if (!frames.length) { writeJson(res, 400, { error: "no frames" }); return true }
+    if (frames.length > 200) { writeJson(res, 413, { error: "batch too large" }); return true }
+    let accepted = 0
+    try {
+      const { ingestAppFrame } = await import("./services/liveEO.mjs")
+      for (const f of frames) {
+        // Only broker-shaped frames are processed; ingestAppFrame validates.
+        if (f && typeof f === "object" && ingestAppFrame(f)) accepted += 1
+      }
+    } catch (err) {
+      writeJson(res, 500, { error: String(err?.message ?? err).slice(0, 200), accepted })
+      return true
+    }
+    writeJson(res, 200, { ok: true, accepted, received: frames.length })
+    return true
+  },
+
   // Extension heartbeat (background.js calls this every ~12s)
   "/api/extension/heartbeat": async (req, res) => {
     if (req.method !== "POST") return writeJson(res, 405, { error: "POST required" })

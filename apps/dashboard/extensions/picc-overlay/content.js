@@ -1019,8 +1019,61 @@
     loadingSince: Date.now(),
     serverReachable: null,
     sources: null,
-    sourcesFetchedAt: 0
+    sourcesFetchedAt: 0,
+    upstream: { framesSeen: 0, framesPushed: 0, lastFrameAt: 0, lastPushAt: 0, lastPushError: null }
   }
+
+  // ── Upstream bridge: page WS frames → server ────────────────────────────────
+  // inject.js (MAIN world) sniffs the broker gateway's WebSocket and relays
+  // frames here via window.postMessage. We batch them and push to the server,
+  // which folds them into the same candle buffers the studio bridge feeds.
+  const UPSTREAM_QUEUE = []
+  let upstreamTimer = null
+  const UPSTREAM_FLUSH_MS = 2000
+  const UPSTREAM_MAX_BATCH = 120
+
+  function queueUpstreamFrame(frame) {
+    if (!frame || typeof frame !== "object") return
+    tradingState.upstream.framesSeen += 1
+    tradingState.upstream.lastFrameAt = Date.now()
+    if (UPSTREAM_QUEUE.length >= 400) UPSTREAM_QUEUE.shift()
+    UPSTREAM_QUEUE.push(frame)
+    if (!upstreamTimer) upstreamTimer = setTimeout(flushUpstream, UPSTREAM_FLUSH_MS)
+  }
+
+  async function flushUpstream() {
+    upstreamTimer = null
+    if (!UPSTREAM_QUEUE.length || !serverPort) return
+    const batch = UPSTREAM_QUEUE.splice(0, UPSTREAM_MAX_BATCH)
+    try {
+      const resp = await serverFetch("/api/extension/ingest", {
+        method: "POST",
+        body: { frames: batch },
+        timeout: 8000
+      })
+      if (resp?.ok) {
+        tradingState.upstream.framesPushed += batch.length
+        tradingState.upstream.lastPushAt = Date.now()
+        tradingState.upstream.lastPushError = null
+      } else if (resp?.error === "aborted") {
+        UPSTREAM_QUEUE.unshift(...batch.slice(0, UPSTREAM_MAX_BATCH))
+      } else {
+        tradingState.upstream.lastPushError = resp?.error || "ingest-failed"
+      }
+    } catch (err) {
+      tradingState.upstream.lastPushError = String(err?.message ?? err).slice(0, 120)
+      UPSTREAM_QUEUE.unshift(...batch.slice(0, UPSTREAM_MAX_BATCH))
+    } finally {
+      if (UPSTREAM_QUEUE.length && !upstreamTimer) upstreamTimer = setTimeout(flushUpstream, UPSTREAM_FLUSH_MS)
+    }
+  }
+
+  window.addEventListener("message", (ev) => {
+    if (ev.source !== window) return
+    const d = ev.data
+    if (!d || !d.__piccEOFrame || !d.frame) return
+    queueUpstreamFrame(d.frame)
+  })
 
   const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
   function fmt$(n, currency) {
@@ -1693,7 +1746,7 @@
     const overallColor = problems.length === 0 ? "#4ade80" : (unconfCount >= 3 || staleCount >= 3 || sources.candles?.status === "unconfigured") ? "#ff6b6b" : "#f59e0b"
     const overallLabel = problems.length === 0 ? "All feeds healthy" : overallColor === "#ff6b6b" ? "System degraded" : "Partial degradation"
     const HINTS = {
-      candles: { unconfigured: "Connect the ExpertOption live bridge", stale: "Bridge idle \u2014 reconnect or restart server" },
+      candles: { unconfigured: "Open a chart on the trading platform \u2014 this tab feeds candles to PICC", stale: "Feed idle \u2014 keep the platform tab open, or restart the server" },
       sentiment: { unconfigured: "Set Serper API key to enable news sentiment", stale: "Sentiment cache old \u2014 will refresh on next analysis" },
       orderflow: { unconfigured: "Waiting for candle feed", stale: "Derived from stale candles" },
       regime: { unconfigured: "Waiting for candle feed", stale: "Derived from stale candles" },
@@ -1703,7 +1756,9 @@
     const header = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">` +
       `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${overallColor}"></span>` +
       `<span style="font-weight:600;font-size:11px;color:${overallColor}">${overallLabel}</span>` +
-      `<span style="font-size:9px;color:#9aa0c0">${entries.length - problems.length}/${entries.length} ok</span></div>`
+      `<span style="font-size:9px;color:#9aa0c0">${entries.length - problems.length}/${entries.length} ok</span>` +
+      (sources.candles?.feed ? `<span style="font-size:8px;font-weight:700;color:#60a5fa;background:#60a5fa22;border:1px solid #60a5fa55;border-radius:3px;padding:0 4px;margin-left:auto">FEED: ${String(sources.candles.feed).toUpperCase()}</span>` : "") +
+      `</div>`
     const rows = entries.map(([name, info]) => {
       const meta = STATUS_META[info.status] || STATUS_META.unconfigured
       const hint = (HINTS[name] || {})[info.status] || ""

@@ -78,6 +78,9 @@ function modeLabel(demo) {
 
 function currentStatus() {
   if (session) return "connected"
+  // No headless session, but the user's own browser is streaming broker
+  // frames through the extension bridge — that IS a live feed.
+  if (!degraded && upstreamStats.lastAt && Date.now() - upstreamStats.lastAt < 60_000) return "connected"
   if (degraded) return degraded.kind
   if (starting) return "connecting"
   return "idle"
@@ -262,7 +265,21 @@ function parseFrame(f) {
 function handleAppFrame(f) {
   const obj = parseFrame(f)
   if (!obj) return
+  processAppObject(obj, "studio")
+}
+
+/**
+ * Core frame processor — shared by the studio bridge (WS frames relayed from
+ * the PICC-managed browser) and the extension bridge (frames sniffed in the
+ * user's own browser via inject.js). Both feed identical candle buffers, so
+ * whichever is live becomes the realtime source.
+ */
+function processAppObject(obj, source = "studio") {
   lastSeen = Date.now()
+  if (source === "extension") {
+    upstreamStats.framesSeen += 1
+    upstreamStats.lastAt = Date.now()
+  }
   if (obj.action === "error") {
     const text = JSON.stringify(obj.message ?? obj)
     if (isAuthRejection(text)) {
@@ -326,6 +343,25 @@ function handleAppFrame(f) {
       account = acc
       emit("account", { account: acc, mode: modeLabel(acc.demo) })
     }
+  }
+}
+
+const upstreamStats = { framesSeen: 0, accepted: 0, lastAt: 0 }
+
+/**
+ * Ingest a broker frame captured by the browser extension in the user's own
+ * session. Accepts an already-parsed frame object (the JSON the gateway sent).
+ * Returns true when the frame was recognized and processed.
+ */
+export function ingestAppFrame(obj) {
+  try {
+    if (!obj || typeof obj !== "object" || typeof obj.action !== "string" || !obj.action) return false
+    if (obj.message != null && typeof obj.message !== "object") return false
+    processAppObject(obj, "extension")
+    upstreamStats.accepted += 1
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -699,12 +735,18 @@ export async function stopLiveEO() {
       /* ignore */
     }
   }
-  buffers.clear()
-  lastTick.clear()
-  assetTicks.clear()
-  watching.length = 0
-  byId.clear()
-  viewedAssetId = null
+  // While the extension bridge streams frames from the user's own browser,
+  // keep candle buffers intact — they are being fed right now and wiping
+  // them would flash every dockable to "no data".
+  const upstreamActive = upstreamStats.lastAt && Date.now() - upstreamStats.lastAt < 60_000
+  if (!upstreamActive) {
+    buffers.clear()
+    lastTick.clear()
+    assetTicks.clear()
+    watching.length = 0
+    byId.clear()
+    viewedAssetId = null
+  }
   account = null
   startedAt = 0
   degraded = null
@@ -791,6 +833,11 @@ export function liveEOStats() {
     lastSeen,
     stale: staleFlag,
     degraded: degraded ? { kind: degraded.kind, reason: degraded.reason, at: degraded.at } : null,
+    upstream: {
+      framesSeen: upstreamStats.framesSeen,
+      accepted: upstreamStats.accepted,
+      lastAt: upstreamStats.lastAt
+    },
     account
   }
 }

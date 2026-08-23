@@ -26,10 +26,16 @@ function unconfigured() {
 
 export function collectSourceStatuses(now = Date.now()) {
   let candles = unconfigured()
+  let candleFeed = null
   try {
     const stats = liveEOStats()
     const lastSeen = Number(stats?.lastSeen) > 0 ? Number(stats.lastSeen) : null
-    if (lastSeen != null) candles = classifySource(lastSeen, now)
+    if (lastSeen != null) {
+      candles = classifySource(lastSeen, now)
+      // Provenance: which live leg fed the frames most recently.
+      const upAt = Number(stats?.upstream?.lastAt) || 0
+      candleFeed = upAt && lastSeen && upAt >= lastSeen - 1500 ? "extension" : "studio"
+    }
   } catch {}
   let sentiment = unconfigured()
   try {
@@ -41,7 +47,7 @@ export function collectSourceStatuses(now = Date.now()) {
   } catch {}
   const derivedFromCandles = () => (candles.status === "unconfigured" ? unconfigured() : { ...candles })
   return {
-    candles,
+    candles: candleFeed ? { ...candles, feed: candleFeed } : candles,
     sentiment,
     orderflow: derivedFromCandles(),
     regime: derivedFromCandles(),
