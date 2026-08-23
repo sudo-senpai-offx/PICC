@@ -5,13 +5,16 @@ import { multiTimeframeConfluence, quickMtfCheck, selectStyle, TRADING_STYLES, T
 function genCandles(n, startPrice = 100, drift = 0.001, vol = 0.01) {
   const candles = []
   let price = startPrice
+  // Anchor on wall-clock time ending NOW — quickMtfCheck refuses buffers
+  // whose newest bar is older than 3× its timeframe (stale-feed guard).
+  const nowSec = Math.floor(Date.now() / 1000)
   for (let i = 0; i < n; i++) {
     const ret = drift + vol * (Math.sin(i * 0.1) * 0.5 + (Math.random() - 0.5))
     price *= 1 + ret
     const h = price * (1 + Math.abs(vol * 0.5))
     const l = price * (1 - Math.abs(vol * 0.5))
     candles.push({
-      time: i * 60,
+      time: nowSec - (n - i) * 300,
       open: price * (1 - ret * 0.3),
       high: h,
       low: l,

@@ -25,14 +25,21 @@ function inferPeriodsPerYear(times) {
     : []
   const gaps = []
   for (let i = 1; i < ts.length; i++) {
-    const d = ts[i] - ts[i - 1]
-    if (d > 0) gaps.push(d / 1000)
+    let d = ts[i] - ts[i - 1]
+    if (d <= 0) continue
+    // Normalize units: liveEO candle times are unix SECONDS (gaps 60…3600);
+    // ms-based feeds produce raw gaps above 4h that no seconds-denominated
+    // bar would. The old unconditional /1000 turned a 60s bar into 0.06s and
+    // annualized volatility ~19,000× too large, pinning vol-scaled sizing to
+    // its floor permanently.
+    if (d > 14400) d = d / 1000
+    gaps.push(d)
   }
   if (!gaps.length) return 252
   gaps.sort((a, b) => a - b)
   const stepSec = gaps[Math.floor(gaps.length / 2)]
   if (stepSec >= DAY_SECONDS / 4) return 252
-  return 252 * Math.round(DAY_SECONDS / stepSec)
+  return clamp(252 * Math.round(DAY_SECONDS / stepSec), 252, 252 * 1440)
 }
 
 // ---------------------------------------------------------------------

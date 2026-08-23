@@ -49,10 +49,14 @@
   }
 
   function loadOverlayStateLocal() {
-    try {
-      const raw = localStorage.getItem(MV3_STATE_KEY)
-      return raw ? JSON.parse(raw) : null
-    } catch { return null }
+    // Read from chrome.storage.local — the writer (saveOverlayStateLocal)
+    // stores under chrome.storage, not localStorage. The old localStorage read
+    // always returned null, silently discarding saved state.
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(MV3_STATE_KEY, (data) => resolve(data[MV3_STATE_KEY] || null))
+      } catch { resolve(null) }
+    })
   }
 
   // ── Dock grouping state ──
@@ -1029,21 +1033,61 @@
   // which folds them into the same candle buffers the studio bridge feeds.
   const UPSTREAM_QUEUE = []
   let upstreamTimer = null
+  let upstreamFlushInFlight = false
   const UPSTREAM_FLUSH_MS = 2000
   const UPSTREAM_MAX_BATCH = 120
 
+  /**
+   * Shape-validate a relayed frame BEFORE queueing: any page script can forge
+   * window messages, so treat them as hostile input. Only broker-shaped
+   * candle/profile/error frames pass; string fields are length-capped and
+   * serialized size is bounded.
+   */
+  function sanitizeUpstreamFrame(frame) {
+    try {
+      if (!frame || typeof frame !== "object" || typeof frame.action !== "string") return null
+      if (frame.action.length > 40) return null
+      const msg = frame.message
+      let clean = { action: frame.action }
+      if (msg != null) {
+        if (typeof msg !== "object") return null
+        clean.message = {}
+        if (msg.assetId != null) clean.message.assetId = String(msg.assetId).slice(0, 32)
+        if (msg.name != null) clean.message.name = String(msg.name).slice(0, 64)
+        if (Array.isArray(msg.candles)) {
+          // Keep only structurally valid rows, cap the count.
+          clean.message.candles = msg.candles.slice(0, 64)
+            .filter((c) => c && typeof c === "object" && Array.isArray(c.v))
+            .map((c) => ({ t: Number(c.t) || 0, tf: Number(c.tf) || 0, v: c.v.slice(0, 8).map(Number) }))
+        }
+      }
+      if (JSON.stringify(clean).length > 4096) return null
+      return clean
+    } catch {
+      return null
+    }
+  }
+
   function queueUpstreamFrame(frame) {
-    if (!frame || typeof frame !== "object") return
+    const clean = sanitizeUpstreamFrame(frame)
+    if (!clean) return
     tradingState.upstream.framesSeen += 1
     tradingState.upstream.lastFrameAt = Date.now()
-    if (UPSTREAM_QUEUE.length >= 400) UPSTREAM_QUEUE.shift()
-    UPSTREAM_QUEUE.push(frame)
+    UPSTREAM_QUEUE.push(clean)
+    while (UPSTREAM_QUEUE.length > 400) UPSTREAM_QUEUE.shift()
     if (!upstreamTimer) upstreamTimer = setTimeout(flushUpstream, UPSTREAM_FLUSH_MS)
   }
 
   async function flushUpstream() {
     upstreamTimer = null
-    if (!UPSTREAM_QUEUE.length || !serverPort) return
+    if (upstreamFlushInFlight) return
+    if (!UPSTREAM_QUEUE.length) return
+    if (!serverPort) {
+      // Server not discovered yet — retry on the normal cadence.
+      upstreamTimer = setTimeout(flushUpstream, UPSTREAM_FLUSH_MS)
+      return
+    }
+    upstreamFlushInFlight = true
     const batch = UPSTREAM_QUEUE.splice(0, UPSTREAM_MAX_BATCH)
     try {
       const resp = await serverFetch("/api/extension/ingest", {
@@ -1056,16 +1100,23 @@
         tradingState.upstream.lastPushAt = Date.now()
         tradingState.upstream.lastPushError = null
       } else if (resp?.error === "aborted") {
-        UPSTREAM_QUEUE.unshift(...batch.slice(0, UPSTREAM_MAX_BATCH))
+        requeueUpstream(batch)
       } else {
         tradingState.upstream.lastPushError = resp?.error || "ingest-failed"
       }
     } catch (err) {
       tradingState.upstream.lastPushError = String(err?.message ?? err).slice(0, 120)
-      UPSTREAM_QUEUE.unshift(...batch.slice(0, UPSTREAM_MAX_BATCH))
+      requeueUpstream(batch)
     } finally {
+      upstreamFlushInFlight = false
       if (UPSTREAM_QUEUE.length && !upstreamTimer) upstreamTimer = setTimeout(flushUpstream, UPSTREAM_FLUSH_MS)
     }
+  }
+
+  /** Re-queue failed batches at the HEAD (preserve order), re-trimming the cap. */
+  function requeueUpstream(batch) {
+    UPSTREAM_QUEUE.unshift(...batch.slice(-400))
+    while (UPSTREAM_QUEUE.length > 400) UPSTREAM_QUEUE.shift()
   }
 
   window.addEventListener("message", (ev) => {
@@ -1076,9 +1127,22 @@
   })
 
   const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
+  // HTML-escape everything dynamic that reaches innerHTML. Values rendered by
+  // the overlay come from PAGE DOM scrapes and SERVER responses — both are
+  // hostile channels into an extension-context sink.
+  const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }
+  function esc(v) {
+    return String(v ?? "").replace(/[&<>"']/g, (c) => ESC_MAP[c])
+  }
+  /** Finite-number guard for .toFixed() chains — a string field used to abort
+   * the whole renderer loop, freezing every dockable after the bad one. */
+  function num(v, digits) {
+    const n = Number(v)
+    return Number.isFinite(n) ? n.toFixed(digits) : "\u2014"
+  }
   function fmt$(n, currency) {
     if (n == null || !isFinite(n)) return "\u2014"
-    const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (currency || "$") + " "
+    const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (esc(currency || "$") + " ")
     return sym + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
   function fmtPct(n) {
@@ -1225,9 +1289,9 @@
       const c = tone(a.changePct)
       const isActive = activeAsset && normalizeAssetId(a.name || a.id) === activeAsset
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #6c63ff20${isActive ? ';background:#6c63ff10;border-radius:3px' : ''}">` +
-        `<span style="font-weight:${isActive ? '700' : '600'};font-size:11px${isActive ? ';color:#6c63ff' : ''}">${a.name || a.id}${isActive ? ' \u25cf' : ''}</span>` +
-        `<span style="font-size:11px;color:${c}">${a.price != null ? a.price.toFixed(4) : "\u2014"}</span>` +
-        `<span style="font-size:10px;color:${c}">${a.changePct != null ? (a.changePct >= 0 ? "+" : "") + a.changePct.toFixed(2) + "%" : ""}</span>` +
+        `<span style="font-weight:${isActive ? '700' : '600'};font-size:11px${isActive ? ';color:#6c63ff' : ''}">${esc(a.name || a.id)}${isActive ? ' \u25cf' : ''}</span>` +
+        `<span style="font-size:11px;color:${c}">${num(a.price, 4)}</span>` +
+        `<span style="font-size:10px;color:${c}">${a.changePct != null && Number.isFinite(Number(a.changePct)) ? (a.changePct >= 0 ? "+" : "") + Number(a.changePct).toFixed(2) + "%" : ""}</span>` +
         `</div>`
     }).join("")
     const acct = tradingState.account
@@ -1292,25 +1356,26 @@
       const verdictColor = dec.verdict === "TRADE" ? "#4ade80" : dec.verdict === "OBSERVE" ? "#f59e0b" : "#a5a0ff"
       const gates = dec.gates || {}
       const gIcon = (ok) => ok ? '<span style="color:#4ade80">\u2713</span>' : '<span style="color:#ff6b6b">\u2717</span>'
-      const decAsset = dec.asset || dec.assetId || ""
-      const isActive = activeAsset && decAsset.toUpperCase() === activeAsset.toUpperCase()
+      const decAsset = esc(dec.asset || dec.assetId || "")
+      const isActive = activeAsset && String(dec.asset || dec.assetId || "").toUpperCase() === activeAsset.toUpperCase()
+      const confNum = Number(dec.confidence)
       return `<div style="border-bottom:1px solid #6c63ff15;padding:3px 0${isActive ? ';background:#6c63ff08;border-radius:3px' : ''}">` +
         `<div style="display:flex;justify-content:space-between;align-items:center">` +
           `<span style="font-weight:600;font-size:11px${isActive ? ';color:#6c63ff' : ''}">${decAsset}${isActive ? ' \u25cf' : ''}</span>` +
-          `<span style="font-size:10px;font-weight:600;color:${verdictColor}">${dec.verdict}</span>` +
+          `<span style="font-size:10px;font-weight:600;color:${verdictColor}">${esc(dec.verdict)}</span>` +
         `</div>` +
         `<div style="display:flex;gap:6px;font-size:9px;color:#a5a0ff">` +
           `<span>${gIcon(gates.score)} conf</span>` +
           `<span>${gIcon(gates.winProb)} prob</span>` +
           `<span>${gIcon(gates.payout)} pay</span>` +
-          `<span>${dec.confidence != null ? dec.confidence.toFixed(0) + "%" : ""}</span>` +
-          `<span style="color:${dec.direction === "up" ? "#4ade80" : dec.direction === "down" ? "#ff6b6b" : "#a5a0ff"}">${(dec.direction || "").toUpperCase()}</span>` +
+          `<span>${Number.isFinite(confNum) ? confNum.toFixed(0) + "%" : ""}</span>` +
+          `<span style="color:${dec.direction === "up" ? "#4ade80" : dec.direction === "down" ? "#ff6b6b" : "#a5a0ff"}">${esc((dec.direction || "").toUpperCase())}</span>` +
         `</div>` +
-        (dec.confidence != null || dec.ev != null
+        (Number.isFinite(confNum) || dec.ev != null
           ? `<div style="font-size:9px;margin-top:1px">` +
-            `${dec.confidence != null ? `<span style="color:#a5a0ff">${dec.confidence.toFixed(0)}%</span> ` : ""}` +
+            `${Number.isFinite(confNum) ? `<span style="color:#a5a0ff">${confNum.toFixed(0)}%</span> ` : ""}` +
             breakevenBadge(dec.confidence, dec.payout) +
-            (dec.ev != null ? ` <span style="color:${dec.ev > 0 ? "#4ade80" : "#ff6b6b"}">EV ${(dec.ev * 100).toFixed(1)}%/stake</span>` : "") +
+            (dec.ev != null && Number.isFinite(Number(dec.ev)) ? ` <span style="color:${dec.ev > 0 ? "#4ade80" : "#ff6b6b"}">EV ${(dec.ev * 100).toFixed(1)}%/stake</span>` : "") +
             `</div>`
           : "") +
         `</div>`
@@ -1362,7 +1427,7 @@
     const body = typeof piccRenderAutopilotPanel === "function"
       ? piccRenderAutopilotPanel({ auto, demo: tradingState.demo })
       : ""
-    const assetLabel = auto?.assetId ? `<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${String(auto.assetId).toUpperCase()} \u25cf</div>` : ""
+    const assetLabel = auto?.assetId ? `<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(String(auto.assetId).toUpperCase())} \u25cf</div>` : ""
     const lines = []
     lines.push(`<div style="display:flex;gap:4px;margin-top:6px">`)
     lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
@@ -1383,7 +1448,7 @@
     const stats = kelly.stats || {}
     const k = kelly.kelly || {}
     const lines = []
-    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${stats.winRate != null ? stats.winRate + "%" : "\u2014"}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Avg payout</span><span>${stats.avgPayout != null ? stats.avgPayout + "x" : "—"}</span></div>`)
     lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
@@ -1405,11 +1470,11 @@
     const colors = { trending: "#4ade80", ranging: "#f59e0b", volatile: "#ff6b6b", breakout: "#6c63ff" }
     const c = colors[regime.regime] || "#a5a0ff"
     const lines = []
-    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
-    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><div style="width:8px;height:8px;border-radius:50%;background:${c}"></div><span style="font-weight:600;font-size:12px;color:${c}">${(regime.regime || "").toUpperCase()}</span><span style="font-size:10px;color:#9aa0c0">${regime.confidence || 0}%</span></div>`)
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>`)
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><div style="width:8px;height:8px;border-radius:50%;background:${c}"></div><span style="font-weight:600;font-size:12px;color:${c}">${esc((regime.regime || "").toUpperCase())}</span><span style="font-size:10px;color:#9aa0c0">${regime.confidence || 0}%</span></div>`)
     if (regime.metrics) lines.push(`<div style="font-size:10px;color:#9aa0c0">ADX: ${regime.metrics.adx} · ATR ratio: ${regime.metrics.atrRatio}x</div>`)
-    if (regime.suggestedStrategy) lines.push(`<div style="font-size:10px;margin-top:4px">Strategy: <b style="color:#6c63ff">${regime.suggestedStrategy}</b></div>`)
-    if (regime.factors?.length) lines.push(`<div style="font-size:9px;color:#9aa0c0;margin-top:2px">${regime.factors.join(" · ")}</div>`)
+    if (regime.suggestedStrategy) lines.push(`<div style="font-size:10px;margin-top:4px">Strategy: <b style="color:#6c63ff">${esc(regime.suggestedStrategy)}</b></div>`)
+    if (regime.factors?.length) lines.push(`<div style="font-size:9px;color:#9aa0c0;margin-top:2px">${esc(regime.factors.join(" · "))}</div>`)
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel("price action")
   }
 
@@ -1423,14 +1488,14 @@
       return banner + '<div style="color:#a5a0ff;padding:4px">Loading order flow\u2026</div>'
     }
     const lines = []
-    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>`)
     const imbColor = of.imbalance === "buy-heavy" ? "#4ade80" : of.imbalance === "sell-heavy" ? "#ff6b6b" : "#f59e0b"
-    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:11px">Net Delta</span><span style="color:${of.cumulative >= 0 ? "#4ade80" : "#ff6b6b"};font-weight:600">${of.cumulative >= 0 ? "+" : ""}${of.cumulative}</span><span style="font-size:9px;padding:1px 4px;border-radius:3px;background:${imbColor}30;color:${imbColor}">${of.imbalance}</span></div>`)
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:11px">Net Delta</span><span style="color:${of.cumulative >= 0 ? "#4ade80" : "#ff6b6b"};font-weight:600">${of.cumulative >= 0 ? "+" : ""}${of.cumulative}</span><span style="font-size:9px;padding:1px 4px;border-radius:3px;background:${imbColor}30;color:${imbColor}">${esc(of.imbalance)}</span></div>`)
     const hasVolume = of.delta.some((d) => (d.volume || 0) > 0)
     if (of.avgDelta != null) lines.push(`<div style="font-size:10px;color:#9aa0c0">Avg delta: ${of.avgDelta}</div>`)
     if (of.signals?.length) {
       for (const sig of of.signals.slice(0, 3)) {
-        lines.push(`<div style="font-size:9px;color:${sig.type === "divergence" ? "#f59e0b" : "#6c63ff"};margin-top:2px">⚡ ${sig.desc}</div>`)
+        lines.push(`<div style="font-size:9px;color:${sig.type === "divergence" ? "#f59e0b" : "#6c63ff"};margin-top:2px">⚡ ${esc(sig.desc)}</div>`)
       }
     }
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(hasVolume ? "live candles" : "no volume data")
@@ -1447,15 +1512,15 @@
     }
     const r = exp.recommended
     const lines = []
-    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
-    lines.push(`<div style="font-weight:600;font-size:12px;color:#6c63ff;margin-bottom:4px">Recommended: ${r.label}</div>`)
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>`)
+    lines.push(`<div style="font-weight:600;font-size:12px;color:#6c63ff;margin-bottom:4px">Recommended: ${esc(r.label)}</div>`)
     lines.push(`<div style="font-size:10px;color:#9aa0c0">Score: ${r.score}/100 · Vol: ${exp.volatility || "—"}</div>`)
     if (exp.all?.length) {
       const top3 = exp.all.slice(0, 3)
       lines.push(`<div style="display:flex;gap:4px;margin-top:4px">`)
       for (const e of top3) {
         const barW = Math.max(10, e.score)
-        lines.push(`<div style="flex:1;text-align:center;font-size:9px"><div style="margin-bottom:2px">${e.label}</div><div style="background:#1a1a2e;border-radius:2px;height:4px;overflow:hidden"><div style="height:100%;width:${barW}%;background:#6c63ff;border-radius:2px"></div></div><div style="color:#9aa0c0;margin-top:1px">${e.score}</div></div>`)
+        lines.push(`<div style="flex:1;text-align:center;font-size:9px"><div style="margin-bottom:2px">${esc(e.label)}</div><div style="background:#1a1a2e;border-radius:2px;height:4px;overflow:hidden"><div style="height:100%;width:${barW}%;background:#6c63ff;border-radius:2px"></div></div><div style="color:#9aa0c0;margin-top:1px">${e.score}</div></div>`)
       }
       lines.push(`</div>`)
     }
@@ -1473,9 +1538,9 @@
     }
     const c = sent.composite
     const lines = []
-    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${activeAsset} \u25cf</div>`)
+    if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>`)
     const scoreColor = c.score > 0.2 ? "#4ade80" : c.score < -0.2 ? "#ff6b6b" : "#f59e0b"
-    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:12px;color:${scoreColor}">${c.label || "Neutral"}</span><span style="font-size:10px;color:#9aa0c0">Score: ${c.score}</span>${c.extreme ? '<span style="font-size:8px;padding:1px 3px;border-radius:3px;background:#ff6b6b30;color:#ff6b6b">EXTREME</span>' : ""}</div>`)
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-weight:600;font-size:12px;color:${scoreColor}">${esc(c.label || "Neutral")}</span><span style="font-size:10px;color:#9aa0c0">Score: ${c.score}</span>${c.extreme ? '<span style="font-size:8px;padding:1px 3px;border-radius:3px;background:#ff6b6b30;color:#ff6b6b">EXTREME</span>' : ""}</div>`)
     if (sent.news) lines.push(`<div style="font-size:10px;color:#9aa0c0">News: ${sent.news.bullish}🟢 ${sent.news.bearish}🔴 ${sent.news.neutral}⚪ (${sent.news.sampleSize})</div>`)
     if (sent.social) lines.push(`<div style="font-size:10px;color:#9aa0c0">Social velocity: ${sent.social.velocity > 0 ? "+" : ""}${sent.social.velocity}</div>`)
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(sent.news?.sampleSize > 0 ? "news+social" : "unavailable")
@@ -1503,7 +1568,7 @@
       for (const b of cal.buckets.slice(0, 8)) {
         const gapColor = b.calibrationGap == null ? "#a5a0ff" : b.calibrationGap >= -0.03 ? "#4ade80" : b.calibrationGap >= -0.1 ? "#f59e0b" : "#ff6b6b"
         lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0">` +
-          `<span style="color:#a5a0ff">${b.bucket}</span>` +
+          `<span style="color:#a5a0ff">${esc(b.bucket)}</span>` +
           `<span>${b.predictedWinRate != null ? (b.predictedWinRate * 100).toFixed(0) + "%" : "—"} → ` +
           `<span style="color:${gapColor}">${b.realizedWinRate != null ? (b.realizedWinRate * 100).toFixed(0) + "%" : "—"}</span>` +
           `${b.calibrationGap != null ? ` <span style="color:${gapColor}">(${(b.calibrationGap * 100).toFixed(0)})</span>` : ""}</span>` +
@@ -1526,8 +1591,8 @@
     const adequacy = cal.adequacy || "insufficient"
     const adeqColor = adequacy === "adequate" ? "#4ade80" : adequacy === "limited" ? "#f59e0b" : "#ff6b6b"
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;margin-top:2px">` +
-      `<span>Sample size (${cal.sampleSize})</span>` +
-      `<span style="color:${adeqColor};font-weight:600">${adequacy}</span></div>`)
+      `<span>Sample size (${esc(cal.sampleSize)})</span>` +
+      `<span style="color:${adeqColor};font-weight:600">${esc(adequacy)}</span></div>`)
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` +
       sourceLabel(cal.totalResolved > 0 ? "trade history" : "insufficient data") + staleLabel()
   }
@@ -1549,23 +1614,23 @@
       const dirColor = dir === "call" ? "#4ade80" : dir === "put" ? "#ff6b6b" : "#f59e0b"
       const dirLabel = dir === "call" ? "CALL" : dir === "put" ? "PUT" : (deal.direction || deal.type || "\u2014")
       const dealAsset = deal.asset || deal.assetId || ""
-      const isActive = activeAsset && dealAsset.toUpperCase() === activeAsset.toUpperCase()
+      const isActive = activeAsset && String(dealAsset).toUpperCase() === activeAsset.toUpperCase()
       const strike = deal.strike ?? deal.entryPrice ?? null
       const lastPrice = deal.lastPrice ?? deal.currentPrice ?? null
       const pnl = deal.livePnl
       const pnlColor = pnl != null ? (pnl > 0 ? "#4ade80" : pnl < 0 ? "#ff6b6b" : "#a5a0ff") : "#a5a0ff"
       const amount = deal.amount != null ? fmt$(deal.amount, tradingState.account?.currency) : "\u2014"
-      const strikeStr = strike != null ? strike.toFixed(4) : "\u2014"
-      const lastStr = lastPrice != null ? lastPrice.toFixed(4) : "\u2014"
-      const pnlStr = pnl != null ? (pnl >= 0 ? "+" : "") + pnl.toFixed(4) : "\u2014"
+      const strikeStr = num(strike, 4)
+      const lastStr = num(lastPrice, 4)
+      const pnlStr = pnl != null && Number.isFinite(Number(pnl)) ? (pnl >= 0 ? "+" : "") + Number(pnl).toFixed(4) : "\u2014"
       const duration = deal.duration ?? deal.expiry ?? null
       const durationStr = duration ? duration + "s" : "\u2014"
       const createdAt = deal.createdAt ?? deal.openedAt ?? null
       const ageStr = createdAt ? formatDuration(Date.now() - createdAt) : ""
       lines.push(`<div style="padding:4px 0;border-bottom:1px solid #6c63ff15${isActive ? ';background:#6c63ff08;border-radius:3px' : ''}">`)
       lines.push(`<div style="display:flex;justify-content:space-between;align-items:center">`)
-      lines.push(`<span style="font-weight:600;font-size:11px${isActive ? ';color:#6c63ff' : ''}">${dealAsset || "\u2014"}${isActive ? ' \u25cf' : ''}</span>`)
-      lines.push(`<span style="font-size:10px;font-weight:600;color:${dirColor};padding:0 4px;border:1px solid ${dirColor}44;border-radius:3px">${dirLabel}</span>`)
+      lines.push(`<span style="font-weight:600;font-size:11px${isActive ? ';color:#6c63ff' : ''}">${esc(dealAsset || "\u2014")}${isActive ? ' \u25cf' : ''}</span>`)
+      lines.push(`<span style="font-size:10px;font-weight:600;color:${dirColor};padding:0 4px;border:1px solid ${dirColor}44;border-radius:3px">${esc(dirLabel)}</span>`)
       lines.push(`</div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;color:#9aa0c0">`)
       lines.push(`<span>${amount} \u00b7 ${durationStr}</span>`)
@@ -1585,7 +1650,7 @@
         const sPnl = s.pnl ?? s.profit ?? null
         const sPnlStr = sPnl != null ? (sPnl >= 0 ? "+" : "") + fmt$(sPnl, tradingState.account?.currency) : ""
         lines.push(`<div style="display:flex;justify-content:space-between;font-size:9px;padding:1px 0">`)
-        lines.push(`<span>${s.asset || s.assetId || ""} ${sDir.toUpperCase()}</span>`)
+        lines.push(`<span>${esc(s.asset || s.assetId || "")} ${esc(sDir.toUpperCase())}</span>`)
         lines.push(`<span style="color:${sColor}">${s.result || ""} ${sPnlStr}</span>`)
         lines.push(`</div>`)
       }
@@ -1607,8 +1672,8 @@
     const assets = tradingState.assets
     const lines = []
     if (pm) {
-      lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin-bottom:4px">${pm.title || window.location.hostname}</div>`)
-      lines.push(`<div style="font-size:10px;color:#9aa0c0;word-break:break-all;margin-bottom:4px">${window.location.href.substring(0, 60)}…</div>`)
+      lines.push(`<div style="font-weight:600;font-size:11px;color:#6c63ff;margin-bottom:4px">${esc(pm.title || window.location.hostname)}</div>`)
+      lines.push(`<div style="font-size:10px;color:#9aa0c0;word-break:break-all;margin-bottom:4px">${esc(window.location.href.substring(0, 60))}…</div>`)
       if (pm.loadTime != null) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Load time</span><span style="color:${pm.loadTime < 2000 ? "#4ade80" : pm.loadTime < 5000 ? "#f59e0b" : "#ff6b6b"}">${pm.loadTime}ms</span></div>`)
       if (pm.domContentLoaded != null) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>DOM ready</span><span>${pm.domContentLoaded}ms</span></div>`)
       if (pm.firstPaint != null) lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>First paint</span><span>${pm.firstPaint}ms</span></div>`)
@@ -1624,8 +1689,8 @@
       for (const a of assets.slice(0, 5)) {
         const c = tone(a.changePct)
         lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px">` +
-          `<span>${a.name}</span>` +
-          `<span>${a.price != null ? a.price : "\u2014"} ${a.changePct != null ? `<span style="color:${c}">${a.changePct >= 0 ? "+" : ""}${a.changePct.toFixed(2)}%</span>` : ""}</span></div>`)
+          `<span>${esc(a.name)}</span>` +
+          `<span>${a.price != null ? a.price : "\u2014"} ${a.changePct != null && Number.isFinite(Number(a.changePct)) ? `<span style="color:${c}">${a.changePct >= 0 ? "+" : ""}${Number(a.changePct).toFixed(2)}%</span>` : ""}</span></div>`)
       }
     }
     if (!lines.length) return '<div style="color:#a5a0ff;padding:4px">Analyzing page\u2026</div>'
@@ -1636,7 +1701,7 @@
     const pm = tradingState.pageMetrics
     const lines = []
     if (pm?.description) {
-      lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-bottom:4px"><b style="color:#eef0ff">Description:</b> ${pm.description.substring(0, 120)}${pm.description.length > 120 ? "…" : ""}</div>`)
+      lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-bottom:4px"><b style="color:#eef0ff">Description:</b> ${esc(pm.description.substring(0, 120))}${pm.description.length > 120 ? "…" : ""}</div>`)
     }
     // Extract headings
     try {
@@ -1650,7 +1715,7 @@
         lines.push(`<div style="font-weight:600;font-size:10px;color:#6c63ff;margin-bottom:2px">Headings</div>`)
         for (const h of headings) {
           const indent = h.level === "H1" ? 0 : h.level === "H2" ? 4 : 8
-          lines.push(`<div style="font-size:10px;color:#eef0ff;padding-left:${indent}px">${h.text.substring(0, 50)}${h.text.length > 50 ? "…" : ""}</div>`)
+          lines.push(`<div style="font-size:10px;color:#eef0ff;padding-left:${indent}px">${esc(h.text.substring(0, 50))}${h.text.length > 50 ? "…" : ""}</div>`)
         }
       }
     } catch {}
@@ -1665,7 +1730,7 @@
       if (links.length > 0) {
         lines.push(`<div style="font-weight:600;font-size:10px;color:#6c63ff;margin-top:4px;margin-bottom:2px">Key Links</div>`)
         for (const l of links) {
-          lines.push(`<div style="font-size:10px;color:#9aa0c0">→ ${l}</div>`)
+          lines.push(`<div style="font-size:10px;color:#9aa0c0">→ ${esc(l)}</div>`)
         }
       }
     } catch {}
@@ -1704,8 +1769,8 @@
       for (const a of assets.slice(0, 4)) {
         const c = tone(a.changePct)
         lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px">` +
-          `<span>${a.name}</span>` +
-          `<span style="font-weight:600">${a.price != null ? a.price : "\u2026"}</span></div>`)
+          `<span>${esc(a.name)}</span>` +
+          `<span style="font-weight:600">${a.price != null ? esc(a.price) : "\u2026"}</span></div>`)
       }
     }
     if (!serverOnline && assets.length === 0) {
@@ -1714,11 +1779,11 @@
     // Show last fetch error for debugging
     if (tradingState.lastFetchError) {
       lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
-      lines.push(`<div style="font-size:9px;color:#ff6b6b;margin-top:2px">Last error: ${tradingState.lastFetchError}</div>`)
+      lines.push(`<div style="font-size:9px;color:#ff6b6b;margin-top:2px">Last error: ${esc(tradingState.lastFetchError)}</div>`)
     }
     // Show active asset being tracked
     if (tradingState.activeAsset) {
-      lines.push(`<div style="font-size:9px;color:#6c63ff;margin-top:2px">Tracking: ${tradingState.activeAsset}</div>`)
+      lines.push(`<div style="font-size:9px;color:#6c63ff;margin-top:2px">Tracking: ${esc(tradingState.activeAsset)}</div>`)
     }
     return `<div style="padding:2px 0">${lines.join("")}</div>`
   }
@@ -1757,7 +1822,7 @@
       `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${overallColor}"></span>` +
       `<span style="font-weight:600;font-size:11px;color:${overallColor}">${overallLabel}</span>` +
       `<span style="font-size:9px;color:#9aa0c0">${entries.length - problems.length}/${entries.length} ok</span>` +
-      (sources.candles?.feed ? `<span style="font-size:8px;font-weight:700;color:#60a5fa;background:#60a5fa22;border:1px solid #60a5fa55;border-radius:3px;padding:0 4px;margin-left:auto">FEED: ${String(sources.candles.feed).toUpperCase()}</span>` : "") +
+      (sources.candles?.feed ? `<span style="font-size:8px;font-weight:700;color:#60a5fa;background:#60a5fa22;border:1px solid #60a5fa55;border-radius:3px;padding:0 4px;margin-left:auto">FEED: ${esc(String(sources.candles.feed).toUpperCase())}</span>` : "") +
       `</div>`
     const rows = entries.map(([name, info]) => {
       const meta = STATUS_META[info.status] || STATUS_META.unconfigured
@@ -2128,9 +2193,14 @@
   let tradingPollTimer = null
   let tradingFetchInFlight = false
   let tradingAbortController = null
+  // Exponential backoff while the server is unreachable (5s → 60s cap).
+  // Prevents the offline state from hammering localhost with requests.
+  let tradingOfflineBackoffMs = 0
+  let tradingNextPollAllowedAt = 0
 
   async function fetchTradingData() {
     if (tradingFetchInFlight) return
+    if (Date.now() < tradingNextPollAllowedAt) return
     tradingFetchInFlight = true
     tradingAbortController = new AbortController()
     const signal = tradingAbortController.signal
@@ -2173,6 +2243,7 @@
       })
       if (signal.aborted) return
       if (resp && resp.ok) {
+        tradingOfflineBackoffMs = 0
         tradingState.serverReachable = true
         tradingState.lastFetchError = null
         tradingState.lastFetchAt = Date.now()
@@ -2270,9 +2341,19 @@
           }).catch(() => {})
         }
       } else {
-        // Consolidated endpoint failed — fallback to individual endpoints
+        // Consolidated endpoint failed — fallback to individual endpoints.
+        // POLLING STORM GUARD: when the server is actually DOWN (not a data
+        // hiccup), the fallback used to fire 10+ extra requests every 5s
+        // forever, each one also re-scanning 4 ports in the background.
         tradingState.serverReachable = false
         tradingState.lastFetchError = resp?.error || "consolidated-failed"
+        const offlineErrors = ["no server found", "server-unreachable", "extension-context-invalidated"]
+        if (offlineErrors.includes(String(resp?.error || "").toLowerCase())) {
+          tradingOfflineBackoffMs = Math.min(60_000, (tradingOfflineBackoffMs || 5_000) * 2)
+          tradingNextPollAllowedAt = Date.now() + tradingOfflineBackoffMs
+          tradingState.lastPollDelayMs = tradingOfflineBackoffMs
+          return
+        }
         if (signal.aborted) return
         const [status, autopilot, demo, decisions] = await Promise.allSettled([
           serverFetch("/api/trading/status"),
@@ -2395,15 +2476,24 @@
       "general": renderPageOverview,
     }
     for (const [id, renderer] of Object.entries(panels)) {
+      // Per-renderer isolation: one malformed field must never abort the loop
+      // and freeze every dockable after it (the old failure mode — panels
+      // stuck on "Loading…" while polling silently kept failing).
+      let html
+      try {
+        html = renderer()
+      } catch (err) {
+        html = '<div style="font-size:9px;color:#f59e0b;padding:2px">Render error \u2014 will retry</div>'
+      }
       const dock = shadowRoot.getElementById(`__PICC_DOCK_${id}__`)
       if (!dock) continue
       const body = dock.querySelector("[data-picc-body]")
-      if (body) body.innerHTML = renderer()
+      if (body) body.innerHTML = html
       const gid = dockGroupMap[id]
       if (gid && groupActiveTab[gid] === id) {
         const gc = shadowRoot.getElementById(`__PICC_GROUP_${gid}__`)
         const gBody = gc?.querySelector("[data-picc-group-body]")
-        if (gBody) gBody.innerHTML = renderer()
+        if (gBody) gBody.innerHTML = html
       }
     }
   }
@@ -2803,6 +2893,23 @@
       cleanupGroups()
       activeDockables = []
       overlayVisible = false
+      // Persist the close so auto-start honors it across reloads — the old
+      // code only saved it server-side and the local check read a flag that
+      // was never written, so a closed overlay resurrected on every reload.
+      try {
+        if (currentSite?.id) savePrefsForSite(currentSite.id, { overlay: false }).catch(() => {})
+        const state = await new Promise((resolve) => {
+          chrome.storage.local.get(MV3_STATE_KEY, (data) => resolve(data[MV3_STATE_KEY] || null))
+        })
+        chrome.storage.local.set({
+          [MV3_STATE_KEY]: {
+            ...(state || {}),
+            siteId: currentSite?.id || state?.siteId || null,
+            settings: { ...(state?.settings || currentSettings), overlay: false },
+            timestamp: Date.now()
+          }
+        })
+      } catch { /* storage unavailable */ }
       return
     }
 
@@ -2848,6 +2955,16 @@
     }
 
     createOverlay(siteInfo, overlaySettings)
+    // Explicit open clears a persisted close — auto-start may resume.
+    try {
+      if (currentSite?.id) savePrefsForSite(currentSite.id, { overlay: true }).catch(() => {})
+      chrome.storage.local.get(MV3_STATE_KEY, (data) => {
+        const state = data[MV3_STATE_KEY]
+        if (state?.settings?.overlay === false) {
+          chrome.storage.local.set({ [MV3_STATE_KEY]: { ...state, settings: { ...state.settings, overlay: true } } })
+        }
+      })
+    } catch { /* ignore */ }
   }
 
   // ── Keyboard shortcut ───────────────────────────────────────────────────────
@@ -2860,6 +2977,7 @@
   }, true)
 
   // ── Autopilot control button delegation (on shadowRoot — document won't receive shadow DOM click events) ──
+
   shadowRoot.addEventListener("click", async (e) => {
     const btn = e.composedPath().find((el) => el.hasAttribute?.("data-picc-action"))
     if (!btn) return

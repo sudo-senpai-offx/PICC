@@ -6,8 +6,8 @@
 // the local demo-deals file and the agent log so the experiment is fully
 // auditable. This is NOT investment advice and nothing here risks real money.
 
-import { mkdirSync } from "node:fs"
-import { readFile, writeFile } from "node:fs/promises"
+import { mkdirSync, unlinkSync } from "node:fs"
+import { readFile, writeFile, rename } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
@@ -90,25 +90,68 @@ async function readJSON(file, fallback) {
 }
 
 async function writeJSON(file, value) {
-  try {
-    await writeFile(file, JSON.stringify(value, null, 2), "utf8")
-    return true
-  } catch (err) {
-    // ENOENT happens when the data dir was created after import time (tests,
-    // or a fresh machine where the parent was never made). Ensure it exists
-    // and retry once instead of silently dropping the write.
-    if (err && err.code === "ENOENT") {
+  const payload = JSON.stringify(value, null, 2)
+  // Atomic write: truncate-then-write leaves a torn JSON file if the process
+  // dies mid-write; the next reader then silently falls back to an empty
+  // ledger and the daily-loss gate sees a clean slate. tmp+rename is atomic
+  // on POSIX and effectively atomic on Windows (rename over existing).
+  const tmp = `${file}.${process.pid}.tmp`
+  const attemptRename = async () => {
+    await writeFile(tmp, payload, "utf8")
+    // Windows: AV/indexer briefly holds freshly-written files → EPERM on
+    // rename. Retry with a short backoff before giving up.
+    for (let i = 0; ; i++) {
       try {
-        mkdirSync(dirname(file), { recursive: true })
-        await writeFile(file, JSON.stringify(value, null, 2), "utf8")
+        await rename(tmp, file)
         return true
-      } catch (retryErr) {
-        console.warn(`[picc-autopilot] write failed ${file}:`, retryErr.message)
-        return false
+      } catch (err) {
+        if (err?.code === "EPERM" && i < 4) {
+          await new Promise((r) => setTimeout(r, 25 * (i + 1)))
+          continue
+        }
+        throw err
       }
     }
+  }
+  try {
+    try {
+      return await attemptRename()
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        mkdirSync(dirname(file), { recursive: true })
+        return await attemptRename()
+      }
+      throw err
+    }
+  } catch (err) {
     console.warn(`[picc-autopilot] write failed ${file}:`, err.message)
-    return false
+    try { unlinkSync(tmp) } catch { /* already gone */ }
+    // Last resort: non-atomic direct write beats losing the data entirely.
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      await writeFile(file, payload, "utf8")
+      return true
+    } catch (finalErr) {
+      console.warn(`[picc-autopilot] fallback write failed ${file}:`, finalErr.message)
+      return false
+    }
+  }
+}
+
+/**
+ * Serialize read-modify-write mutations of one JSON file through a promise
+ * chain (same pattern as dealWrite). Prevents concurrent config saves from
+ * losing each other's fields.
+ */
+function makeFileChain() {
+  let chain = Promise.resolve()
+  return (fn) => {
+    const run = chain.then(fn, fn)
+    chain = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
   }
 }
 
@@ -121,33 +164,39 @@ export async function getAutopilotConfig() {
   return { ...DEFAULTS, ...saved }
 }
 
+// Serialized config mutations: two concurrent saveAutopilotConfig calls used
+// to read-modify-write the same file and silently drop each other's fields.
+const mutateConfig = makeFileChain()
+
 export async function saveAutopilotConfig(patch) {
-  const next = { ...(await getAutopilotConfig()), ...(patch ?? {}) }
-  next.enabled = Boolean(next.enabled)
-  next.assetId = String(next.assetId || "BTCUSD").trim().toUpperCase()
-  next.duration = clamp(Math.round(Number(next.duration) || 60), 5, 43200)
-  next.amount = next.amount != null && Number(next.amount) > 0 ? clamp(Number(next.amount), 1, 1000) : null
-  next.minConfidence = clamp(Number(next.minConfidence) || 55, 30, 95)
-  next.cooldownMs = clamp(Math.round(Number(next.cooldownMs) || 900000), 10000, 86400000)
-  next.humanReviewMs = clamp(Math.round(Number(next.humanReviewMs ?? 5000)) || 0, 0, 60000)
-  next.maxConcurrent = clamp(Math.round(Number(next.maxConcurrent) || 3), 1, 10)
-  next.dailyLossLimitPct = clamp(Number(next.dailyLossLimitPct) || 10, 1, 100)
-  next.maxDailyTrades = clamp(Math.round(Number(next.maxDailyTrades) || 0), 0, 100)
-  next.aiGate = Boolean(next.aiGate)
-  next.proGate = Boolean(next.proGate)
-  next.mtfGate = next.mtfGate !== false
-  next.minMtfAgree = clamp(Math.round(Number(next.minMtfAgree) || 0), 0, 3)
-  next.sentimentGate = Boolean(next.sentimentGate)
-  next.minSentimentAlignment = clamp(Number(next.minSentimentAlignment) || 0.3, 0, 1)
-  next.consecutiveLossLimit = clamp(Math.round(Number(next.consecutiveLossLimit) || 3), 1, 20)
-  next.consecutiveLossWindowMs = clamp(Math.round(Number(next.consecutiveLossWindowMs) || 1800000), 60000, 86400000)
-  next.regimeShiftPause = next.regimeShiftPause !== false
-  next.maxCandleAgeSec = clamp(Math.round(Number(next.maxCandleAgeSec) || 60), 10, 3600)
-  next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
-  next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
-  if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
-  next.lastEntryAt = Math.max(0, Number(next.lastEntryAt) || 0)
-  await writeJSON(CONFIG_FILE, next)
+  await mutateConfig(async () => {
+    const next = { ...(await getAutopilotConfig()), ...(patch ?? {}) }
+    next.enabled = Boolean(next.enabled)
+    next.assetId = String(next.assetId || "BTCUSD").trim().toUpperCase()
+    next.duration = clamp(Math.round(Number(next.duration) || 60), 5, 43200)
+    next.amount = next.amount != null && Number(next.amount) > 0 ? clamp(Number(next.amount), 1, 1000) : null
+    next.minConfidence = clamp(Number(next.minConfidence) || 55, 30, 95)
+    next.cooldownMs = clamp(Math.round(Number(next.cooldownMs) || 900000), 10000, 86400000)
+    next.humanReviewMs = clamp(Math.round(Number(next.humanReviewMs ?? 5000)) || 0, 0, 60000)
+    next.maxConcurrent = clamp(Math.round(Number(next.maxConcurrent) || 3), 1, 10)
+    next.dailyLossLimitPct = clamp(Number(next.dailyLossLimitPct) || 10, 1, 100)
+    next.maxDailyTrades = clamp(Math.round(Number(next.maxDailyTrades) || 0), 0, 100)
+    next.aiGate = Boolean(next.aiGate)
+    next.proGate = Boolean(next.proGate)
+    next.mtfGate = next.mtfGate !== false
+    next.minMtfAgree = clamp(Math.round(Number(next.minMtfAgree) || 0), 0, 3)
+    next.sentimentGate = Boolean(next.sentimentGate)
+    next.minSentimentAlignment = clamp(Number(next.minSentimentAlignment) || 0.3, 0, 1)
+    next.consecutiveLossLimit = clamp(Math.round(Number(next.consecutiveLossLimit) || 3), 1, 20)
+    next.consecutiveLossWindowMs = clamp(Math.round(Number(next.consecutiveLossWindowMs) || 1800000), 60000, 86400000)
+    next.regimeShiftPause = next.regimeShiftPause !== false
+    next.maxCandleAgeSec = clamp(Math.round(Number(next.maxCandleAgeSec) || 60), 10, 3600)
+    next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
+    next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
+    if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
+    next.lastEntryAt = Math.max(0, Number(next.lastEntryAt) || 0)
+    await writeJSON(CONFIG_FILE, next)
+  })
   return getAutopilotConfig()
 }
 
@@ -200,17 +249,27 @@ export function evaluateLossBreaker(signalsNewestFirst, { limit = 3, windowMs = 
   return { tripped: true, streak, until: oldestMs + win, oldestLossAt }
 }
 
+let ledgerReadFailures = 0
+
 /**
  * Re-evaluate the consecutive-loss latch from the accuracy ledger. Returns a
  * refusal reason while the breaker holds, or null when trading may proceed.
+ * FAIL-CLOSED: if the ledger cannot be read the engine must NOT assume "no
+ * losses" — repeated failures pause entries until the ledger answers again.
  */
 async function checkLossBreaker(config, now = Date.now()) {
   let signals = []
   try {
     const acc = await signalAccuracy()
     signals = Array.isArray(acc?.recent) ? acc.recent : []
+    ledgerReadFailures = 0
   } catch {
-    /* ledger unavailable — fail open */
+    ledgerReadFailures += 1
+    if (ledgerReadFailures >= 2) {
+      return `loss breaker cannot read the trade ledger (${ledgerReadFailures} consecutive failures) — entries paused for safety`
+    }
+    // One transient failure: use an empty set but remember — next failure blocks.
+    signals = []
   }
   const evaluation = evaluateLossBreaker(signals, {
     limit: config.consecutiveLossLimit,
@@ -441,8 +500,23 @@ async function recordDeal(deal) {
 
 let dealWrite = Promise.resolve()
 
+/** Serialized read of the deals file — never observes a torn/partial write. */
+function readDealsSerialized() {
+  return dealWrite.then(
+    () => readJSON(DEALS_FILE, { deals: [] }),
+    () => readJSON(DEALS_FILE, { deals: [] })
+  )
+}
+
 async function recordDealLocked(deal) {
   const file = await readJSON(DEALS_FILE, { deals: [] })
+  // Cross-session idempotency: during a session handover both sockets can
+  // broadcast the same settlement. Without this dedupe the deal (and its
+  // PnL) is recorded twice — a doubled loss stops trading early, a doubled
+  // win masks real drawdown.
+  if (deal.serverId != null && file.deals.some((d) => d.serverId === deal.serverId)) {
+    return
+  }
   file.deals.unshift({
     ...deal,
     recordAt: new Date().toISOString()
@@ -475,11 +549,15 @@ async function recordKelly(deal) {
     if (!Array.isArray(store.data.history)) store.data.history = []
     const profit = Number(deal.profit) || 0
     const stake = Number(deal.amount) || 0
+    // Payout (b in the Kelly formula) is the per-contract win odds and must be
+    // estimated from WINS ONLY. Storing 0 for losers made the snapshot's
+    // `|| 1` coercion count every loss as a 100% payout, biasing avgPayout
+    // upward and oversizing positions by ~25-45%.
     store.data.history.push({
       outcome: profit > 0 ? "win" : profit < 0 ? "loss" : "draw",
       win: profit > 0,
       stake,
-      payout: profit > 0 && stake > 0 ? Math.round((profit / stake) * 100) / 100 : 0,
+      payout: profit > 0 && stake > 0 ? Math.round((profit / stake) * 100) / 100 : null,
       timestamp: Date.now()
     })
     if (store.data.history.length > 200) store.data.history = store.data.history.slice(-200)
@@ -520,7 +598,7 @@ async function recordFeedback(deal) {
 }
 
 async function todayPnl() {
-  const file = await readJSON(DEALS_FILE, { deals: [] })
+  const file = await readDealsSerialized()
   const today = new Date().toISOString().slice(0, 10)
   return file.deals
     .filter((d) => (d.closedAt ?? "").startsWith(today))
@@ -529,7 +607,7 @@ async function todayPnl() {
 
 /** Number of deals settled so far today — feeds the maxDailyTrades cap. */
 async function todayTradeCount() {
-  const file = await readJSON(DEALS_FILE, { deals: [] })
+  const file = await readDealsSerialized()
   const today = new Date().toISOString().slice(0, 10)
   return file.deals.filter((d) => (d.recordAt ?? "").startsWith(today)).length
 }

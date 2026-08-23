@@ -30,8 +30,15 @@
 
       __piccHook() {
         const ws = this
+        const STAMP = "__piccSeen"
+        // Sniff each frame exactly ONCE per event even if the page registers
+        // multiple handlers or reassigns onmessage repeatedly (framework
+        // reconnects/HMR) — the old setter stacked a NEW listener per
+        // assignment, duplicating relays and firing stale page handlers.
         const handle = (ev) => {
           try {
+            if (ev[STAMP]) return
+            try { Object.defineProperty(ev, STAMP, { value: true }) } catch { /* frozen event */ }
             if (typeof ev.data !== "string") return
             if (ev.data.length > 512 * 1024) return
             const parsed = JSON.parse(ev.data)
@@ -43,6 +50,7 @@
         // Wrap addEventListener-based listeners AND the onmessage property so
         // either registration style is captured.
         const origAdd = ws.addEventListener.bind(ws)
+        origAdd("message", handle)
         ws.addEventListener = function (type, listener, opts) {
           if (type === "message") {
             const wrapped = (ev) => { try { handle(ev) } catch { /* ignore */ } finally { listener.call(ws, ev) } }
@@ -51,14 +59,16 @@
           return origAdd(type, listener, opts)
         }
         let userHandler = null
+        let userWrapper = null
         Object.defineProperty(ws, "onmessage", {
           get: () => userHandler,
           set: (fn) => {
             userHandler = fn
-            origAdd("message", (ev) => {
-              try { handle(ev) } catch { /* ignore */ }
-              if (typeof fn === "function") fn.call(ws, ev)
-            })
+            // ONE persistent wrapper whose target is swapped — never stack.
+            if (!userWrapper) {
+              userWrapper = (ev) => { if (typeof userHandler === "function") userHandler.call(ws, ev) }
+              origAdd("message", userWrapper)
+            }
           },
           configurable: true
         })

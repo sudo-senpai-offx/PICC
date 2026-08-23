@@ -104,8 +104,9 @@ describe("accuracy ledger", () => {
     expect(stats.misses).toBe(1)
     expect(stats.pushes).toBe(1)
     expect(stats.hitRate).toBeCloseTo(2 / 3, 5)
-    // realized EV: hit +82, hit +82, miss -100, push 0 → 64/4 = +16 %/stake
-    expect(stats.realizedEv).toBeCloseTo(16, 5)
+    // realized EV in fraction-of-stake units (matching predictedEv):
+    // hit +0.82, hit +0.82, miss −1, push 0 → 0.64/4 = +0.16 /stake
+    expect(stats.realizedEv).toBeCloseTo(0.16, 5)
     expect(stats.byExpiry["60"].n).toBe(4)
     expect(stats.byExpiry["60"].hitRate).toBeCloseTo(2 / 3, 5)
     expect(ledgerHistory(10)).toHaveLength(4)
@@ -131,8 +132,9 @@ describe("accuracy ledger", () => {
     expect(bt.engine.misses).toBe(1)
     expect(bt.engine.hitRate).toBeCloseTo(2 / 3, 5)
     expect(bt.engine.predictedEv).toBeCloseTo(0.4, 5)
-    // realized EV: hit +82, hit +82, miss -100 → 64/3 = 21.33 %/stake
-    expect(bt.engine.realizedEv).toBeCloseTo(64 / 3, 5)
+    // realized EV in fraction-of-stake units: hit +0.82, hit +0.82, miss −1
+    // → 0.64/3 ≈ 0.2133 /stake (comparable to predictedEv's fraction scale)
+    expect(bt.engine.realizedEv).toBeCloseTo(0.64 / 3, 5)
     // demo-deal side is environment-dependent but must always be a number
     expect(typeof bt.demo.n).toBe("number")
     expect(typeof bt.demo.realizedEv === "number" || bt.demo.realizedEv === null).toBe(true)

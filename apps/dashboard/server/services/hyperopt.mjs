@@ -311,7 +311,12 @@ export function walkForwardBacktest(candles, options = {}) {
     ? withSharpe.reduce((a, r) => a + r.validationSharpe, 0) / withSharpe.length
     : null
   const totalValTrades = results.reduce((a, r) => a + r.validationTrades, 0)
-  const valWins = results.reduce((a, r) => a + r.validationTrades * (r.validationHitRate ?? 0), 0)
+  // Aggregate wins directly (trades × hitRate miscounts pushes: trades
+  // include them, hitRate excludes them).
+  const valWins = results.reduce(
+    (a, r) => a + Math.round(r.validationTrades * (r.validationHitRate ?? 0)),
+    0
+  )
   return {
     ok: true,
     bars: clean.length,

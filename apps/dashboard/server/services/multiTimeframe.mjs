@@ -291,7 +291,7 @@ export function multiTimeframeConfluence(opts = {}) {
  * Quick MTF check using only LiveEO periods (for the decision engine).
  * Returns a simple { agree, total, boost } shape.
  */
-export function quickMtfCheck(asset, primaryDirection) {
+export function quickMtfCheck(asset, primaryDirection, { nowSec = Math.floor(Date.now() / 1000) } = {}) {
   if (!asset || primaryDirection === 0) return { agree: 0, total: 0, boost: 0, tfDetails: [] }
   const periods = asset.periods || {}
   const tfSeconds = [300, 900]
@@ -302,6 +302,14 @@ export function quickMtfCheck(asset, primaryDirection) {
   for (const tf of tfSeconds) {
     const candles = periods[tf]
     if (!Array.isArray(candles) || candles.length < 20) continue
+    // Freshness gate: a buffer whose newest bar is older than 3× its own
+    // timeframe is stale (reconnect gap, dead feed). Scoring it would let
+    // old data vote on a live entry — skip it instead.
+    const lastTime = Number(candles[candles.length - 1]?.time)
+    if (Number.isFinite(lastTime) && nowSec - lastTime > tf * 3) {
+      details.push({ tf, dir: 0, strength: 0, matches: false, stale: true })
+      continue
+    }
     checked += 1
     try {
       const dashboard = computeIndicatorDashboard(candles)

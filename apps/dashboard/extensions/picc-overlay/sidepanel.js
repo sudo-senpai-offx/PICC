@@ -32,9 +32,16 @@ async function serverFetch(path) {
 }
 
 const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
+// Escape EVERY server-origin string before innerHTML — this page has full
+// extension privileges (tabs/cookies/downloads), so injected markup here is
+// strictly worse than in the overlay.
+const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ESC_MAP[c])
+}
 function fmt$(n, currency) {
   if (n == null || !isFinite(n)) return "\u2014"
-  const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (currency || "$") + " "
+  const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (esc(currency || "$") + " ")
   return sym + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
@@ -123,18 +130,18 @@ async function loadSignals() {
   const d = data.data || data
   const rec = d.recommendation || null
   const best = d.best || null
-  if (!rec && !best) { el.innerHTML = `<div class="empty">${d.honesty || "No signal data"}</div>`; return }
+  if (!rec && !best) { el.innerHTML = `<div class="empty">${esc(d.honesty || "No signal data")}</div>`; return }
   const verdict = rec ? "TRADE" : (best.verdict || "N/A")
   const confidence = rec?.confidence ?? best.confidence ?? "N/A"
   const direction = rec ? rec.action : (best.direction || best.action || "N/A")
   const score = best?.intelScore ?? "N/A"
   const asset = rec ? rec.market : (best.asset || best.assetId || "N/A")
   el.innerHTML = `
-    <div class="metric"><span class="metric-label">Verdict</span><span class="metric-value" style="color:${verdict === "TRADE" ? "#4ade80" : verdict === "OBSERVE" ? "#f59e0b" : "#9aa0c0"}">${verdict}</span></div>
-    <div class="metric"><span class="metric-label">Confidence</span><span class="metric-value">${confidence ?? "N/A"}%</span></div>
-    <div class="metric"><span class="metric-label">Direction</span><span class="metric-value">${direction}</span></div>
-    <div class="metric"><span class="metric-label">Score</span><span class="metric-value">${score}</span></div>
-    <div class="metric"><span class="metric-label">Asset</span><span class="metric-value">${asset}</span></div>
+    <div class="metric"><span class="metric-label">Verdict</span><span class="metric-value" style="color:${verdict === "TRADE" ? "#4ade80" : verdict === "OBSERVE" ? "#f59e0b" : "#9aa0c0"}">${esc(verdict)}</span></div>
+    <div class="metric"><span class="metric-label">Confidence</span><span class="metric-value">${esc(confidence)}%</span></div>
+    <div class="metric"><span class="metric-label">Direction</span><span class="metric-value">${esc(direction)}</span></div>
+    <div class="metric"><span class="metric-label">Score</span><span class="metric-value">${esc(score)}</span></div>
+    <div class="metric"><span class="metric-label">Asset</span><span class="metric-value">${esc(asset)}</span></div>
   `
 }
 
@@ -168,7 +175,7 @@ async function loadAlerts() {
   if (soundOn) playSideAlert()
   el.innerHTML = soundToggle + alerts.slice(0, 10).map((a) => `
     <div class="metric">
-      <span class="metric-label">${a.symbol} ${a.condition.replace(/_/g, " ")} ${a.value}</span>
+      <span class="metric-label">${esc(a.symbol)} ${esc(String(a.condition || "").replace(/_/g, " "))} ${esc(a.value)}</span>
       <span class="metric-value" style="color:#4ade80;font-size:10px;">ARMED</span>
     </div>
   `).join("")
@@ -183,14 +190,14 @@ async function loadSessions() {
   const c = data.current
   el.innerHTML = `
     <div style="padding:6px;border-radius:4px;background:${c.activeOverlaps?.length ? "#ec489811" : c.activeSessions?.length ? "#6c63ff11" : "#1a1a2e"};border:1px solid ${c.activeOverlaps?.length ? "#ec4898" : c.activeSessions?.length ? "#6c63ff" : "#2a2a4a"};margin-bottom:8px;">
-      <div style="font-size:12px;font-weight:600;">${c.activeOverlaps?.length ? c.activeOverlaps[0].name : c.activeSessions?.length ? c.activeSessions.map((s) => s.name).join(" + ") : "Off Hours"}</div>
-      <div style="font-size:10px;color:#9aa0c0;">UTC ${c.utcHour} | ${c.description}</div>
+      <div style="font-size:12px;font-weight:600;">${esc(c.activeOverlaps?.length ? c.activeOverlaps[0].name : c.activeSessions?.length ? c.activeSessions.map((s) => s.name).join(" + ") : "Off Hours")}</div>
+      <div style="font-size:10px;color:#9aa0c0;">UTC ${esc(c.utcHour)} | ${esc(c.description)}</div>
     </div>
     ${(data.schedule?.schedule || []).map((s) => `
       <div class="session-bar">
         <span class="session-dot" style="background:${s.isActive ? s.color : "#2a2a4a"};"></span>
-        <span style="color:${s.isActive ? s.color : "#9aa0c0"};min-width:60px;">${s.name}</span>
-        <span style="font-size:10px;color:#9aa0c0;">${s.isActive ? `${s.hoursUntilClose}h left` : `in ${s.hoursUntilOpen}h`}</span>
+        <span style="color:${s.isActive ? s.color : "#9aa0c0"};min-width:60px;">${esc(s.name)}</span>
+        <span style="font-size:10px;color:#9aa0c0;">${s.isActive ? `${esc(s.hoursUntilClose)}h left` : `in ${esc(s.hoursUntilOpen)}h`}</span>
       </div>
     `).join("")}
   `

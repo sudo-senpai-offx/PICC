@@ -30,16 +30,25 @@ function mean(arr) {
 export function pearsonCorrelation(x, y) {
   const minLen = Math.min(x.length, y.length)
   if (minLen < 3) return null
-  const ax = x.slice(0, minLen).filter((v) => Number.isFinite(v))
-  const ay = y.slice(0, minLen).filter((v) => Number.isFinite(v))
-  const n = Math.min(ax.length, ay.length)
+  // Drop non-finite PAIRS jointly — filtering each array independently
+  // misaligns the indices (x[i] would be paired against y[i±k] after any
+  // single gap), producing arbitrarily wrong correlations with no error.
+  const pairs = []
+  for (let i = 0; i < minLen; i++) {
+    const xv = Number(x[i])
+    const yv = Number(y[i])
+    if (Number.isFinite(xv) && Number.isFinite(yv)) pairs.push([xv, yv])
+  }
+  const n = pairs.length
   if (n < 3) return null
-  const mx = ax.reduce((s, v) => s + v, 0) / n
-  const my = ay.reduce((s, v) => s + v, 0) / n
+  let sx = 0, sy = 0
+  for (const [xv, yv] of pairs) { sx += xv; sy += yv }
+  const mx = sx / n
+  const my = sy / n
   let sumXY = 0, sumX2 = 0, sumY2 = 0
-  for (let i = 0; i < n; i++) {
-    const dx = ax[i] - mx
-    const dy = ay[i] - my
+  for (const [xv, yv] of pairs) {
+    const dx = xv - mx
+    const dy = yv - my
     sumXY += dx * dy
     sumX2 += dx * dx
     sumY2 += dy * dy

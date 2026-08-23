@@ -46,6 +46,10 @@ export function kellySnapshot() {
   const recent = history.slice(-200)
   const wins = recent.filter((t) => t.outcome === "win").length
   const winRate = recent.length > 0 ? wins / recent.length : 0.5
-  const avgPayout = recent.length > 0 ? recent.reduce((s, t) => s + (t.payout || 1), 0) / recent.length : 1.5
+  // Payout odds (b) are a WIN property — average wins only. Legacy rows may
+  // carry payout:0 for losses; they are excluded, never coerced to 1.
+  const payoutSamples = recent.filter((t) => t.outcome === "win" && Number(t.payout) > 0).map((t) => Number(t.payout))
+  // Typical binary-option payout (~80%). Never fabricate >100%.
+  const avgPayout = payoutSamples.length > 0 ? payoutSamples.reduce((s, v) => s + v, 0) / payoutSamples.length : 0.8
   return { settings, stats: { totalTrades: recent.length, winRate: Math.round(winRate * 10000) / 100, avgPayout: Math.round(avgPayout * 100) / 100 }, kelly: computeKelly(winRate, avgPayout, settings.mode) }
 }

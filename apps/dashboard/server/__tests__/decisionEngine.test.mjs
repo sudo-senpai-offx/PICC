@@ -56,10 +56,13 @@ function flatCandles(n = 80, price = 100) {
 }
 
 function wiggleTrend(n, driftPct, wigglePct, base = 100) {
+  // Anchor on wall-clock time ending NOW — quickMtfCheck refuses stale
+  // buffers (newest bar older than 3× its timeframe).
+  const nowSec = Math.floor(Date.now() / 1000)
   return Array.from({ length: n }, (_, i) => {
     const close = base * (1 + driftPct * i) * (1 + wigglePct * Math.sin(i * 0.7))
     const open = base * (1 + driftPct * Math.max(0, i - 1)) * (1 + wigglePct * Math.sin((i - 1) * 0.7))
-    return { time: i * 60, open, high: Math.max(open, close) * 1.0005, low: Math.min(open, close) * 0.9995, close }
+    return { time: nowSec - (n - i) * 60, open, high: Math.max(open, close) * 1.0005, low: Math.min(open, close) * 0.9995, close }
   })
 }
 

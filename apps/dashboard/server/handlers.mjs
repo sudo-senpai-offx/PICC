@@ -936,22 +936,33 @@ async function _handleApiInner(req, res, url, reqId) {
 
   const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`)
   const path = parsed.pathname
-  const body = path === "/api/browser/upload" ? await readBodyMax(req, 64e6) : await readBody(req)
   const auth = req.headers.authorization
+
+  // General rate limit: 60 requests per 60 seconds per IP for all POST endpoints.
+  // Checked BEFORE consuming the body so a 429 never pays the read cost, and
+  // exempting the extension's own high-frequency routes — their dedicated
+  // buckets apply instead (otherwise an ingest burst locks out logins/autopilot).
+  const EXTENSION_POLL_ROUTES = new Set([
+    "/api/extension/ingest",
+    "/api/extension/heartbeat",
+    "/api/extension/tab-changed",
+    "/api/browser/metrics",
+    "/api/extension/trading-data"
+  ])
+  if (["POST", "PUT", "PATCH"].includes(req.method) && !EXTENSION_POLL_ROUTES.has(path)) {
+    const generalKey = `general:${clientIp(req)}`
+    if (rateLimited(generalKey, 60, 60_000)) {
+      writeJson(res, 429, { error: "rate limit exceeded — try again later" })
+      return true
+    }
+  }
+
+  const body = path === "/api/browser/upload" ? await readBodyMax(req, 64e6) : await readBody(req)
 
   // Reject invalid JSON bodies on POST/PUT/PATCH
   if (body === null && ["POST", "PUT", "PATCH"].includes(req.method)) {
     writeJson(res, 400, { error: "invalid JSON in request body" })
     return
-  }
-
-  // General rate limit: 60 requests per 60 seconds per IP for all POST endpoints
-  if (["POST", "PUT", "PATCH"].includes(req.method)) {
-    const generalKey = `general:${clientIp(req)}`
-    if (rateLimited(generalKey, 60, 60_000)) {
-      writeJson(res, 429, { error: "rate limit exceeded — try again later" })
-      return
-    }
   }
 
   if (path === "/api/health" && (req.method === "GET" || req.method === "POST")) {
@@ -1070,14 +1081,20 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/realtime" && req.method === "GET") {
+    // Cross-origin EventSource snooping guard (any website can open this from
+    // a visitor's machine — reject browser-supplied foreign origins).
+    const origin = req.headers.origin
+    if (origin && !TRUSTED_ORIGINS.includes(String(origin))) {
+      writeJson(res, 403, { error: "origin not allowed" })
+      return true
+    }
     const token = parsed.searchParams.get("token") ?? ""
     const ok = isLocalhostRequest(req) || (token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization)))
     if (!ok) return writeJson(res, 401, { error: "authentication required" })
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*"
+      Connection: "keep-alive"
     })
     const send = (event, data) => {
       try {
@@ -1328,30 +1345,37 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/settings/llm" && req.method === "POST") {
+    // These routes configure and echo provider credentials — never public.
+    if (!(await requireAuth(req, res))) return true
     try {
       const settings = body?.settings
       if (!settings || typeof settings !== "object") {
-        return writeJson(res, 400, { error: "settings object required" })
+        writeJson(res, 400, { error: "settings object required" })
+        return true
       }
-      const saved = await saveLLMSettings(settings)
-      writeJson(res, 200, { ok: true, settings: saved })
+      await saveLLMSettings(settings)
+      // Echo the MASKED view — saveLLMSettings returns raw key material, which
+      // must never leave the server.
+      writeJson(res, 200, { ok: true, settings: llmSettingsView() })
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err.message })
     }
-    return
+    return true
   }
 
   if (path === "/api/settings/llm/test" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
     const providerId = String(body?.provider ?? "").trim()
     if (!PROVIDER_IDS.includes(providerId)) {
-      return writeJson(res, 400, { error: "unknown provider" })
+      writeJson(res, 400, { error: "unknown provider" })
+      return true
     }
     try {
       writeJson(res, 200, await withTimeout(testLLMProvider(providerId), 20000))
     } catch (err) {
       writeJson(res, 502, { ok: false, error: err.message })
     }
-    return
+    return true
   }
 
   if (path === "/api/trading/paper/trade" && req.method === "POST") {
@@ -2089,6 +2113,11 @@ async function _handleApiInner(req, res, url, reqId) {
 
   if (path === "/api/trading/notifications" && (req.method === "GET" || req.method === "POST")) {
     const { notify, getNotifications, markRead, markAllRead, clearOld, unreadCount, notificationStats, getWebhookSettings, saveWebhookSettings, emitEvent } = await import("./services/notificationCenter.mjs")
+    // Webhook settings/test are a stored-SSRF channel (server POSTs trading
+    // activity to any URL) — mutating actions require auth. Reads stay open.
+    if (req.method === "POST" && ["webhook-settings", "webhook-test"].includes(String(body?.action))) {
+      if (!(await requireAuth(req, res))) return true
+    }
     if (req.method === "GET") {
       const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 50), 1), 200)
       const unreadOnly = parsed.searchParams.get("unread") === "true"
@@ -2364,13 +2393,21 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/collectors/cashpilot" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
+    // This route makes the SERVER fetch an arbitrary URL and reflect the
+    // response — a strict token is required even before any account exists.
+    if (!(await verifyUser(auth))) {
       return writeJson(res, 401, { error: "authentication required" })
     }
     const baseUrl = String(body.url || "").trim()
     const key = String(body.key || "").trim()
     if (!baseUrl) return writeJson(res, 400, { error: "cashpilot url required" })
     if (!isHttpUrl(baseUrl)) return writeJson(res, 400, { error: "cashpilot url must be an http(s) address" })
+    // Block loopback/private/link-local targets — the classic SSRF probe set.
+    let host = ""
+    try { host = new URL(baseUrl).hostname } catch { /* isHttpUrl already validated */ }
+    if (/^(localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|\[::1\]|\[fc|\[fd)/i.test(host) || /^\[?f[cd]/i.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
+      return writeJson(res, 400, { error: "cashpilot url must be a public host" })
+    }
     try {
       const [summary, daily, breakdown] = await Promise.all([
         withTimeout(fetchCashPilotSummary(baseUrl, key), 15000),
@@ -2715,13 +2752,15 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/streams/snapshot" && req.method === "POST") {
+    // Overwrites the income snapshot shown on the dashboard — localhost only.
+    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
     try {
       writeJson(res, 200, await saveSnapshot(body))
     } catch (err) {
       console.error("[picc] streams snapshot failed:", err)
       writeJson(res, 500, { ok: false, error: err.message })
     }
-    return
+    return true
   }
 
   if (path === "/api/streams/snapshot" && req.method === "GET") {
@@ -2953,6 +2992,8 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/billing/ewallet/submit" && req.method === "POST") {
+    // Confirms a payment order — same auth bar as /api/billing/ewallet/order.
+    if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "authentication required" })
     const { orderId, confirmRef } = body
     if (!orderId) return writeJson(res, 400, { error: "orderId required" })
     try {
@@ -3048,12 +3089,17 @@ async function _handleApiInner(req, res, url, reqId) {
     if (!(await verifyUser(auth)) && (await hasUsers())) {
       return writeJson(res, 401, { error: "authentication required" })
     }
+    // Same cross-origin snooping guard as the other SSE streams.
+    const origin = req.headers.origin
+    if (origin && !TRUSTED_ORIGINS.includes(String(origin))) {
+      writeJson(res, 403, { error: "origin not allowed" })
+      return true
+    }
     const headless = parsed.searchParams.get("headless") !== "false"
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*"
+      Connection: "keep-alive"
     })
     const send = (event, data) => {
       try {
@@ -3153,6 +3199,11 @@ async function _handleApiInner(req, res, url, reqId) {
   if (browserHandler) {
     const handled = await browserHandler(req, res, { ...parsed, searchParams: parsed.searchParams, body })
     if (handled) return
+    // Handler returned falsy WITHOUT writing a response → fall through to the
+    // 404 below. If it DID already write headers (a bug elsewhere in this
+    // table), attempting a second write would throw ERR_HTTP_HEADERS_SENT and
+    // take the whole process down — stop here instead.
+    if (res.headersSent) return
   }
 
   // ── Consolidated extension trading-data endpoint ──────────────────────────
@@ -3306,7 +3357,7 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
-  writeJson(res, 404, { error: "Not found" })
+  if (!res.headersSent) writeJson(res, 404, { error: "Not found" })
 }
 
 // -------------------------------------------------------------------
@@ -3655,15 +3706,21 @@ const BROWSER_ROUTES = {
     return true
   },
   "/api/browser/stream": async (req, res, parsed) => {
+    // Cross-origin EventSource snooping: any website can open this stream from
+    // a visitor's machine. Reject browser-supplied origins that aren't ours.
+    const origin = req.headers.origin
+    if (origin && !TRUSTED_ORIGINS.includes(String(origin))) {
+      writeJson(res, 403, { error: "origin not allowed" })
+      return true
+    }
     const token = parsed.searchParams.get("token") ?? ""
     const ok = token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization))
-    if (!ok) return writeJson(res, 401, { error: "authentication required" })
+    if (!ok) { writeJson(res, 401, { error: "authentication required" }); return true }
     if (req.method !== "GET") return false
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*"
+      Connection: "keep-alive"
     })
     const send = (event, data) => {
       try {
@@ -3703,7 +3760,8 @@ const BROWSER_ROUTES = {
     if (req.method !== "POST") return false
     const ip = clientIp(req)
     if (rateLimited(`ext-metrics:${ip}`, 60, 60_000)) {
-      return writeJson(res, 429, { error: "rate limited" })
+      writeJson(res, 429, { error: "rate limited" })
+      return true
     }
     const body = parsed.body || {}
     // Bound metrics to prevent memory exhaustion — max 50 tracked tabs
@@ -3731,8 +3789,10 @@ const BROWSER_ROUTES = {
   // Screen casting frame ingestion (from extension)
   "/api/casting/frame": async (req, res, parsed) => {
     if (req.method !== "POST") return false
+    // Casting frames render inside the trusted dashboard — localhost only.
+    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
     const body = parsed.body || {}
-    if (!body.image) return writeJson(res, 400, { error: "missing image" })
+    if (!body.image) { writeJson(res, 400, { error: "missing image" }); return true }
     if (!globalThis.__picc_casting) globalThis.__picc_casting = { active: false, frames: [], maxFrames: 10, lastFrame: null }
     const casting = globalThis.__picc_casting
     casting.active = true
@@ -3765,6 +3825,8 @@ const BROWSER_ROUTES = {
 
   // Extension installation status
   "/api/extension/status": async (req, res) => {
+    // Heartbeat carries the user's browsing URLs/titles — localhost only.
+    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
     const lastHeartbeat = globalThis.__picc_ext_heartbeat || null
     const isAlive = lastHeartbeat && (Date.now() - lastHeartbeat.timestamp < 30_000)
     writeJson(res, 200, {
@@ -3808,13 +3870,14 @@ const BROWSER_ROUTES = {
   },
 
   // Extension heartbeat (background.js calls this every ~12s)
-  "/api/extension/heartbeat": async (req, res) => {
-    if (req.method !== "POST") return writeJson(res, 405, { error: "POST required" })
+  "/api/extension/heartbeat": async (req, res, parsed) => {
+    if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }
     const ip = clientIp(req)
     if (rateLimited(`ext-heartbeat:${ip}`, 30, 60_000)) {
-      return writeJson(res, 429, { error: "rate limited" })
+      writeJson(res, 429, { error: "rate limited" })
+      return true
     }
-    const body = typeof req.__body === "object" ? req.__body : {}
+    const body = parsed?.body || {}
     // Bound the data to prevent memory exhaustion
     globalThis.__picc_ext_heartbeat = {
       version: String(body.extensionVersion || "unknown").slice(0, 32),
@@ -3833,9 +3896,9 @@ const BROWSER_ROUTES = {
   },
 
   // Extension tab-changed event
-  "/api/extension/tab-changed": async (req, res) => {
-    if (req.method !== "POST") return writeJson(res, 405, { error: "POST required" })
-    const body = typeof req.__body === "object" ? req.__body : {}
+  "/api/extension/tab-changed": async (req, res, parsed) => {
+    if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }
+    const body = parsed?.body || {}
     // Update heartbeat with current tab (bounded)
     if (globalThis.__picc_ext_heartbeat) {
       globalThis.__picc_ext_heartbeat.activeTab = {
@@ -3900,12 +3963,27 @@ async function handleStripeWebhook(event) {
 
 function readRawBody(req, maxBytes = 2e6) {
   return new Promise((resolve, reject) => {
-    let raw = ""
+    const chunks = []
+    let size = 0
     req.on("data", (chunk) => {
-      raw += chunk
-      if (raw.length > maxBytes) reject(new Error("body too large"))
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+      size += buf.length
+      if (size > maxBytes) {
+        // Stop consuming immediately — the old code kept appending every
+        // chunk after rejection, so the cap never halted intake.
+        req.removeAllListeners("data")
+        req.removeAllListeners("end")
+        try { req.destroy() } catch { /* already gone */ }
+        reject(new Error("body too large"))
+        return
+      }
+      chunks.push(buf)
     })
-    req.on("end", () => resolve(raw))
+    req.on("end", () => {
+      // Buffer-concat then decode once: string += on chunk boundaries splits
+      // multibyte UTF-8 sequences and corrupts valid JSON.
+      resolve(Buffer.concat(chunks).toString("utf8"))
+    })
     req.on("error", reject)
   })
 }

@@ -222,7 +222,10 @@ every(
   async () => {
     const st = liveEOStats() ?? {}
     if (st.status !== "connected" || !Number(st.lastSeen)) {
-      setLiveEOStale(false)
+      // Only clear the flag when the stream is genuinely healthy. A
+      // disconnected/reconnecting session with old buffers is still stale —
+      // clearing here hid the staleness from the UI during reconnect gaps.
+      if (st.status === "idle") setLiveEOStale(false)
       return
     }
     const tickAgeSec = Math.round((Date.now() - Number(st.lastSeen)) / 1000)

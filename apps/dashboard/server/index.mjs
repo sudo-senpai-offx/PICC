@@ -49,7 +49,10 @@ const server = createServer(async (req, res) => {
     } catch (err) {
       console.error("[picc-server] API error:", err)
       log.error("API error", { error: err.message })
-      writeJson(res, 500, { error: "internal error" })
+      // Only attempt the 500 when nothing was written — writing after headers
+      // throws ERR_HTTP_HEADERS_SENT and escalates a handled error into a crash.
+      if (!res.headersSent) writeJson(res, 500, { error: "internal error" })
+      else try { res.end() } catch { /* socket gone */ }
     }
     return
   }
@@ -83,6 +86,12 @@ const server = createServer(async (req, res) => {
 if (!process.env.PICC_NO_LISTEN) {
   process.on("unhandledRejection", (reason) => {
     console.error("[picc-server] unhandledRejection:", reason)
+  })
+  // Last-resort guard: an uncaught exception in a request listener would
+  // otherwise take down the whole dashboard (autopilot + scheduler with it).
+  process.on("uncaughtException", (err) => {
+    console.error("[picc-server] uncaughtException:", err)
+    log.error("uncaughtException", { error: err?.message, stack: err?.stack })
   })
 
   let shuttingDown = false
@@ -135,8 +144,12 @@ if (!process.env.PICC_NO_LISTEN) {
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
   process.on("SIGINT", () => gracefulShutdown("SIGINT"))
 
-  server.listen(PORT, () => {
-    log.info("server started", { port: PORT, dist: ROOT })
+  // Bind loopback explicitly. The auth model trusts "not-localhost needs a
+  // token", so binding all interfaces would hand LAN neighbors (and any
+  // tunnel forwarder, which connects from 127.0.0.1) an unauthenticated
+  // control plane.
+  server.listen(PORT, "127.0.0.1", () => {
+    log.info("server started", { port: PORT, host: "127.0.0.1", dist: ROOT })
     if (startScheduler()) {
       console.log("[picc-scheduler] started")
     }

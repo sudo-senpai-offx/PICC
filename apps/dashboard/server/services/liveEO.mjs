@@ -77,7 +77,14 @@ function modeLabel(demo) {
 }
 
 function currentStatus() {
-  if (session) return "connected"
+  if (session) {
+    // Truthfulness check: a non-null session whose transport died (reconnects
+    // exhausted, socket closed) must never report "connected".
+    try {
+      if (session.connected === false) return "stale"
+    } catch { /* getter unavailable — assume legacy */ }
+    return "connected"
+  }
   // No headless session, but the user's own browser is streaming broker
   // frames through the extension bridge — that IS a live feed.
   if (!degraded && upstreamStats.lastAt && Date.now() - upstreamStats.lastAt < 60_000) return "connected"
@@ -162,7 +169,11 @@ function ensureBuffer(assetId, period) {
 function reseedBuffer(assetId, period, ohlc) {
   const pbuf = ensureBuffer(assetId, period)
   if (Array.isArray(ohlc) && ohlc.length) {
-    pbuf.ohlc = ohlc.slice(-BUFFER_CAP)
+    // Defensive sort: mergeLiveCandle/cascadeBar assume ascending time. If the
+    // wire ever delivers a different order, honor it instead of silently
+    // discarding every subsequent live bar.
+    const sorted = [...ohlc].sort((a, b) => Number(a.time) - Number(b.time))
+    pbuf.ohlc = sorted.slice(-BUFFER_CAP)
     pbuf.prevClose = pbuf.ohlc.at(-2)?.close ?? pbuf.ohlc.at(-1)?.close ?? 0
   }
   // Re-apply the in-progress bar captured from the app stream, if newer.
@@ -281,6 +292,11 @@ function processAppObject(obj, source = "studio") {
     upstreamStats.lastAt = Date.now()
   }
   if (obj.action === "error") {
+    // Error frames relayed through the extension reflect the USER'S BROWSER
+    // session, not our headless session — closing the headless feed because
+    // of browser-tab noise would be wrong. Studio frames (our own socket)
+    // remain authoritative for auth rejections.
+    if (source === "extension") return
     const text = JSON.stringify(obj.message ?? obj)
     if (isAuthRejection(text)) {
       const reason = String(obj.message?.message ?? obj.message?.error ?? "gateway rejected the session token")
@@ -446,10 +462,42 @@ async function refreshHeadless() {
   if (balRes.status === "fulfilled") account = mergeBalanceIntoAccount(account, balRes.value)
   if (assetsRes.status === "fulfilled") {
     const assets = assetsFrom(assetsRes.value)
+    // MERGE, don't clobber: extension/studio frames register stub entries for
+    // assets the user is viewing that may not exist in this broker asset list
+    // (e.g. OTC variants). Wiping them every 20s made the viewed asset
+    // intermittently vanish from the decision feed.
+    const watchingSnapshot = [...watching]
     byId.clear()
     for (const a of assets) byId.set(String(a.id), a)
+    const freshIds = new Set(assets.map((a) => String(a.id)))
+    for (const prev of watchingSnapshot) {
+      if (!freshIds.has(String(prev.id))) {
+        // Preserve unseen-but-tracked entries only while they have live data.
+        const hasData = buffers.get(bufferKey(prev.id, LIVE_BAR_PERIOD))?.ohlc?.length
+        if (!hasData && String(prev.id) !== String(viewedAssetId)) continue
+        if (!byId.has(String(prev.id))) byId.set(String(prev.id), prev)
+      }
+    }
     watching.length = 0
-    watching.push(...resolveWatchSet(assets))
+    const resolved = resolveWatchSet([...byId.values()])
+    watching.push(...resolved)
+    // Preserve any OTHER previously-tracked asset that still has live buffer
+    // data (the user browsed it recently) — keeps multi-asset tracking stable
+    // across refreshes.
+    for (const prev of watchingSnapshot) {
+      if (watching.some((w) => String(w.id) === String(prev.id))) continue
+      if (buffers.get(bufferKey(prev.id, LIVE_BAR_PERIOD))?.ohlc?.length) {
+        if (!byId.has(String(prev.id))) byId.set(String(prev.id), prev)
+        watching.push(prev)
+      }
+    }
+    // The asset the user is actually viewing must ALWAYS stay tracked, even
+    // when it is absent from both the broker list and the default watch set.
+    if (viewedAssetId && !watching.some((w) => String(w.id) === String(viewedAssetId))) {
+      const known = byId.get(String(viewedAssetId)) ?? { id: String(viewedAssetId), name: viewedAssetId, type: "", currency: "", visible: true }
+      byId.set(String(viewedAssetId), known)
+      watching.push(known)
+    }
   }
   const ids = [...watching.map((w) => w.id)]
   if (viewedAssetId && !ids.includes(viewedAssetId)) ids.push(viewedAssetId)
@@ -561,6 +609,22 @@ async function openLiveSession(gen) {
   currentMode = modeLabel(actualDemo)
   account = acc
   session = s
+
+  // Transport give-up: after exhausting reconnect attempts the socket is dead
+  // for good. Without this hook the session object stays non-null and every
+  // status endpoint reports "connected" over frozen data forever.
+  if (typeof s.onGiveUp === "function") {
+    s.onGiveUp((reason) => {
+      if (session !== s) return // a newer session owns the slot
+      session = null
+      lastError = String(reason?.message ?? reason ?? "transport gave up")
+      emit("status", { status: "error", error: lastError })
+      log.warn("ExpertOption transport gave up — scheduling soft reconnect", { error: lastError })
+      setTimeout(() => {
+        if (!session && subscribers.size > 0) void softReconnectLiveEO()
+      }, 5_000).unref?.()
+    })
+  }
 
   const assetsRaw = await s.assets().catch(() => null)
   if (assetsRaw) {

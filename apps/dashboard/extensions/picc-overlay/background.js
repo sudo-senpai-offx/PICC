@@ -8,9 +8,19 @@ const HEARTBEAT_MS = 30_000
 const METRICS_MS = 30_000
 
 // ── State ────────────────────────────────────────────────────────────────────
+// MV3 service workers die after ~30s idle; module state resets on every cold
+// start. detectedPort is mirrored to chrome.storage.session so the first
+// request after a restart doesn't re-scan all four ports.
 let serverOnline = false
 let lastServerCheck = 0
 let detectedPort = null
+try {
+  chrome.storage.session.get(["piccDetectedPort"]).then((d) => {
+    if (d?.piccDetectedPort && PICC_PORTS.includes(d.piccDetectedPort)) {
+      detectedPort = d.piccDetectedPort
+    }
+  }).catch(() => {})
+} catch { /* storage.session unavailable (old Edge) */ }
 let serverFetchRetries = 0
 const MAX_RETRIES = 1
 let extensionState = { installed: true, installTime: null, activeTabId: null }
@@ -73,6 +83,7 @@ async function detectServerPort() {
         if (data?.ok) {
           detectedPort = port
           serverFetchRetries = 0
+          try { chrome.storage.session.set({ piccDetectedPort: port }).catch(() => {}) } catch { /* ignore */ }
           return { port, ok: true, data }
         }
       }
@@ -242,8 +253,16 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 })
 
 // ── Alarms (MV3 service worker lifecycle safe) ───────────────────────────────
-chrome.alarms.create("picc-heartbeat", { periodInMinutes: HEARTBEAT_MS / 60000 })
-chrome.alarms.create("picc-metrics", { periodInMinutes: METRICS_MS / 60000 })
+// Create only when missing — re-creating on every SW evaluation resets the
+// countdown, making heartbeats unpredictable.
+async function ensureAlarms() {
+  try {
+    const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name))
+    if (!existing.has("picc-heartbeat")) chrome.alarms.create("picc-heartbeat", { periodInMinutes: HEARTBEAT_MS / 60000 })
+    if (!existing.has("picc-metrics")) chrome.alarms.create("picc-metrics", { periodInMinutes: METRICS_MS / 60000 })
+  } catch { /* alarms unavailable */ }
+}
+void ensureAlarms()
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "picc-heartbeat") sendHeartbeat()
@@ -387,7 +406,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: "unsafe download URL" })
       return false
     }
-    try { chrome.downloads?.download({ url: msg.url, filename: msg.filename }) } catch {}
+    // Basename only — a hostile filename must not write into subdirectories.
+    const safeName = String(msg.filename || "").split(/[\\/]/).pop().replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 120)
+    try { chrome.downloads?.download({ url: msg.url, filename: safeName || undefined }) } catch {}
     sendResponse({ ok: true })
     return false
   }

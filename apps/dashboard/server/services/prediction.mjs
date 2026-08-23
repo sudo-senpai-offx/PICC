@@ -205,7 +205,12 @@ export function backtestModels(closes, h, maxWindows = 20) {
     const slice = closes.slice(0, start + 1)
     const exp = modelExpectations(slice, h)
     const future = closes.slice(start + 1, start + 1 + h)
-    const realized = Math.log(Math.max(Number(future[future.length - 1]) || 0, EPS)) - Math.log(Math.max(Number(future[0]) || 0, EPS))
+    // The forecast is made from close[start] for an h-step horizon — realized
+    // return must span h steps: log(c[start+h]) − log(c[start]). Using
+    // future[0] measured only h−1 steps, biasing hit-rate scoring.
+    const realized =
+      Math.log(Math.max(Number(future[future.length - 1]) || 0, EPS)) -
+      Math.log(Math.max(Number(slice[slice.length - 1]) || 0, EPS))
     let windowHits = 0
     let windowModels = 0
     for (const name of Object.keys(scores)) {
@@ -260,7 +265,8 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
   const values = Object.values(exp)
   const m = mean(values)
   const s = std(values, m) || EPS
-  const avgZ = mean(values.map((v) => (v - m) / s))
+  // NOTE: avgZ is identically 0 by construction (mean of z-scores of the same
+  // sample) — it must not be used as a signal-strength fallback.
   const agreement = Math.max(0, Math.min(1, 1 - s / (s + 1)))
 
   // Honest calibration: use weighted-average hit rate (not plain mean).
@@ -274,10 +280,14 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
 
   // Shrink toward the no-skill 50% baseline when the sample is thin.
   const shrink = Math.max(0.25, Math.min(1, sampleSize / 20))
+  // No backtest yet: scale confidence by signal magnitude vs expected noise
+  // (|score| / (vol·√h)) instead of the old avgZ term, which was identically
+  // zero and made this branch a constant 50%.
+  const magnitude = Math.min(0.5, Math.abs(ensembleScore) / (Math.max(vol, EPS) * Math.sqrt(h)) * 0.25)
   const calibrated =
     meanHit != null
       ? (meanHit - 0.5) * shrink + 0.5
-      : Math.min(0.55, Math.abs(avgZ) * 0.1 + 0.5)
+      : Math.min(0.55, 0.5 + magnitude)
 
   const confidencePct = Math.round(Math.min(0.95, Math.max(0.5, calibrated + agreement * 0.12)) * 100)
   const strength = Math.min(1, Math.abs(ensembleScore) / (Math.max(vol, EPS) * Math.sqrt(h)) * 1.2)
@@ -306,6 +316,8 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
         ? "Models disagree or the backtest sample is thin — treat this as coin-flip odds, not a signal."
         : direction === "flat"
           ? "Net expectation is near zero across models — no edge detected."
-          : `Backtested ${sampleSize} trailing window(s); ensemble weighted avg ${Math.round(meanHit * 100)}% hit rate. Past performance never guarantees future results.`
+          : meanHit != null
+            ? `Backtested ${sampleSize} trailing window(s); ensemble weighted avg ${Math.round(meanHit * 100)}% hit rate. Past performance never guarantees future results.`
+            : `Backtested ${sampleSize} trailing window(s). Past performance never guarantees future results.`
   }
 }

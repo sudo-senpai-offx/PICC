@@ -71,12 +71,17 @@ export class WsClient {
       const frame = tryDecodeFrame(this._incoming)
       if (!frame) return
       this._incoming = this._incoming.subarray(frame.consumed)
-      this._dispatch(frame.opcode, frame.payload)
+      this._dispatch(frame.opcode, frame.payload, frame.fin)
     }
   }
 
-  _dispatch(opcode, payload) {
+  _dispatch(opcode, payload, fin = true) {
     if (opcode === OP_TEXT || opcode === OP_BINARY) {
+      if (!fin) {
+        // First fragment of a fragmented message — buffer until the FIN bit.
+        this._fragmented = { opcode, parts: [payload], fin }
+        return
+      }
       if (this._fragmented) this._fragmented = null
       this._emitMessage(opcode, payload)
       return
@@ -84,7 +89,7 @@ export class WsClient {
     if (opcode === OP_CONT) {
       if (!this._fragmented) return
       this._fragmented.parts.push(payload)
-      if (this._fragmented.fin) {
+      if (fin) {
         const full = Buffer.concat(this._fragmented.parts)
         const op = this._fragmented.opcode
         this._fragmented = null
@@ -179,6 +184,9 @@ function tryDecodeFrame(buf) {
     len = Number(big)
     offset += 8
   }
+  // Refuse absurd declared lengths BEFORE allocating — a hostile endpoint can
+  // otherwise OOM the process with one 64-bit header.
+  if (len > 16 * 1024 * 1024) throw new WsError(`frame too large (${len} bytes)`)
   let mask
   if (masked) {
     if (buf.length < offset + 4) return null

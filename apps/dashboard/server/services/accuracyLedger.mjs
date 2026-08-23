@@ -85,8 +85,11 @@ export function exitPriceFor(assetId, assetName, at) {
   const asset = (data?.assets ?? []).find((a) => a.id === assetId || a.name === assetName)
   const candles = asset?.periods?.[60] ?? []
   if (!candles.length) return null
-  // Prefer the close of the candle that covers `at`; fall back to the latest.
-  const covering = [...candles].reverse().find((c) => Number(c.time) <= at)
+  // Candle times are unix SECONDS while `at` (expiresAt) is epoch MS — compare
+  // like with like. The old ms-vs-seconds comparison always matched the first
+  // (newest) candle, so "price at expiry" was actually "current price".
+  const atSec = Math.floor(Number(at) / 1000)
+  const covering = [...candles].reverse().find((c) => Number(c.time) <= atSec)
   return Number((covering ?? candles[candles.length - 1]).close)
 }
 
@@ -121,6 +124,9 @@ export function ledgerHistory(limit = 200) {
   return entries.slice(-limit).reverse()
 }
 
+/** EV per 1 unit staked: hit pays b (fraction), miss loses the stake. */
+const realizedEvTerm = (e) => (e.result === "hit" ? (Number(e.payout) || 0) / 100 : e.result === "push" ? 0 : -1)
+
 export function ledgerStats() {
   const resolved = entries.filter((e) => e.status === "resolved" && e.result !== "unresolved")
   const hits = resolved.filter((e) => e.result === "hit").length
@@ -128,8 +134,11 @@ export function ledgerStats() {
   const pushes = resolved.filter((e) => e.result === "push").length
   const decided = hits + misses + pushes
   const hitRate = hits + misses > 0 ? hits / (hits + misses) : null
+  // Both sides are now fractions of stake: realized = p·b − (1−p), predicted
+  // comes from evGate in the same units. The old mix compared percent against
+  // fraction, making the engine's honesty metric meaningless (~×100 off).
   const realizedEv = decided
-    ? resolved.reduce((a, e) => a + (e.result === "hit" ? e.payout ?? 0 : e.result === "push" ? 0 : -100), 0) / decided
+    ? resolved.reduce((a, e) => a + realizedEvTerm(e), 0) / decided
     : null
   const predictedEv = resolved.length
     ? resolved.reduce((a, e) => a + (e.ev ?? 0), 0) / resolved.length
@@ -144,7 +153,7 @@ export function ledgerStats() {
     if (e.result === "miss") b.misses++
     b.predictedWin += e.winProb ?? 0
     b.predictedEv += e.ev ?? 0
-    b.realizedEv += e.result === "hit" ? e.payout ?? 0 : e.result === "push" ? 0 : -100
+    b.realizedEv += realizedEvTerm(e)
   }
   for (const k of Object.keys(byExpiry)) {
     const b = byExpiry[k]
@@ -224,7 +233,7 @@ export async function backtestGates() {
     if (e.result === "push") en.pushes++
     en.predWin += e.winProb ?? 0
     en.predEv += e.ev ?? 0
-    en.realEv += e.result === "hit" ? e.payout ?? 0 : e.result === "push" ? 0 : -100
+    en.realEv += realizedEvTerm(e)
   }
 
   for (const d of deals) {
@@ -248,11 +257,12 @@ export async function backtestGates() {
     const pay = Number(d.payout)
     if (Number.isFinite(pay) && pay > 0) de.payouts += pay
     if (Number.isFinite(pay)) {
-      de.realEv += d.result === "win" ? pay : d.result === "loss" ? -100 : 0
+      // Percent payout -> fraction of stake, matching engine EV units.
+      de.realEv += d.result === "win" ? pay / 100 : d.result === "loss" ? -1 : 0
     } else {
       const amt = Number(d.amount)
       const profit = Number(d.profit)
-      if (Number.isFinite(amt) && Number.isFinite(profit) && amt > 0) de.realEv += (profit / amt) * 100
+      if (Number.isFinite(amt) && Number.isFinite(profit) && amt > 0) de.realEv += profit / amt
     }
   }
 
@@ -290,16 +300,14 @@ export async function backtestGates() {
   const demoLosses = demoAll.filter((d) => d.result === "loss").length
   const demoRealizedEv = demoAll.reduce((a, d) => {
     const pay = Number(d.payout)
-    if (Number.isFinite(pay)) return a + (d.result === "win" ? pay : d.result === "loss" ? -100 : 0)
+    if (Number.isFinite(pay)) return a + (d.result === "win" ? pay / 100 : d.result === "loss" ? -1 : 0)
     const amt = Number(d.amount)
     const profit = Number(d.profit)
-    return a + (Number.isFinite(amt) && Number.isFinite(profit) && amt > 0 ? (profit / amt) * 100 : 0)
+    return a + (Number.isFinite(amt) && Number.isFinite(profit) && amt > 0 ? profit / amt : 0)
   }, 0)
 
   const enginePredEv = resolved.length ? resolved.reduce((a, e) => a + (e.ev ?? 0), 0) / resolved.length : null
-  const engineRealEv = resolved.length
-    ? resolved.reduce((a, e) => a + (e.result === "hit" ? e.payout ?? 0 : e.result === "push" ? 0 : -100), 0) / resolved.length
-    : null
+  const engineRealEv = resolved.length ? resolved.reduce((a, e) => a + realizedEvTerm(e), 0) / resolved.length : null
 
   return {
     ok: true,

@@ -109,7 +109,13 @@ export function translateSymbol(raw, targetPlatform = "") {
       break
     }
   }
-  if (!base) base = SYMBOL_NAME_TO_BASE[cleaned] ?? cleaned
+  if (!base) {
+    base = SYMBOL_NAME_TO_BASE[cleaned] ?? cleaned
+  } else if (!SYMBOL_NAME_TO_BASE[base]) {
+    // Quote-suffix slice bypassed the name map — "BITCOINUSDT" would become
+    // the invalid ticker "BITCOIN". Fall back to the name map on the base.
+    base = SYMBOL_NAME_TO_BASE[base] ?? base
+  }
   const platform = String(targetPlatform ?? "").toLowerCase()
   if (platform === "binance") return `${base}USDT`
   if (platform === "coinbase") return `${base}-USD`
@@ -958,7 +964,8 @@ export async function tradingAssist(question = "", context = {}) {
 /**
  * Risk-of-ruin calculator using the classic formula:
  *   RoR = ((1 - edge) / (1 + edge)) ^ units
- * where edge = (winRate * avgPayout - (1 - winRate)) / (avgPayout + 1)
+ * where edge = winRate * avgPayout - (1 - winRate)  (expected profit per unit
+ * wagered — reduces to 2p−1 in the even-money case the formula was derived for)
  * and units = balance / riskPerTrade.
  *
  * For binary options the payout is fixed (typically 0.70-0.90x), so we use
@@ -971,7 +978,9 @@ export function riskOfRuin({ winRate, avgPayout, riskPct, balance } = {}) {
   const bal = Math.max(1, Number(balance) || 1000)
 
   const units = Math.floor(bal * risk > 0 ? 1 / risk : 1000)
-  const edge = (wr * ap - (1 - wr)) / (ap + 1)
+  // The old /(ap+1) divisor HALVED the edge: at p=0.55 it reported ~13.9% RoR
+  // where the formula gives ~1.9% — overstating ruin risk ~7×.
+  const edge = wr * ap - (1 - wr)
   const base = Math.max(0, Math.min(1, (1 - edge) / (1 + edge)))
   const ror = Math.pow(base, units)
 

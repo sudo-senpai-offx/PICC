@@ -406,11 +406,14 @@ export function rsi(closes, period = 14) {
     const loss = Math.max(-chg, 0)
     if (avgGain == null) {
       const seed = []
+      let seedOk = true
       for (let j = Math.max(1, i - p + 1); j <= i; j++) {
-        const d = c[j] - c[j - 1]
-        seed.push(d)
+        // Interior nulls poison the Wilder seed (NaN propagates through every
+        // later smoothing step) — require the whole window to be intact.
+        if (c[j] == null || c[j - 1] == null) { seedOk = false; break }
+        seed.push(c[j] - c[j - 1])
       }
-      if (seed.length < p) continue
+      if (!seedOk || seed.length < p) continue
       avgGain = seed.reduce((s, d) => s + Math.max(d, 0), 0) / p
       avgLoss = seed.reduce((s, d) => s + Math.max(-d, 0), 0) / p
       out[i] = 100 - 100 / (1 + (avgLoss > 0 ? avgGain / avgLoss : Infinity))

@@ -565,6 +565,7 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
   const candleListeners = new Set()
   const reconnectListeners = new Set()
   const dropListeners = new Set()
+  const giveUpListeners = new Set()
   const outbox = [] // queued payloads during disconnect, drained on reconnect
   const MAX_OUTBOX = 50
 
@@ -617,6 +618,19 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
         pendingNs.delete(ns)
         clearTimeout(waiter.timer)
         waiter.reject(new Error(String(frame.error ?? "request rejected")))
+        return
+      }
+      // requestAction waiters must also learn about rejections immediately —
+      // otherwise every gateway refusal (e.g. insufficient funds on closeTrade)
+      // burns its full timeout and the caller loses the server's reason.
+      const aw = ns && pendingAction.get(ns)
+      if (aw) {
+        pendingAction.delete(ns)
+        clearTimeout(aw.timer)
+        try {
+          aw.reject(new Error(String(frame.error ?? "request rejected")))
+        } catch { /* already settled */ }
+        return
       }
       return
     }
@@ -687,6 +701,12 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
       console.warn(
         `[picc-expertoption] giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts — run Trading → ExpertOption again to reconnect`
       )
+      // Tell higher layers the transport is dead for good — without this,
+      // liveEO keeps reporting "connected" (session non-null) while no data
+      // will ever flow again: a silent permanent freeze.
+      for (const cb of giveUpListeners) {
+        try { cb(new Error(`gave up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`)) } catch { /* ignore */ }
+      }
       return
     }
     reconnecting = true
@@ -771,10 +791,12 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
         /* ignore */
       }
       ws = null
-      if (!/timed out|timeout/i.test(msg)) {
-        // The broker actively rejected the session token — retrying against the
-        // same token can never succeed, so stop reconnecting and surface a
-        // friendly message to the caller instead.
+      // Only a GENUINE auth rejection is permanent. The old check treated any
+      // non-timeout error (rate limits, transient gateway hiccups, malformed
+      // data) as a dead token, permanently disabling reconnect for a healthy
+      // credential. AUTH_FAIL_RE matches the actual rejection vocabulary.
+      const looksTransient = /timed out|timeout|rate.?limit|temporarily|unavailable|incorrect_data|internal|network/i.test(msg)
+      if (!looksTransient) {
         authFailed = true
         throw new Error(
           `ExpertOption rejected the session token (${msg}) — reconnect in ExpertOption and update the token in Trading Settings`
@@ -826,7 +848,15 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
         reject(new Error(`no response for "${payload.action}" (${ns})`))
       }, timeoutMs)
       pendingNs.set(ns, { resolve: (v) => resolve(v), reject: (e) => reject(e), timer })
-      ws.sendText(JSON.stringify(framed))
+      try {
+        ws.sendText(JSON.stringify(framed))
+      } catch (err) {
+        // Socket died between ensureOpen() and the write — clean up the
+        // just-registered entry instead of leaving it to age out.
+        clearTimeout(timer)
+        pendingNs.delete(ns)
+        reject(err)
+      }
     })
   }
 
@@ -862,7 +892,11 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
         if (!pendingAction.has(k)) pendingAction.set(k, waiter)
       }
       timers.push(setTimeout(() => settle(reject, new Error(`no response for "${payload.action}" (${list.join("/")})`)), timeoutMs))
-      ws.sendText(JSON.stringify(framed))
+      try {
+        ws.sendText(JSON.stringify(framed))
+      } catch (err) {
+        settle(reject, err)
+      }
     })
   }
 
@@ -937,6 +971,10 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
     onDrop: (cb) => {
       dropListeners.add(cb)
       return () => dropListeners.delete(cb)
+    },
+    onGiveUp: (cb) => {
+      giveUpListeners.add(cb)
+      return () => giveUpListeners.delete(cb)
     },
     close() {
       if (userClosed) return
@@ -1033,7 +1071,11 @@ export async function connectSession({ token, isDemo = true, wsUrl = DEFAULT_WS_
         return { assetId: aid }
       }),
     onCandles: (cb) => transport.onCandles(cb),
-    onReconnect: (cb) => transport.onReconnect(cb)
+    onReconnect: (cb) => transport.onReconnect(cb),
+    onGiveUp: (cb) => transport.onGiveUp(cb),
+    get connected() {
+      return Boolean(transport.connected)
+    }
   }
 }
 
@@ -1110,6 +1152,10 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
       if (pending) {
         pendingBuys.delete(requestId)
         clearTimeout(pending.timer)
+        // Fingerprint consumed — without deleting, entries accumulate forever
+        // (leak) and stale entries widen the ±5s attribution window for
+        // unsolicited pushes.
+        fingerprints.delete(fingerprintKey(deal.assetId, deal.type, deal.amount, deal.strikeTime))
         deal.requestId = requestId
         deal.symbol = pending.info.symbol
         deal.duration = pending.info.duration
@@ -1207,6 +1253,7 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
           const key = fingerprintKey(aid, type, amt, now)
           const timer = setTimeout(() => {
             pendingBuys.delete(requestId)
+            fingerprints.delete(key)
             reject(new Error("trade confirmation timed out — the server did not acknowledge buyOption"))
           }, 20000)
           pendingBuys.set(requestId, { resolve, reject, timer, info })
@@ -1216,6 +1263,7 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
           } catch (err) {
             clearTimeout(timer)
             pendingBuys.delete(requestId)
+            fingerprints.delete(key)
             reject(err)
           }
         },

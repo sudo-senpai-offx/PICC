@@ -24,9 +24,26 @@ export function optimizeExpiry(candles, regime = "ranging", signalStrength = 0.5
   }
   const volatility = Math.sqrt(returns.reduce((s, r) => s + r * r, 0) / returns.length)
   const avgMove = returns.reduce((s, r) => s + Math.abs(r), 0) / returns.length
+  // Infer the actual bar interval instead of assuming 60s: √time scaling of
+  // the expected move is only correct when `seconds` and the bar length share
+  // a unit (a 300s series under-scaled moves by √5 otherwise).
+  let barSec = 60
+  const gaps = []
+  for (let i = 1; i < candles.length; i++) {
+    const dt = Number(candles[i]?.time) - Number(candles[i - 1]?.time)
+    if (Number.isFinite(dt) && dt > 0) {
+      // Raw intervals above 4h are almost certainly MILLISECONDS (no binary
+      // base timeframe is longer than that in seconds); normalize them.
+      gaps.push(dt > 14400 ? dt / 1000 : dt)
+    }
+  }
+  if (gaps.length >= 5) {
+    gaps.sort((a, b) => a - b)
+    barSec = Math.max(1, Math.round(gaps[Math.floor(gaps.length / 2)]))
+  }
   const scored = EXPIRY_OPTIONS.map((exp) => {
     let score = 50
-    const expectedMove = avgMove * Math.sqrt(exp.seconds / 60)
+    const expectedMove = avgMove * Math.sqrt(exp.seconds / barSec)
     if (regime === "trending") {
       score = exp.seconds >= 300 ? 80 : exp.seconds >= 60 ? 65 : 40
       if (signalStrength > 0.7) score += 10
