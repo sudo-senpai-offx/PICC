@@ -77,6 +77,43 @@ const DEFAULT_CREDS = {
 
 const DEFAULT_LEDGER = { positions: [], closed: [], signals: [] }
 
+const SYMBOL_NAME_TO_BASE = {
+  BITCOIN: "BTC",
+  ETHEREUM: "ETH",
+  LITECOIN: "LTC",
+  SOLANA: "SOL",
+  DOGECOIN: "DOGE",
+  CARDANO: "ADA",
+  RIPPLE: "XRP",
+  GOLD: "XAU",
+  SILVER: "XAG"
+}
+
+export function translateSymbol(raw, targetPlatform = "") {
+  const cleaned = String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\(OTC\)/g, "")
+    .replace(/-OTC\b/g, "")
+    .replace(/[^A-Z0-9]/g, "")
+  if (!cleaned || /^\d+$/.test(cleaned)) return null
+  let base = null
+  let quote = "USD"
+  for (const q of ["USDT", "USD"]) {
+    if (cleaned.endsWith(q) && cleaned.length > q.length) {
+      base = cleaned.slice(0, cleaned.length - q.length)
+      quote = q
+      break
+    }
+  }
+  if (!base) base = SYMBOL_NAME_TO_BASE[cleaned] ?? cleaned
+  const platform = String(targetPlatform ?? "").toLowerCase()
+  if (platform === "binance") return `${base}USDT`
+  if (platform === "coinbase") return `${base}-USD`
+  if (platform === "yahoo") return `${base}-${quote}`
+  return `${base}${quote}`
+}
+
 // ---------------------------------------------------------------------
 // Credentials (server-side, masked when read by the UI)
 // ---------------------------------------------------------------------
