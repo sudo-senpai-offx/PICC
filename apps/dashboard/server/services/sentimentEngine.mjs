@@ -60,6 +60,13 @@ export async function getSentiment(symbol) {
   return result
 }
 
+export function sentimentLastUpdate() {
+  const cacheTs = Object.values(store.data.cache || {}).map((c) => Number(c?.timestamp) || 0)
+  const historyTs = (store.data.history || []).map((h) => Number(h?.timestamp) || 0)
+  const stamps = [...cacheTs, ...historyTs].filter((t) => t > 0)
+  return stamps.length ? Math.max(...stamps) : null
+}
+
 async function getNewsSentiment(symbol) {
   try {
     const results = await serperNews(`${symbol} trading news`, 10)

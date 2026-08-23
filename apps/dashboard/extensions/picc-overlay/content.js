@@ -352,6 +352,7 @@
       { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", description: "Optimal expiry selection with volatility analysis", defaultPos: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
       { id: "sentiment", title: "Sentiment", icon: "🎭", description: "News + social sentiment fusion with extremes", defaultPos: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
       { id: "server-status", title: "PICC Status", icon: "🔌", description: "Server connection health and data pipeline status", defaultPos: "bottom-right", defaultSize: { width: 260, height: 160 }, defaultCollapsed: true },
+      { id: "data-sources", title: "Data Sources", icon: "🩺", description: "Honesty status of every feed: live, local, stale, unconfigured", defaultPos: "right", defaultSize: { width: 280, height: 260 }, defaultCollapsed: true },
     ],
     bandwidth: [
       { id: "speed", title: "Speed Monitor", icon: "📡", defaultPos: "top-right", defaultSize: { width: 280, height: 200 }, defaultCollapsed: false },
@@ -1009,7 +1010,9 @@
     lastFetchError: null,
     lastFetchAt: 0,
     loadingSince: Date.now(),
-    serverReachable: null
+    serverReachable: null,
+    sources: null,
+    sourcesFetchedAt: 0
   }
 
   const CURRENCY_SYMBOLS = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
@@ -1225,44 +1228,16 @@
   function renderAutopilot() {
     const auto = tradingState.autopilot
     const running = auto?.enabled ?? false
-    const statusColor = running ? "#4ade80" : "#a5a0ff"
     const banner = checkFeatures("autopilot")
+    const body = typeof piccRenderAutopilotPanel === "function"
+      ? piccRenderAutopilotPanel({ auto, demo: tradingState.demo })
+      : ""
     const lines = []
-    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">`)
-    lines.push(`<div style="width:8px;height:8px;border-radius:50%;background:${statusColor}"></div>`)
-    lines.push(`<span style="font-weight:600;font-size:11px">${running ? "Running" : "Stopped"}</span>`)
-    lines.push(`</div>`)
-    if (auto?.minConfidence != null) lines.push(`<div style="font-size:11px">Min confidence: <b>${auto.minConfidence}%</b></div>`)
-    if (auto?.assetId) lines.push(`<div style="font-size:11px">Asset: <b>${auto.assetId}</b></div>`)
-    const lastDec = tradingState.demo?.autopilot?.lastDecision
-    if (lastDec) lines.push(`<div style="font-size:10px;color:#a5a0ff">Last: ${lastDec}</div>`)
-    const demo = tradingState.demo
-    if (demo?.todayPnl != null) {
-      lines.push(`<div style="font-size:11px;margin-top:2px">Today PnL: <span style="color:${tone(demo.todayPnl)}">${fmt$(demo.todayPnl, demo.currency)}</span></div>`)
-    }
-    // Human-review countdown: show time until cooldown expires
-    if (running && auto?.lastEntryAt && auto?.cooldownMs) {
-      const elapsed = Date.now() - auto.lastEntryAt
-      const remaining = auto.cooldownMs - elapsed
-      if (remaining > 0) {
-        const secs = Math.ceil(remaining / 1000)
-        const mins = Math.floor(secs / 60)
-        const remSecs = secs % 60
-        const timeStr = mins > 0 ? `${mins}m ${remSecs}s` : `${secs}s`
-        const pct = Math.min(100, Math.round((elapsed / auto.cooldownMs) * 100))
-        lines.push(`<div style="margin-top:4px">`)
-        lines.push(`<div style="font-size:10px;color:#f59e0b;margin-bottom:2px">Review cooldown: ${timeStr}</div>`)
-        lines.push(`<div style="background:#1a1a2e;border-radius:3px;height:4px;overflow:hidden">`)
-        lines.push(`<div style="height:100%;width:${pct}%;background:#f59e0b;border-radius:3px;transition:width 1s linear"></div>`)
-        lines.push(`</div></div>`)
-      }
-    }
-    // Control buttons
     lines.push(`<div style="display:flex;gap:4px;margin-top:6px">`)
     lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
     lines.push(`<button data-picc-action="autopilot-kill" style="background:#ff6b6b30;border:1px solid #ff6b6b;color:#ff6b6b;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">Kill</button>`)
     lines.push(`</div>`)
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + staleLabel()
+    return banner + `<div style="padding:2px 0">${body}${lines.join("")}</div>` + staleLabel()
   }
 
   // ── Kelly Sizing Renderer ──────────────────────────────────────────────────
@@ -1476,6 +1451,58 @@
       lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-top:4px">Extension will still detect page data, prices, and content.</div>`)
     }
     return `<div style="padding:2px 0">${lines.join("")}</div>`
+  }
+
+  // ── Data Sources Honesty Renderer ─────────────────────────────────────────
+  function renderDataSources() {
+    const sources = tradingState.sources
+    const STATUS_META = {
+      live: { color: "#4ade80" },
+      local: { color: "#60a5fa" },
+      stale: { color: "#f59e0b" },
+      unconfigured: { color: "#9aa0c0" }
+    }
+    if (!sources || typeof sources !== "object") {
+      if (serverOnline === false || isTimedOut()) return offlineBanner()
+      return '<div style="color:#a5a0ff;padding:4px">Checking data source health\u2026</div>' + sourceLabel("api/trading/health")
+    }
+    const entries = Object.entries(sources).filter(([, s]) => s && s.status)
+    if (!entries.length) {
+      return '<div style="color:#a5a0ff;padding:4px">No source report available</div>' + sourceLabel("api/trading/health")
+    }
+    const problems = entries.filter(([, s]) => s.status === "stale" || s.status === "unconfigured")
+    const unconfCount = entries.filter(([, s]) => s.status === "unconfigured").length
+    const staleCount = entries.filter(([, s]) => s.status === "stale").length
+    const overallColor = problems.length === 0 ? "#4ade80" : (unconfCount >= 3 || staleCount >= 3 || sources.candles?.status === "unconfigured") ? "#ff6b6b" : "#f59e0b"
+    const overallLabel = problems.length === 0 ? "All feeds healthy" : overallColor === "#ff6b6b" ? "System degraded" : "Partial degradation"
+    const HINTS = {
+      candles: { unconfigured: "Connect the ExpertOption live bridge", stale: "Bridge idle \u2014 reconnect or restart server" },
+      sentiment: { unconfigured: "Set Serper API key to enable news sentiment", stale: "Sentiment cache old \u2014 will refresh on next analysis" },
+      orderflow: { unconfigured: "Waiting for candle feed", stale: "Derived from stale candles" },
+      regime: { unconfigured: "Waiting for candle feed", stale: "Derived from stale candles" },
+      expiry: { unconfigured: "Waiting for candle feed", stale: "Derived from stale candles" },
+      kelly: { unconfigured: "Close paper trades to calibrate sizing", stale: "Trade history is old \u2014 results may not reflect current edge" }
+    }
+    const header = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">` +
+      `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${overallColor}"></span>` +
+      `<span style="font-weight:600;font-size:11px;color:${overallColor}">${overallLabel}</span>` +
+      `<span style="font-size:9px;color:#9aa0c0">${entries.length - problems.length}/${entries.length} ok</span></div>`
+    const rows = entries.map(([name, info]) => {
+      const meta = STATUS_META[info.status] || STATUS_META.unconfigured
+      const hint = (HINTS[name] || {})[info.status] || ""
+      const updatedTxt = info.lastUpdate ? new Date(info.lastUpdate).toLocaleTimeString() : "never"
+      const ageTxt = info.age != null ? info.age + "s" : "\u2014"
+      return `<div style="padding:2px 0;border-bottom:1px solid #6c63ff15">` +
+        `<div style="display:flex;justify-content:space-between;align-items:center">` +
+        `<span style="font-size:11px;font-weight:600">${name}</span>` +
+        `<span style="display:flex;align-items:center;gap:5px">` +
+        `<span style="font-size:9px;color:#9aa0c0">${updatedTxt} \u00b7 ${ageTxt}</span>` +
+        `<span style="font-size:8px;font-weight:700;color:${meta.color};background:${meta.color}22;border:1px solid ${meta.color}55;border-radius:3px;padding:0 4px">${info.status.toUpperCase()}</span>` +
+        `</span></div>` +
+        (hint ? `<div style="font-size:9px;color:#9aa0c0;margin-top:1px">\u2192 ${hint}</div>` : "") +
+        `</div>`
+    }).join("")
+    return header + `<div style="margin-top:2px">${rows}</div>` + staleLabel()
   }
 
   // ── Universal page data extraction (works on ANY site) ────────────────────
@@ -1950,6 +1977,15 @@
           if (v?.ok) tradingState[key] = v.data
         }
       }
+      if (tradingState.serverReachable && Date.now() - tradingState.sourcesFetchedAt > 20000) {
+        tradingState.sourcesFetchedAt = Date.now()
+        void serverFetch("/api/trading/health").then((h) => {
+          if (h?.ok && h.data?.sources) {
+            tradingState.sources = h.data.sources
+            updateAllDockables()
+          }
+        }).catch(() => {})
+      }
     } catch {
       tradingState.serverReachable = false
       tradingState.lastFetchError = "fetch-exception"
@@ -1974,6 +2010,7 @@
       "page-overview": renderPageOverview,
       "page-content": renderPageContent,
       "server-status": renderServerStatus,
+      "data-sources": renderDataSources,
       "speed": renderPageOverview,
       "connectors": renderServerStatus,
       "tracker": renderPageOverview,

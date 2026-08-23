@@ -162,6 +162,7 @@ import {
   refreshLoginStates
 } from "./services/browserStudio.mjs"
 import { suiteForSite } from "./services/suites.mjs"
+import { collectSourceStatuses } from "./services/dataSources.mjs"
 import * as interventions from "./services/interventions.mjs"
 
 // ---------------------------------------------------------------------
@@ -2298,6 +2299,9 @@ async function _handleApiInner(req, res, url, reqId) {
         result.mtf = null
       }
     } catch { result.prediction = { error: "failed" }; result.mtf = null }
+    try {
+      result.sources = collectSourceStatuses()
+    } catch { result.sources = null }
     writeJson(res, 200, result)
     return true
   }
