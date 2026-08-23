@@ -18,7 +18,7 @@ An AI-assisted **planning** platform for exploring and optimizing passive income
 1. **Financial Twin Emulator** — enter capital + risk tolerance, run Monte Carlo simulations over historical data, get a projection report. No trades, no money moved.
 2. **Listing Optimizer** — read-only Amazon Seller analysis that suggests listing rewrites the user pastes in themselves.
 3. **Content Studio** — AI-generated blog/YouTube/affiliate content with one-click copy, gated by a human-review toggle.
-4. **Trading Suite** — multi-model price prediction engine (momentum + mean-reversion + regression + Monte Carlo with honest backtest-damped confidence), paper-trading ledger, and optional read-only ExpertOption balance/candles. Decision-support only — it never places real orders.
+4. **Trading Suite** — 8-model price-prediction ensemble (momentum, mean-reversion, trend regression, Monte Carlo, ARIMA, Prophet-style seasonality, LSTM-lite, GARCH-lite) with walk-forward backtested confidence, paper-trading ledger, and optional read-only ExpertOption balance/candles. Decision-support only — it never places real orders.
 
 ## Quick start
 
@@ -78,7 +78,7 @@ See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for Malaysia PDPA (effective 30 Apr
 | Financial Twin emulator (Monte Carlo) | ✅ |
 | Listing Optimizer UI + overlay contract | ✅ |
 | Content Studio UI + human-review gate | ✅ |
-| Plasmo extension (overlay, timer, popup) | ✅ |
+| Plasmo extension (overlay, timer, popup) | ⚠️ deprecated — superseded by the MV3 extension |
 | CrewAI crew (research/analyst/content) | ✅ |
 | CrewAI trading + investment (DeFi/staking/NFT) crews | ✅ |
 | n8n workflow templates (simulator, listing, content, trading-signal, staking-monitor, depin-aggregator) | ✅ (optional orchestration) |
@@ -95,7 +95,7 @@ See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for Malaysia PDPA (effective 30 Apr
 | PayPal checkout (server-side capture, individual account) | ✅ (live when keys set) |
 | Manual e-wallet (Touch 'n Go) | ✅ (always available) |
 | BTCPay Server (self-hosted, no KYC) | ✅ (live when keys set) |
-| Vitest unit + integration tests | ✅ |
+| Vitest unit + integration tests (623+) | ✅ |
 | Automator — balance collector (Honeygain/Pawns/Traffmonetizer/Repocket) + health alerts + LLM assistant | ✅ |
 | Pi Node (infra/pi-node) — one device, every bandwidth provider | ✅ |
 | Amazon SP-API (read-only competitor data) | ✅ (live when keys set) |

@@ -15,7 +15,7 @@ the user always performs the final action on the external platform.
 │  Backend  apps/dashboard/server (Node, ESM, zero-framework)        │
 │  /api/twin/run  /api/listing/analyze  /api/content/generate        │
 │  /api/extension/suggest|confirm  /api/agents/run                   │
-│  /api/trading/* (predict | paper | portfolio | history | assist)   │
+│  /api/trading/* (predict | paper | autopilot | decisions | assist) │
 │  /api/stripe/*  /api/paypal/*  /api/billing/ewallet/*  /api/btcpay/*│
 │  /api/automator/*  /api/health                                     │
 └──────────┬──────────────┬──────────────┬─────────────┬─────────────┘
@@ -29,8 +29,9 @@ the user always performs the final action on the external platform.
           │ CoinGecko (no key, crypto prices)
    ┌──────▼──────────────────────────────────────┐
    │ Trading engine (server/services/trading.mjs) │
-   │ momentum + mean-reversion + regression + MC  │
-   │ -> honest backtest-damped confidence         │
+   │ 8-model ensemble: momentum | mean-revert |   │
+   │ trend | MC | ARIMA | prophet | LSTM | GARCH  │
+   │ -> walk-forward backtested confidence        │
    │ paper ledger | optional ExpertOption bridge  │
    │   (read-only WebSocket: balance/candles only) │
    └──────────────────────────────────────────────┘
@@ -49,7 +50,7 @@ the user always performs the final action on the external platform.
    nft_royalty_earnings, depin_nodes, agent_configs, agent_earnings,
    agent_bounties, predictions, human_review_logs (infra/supabase/v2.sql)
 
-   Browser Extension (MV3) ◀── overlay suggestions + live trading data (extension/confirm logs)
+   Browser Extension (MV3) ◀── dockable overlay + live trading data (/api/extension/trading-data)
    External platforms (Amazon, YouTube, brokerages) — user clicks, PICC never does
 ```
 
@@ -60,20 +61,28 @@ the user always performs the final action on the external platform.
    computes **real annualized drift and volatility** from the log returns.
 3. The Monte Carlo engine (server) projects the distribution using those real parameters, with a
    risk-based allocation.
-4. If `OPENAI_API_KEY` is set, the backend adds a short plain-language commentary.
+4. With any cloud LLM key configured, the backend adds a short plain-language commentary.
 5. Result (percentiles, allocation, last price, 5-year sparkline) is rendered, and a row is written
    to `public.simulations` in Supabase.
 6. If Yahoo is unreachable, the backend falls back to model assumptions and says so (`source: local`).
 
 ## Data flow (extension)
 
-1. The content script extracts page context — Amazon title/bullets/brand/ASIN or YouTube
-   title/channel/description — and messages the service worker.
-2. The service worker POSTs `{ platform, pageTitle, pageData }` to `/api/extension/suggest`.
-3. With `OPENAI_API_KEY`, the backend generates real suggestions (optionally informed by Serper);
-   otherwise a rule engine returns generic ones.
-4. The overlay renders them with the mandatory 5-second human-review timer. Copying logs a
-   confirmation to `/api/extension/confirm`.
+The canonical extension (`apps/dashboard/extensions/picc-overlay/`) is MV3 vanilla JS loaded
+unpacked — no Plasmo, no build step:
+
+1. The content script injects a closed-shadow-DOM overlay on any site: the PICC pill expands into
+   trading dockables that POST `/api/extension/trading-data` every 5 s. That consolidated endpoint
+   returns everything the dockables need in one response — trading status (incl. live ExpertOption
+   balance when configured), decision-engine output, demo-account state, candles (live EO frames
+   first, Yahoo fallback), kelly sizing, regime, expiry optimization, sentiment and orderflow.
+2. Autopilot is armed/disarmed through `/api/trading/autopilot/start|stop` (authenticated); state
+   changes are logged server-side. PICC never sends trade orders to the broker.
+3. The service worker heartbeats `/api/extension/heartbeat` (~12 s cadence), reports navigations
+   via `/api/extension/tab-changed`, and probes `/api/health` for dashboard reachability.
+4. Settings persist in `chrome.storage.local` with MV3-safe debounced saves. The legacy suggestion
+   contract (`/api/extension/suggest` + `/api/extension/confirm`) remains server-side for the
+   deprecated Plasmo skeleton (`apps/extension/`) only.
 
 ## Data flow (billing)
 
@@ -166,14 +175,18 @@ Connector registry (slug: expertoption | honeygain | earnapp | pawns | repocket 
 1. The user asks for a prediction on an asset (crypto or FX/stock). `POST /api/trading/predict`
    fetches 30–60 days of candles from the public data source (Yahoo Finance for FX/stocks, CoinGecko
    for crypto — neither needs a key).
-2. `server/services/trading.mjs` runs four models — momentum (EMA cross), mean-reversion (z-score),
-   linear regression slope, and Monte Carlo — and votes on direction. The reported confidence is the
-   ensemble agreement **damped toward 50%** so a 2-of-3 vote reads ~60%, never a confident 90%.
+2. `server/services/trading.mjs` runs the 8-model ensemble in `prediction.mjs` — momentum,
+   mean-reversion, trend regression, Monte Carlo, ARIMA, Prophet-style seasonality, LSTM-lite and
+   GARCH-lite — with dynamic weights from each model's walk-forward backtest hit rate. The reported
+   confidence is a calibrated fraction of times the direction call would have been right on unseen
+   data, never a made-up number.
 3. Signals are appended to the paper ledger (`server/data/`); paper trades update the virtual
-   portfolio with the same damping and stop-loss caps. Real orders are never placed.
-4. If `EXPERTOPTION_USER_ID` + `EXPERT_OPTION_TOKEN` are configured, `POST /api/trading/account`
-   opens a read-only WebSocket to ExpertOption and returns balance/profile/candles — no trade
-   messages are ever sent.
+   portfolio with the same calibrated confidence and stop-loss caps. Real orders are never placed.
+4. When an ExpertOption session token has been captured into the server-side credentials store
+   (`server/data/trading-credentials.json` — captured from the in-app browser via
+   `POST /api/browser/capture-session` or `scripts/capture-eo-session.mjs`; there are no EO env
+   vars), the read-only WebSocket client surfaces balance/profile/candles through
+   `/api/trading/status` and `POST /api/trading/pro/expertoption` — no trade messages are ever sent.
 5. `POST /api/trading/assist` answers plain-language questions with a cloud LLM when configured,
    else a local rule-based fallback (source `local`).
 
@@ -185,10 +198,10 @@ Connector registry (slug: expertoption | honeygain | earnapp | pawns | repocket 
 - **Human review gate.** Every suggestion surface includes a mandatory 5-second timer plus a
   confirmation toggle before copy/apply is enabled. Confirmations are logged to
   `public.human_confirmations`.
-- **Real data, honest fallbacks.** The backend prefers live providers (Yahoo, OpenAI, Serper,
-  Stripe). When a key is missing or a provider is unreachable, it degrades to a clearly-labelled
-  local engine rather than silently returning fake data. `/api/health` reports exactly which
-  providers are configured.
+- **Real data, honest fallbacks.** The backend prefers live providers (Yahoo, the
+  Gemini/Groq/Mistral/Cerebras/OpenAI hybrid, Serper, Stripe). When a key is missing or a provider
+  is unreachable, it degrades to a clearly-labelled local engine rather than silently returning
+  fake data. `/api/health` reports exactly which providers are configured.
 - **Secrets never reach the browser.** Non-`VITE_` env vars (OpenAI, Serper, Stripe, Supabase
   service role) are only read by the Node backend.
 - **Read-only integrations.** Amazon analysis uses the page data the user is already looking at;
@@ -210,11 +223,14 @@ config and the full endpoint list live in `server/handlers.mjs`.
 
 ### Extension → backend
 
-The service worker forwards page context to `/api/extension/suggest` and expects
-`{ suggestions: [{ id, title, body, confidence }], source }`. Copy confirmations go to
-`/api/extension/confirm`. The popup stores settings in `chrome.storage.sync`. The trading
-extension (`apps/dashboard/extensions/picc-overlay/`) also reads trading endpoints and may
-trigger `POST /api/connectors/:slug/collect` to surface live balances on the source's own page.
+The canonical extension (`apps/dashboard/extensions/picc-overlay/`) is MV3 vanilla JS loaded
+unpacked (no Plasmo, no build step). Its content script polls the consolidated
+`POST /api/extension/trading-data` aggregate every 5 s for all trading dockables; the service
+worker heartbeats `/api/extension/heartbeat`, forwards navigations via `/api/extension/tab-changed`,
+and probes `/api/health` for dashboard reachability. Settings persist in `chrome.storage.local`
+with MV3-safe debounced saves. The legacy `{ suggestions: [{ id, title, body, confidence }], source }`
+contract (`/api/extension/suggest|confirm`) remains available server-side for the deprecated Plasmo
+skeleton (`apps/extension/`) only.
 
 ### Agents → backend
 

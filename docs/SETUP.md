@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Node.js 20+ and npm
+- Node.js 22+ and npm
 - Python 3.10+ (optional — only for the CrewAI agents service)
 
 ## 1. Install dependencies
@@ -46,8 +46,8 @@ server). Everything without a `VITE_` prefix stays server-side only — it never
 | `SP_AMAZON_MARKETPLACE` | Country code for competitor data (default `US`) | e.g. `MY`, `SG`, `GB`, `DE`, `JP`, `AU`, … |
 | `STRIPE_SECRET_KEY` | Stripe billing, optional alternative (server-only) | dashboard.stripe.com → Developers |
 | `STRIPE_WEBHOOK_SECRET` | Verifies webhook signature (server-only) | `stripe listen` or Stripe dashboard |
-| `VITE_STRIPE_PRICE_PRO` | Price ID for the $19/mo plan | Stripe → Products & prices |
-| `VITE_STRIPE_PRICE_BUSINESS` | Price ID for the $49/mo plan | Stripe → Products & prices |
+| `STRIPE_PRICE_PRO` | Price ID for the $19/mo plan (server-only) | Stripe → Products & prices |
+| `STRIPE_PRICE_BUSINESS` | Price ID for the $49/mo plan (server-only) | Stripe → Products & prices |
 | `PICC_AGENTS_URL` | URL of the CrewAI microservice (optional) | `http://localhost:8000` |
 
 **Hybrid cloud LLM (no card needed).** The backend tries every provider you've added a key for, in
@@ -141,7 +141,7 @@ and no bank verification required. All are optional — enable whatever you want
 | **PayPal** | `PAYPAL_CLIENT_ID` + `PAYPAL_CLIENT_SECRET` from developer.paypal.com → Apps & Credentials (works on a personal account) | Automated checkout, server-side capture, `PAYPAL_MODE=sandbox\|live` |
 | **Touch 'n Go** | `EWALLET_TNG_NUMBER` (your receiving number) | Manual e-wallet: customer sends the exact amount + reference, then enters their confirmation code. No gateway, no fees, no KYC. |
 | **BTCPay Server** | `BTCPAY_URL=http://127.0.0.1:23000`, `BTCPAY_API_KEY`, `BTCPAY_STORE_ID` | Self-hosted, open-source, no KYC. Invoice status is checked server-side on return. Node status (sync + reachability) is shown on the Dashboard. |
-| **Stripe** | `STRIPE_SECRET_KEY` + prices + webhook | Still supported if you prefer it: `stripe listen --forward-to http://localhost:5173/api/stripe/webhook`, create $19/$49 recurring prices, set `VITE_STRIPE_PRICE_*`. Test card `4242 4242 4242 4242`. |
+| **Stripe** | `STRIPE_SECRET_KEY` + prices + webhook | Still supported if you prefer it: `stripe listen --forward-to http://localhost:5173/api/stripe/webhook`, create $19/$49 recurring prices, set `STRIPE_PRICE_*`. Test card `4242 4242 4242 4242`. |
 
 When a payment completes, the backend writes `profiles.subscription_tier` / `subscription_status`
 and records an audit row in `payment_orders` (Supabase). The `/pricing` page shows only the methods
@@ -197,8 +197,9 @@ The Trading Suite needs **no keys**: the prediction engine runs on public market
   and candles for assets you already own on ExpertOption. It never places, modifies, or cancels a
   trade. Setup needs **no `.env` keys** — the session token is captured automatically:
   1. Run `npm run dev` to start the dashboard server.
-  2. In Chrome/Edge, navigate to ExpertOption and log in to your demo account.
-  3. The browser extension (or `scripts/capture-eo-session.mjs`) auto-captures the session token.
+  2. Run `node scripts/capture-eo-session.mjs` — it opens the in-app browser on ExpertOption.
+  3. Log in to your demo account once inside that window; the script captures a fresh session token
+     (re-capture anytime via `POST /api/browser/capture-session`).
   4. The token is stored server-side in `server/data/trading-credentials.json`.
   5. Verify via `GET /api/trading/status` — it should show `expertOption.configured: true`.
 
@@ -209,17 +210,19 @@ The Trading Suite needs **no keys**: the prediction engine runs on public market
 ## 8. Tests
 
 ```bash
-npm run test        # vitest — engine, Yahoo stats, API handlers, client fallback
+npm run test --workspace @picc/dashboard   # vitest — engine, Yahoo stats, API handlers, client fallback
 npm run typecheck   # tsc --noEmit
 ```
 
 ## 9. Verify end-to-end
 
 - Dashboard: `npm run dev`, run a Financial Twin simulation — it should show the real fund name,
-  last price, and a 5-year sparkline (live Yahoo data). Generate content with `OPENAI_API_KEY` set
-  to see live research sources. Open Trading → Predict to see a live multi-model signal.
-- Extension: open an Amazon product page, wait for the overlay, exercise the 5-second human-review
-  timer and copy button.
+   last price, and a 5-year sparkline (live Yahoo data). Generate content with a cloud LLM key set
+   (e.g. `GEMINI_API_KEY`) to see live research sources. Open Trading → Predict to see a live
+   multi-model signal.
+- Extension: with `npm run dev` running, load `apps/dashboard/extensions/picc-overlay/` unpacked,
+  open any trading site, click the PICC pill and confirm the dockables populate from
+  `/api/extension/trading-data` within ~5 s.
 - Agents: with the microservice running, Agents → Run research crew produces a CrewAI report; Trading
   Suite → Ask AI returns trading-crew commentary.
 - n8n (optional): after importing the templates in `infra/n8n/workflows/`, POST to `/webhook/trading-signal`
