@@ -499,7 +499,7 @@ describe("overlay UI adaptation per platform", () => {
     const i = loadOverlay("https://www.expertoption.com/trade")
     const trading = i.getDefaultSettings("trading")
     expect(trading.dockables["expiry-opt"]).toBe(true)
-    expect(trading.features.autopilot).toBe(false)
+    expect(trading.features.autopilot).toBe(true)
     expect(Object.keys(i.getDefaultSettings("bandwidth").dockables)).toEqual(["speed", "connectors"])
     expect(Object.keys(i.getDefaultSettings("generic").dockables)).toEqual(["general"])
     const presets = i.SUITE_DOCKABLE_PRESETS.trading.map((p) => p.id)

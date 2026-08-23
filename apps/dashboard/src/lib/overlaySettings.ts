@@ -63,8 +63,8 @@ export const DEFAULT_OVERLAY_SETTINGS: OverlaySettings = {
   features: {
     assistance: true,
     decisionSupport: true,
-    automation: false,
-    autopilot: false,
+    automation: true,
+    autopilot: true,
     analysis: true,
     ai: true,
   },

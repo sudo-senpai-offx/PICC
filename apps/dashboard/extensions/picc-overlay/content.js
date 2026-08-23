@@ -388,7 +388,7 @@
       opacity: 0.92,
       collapsed: false,
       dockables: Object.fromEntries(dockables.map((id) => [id, true])),
-      features: { assistance: true, decisionSupport: true, automation: false, autopilot: false, analysis: true, ai: true },
+      features: { assistance: true, decisionSupport: true, automation: true, autopilot: true, analysis: true, ai: true },
       dockableLayout: {},
       positions: []
     }
@@ -419,7 +419,7 @@
   // ── Site detection ──────────────────────────────────────────────────────────
   const SITE_PROFILES = [
     // Trading
-    { hosts: ["expertoption.com", "expert-option.com", "expertoption.finance"], id: "expertoption", label: "ExpertOption", category: "trading", suite: "trading" },
+    { hosts: ["expertoption.com", "expert-option.com", "expertoption.finance", "app.expertoption.finance", "app.expertoption.com"], id: "expertoption", label: "ExpertOption", category: "trading", suite: "trading" },
     { hosts: ["binance.com"], id: "binance", label: "Binance", category: "trading", suite: "trading" },
     { hosts: ["coinbase.com"], id: "coinbase", label: "Coinbase", category: "trading", suite: "trading" },
     { hosts: ["kraken.com"], id: "kraken", label: "Kraken", category: "trading", suite: "trading" },
@@ -1131,11 +1131,11 @@
   // ── Feature-aware helpers ──────────────────────────────────────────────────
   const DOCKABLE_FEATURES = {
     "price-ticker": ["analysis"],
-    "positions": ["autopilot", "automation", "decisionSupport"],
+    "positions": [],
     "portfolio": [],
     "ai-signals": ["ai", "decisionSupport", "analysis"],
     "risk-mgr": ["decisionSupport", "analysis"],
-    "autopilot": ["autopilot", "automation", "decisionSupport"],
+    "autopilot": ["autopilot", "automation"],
     "kelly-sizing": ["analysis"],
     "regime-detect": ["analysis"],
     "order-flow": ["analysis"],
@@ -1481,12 +1481,13 @@
 
   // ── Positions Renderer (multi-trade tracker) ──────────────────────────────
   function renderPositions() {
-    const openDeals = tradingState.openDeals || []
+    const openDeals = tradingState.openDeals || tradingState.demo?.openDeals || []
     const banner = checkFeatures("positions")
     const activeAsset = tradingState.activeAsset || ""
-    if (!openDeals.length) {
+    const settled = tradingState.demo?.settled || []
+    if (!openDeals.length && !settled.length) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
-      return banner + '<div style="color:#a5a0ff;padding:4px">No open positions</div>'
+      return banner + '<div style="color:#a5a0ff;padding:4px">No open positions</div>' + staleLabel()
     }
     const lines = []
     lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-bottom:4px">${openDeals.length} open position${openDeals.length !== 1 ? "s" : ""}</div>`)
@@ -1523,7 +1524,20 @@
       lines.push(`</div>`)
       lines.push(`</div>`)
     }
-    return banner + `<div style="padding:2px 0">${lines.join("")}</div>`
+    if (settled.length) {
+      lines.push(`<div style="border-top:1px solid #6c63ff20;margin-top:4px;padding-top:4px;font-size:9px;color:#9aa0c0">Recent settled</div>`)
+      for (const s of settled.slice(0, 5)) {
+        const sDir = (s.direction || s.type || "").toLowerCase()
+        const sColor = s.result === "win" ? "#4ade80" : s.result === "loss" ? "#ff6b6b" : "#a5a0ff"
+        const sPnl = s.pnl ?? s.profit ?? null
+        const sPnlStr = sPnl != null ? (sPnl >= 0 ? "+" : "") + fmt$(sPnl, tradingState.account?.currency) : ""
+        lines.push(`<div style="display:flex;justify-content:space-between;font-size:9px;padding:1px 0">`)
+        lines.push(`<span>${s.asset || s.assetId || ""} ${sDir.toUpperCase()}</span>`)
+        lines.push(`<span style="color:${sColor}">${s.result || ""} ${sPnlStr}</span>`)
+        lines.push(`</div>`)
+      }
+    }
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + staleLabel()
   }
 
   function formatDuration(ms) {
@@ -1643,6 +1657,15 @@
     }
     if (!serverOnline && assets.length === 0) {
       lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-top:4px">Extension will still detect page data, prices, and content.</div>`)
+    }
+    // Show last fetch error for debugging
+    if (tradingState.lastFetchError) {
+      lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
+      lines.push(`<div style="font-size:9px;color:#ff6b6b;margin-top:2px">Last error: ${tradingState.lastFetchError}</div>`)
+    }
+    // Show active asset being tracked
+    if (tradingState.activeAsset) {
+      lines.push(`<div style="font-size:9px;color:#6c63ff;margin-top:2px">Tracking: ${tradingState.activeAsset}</div>`)
     }
     return `<div style="padding:2px 0">${lines.join("")}</div>`
   }

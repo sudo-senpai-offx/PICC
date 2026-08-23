@@ -94,7 +94,7 @@ describe("demo-only guard (expertoptionDemo)", () => {
 
   it("proceeds normally when demo mode is on", async () => {
     await trading.saveCredentials({ expertoptionToken: "tok", expertoptionDemo: true })
-    await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50, cooldownMs: 10000 })
+    await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50, cooldownMs: 10000, humanReviewMs: 0 })
 
     const out = await autopilot.autopilotTick()
     expect(out.ok).toBe(true)
