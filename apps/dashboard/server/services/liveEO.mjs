@@ -97,6 +97,11 @@ function markAuthRejected(reason) {
   degraded = { kind, reason: String(reason).slice(0, 300), at: Date.now() }
   emit("status", { status: kind, mode: currentMode, error: degraded.reason })
   log.warn(`ExpertOption session ${kind}`, { reason: degraded.reason })
+  if (kind === "expired") {
+    import("./notificationCenter.mjs")
+      .then((m) => m.emitEvent("connector.expired", { connector: "expertoption", reason: degraded.reason, at: new Date(degraded.at).toISOString() }))
+      .catch(() => {})
+  }
 }
 
 /** Scheduler hook: flip the "connected but stale" warning flag. */

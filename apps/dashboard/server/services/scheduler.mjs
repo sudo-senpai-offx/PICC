@@ -226,10 +226,16 @@ every(
       return
     }
     const tickAgeSec = Math.round((Date.now() - Number(st.lastSeen)) / 1000)
+    const wasStale = Boolean(st.stale)
     const stale = tickAgeSec > 60
     setLiveEOStale(stale)
     if (stale) {
       log.warn("ExpertOption stream is connected but stale", { lastTickAgeSec: tickAgeSec, viewed: st.viewed ?? null })
+      if (!wasStale) {
+        import("./notificationCenter.mjs")
+          .then((m) => m.emitEvent("connector.stale", { connector: "expertoption", lastTickAgeSec: tickAgeSec, viewed: st.viewed ?? null }))
+          .catch(() => {})
+      }
     }
   },
   { staggerMs: 15_000 }

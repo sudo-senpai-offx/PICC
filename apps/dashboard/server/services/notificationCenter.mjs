@@ -11,6 +11,16 @@ const STORE_FILE = join(DATA_DIR, "notification-center.json")
 const MAX_NOTIFICATIONS = 500
 const LEVELS = new Set(["info", "warn", "error", "critical"])
 const CHANNELS = new Set(["in-app", "log", "all"])
+export const WEBHOOK_EVENTS = [
+  "autopilot.start",
+  "autopilot.stop",
+  "autopilot.kill",
+  "risk.dailyLossApproached",
+  "risk.dailyLossHit",
+  "connector.stale",
+  "connector.expired"
+]
+const WEBHOOK_EVENT_SET = new Set(WEBHOOK_EVENTS)
 
 try {
   mkdirSync(DATA_DIR, { recursive: true })
@@ -27,6 +37,9 @@ async function load() {
     store = Array.isArray(raw?.notifications) ? raw : { notifications: [] }
   } catch {
     store = { notifications: [] }
+  }
+  if (!store.webhook || typeof store.webhook !== "object") {
+    store.webhook = { webhookUrl: "", webhookEvents: [] }
   }
   return store
 }
@@ -149,4 +162,79 @@ export async function notificationStats() {
     if (byLevel[n.level] != null) byLevel[n.level]++
   }
   return { total: s.notifications.length, unread, byLevel }
+}
+
+// ---------------------------------------------------------------------
+// Outbound webhook channel — fire-and-forget event delivery with one retry
+// ---------------------------------------------------------------------
+
+export function getWebhookSettings() {
+  const cfg = store?.webhook ?? { webhookUrl: "", webhookEvents: [] }
+  return {
+    webhookUrl: String(cfg.webhookUrl ?? ""),
+    webhookEvents: Array.isArray(cfg.webhookEvents) ? [...cfg.webhookEvents] : []
+  }
+}
+
+export async function saveWebhookSettings({ webhookUrl, webhookEvents } = {}) {
+  const s = await load()
+  if (webhookUrl !== undefined) {
+    const raw = String(webhookUrl ?? "").trim()
+    s.webhook.webhookUrl = /^https?:\/\/\S+/i.test(raw) ? raw : ""
+  }
+  if (webhookEvents !== undefined) {
+    s.webhook.webhookEvents = Array.isArray(webhookEvents)
+      ? [...new Set(webhookEvents.filter((e) => WEBHOOK_EVENT_SET.has(e)))]
+      : []
+  }
+  await persist()
+  return getWebhookSettings()
+}
+
+async function postWebhook(url, payload, timeoutMs) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), Math.max(1, Number(timeoutMs) || 10000))
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+      signal: ctrl.signal
+    })
+    if (!res.ok) throw new Error(`webhook responded ${res.status}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Deliver an event to the configured webhook. Fire-and-forget: the first
+ * attempt runs detached and a single retry follows after retryDelayMs on
+ * failure. Never throws — delivery problems are logged, not raised.
+ */
+export async function emitEvent(event, data = null, opts = {}) {
+  const s = await load()
+  const url = String(s.webhook?.webhookUrl ?? "")
+  const events = Array.isArray(s.webhook?.webhookEvents) ? s.webhook.webhookEvents : []
+  if (!url || !events.includes(event)) {
+    return { ok: false, skipped: true, reason: "webhook not configured for this event" }
+  }
+  const payload = JSON.stringify({ event, timestamp: new Date().toISOString(), data })
+  const timeoutMs = Number(opts.timeoutMs) || 10000
+  const retryDelayMs = Number(opts.retryDelayMs) || 5000
+  void (async () => {
+    try {
+      await postWebhook(url, payload, timeoutMs)
+      return
+    } catch (err) {
+      console.warn(`[picc-notifications] webhook ${event} first attempt failed:`, err.message)
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, retryDelayMs)))
+    try {
+      await postWebhook(url, payload, timeoutMs)
+    } catch (err) {
+      console.warn(`[picc-notifications] webhook ${event} delivery failed after retry:`, err.message)
+    }
+  })()
+  return { ok: true, queued: true, event }
 }

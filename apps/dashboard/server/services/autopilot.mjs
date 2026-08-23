@@ -12,7 +12,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
 import { connectTradingSession, candlesFrom } from "./expertoption.mjs"
-import { getCredentials, recordSignal, resolveSignal } from "./trading.mjs"
+import { getCredentials, recordSignal, resolveSignal, signalAccuracy } from "./trading.mjs"
 import { predictDirection } from "./prediction.mjs"
 import { proAnalyzeCandles } from "./proanalysis.mjs"
 import { metricsFrom } from "./analytics.mjs"
@@ -21,6 +21,7 @@ import { chatText, llmConfigured } from "./llm.mjs"
 import { volatilityPositionSize, realizedVolatility } from "./volatility.mjs"
 import { quickMtfCheck } from "./multiTimeframe.mjs"
 import { liveEOData } from "./liveEO.mjs"
+import { detectRegime } from "./regimeDetection.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -40,6 +41,7 @@ const DEFAULTS = {
   amount: null, // null => auto: riskPerTradePct of balance
   minConfidence: 55,
   cooldownMs: 15 * 60 * 1000,
+  humanReviewMs: 5000,
   maxConcurrent: 3,
   dailyLossLimitPct: 10,
   maxDailyTrades: 0, // 0 = unlimited
@@ -49,6 +51,10 @@ const DEFAULTS = {
   minMtfAgree: 0,
   sentimentGate: false, // when true, block trades if sentiment strongly opposes signal direction
   minSentimentAlignment: 0.3, // minimum sentiment alignment threshold (0-1) for sentimentGate
+  consecutiveLossLimit: 3, // consecutive-loss circuit breaker: pause after N straight losses
+  consecutiveLossWindowMs: 30 * 60 * 1000, // ...only when those losses happened inside this window
+  regimeShiftPause: true, // regime-shift breaker: pause entries until the new regime stabilizes
+  maxCandleAgeSec: 60, // refuse to trade on candle data older than this (seconds)
   timeframe: 60,
   count: 120,
   stopReason: null,
@@ -63,7 +69,8 @@ const state = {
   sessionError: null,
   loopTimer: null,
   lastRun: null,
-  lastDecision: null
+  lastDecision: null,
+  dataHealth: "unknown"
 }
 
 function clamp(n, lo, hi) {
@@ -122,6 +129,7 @@ export async function saveAutopilotConfig(patch) {
   next.amount = next.amount != null && Number(next.amount) > 0 ? clamp(Number(next.amount), 1, 1000) : null
   next.minConfidence = clamp(Number(next.minConfidence) || 55, 30, 95)
   next.cooldownMs = clamp(Math.round(Number(next.cooldownMs) || 900000), 10000, 86400000)
+  next.humanReviewMs = clamp(Math.round(Number(next.humanReviewMs ?? 5000)) || 0, 0, 60000)
   next.maxConcurrent = clamp(Math.round(Number(next.maxConcurrent) || 3), 1, 10)
   next.dailyLossLimitPct = clamp(Number(next.dailyLossLimitPct) || 10, 1, 100)
   next.maxDailyTrades = clamp(Math.round(Number(next.maxDailyTrades) || 0), 0, 100)
@@ -131,12 +139,241 @@ export async function saveAutopilotConfig(patch) {
   next.minMtfAgree = clamp(Math.round(Number(next.minMtfAgree) || 0), 0, 3)
   next.sentimentGate = Boolean(next.sentimentGate)
   next.minSentimentAlignment = clamp(Number(next.minSentimentAlignment) || 0.3, 0, 1)
+  next.consecutiveLossLimit = clamp(Math.round(Number(next.consecutiveLossLimit) || 3), 1, 20)
+  next.consecutiveLossWindowMs = clamp(Math.round(Number(next.consecutiveLossWindowMs) || 1800000), 60000, 86400000)
+  next.regimeShiftPause = next.regimeShiftPause !== false
+  next.maxCandleAgeSec = clamp(Math.round(Number(next.maxCandleAgeSec) || 60), 10, 3600)
   next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
   next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
   if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
   next.lastEntryAt = Math.max(0, Number(next.lastEntryAt) || 0)
   await writeJSON(CONFIG_FILE, next)
   return getAutopilotConfig()
+}
+
+// ---------------------------------------------------------------------
+// Circuit breakers
+// ---------------------------------------------------------------------
+//
+// Two independent pauses that sit in front of every entry decision:
+//
+//   • Consecutive-loss breaker — trips when the accuracy ledger shows N
+//     straight losses all inside one time window. It LATCHES: resuming only
+//     once those losses age out of the window or a manual reset clears it
+//     (a later win does not unlatch it early).
+//
+//   • Regime-shift breaker — when regimeDetection flags a change away from
+//     the last stable regime, entries pause until the detector reports the
+//     SAME new regime twice consecutively (2-reading stabilization).
+
+const breakers = {
+  lossTrippedUntil: 0,
+  lossTrigger: null,
+  lossManualHold: false
+}
+
+const regimeBreaker = {
+  stable: null,
+  candidate: null,
+  candidateCount: 0,
+  paused: false,
+  lastTransition: null
+}
+
+export function evaluateLossBreaker(signalsNewestFirst, { limit = 3, windowMs = 30 * 60 * 1000, now = Date.now() } = {}) {
+  const lim = Math.max(1, Math.round(Number(limit) || 3))
+  const win = Math.max(1, Number(windowMs) || 1800000)
+  let streak = 0
+  let oldestLossAt = null
+  for (const s of Array.isArray(signalsNewestFirst) ? signalsNewestFirst : []) {
+    if (s?.resolution === "loss") {
+      streak++
+      oldestLossAt = s.resolvedAt ?? s.resolvedTs ?? null
+    } else {
+      break
+    }
+  }
+  if (streak < lim) return { tripped: false, streak }
+  const oldestMs = oldestLossAt != null ? new Date(oldestLossAt).getTime() : NaN
+  if (!Number.isFinite(oldestMs)) return { tripped: true, streak, until: now + win }
+  if (now - oldestMs > win) return { tripped: false, streak }
+  return { tripped: true, streak, until: oldestMs + win, oldestLossAt }
+}
+
+/**
+ * Re-evaluate the consecutive-loss latch from the accuracy ledger. Returns a
+ * refusal reason while the breaker holds, or null when trading may proceed.
+ */
+async function checkLossBreaker(config, now = Date.now()) {
+  let signals = []
+  try {
+    const acc = await signalAccuracy()
+    signals = Array.isArray(acc?.recent) ? acc.recent : []
+  } catch {
+    /* ledger unavailable — fail open */
+  }
+  const evaluation = evaluateLossBreaker(signals, {
+    limit: config.consecutiveLossLimit,
+    windowMs: config.consecutiveLossWindowMs,
+    now
+  })
+  if (!evaluation.tripped) {
+    if (breakers.lossTrippedUntil > now) {
+      return `consecutive-loss breaker latched — resumes at ${new Date(breakers.lossTrippedUntil).toISOString()} or via manual reset`
+    }
+    if (breakers.lossTrippedUntil) {
+      breakers.lossTrippedUntil = 0
+      breakers.lossTrigger = null
+      console.log("[picc-autopilot] consecutive-loss breaker cleared — losses aged out of the window")
+    }
+    breakers.lossManualHold = false
+    return null
+  }
+  if (breakers.lossManualHold) return null
+  const until = evaluation.until ?? now + Number(config.consecutiveLossWindowMs)
+  if (breakers.lossTrippedUntil <= now) {
+    breakers.lossTrigger = {
+      streak: evaluation.streak,
+      limit: Number(config.consecutiveLossLimit),
+      windowMs: Number(config.consecutiveLossWindowMs),
+      oldestLossAt: evaluation.oldestLossAt ?? null,
+      at: now
+    }
+    console.warn(
+      `[picc-autopilot] consecutive-loss BREAKER TRIPPED — ${evaluation.streak} straight losses within ${Math.round(Number(config.consecutiveLossWindowMs) / 60000)} min (limit ${config.consecutiveLossLimit}); entries paused until ${new Date(until).toISOString()} or manual reset`
+    )
+  }
+  breakers.lossTrippedUntil = Math.max(breakers.lossTrippedUntil, until)
+  return `consecutive-loss breaker engaged (${evaluation.streak} straight losses inside ${Math.round(Number(config.consecutiveLossWindowMs) / 60000)} min)`
+}
+
+/**
+ * Feed one regime reading into the shift breaker. A reading equal to the last
+ * stable regime keeps trading open; any different reading starts a transition
+ * (pause) that lasts until the NEW regime is seen twice consecutively.
+ * Returns the post-update status; "unknown" readings are ignored entirely.
+ */
+export function updateRegimeBreaker(regime, now = Date.now()) {
+  if (!regime || regime === "unknown") return regimeStatus()
+  if (regimeBreaker.stable == null) {
+    if (regimeBreaker.candidate !== regime) {
+      regimeBreaker.candidate = regime
+      regimeBreaker.candidateCount = 1
+    } else {
+      regimeBreaker.candidateCount++
+      if (regimeBreaker.candidateCount >= 2) {
+        regimeBreaker.stable = regime
+        regimeBreaker.candidate = null
+        regimeBreaker.candidateCount = 0
+      }
+    }
+    return regimeStatus()
+  }
+  if (regime === regimeBreaker.stable) {
+    if (regimeBreaker.paused || regimeBreaker.candidate) {
+      console.log(`[picc-autopilot] regime-shift breaker resumed — regime stable at "${regime}"`)
+    }
+    regimeBreaker.candidate = null
+    regimeBackToStable()
+    return regimeStatus()
+  }
+  if (regimeBreaker.candidate !== regime) {
+    regimeBreaker.candidate = regime
+    regimeBreaker.candidateCount = 1
+    regimeBreaker.lastTransition = { from: regimeBreaker.stable, to: regime, at: now }
+    regimeBreaker.paused = true
+    console.warn(
+      `[picc-autopilot] regime-shift BREAKER PAUSED entries — transition ${regimeBreaker.stable} -> ${regime}; waiting for two stable "${regime}" readings`
+    )
+  } else {
+    regimeBreaker.candidateCount++
+    if (regimeBreaker.candidateCount >= 2) {
+      console.log(
+        `[picc-autopilot] regime-shift breaker resumed — "${regime}" confirmed stable after ${regimeBreaker.candidateCount} readings`
+      )
+      regimeBreaker.stable = regime
+      regimeBreaker.candidate = null
+      regimeBreaker.candidateCount = 0
+      regimeBackToStable()
+    }
+  }
+  return regimeStatus()
+}
+
+function regimeBackToStable() {
+  regimeBreaker.paused = false
+}
+
+function regimeStatus() {
+  return {
+    stable: regimeBreaker.stable,
+    candidate: regimeBreaker.candidate,
+    candidateReadings: regimeBreaker.candidateCount,
+    paused: Boolean(regimeBreaker.paused && regimeBreaker.candidate),
+    lastTransition: regimeBreaker.lastTransition
+  }
+}
+
+export function breakerStatus(now = Date.now()) {
+  return {
+    lossBreaker: {
+      tripped: breakers.lossTrippedUntil > now,
+      until: breakers.lossTrippedUntil > now ? new Date(breakers.lossTrippedUntil).toISOString() : null,
+      trigger: breakers.lossTrigger
+    },
+    regimeBreaker: regimeStatus()
+  }
+}
+
+/** Manual reset — clear both breaker latches immediately. The loss breaker
+ *  stays disarmed (manual hold) until the losing streak actually clears, so a
+ *  reset is not undone by the very next evaluation of an unchanged ledger.
+ *  Pass { manualHold: false } for a clean-slate reset (tests). */
+export function resetBreakers({ manualHold = true } = {}) {
+  breakers.lossTrippedUntil = 0
+  breakers.lossTrigger = null
+  breakers.lossManualHold = Boolean(manualHold)
+  regimeBreaker.stable = null
+  regimeBreaker.candidate = null
+  regimeBreaker.candidateCount = 0
+  regimeBreaker.paused = false
+  regimeBreaker.lastTransition = null
+}
+
+function emitAutopilotEvent(event, data) {
+  import("./notificationCenter.mjs")
+    .then((m) => m.emitEvent(event, data))
+    .catch(() => {})
+}
+
+const riskNotify = { dayKey: null, approached: false, hit: false }
+
+function maybeEmitRiskEvents(config, dayKey, dayStartBalance, pnl) {
+  const startBal = Number(dayStartBalance)
+  if (!Number.isFinite(startBal) || startBal <= 0) return
+  const limitAbs = (Number(config.dailyLossLimitPct) / 100) * startBal
+  if (!(limitAbs > 0)) return
+  if (riskNotify.dayKey !== dayKey) {
+    riskNotify.dayKey = dayKey
+    riskNotify.approached = false
+    riskNotify.hit = false
+  }
+  const drawdown = -Number(pnl)
+  const data = {
+    dayStartBalance: round2(startBal),
+    dailyPnl: round2(Number(pnl)),
+    limitPct: Number(config.dailyLossLimitPct),
+    drawdown: round2(Math.max(0, drawdown))
+  }
+  if (drawdown >= limitAbs) {
+    if (riskNotify.hit) return
+    riskNotify.hit = true
+    emitAutopilotEvent("risk.dailyLossHit", { ...data, thresholdPct: 100 })
+  } else if (drawdown >= limitAbs * 0.8) {
+    if (riskNotify.approached) return
+    riskNotify.approached = true
+    emitAutopilotEvent("risk.dailyLossApproached", { ...data, thresholdPct: 80 })
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -444,7 +681,15 @@ async function runAutopilotTick() {
   }
 
   const session = await ensureSession()
-  const balance = (await session.balance()).balance ?? 0
+  let balance = 0
+  try {
+    balance = (await session.balance()).balance ?? 0
+  } catch (err) {
+    state.dataHealth = "stale"
+    state.lastDecision = `balance fetch failed: ${err?.message ?? err}`
+    console.warn("[picc-autopilot] balance fetch failed — treating data as stale:", err?.message ?? err)
+    return { ok: false, reason: `session unreachable (${err?.message ?? err})`, stale: true }
+  }
   const open = session.deals()
 
   // Daily reset: lock the day-start balance once per day for the loss limit.
@@ -455,11 +700,41 @@ async function runAutopilotTick() {
     await saveAutopilotConfig({ dayKey: today, dayStartBalance: balance })
   }
 
-  const raw = await session.candles(config.assetId, config.timeframe, config.count)
+  let raw = null
+  try {
+    raw = await session.candles(config.assetId, config.timeframe, config.count)
+  } catch (err) {
+    state.dataHealth = "stale"
+    state.lastDecision = `candle fetch failed: ${err?.message ?? err}`
+    console.warn("[picc-autopilot] candle fetch failed — marking data stale:", err?.message ?? err)
+    return { ok: false, reason: `candle fetch failed (${err?.message ?? err})`, stale: true }
+  }
   const { closes, ohlc } = candlesFrom(raw)
   if (closes.length < 30) {
+    state.dataHealth = "stale"
     state.lastDecision = `not enough candles (${closes.length})`
     return { ok: false, reason: "not enough candles" }
+  }
+  state.dataHealth = "live"
+
+  // Candle-freshness guard: refuse to act on data that stopped updating —
+  // a frozen feed must never look like a quiet market. The newest bar is the
+  // one currently forming, so its open time is legitimately up to one full
+  // timeframe in the past; staleness is measured from the moment that bar
+  // should have been replaced by a newer one (open + timeframe). Only enforced
+  // when the newest candle carries a plausible epoch timestamp (synthetic
+  // fixtures with tiny/zero times have no meaningful age).
+  const newestCandleSec = Number(ohlc[ohlc.length - 1]?.time)
+  const tfSec = Math.max(1, Math.round(Number(config.timeframe) || 60))
+  if (Number.isFinite(newestCandleSec) && newestCandleSec > 1_000_000_000 && Number(config.maxCandleAgeSec) > 0) {
+    const staleAfterSec = newestCandleSec + tfSec + Number(config.maxCandleAgeSec)
+    const nowSec = Math.floor(Date.now() / 1000)
+    if (nowSec > staleAfterSec) {
+      const overdueSec = nowSec - (newestCandleSec + tfSec)
+      state.dataHealth = "stale"
+      state.lastDecision = `candle data stale (${overdueSec}s past bar close, limit ${config.maxCandleAgeSec}s)`
+      return { ok: false, reason: state.lastDecision, stale: true }
+    }
   }
 
   const pred = predictDirection(closes, 3, { maxWindows: 200 })
@@ -485,6 +760,30 @@ async function runAutopilotTick() {
 
   const pnl = await todayPnl()
   const todayTrades = await todayTradeCount()
+
+  // Risk-threshold notifications fire regardless of breaker state — the user
+  // wants to know about an approaching loss limit even when trading is paused.
+  maybeEmitRiskEvents(config, today, config.dayStartBalance, pnl)
+
+  // Circuit breakers — evaluated fresh every tick, in front of the decision.
+  if (config.regimeShiftPause) {
+    try {
+      updateRegimeBreaker(detectRegime(ohlc, `${config.timeframe}s`).regime, Date.now())
+    } catch {
+      /* regime detection is best-effort */
+    }
+  }
+  const regimeNow = regimeStatus()
+  if (config.regimeShiftPause && regimeNow.paused) {
+    state.lastDecision = `regime-shift breaker: ${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization`
+    return { ok: false, reason: `regime-shift breaker paused entries (${regimeNow.stable} -> ${regimeNow.candidate}, awaiting stable readings)` }
+  }
+  const lossRefusal = await checkLossBreaker(config, Date.now())
+  if (lossRefusal) {
+    state.lastDecision = lossRefusal
+    return { ok: false, reason: lossRefusal }
+  }
+
   const aiVeto = config.aiGate ? !(await aiConsents(pred)) : false
 
   // Multi-timeframe confluence gate: check if higher timeframes agree with
@@ -552,9 +851,17 @@ async function runAutopilotTick() {
     ? `${decision.direction} ${decision.confidence}% — ${decision.reason}`
     : decision.reason
 
-  if (!decision.trade) return { ok: false, reason: decision.reason }
+  if (!decision.trade) {
+    if (/cap|loss limit/i.test(String(decision.reason))) {
+      console.warn(`[picc-autopilot] safety limit engaged — ${decision.reason}`)
+    }
+    return { ok: false, reason: decision.reason }
+  }
 
   const amount = await defaultAmount(balance, creds.riskPerTradePct, closes, ohlc.map((c) => c.time))
+  if (config.humanReviewMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, config.humanReviewMs))
+  }
   const deal = await session.buy({
     assetId: config.assetId,
     type: decision.direction,
@@ -569,7 +876,8 @@ async function runAutopilotTick() {
 }
 
 export async function startAutopilot() {
-  await saveAutopilotConfig({ enabled: true, stopReason: null })
+  const config = await saveAutopilotConfig({ enabled: true, stopReason: null })
+  emitAutopilotEvent("autopilot.start", { assetId: config.assetId, at: new Date().toISOString() })
   if (!state.loopTimer) {
     state.loopTimer = setInterval(() => {
       autopilotTick().catch((err) => {
@@ -590,7 +898,9 @@ export async function stopAutopilot(reason = "manual") {
     clearInterval(state.loopTimer)
     state.loopTimer = null
   }
-  await saveAutopilotConfig({ enabled: false, stopReason: reason })
+  const config = await saveAutopilotConfig({ enabled: false, stopReason: reason })
+  const event = /kill|panic|emergency/i.test(String(reason)) ? "autopilot.kill" : "autopilot.stop"
+  emitAutopilotEvent(event, { reason, at: new Date().toISOString() })
   return getAutopilotConfig()
 }
 
@@ -630,7 +940,9 @@ export async function demoStatus() {
       ...config,
       running: Boolean(state.loopTimer),
       lastRun: state.lastRun,
-      lastDecision: state.lastDecision
+      lastDecision: state.lastDecision,
+      dataHealth: state.dataHealth,
+      breakers: breakerStatus()
     }
   }
 }
@@ -642,6 +954,8 @@ export async function _resetAutopilotData() {
   await writeJSON(DEALS_FILE, { deals: [] })
   state.lastRun = null
   state.lastDecision = null
+  state.dataHealth = "unknown"
+  resetBreakers({ manualHold: false })
 }
 
 // ---------------------------------------------------------------------

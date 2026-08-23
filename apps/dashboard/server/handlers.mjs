@@ -513,7 +513,10 @@ const SCHEMAS = {
     humanReviewMs: [isNumber(0, 60000)],
     maxConcurrent: [isNumber(1, 10)],
     dailyLossLimitPct: [isNumber(1, 100)],
-    maxDailyTrades: [isNumber(0, 100)]
+    maxDailyTrades: [isNumber(0, 100)],
+    consecutiveLossLimit: [isNumber(1, 20)],
+    consecutiveLossWindowMs: [isNumber(60000, 86400000)],
+    maxCandleAgeSec: [isNumber(10, 3600)]
   },
   demoPlace: {
     assetId: [required, maxLength(20)],
@@ -2075,14 +2078,23 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/notifications" && (req.method === "GET" || req.method === "POST")) {
-    const { notify, getNotifications, markRead, markAllRead, clearOld, unreadCount, notificationStats } = await import("./services/notificationCenter.mjs")
+    const { notify, getNotifications, markRead, markAllRead, clearOld, unreadCount, notificationStats, getWebhookSettings, saveWebhookSettings, emitEvent } = await import("./services/notificationCenter.mjs")
     if (req.method === "GET") {
       const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 50), 1), 200)
       const unreadOnly = parsed.searchParams.get("unread") === "true"
-      writeJson(res, 200, { ok: true, notifications: getNotifications({ limit, unreadOnly }), unread: unreadCount(), stats: notificationStats() })
+      writeJson(res, 200, { ok: true, notifications: getNotifications({ limit, unreadOnly }), unread: unreadCount(), stats: notificationStats(), webhook: getWebhookSettings() })
       return true
     }
     if (req.method === "POST") {
+      if (body.action === "webhook-settings") {
+        writeJson(res, 200, { ok: true, settings: await saveWebhookSettings(body.settings ?? body) })
+        return true
+      }
+      if (body.action === "webhook-test") {
+        const result = await emitEvent(String(body.event || "autopilot.start"), body.data ?? {})
+        writeJson(res, 200, { ok: true, delivery: result })
+        return true
+      }
       if (body.action === "read" && body.id) { markRead(body.id); writeJson(res, 200, { ok: true }); return true }
       if (body.action === "read-all") { markAllRead(); writeJson(res, 200, { ok: true }); return true }
       if (body.action === "clear") { const age = Number(body.olderThanMs) || 7 * 24 * 60 * 60 * 1000; clearOld(age); writeJson(res, 200, { ok: true }); return true }
