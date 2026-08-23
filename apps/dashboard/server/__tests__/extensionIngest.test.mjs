@@ -68,6 +68,39 @@ describe("ingestAppFrame (extension upstream bridge)", () => {
     expect(statuses.expiry.status).toBe("live")
   })
 
+  it("drops non-finite or non-positive tick prices instead of recording them as real ticks", async () => {
+    // A DOM-scraped price is not guaranteed numeric: locale decimal commas,
+    // a loading-state placeholder ("--"), or a selector that briefly missed
+    // its target can all produce NaN. Regression for a bug where such a tick
+    // was accepted, stored as lastPrice, and silently broke up/down
+    // classification for every subsequent legitimate tick too.
+    ingestAppFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [Number("--")]))
+    ingestAppFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [-1]))
+    ingestAppFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [0]))
+    let data = liveEOData()
+    let asset = data.assets.find((a) => a.id === "555")
+    expect(asset?.ticks?.count ?? 0).toBe(0)
+
+    // A legitimate tick right after must not have its up/down classification
+    // poisoned by the rejected bad ticks.
+    ingestAppFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [1.5]))
+    ingestAppFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [1.6]))
+    data = liveEOData()
+    asset = data.assets.find((a) => a.id === "555")
+    expect(asset.ticks.count).toBe(2)
+    expect(asset.ticks.up).toBe(1)
+  })
+
+  it("drops OHLC bars containing any non-finite or non-positive value", async () => {
+    const now = Math.floor(Date.now() / 1000)
+    ingestAppFrame(candleFrame("666", 5, now - (now % 60), [1.1, Number("--"), 1.05, 1.15]))
+    const data = liveEOData()
+    const asset = data.assets.find((a) => a.id === "666")
+    // Asset stub is still tracked (frame was structurally valid), but no bar
+    // was written from the corrupt OHLC row.
+    expect(asset?.periods?.[60]?.length ?? 0).toBe(0)
+  })
+
   it("ignores non-candle actions other than profile/error", async () => {
     const before = liveEOStats().upstream.framesSeen
     ingestAppFrame({ action: "unknown-action", message: {} })

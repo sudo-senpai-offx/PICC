@@ -312,6 +312,11 @@ function processAppObject(obj, source = "studio") {
       const tf = Number(c.tf ?? 0)
       if (tf === 0 && c.v.length === 1) {
         const price = Number(c.v[0])
+        // A malformed scrape (locale decimal comma, a loading-state
+        // placeholder, a selector that missed) must never be treated as a
+        // real tick — it would silently poison recordTick's lastPrice
+        // comparison for every tick that follows, not just this one.
+        if (!Number.isFinite(price) || price <= 0) continue
         const ts = Date.now()
         recordTick(assetId, price, ts / 1000)
         const key = bufferKey(assetId, "tick")
@@ -329,7 +334,7 @@ function processAppObject(obj, source = "studio") {
       }
       if (tf === LIVE_BAR_PERIOD && c.v.length >= 4) {
         const [o, h, l, cl] = c.v.map(Number)
-        if (Number.isFinite(cl)) {
+        if (Number.isFinite(cl) && cl > 0 && [o, h, l].every((n) => Number.isFinite(n) && n > 0)) {
           recordTick(assetId, cl, Number(c.t) || Date.now() / 1000)
           applyLiveBar(assetId, Number(c.t) || 0, o, h, l, cl)
         }
