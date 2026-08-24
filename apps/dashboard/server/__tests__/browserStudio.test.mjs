@@ -38,7 +38,7 @@ async function call(handleApi, method, path, body, headers) {
   return res
 }
 
-describe("Browser Studio — site detection", () => {
+describe("Browser Studio â€” site detection", () => {
   it("maps known dashboards to catalog entries", async () => {
     const { detectSite } = await import("../services/browserStudio.mjs")
     expect(detectSite("https://dashboard.honeygain.com/").id).toBe("honeygain")
@@ -55,7 +55,7 @@ describe("Browser Studio — site detection", () => {
   })
 })
 
-describe("Browser Studio — credential vault", () => {
+describe("Browser Studio â€” credential vault", () => {
   let dir
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "picc-browser-vault-"))
@@ -82,7 +82,7 @@ describe("Browser Studio — credential vault", () => {
   })
 })
 
-describe("Browser Studio — settings, permissions and per-source prefs", () => {
+describe("Browser Studio â€” settings, permissions and per-source prefs", () => {
   let dir
   let m
   beforeAll(async () => {
@@ -98,7 +98,7 @@ describe("Browser Studio — settings, permissions and per-source prefs", () => 
   it("returns default browser settings before anything is saved", async () => {
     const s = await m.getBrowserSettings()
     expect(s.stealth).toBe(true)
-    expect(s.humanizeInput).toBe(true)
+    expect(s.humanizeInput).toBe(false)
     expect(s.defaultProfile).toBe("studio")
     expect(s.devTools).toBe(false)
     expect(s.tabFreezeMs).toBe(90_000)
@@ -183,7 +183,7 @@ describe("Browser Studio — settings, permissions and per-source prefs", () => 
   })
 })
 
-describe("Browser Studio — API routes", () => {
+describe("Browser Studio â€” API routes", () => {
   let handleApi
 
   beforeAll(async () => {

@@ -1185,6 +1185,124 @@ export function getDemoSession() {
   return state.session && state.session.connected ? state.session : null
 }
 
+/**
+ * Phase 11 — go-live READINESS REPORT (the honest gate before demo → real).
+ * This is decision support, NOT an unlock: PICC has no live-trading path at
+ * all. It aggregates the evidence you asked for: enough resolved decisions,
+ * realized win-rate durably above the instrument's breakeven, calibration
+ * adequacy per confidence bucket, feed reliability over 24h, and data-source
+ * health. Blockers = do not even think about real money yet; warnings =
+ * proceed-with-humility items.
+ */
+export async function tradingReadiness() {
+  const blockers = []
+  const warnings = []
+  const facts = {}
+
+  // Demo-only reminder — always present, never removable.
+  warnings.push("Demo results are a hypothesis about live conditions, not proof: fills, psychology, and account-level scrutiny all differ once real money is involved.")
+
+  let resolvedCount = 0
+  try {
+    const { ledgerStats } = await import("./accuracyLedger.mjs")
+    const stats = ledgerStats()
+    facts.decisionsResolved = stats.resolved
+    facts.hitRate = stats.hitRate
+    facts.calibrationEdge = stats.edge
+    resolvedCount = Number(stats.resolved) || 0
+    if (resolvedCount < 200) {
+      blockers.push(`only ${resolvedCount} resolved decisions — need ≥200 for a statistically meaningful sample`)
+    } else if (resolvedCount < 500) {
+      warnings.push(`${resolvedCount} resolved decisions is a thin-but-usable sample; 500+ preferred`)
+    }
+    if (resolvedCount >= 100 && stats.hitRate == null) {
+      blockers.push("no measurable hit rate despite resolved history")
+    }
+    if (stats.edge != null && stats.edge <= 0 && resolvedCount >= 200) {
+      blockers.push(`realized-vs-predicted EV edge is ${stats.edge.toFixed(3)} (≤0): the engine is not beating its own predictions`)
+    }
+    try {
+      const { getCalibrationSummary } = await import("./calibration.mjs")
+      const cal = getCalibrationSummary()
+      facts.calibration = {
+        totalResolved: cal?.totalResolved ?? null,
+        adequacy: cal?.adequacy ?? null,
+        calibrationGap: cal?.calibrationGap ?? null
+      }
+      if (cal?.adequacy === "insufficient") {
+        warnings.push("calibration buckets marked insufficient — confidence numbers are not yet trustworthy")
+      }
+      if (cal?.calibrationGap != null && cal.calibrationGap < -0.08) {
+        blockers.push(`engine is overconfident: realized win-rate runs ${(Math.abs(cal.calibrationGap) * 100).toFixed(1)} pts below predicted`)
+      }
+    } catch { /* calibration module unavailable */ }
+  } catch {
+    blockers.push("accuracy ledger unavailable")
+  }
+
+  // Breakeven vs realized, using the payout actually offered.
+  try {
+    const creds = await getCredentials()
+    facts.demoMode = Boolean(creds.expertoptionDemo)
+    if (!creds.expertoptionDemo) {
+      blockers.push("demo mode is OFF in credentials — this report is only meaningful in demo mode")
+    }
+    void creds
+    const dealsFile = await readJSON(DEALS_FILE, { deals: [] })
+    const withPayout = (dealsFile.deals || []).find((d) => d.payout != null)
+    const payoutPct = Number(withPayout?.payout) || 82
+    facts.payoutPct = payoutPct
+    // Binary breakeven win rate: 1 / (1 + payout) as a fraction of stake.
+    const breakeven = 1 / (1 + payoutPct / 100)
+    facts.breakevenWinRatePct = Math.round(breakeven * 1000) / 10
+    try {
+      const file = await readDealsSerialized()
+      const today = new Date().toISOString().slice(0, 10)
+      const recent = (file.deals || []).filter((d) => (d.recordAt ?? "").startsWith(today))
+      const wins = recent.filter((d) => d.result === "win").length
+      const losses = recent.filter((d) => d.result === "loss").length
+      if (wins + losses >= 20) {
+        facts.todayWinRatePct = Math.round((wins / (wins + losses)) * 1000) / 10
+        if (facts.todayWinRatePct <= breakeven * 100) {
+          warnings.push(`today's demo win rate (${facts.todayWinRatePct}%) is at/below the ${(breakeven * 100).toFixed(1)}% breakeven for ${payoutPct}% payout`)
+        }
+      }
+    } catch { /* deal history unavailable */ }
+  } catch { /* credentials unavailable */ }
+
+  // Feed reliability.
+  try {
+    const { sessionUptime24h } = await import("./scheduler.mjs")
+    const up = sessionUptime24h()
+    facts.uptime24h = up
+    if (up.samples >= 60) {
+      if ((up.livePct ?? 0) < 80) blockers.push(`live-session uptime over ${up.windowHours}h is only ${up.livePct}% — fix feed reliability first`)
+      else if ((up.livePct ?? 0) < 95) warnings.push(`live-session uptime ${up.livePct}% — decent but not rock-solid`)
+    } else {
+      warnings.push("less than 30 minutes of uptime samples — reliability is unmeasured")
+    }
+  } catch { /* scheduler unavailable */ }
+
+  // Data source health.
+  try {
+    const { collectSourceStatuses } = await import("./dataSources.mjs")
+    const sources = collectSourceStatuses()
+    const problems = Object.entries(sources).filter(([, s]) => s?.status === "unconfigured" || s?.status === "stale").map(([k]) => k)
+    facts.degradedSources = problems
+    if (problems.includes("candles")) blockers.push("candle feed is unconfigured/stale — no live data behind any number")
+    else if (problems.length) warnings.push(`degraded sources: ${problems.join(", ")}`)
+  } catch { /* ignore */ }
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    readyForRealConsideration: blockers.length === 0,
+    blockers,
+    warnings,
+    facts
+  }
+}
+
 /** Test hook — wipe config + demo deals and drop the socket. */
 export async function _resetAutopilotData() {
   await _closeSession()

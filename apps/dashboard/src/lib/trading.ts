@@ -422,6 +422,31 @@ export function whyAutopilot(assetId?: string): Promise<AutopilotWhyResult> {
   return post("/trading/autopilot/why", assetId ? { assetId } : {})
 }
 
+// Phase 11 — go-live readiness report (demo → real decision support).
+export interface TradingReadiness {
+  ok: boolean
+  generatedAt: string
+  readyForRealConsideration: boolean
+  blockers: string[]
+  warnings: string[]
+  facts: {
+    decisionsResolved?: number
+    hitRate?: number | null
+    calibrationEdge?: number | null
+    calibration?: { totalResolved?: number | null; adequacy?: string | null; calibrationGap?: number | null }
+    demoMode?: boolean
+    payoutPct?: number
+    breakevenWinRatePct?: number
+    todayWinRatePct?: number
+    uptime24h?: { samples: number; connectedPct: number | null; livePct: number | null; windowHours: number }
+    degradedSources?: string[]
+  }
+}
+
+export function getTradingReadiness(): Promise<TradingReadiness> {
+  return request("/trading/readiness")
+}
+
 export function placeDemoTrade(input: {
   assetId: string
   type: "call" | "put"

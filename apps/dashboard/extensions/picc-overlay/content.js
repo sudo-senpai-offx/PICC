@@ -422,22 +422,26 @@
 
   // ── Site detection ──────────────────────────────────────────────────────────
   const SITE_PROFILES = [
-    // Trading
-    { hosts: ["expertoption.com", "expert-option.com", "expertoption.finance", "app.expertoption.finance", "app.expertoption.com"], id: "expertoption", label: "ExpertOption", category: "trading", suite: "trading" },
-    { hosts: ["binance.com"], id: "binance", label: "Binance", category: "trading", suite: "trading" },
-    { hosts: ["coinbase.com"], id: "coinbase", label: "Coinbase", category: "trading", suite: "trading" },
-    { hosts: ["kraken.com"], id: "kraken", label: "Kraken", category: "trading", suite: "trading" },
-    { hosts: ["robinhood.com"], id: "robinhood", label: "Robinhood", category: "trading", suite: "trading" },
-    { hosts: ["tastytrade.com"], id: "tastytrade", label: "Tastytrade", category: "trading", suite: "trading" },
-    { hosts: ["webull.com"], id: "webull", label: "Webull", category: "trading", suite: "trading" },
-    { hosts: ["etoro.com"], id: "etoro", label: "eToro", category: "trading", suite: "trading" },
-    { hosts: ["tradingview.com"], id: "tradingview", label: "TradingView", category: "trading", suite: "trading" },
-    { hosts: ["mt4.metaquotes.net", "mt5.metaquotes.net"], id: "metatrader", label: "MetaTrader", category: "trading", suite: "trading" },
-    { hosts: ["deriv.com"], id: "deriv", label: "Deriv", category: "trading", suite: "trading" },
-    { hosts: ["olymptrade.com"], id: "olymptrade", label: "OlympTrade", category: "trading", suite: "trading" },
-    { hosts: ["quotex.com"], id: "quotex", label: "Quotex", category: "trading", suite: "trading" },
-    { hosts: ["iqoption.com"], id: "iqoption", label: "IQ Option", category: "trading", suite: "trading" },
-    { hosts: ["nadex.com"], id: "nadex", label: "Nadex", category: "trading", suite: "trading" },
+    // Trading. platformKind drives feature gating: only binary/fixed-time
+    // platforms ("binary") get the autopilot/automation features — the
+    // server-side autopilot loop is ExpertOption-demo-only, so showing live
+    // autopilot controls on a spot/equity broker would imply capability
+    // that does not exist.
+    { hosts: ["expertoption.com", "expert-option.com", "expertoption.finance", "app.expertoption.finance", "app.expertoption.com"], id: "expertoption", label: "ExpertOption", category: "trading", suite: "trading", platformKind: "binary" },
+    { hosts: ["binance.com"], id: "binance", label: "Binance", category: "trading", suite: "trading", platformKind: "spot" },
+    { hosts: ["coinbase.com"], id: "coinbase", label: "Coinbase", category: "trading", suite: "trading", platformKind: "spot" },
+    { hosts: ["kraken.com"], id: "kraken", label: "Kraken", category: "trading", suite: "trading", platformKind: "spot" },
+    { hosts: ["robinhood.com"], id: "robinhood", label: "Robinhood", category: "trading", suite: "trading", platformKind: "equity" },
+    { hosts: ["tastytrade.com"], id: "tastytrade", label: "Tastytrade", category: "trading", suite: "trading", platformKind: "equity" },
+    { hosts: ["webull.com"], id: "webull", label: "Webull", category: "trading", suite: "trading", platformKind: "equity" },
+    { hosts: ["etoro.com"], id: "etoro", label: "eToro", category: "trading", suite: "trading", platformKind: "spot" },
+    { hosts: ["tradingview.com"], id: "tradingview", label: "TradingView", category: "trading", suite: "trading", platformKind: "charts" },
+    { hosts: ["mt4.metaquotes.net", "mt5.metaquotes.net"], id: "metatrader", label: "MetaTrader", category: "trading", suite: "trading", platformKind: "spot" },
+    { hosts: ["deriv.com"], id: "deriv", label: "Deriv", category: "trading", suite: "trading", platformKind: "binary" },
+    { hosts: ["olymptrade.com"], id: "olymptrade", label: "OlympTrade", category: "trading", suite: "trading", platformKind: "binary" },
+    { hosts: ["quotex.com"], id: "quotex", label: "Quotex", category: "trading", suite: "trading", platformKind: "binary" },
+    { hosts: ["iqoption.com"], id: "iqoption", label: "IQ Option", category: "trading", suite: "trading", platformKind: "binary" },
+    { hosts: ["nadex.com"], id: "nadex", label: "Nadex", category: "trading", suite: "trading", platformKind: "binary" },
     // Bandwidth
     { hosts: ["speedtest.net"], id: "speedtest", label: "Speedtest", category: "bandwidth", suite: "bandwidth" },
     { hosts: ["fast.com"], id: "fast", label: "Fast.com", category: "bandwidth", suite: "bandwidth" },
@@ -2596,6 +2600,14 @@
 
     const cfg = overlaySettings || {}
     currentSettings = { ...getDefaultSettings(siteInfo?.suite), ...cfg }
+    // Platform-kind honesty gate: the autopilot loop is ExpertOption-demo-only
+    // server-side. On spot/equity/charting platforms, disable the automation
+    // features by default so panels show "feature disabled" instead of
+    // implying control this platform does not have. Binary platforms (EO,
+    // Deriv, Quotex…) keep them enabled.
+    if (siteInfo?.platformKind && siteInfo.platformKind !== "binary") {
+      currentSettings.features = { ...(currentSettings.features || {}), automation: false, autopilot: false }
+    }
     const opa = currentSettings.opacity
 
     // Pill position is always bottom-left (fixed); dockables are positioned independently

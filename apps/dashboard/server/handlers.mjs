@@ -1548,6 +1548,20 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // Phase 11 — go-live readiness report (decision support, NOT an unlock:
+  // PICC has no live-trading path). Aggregates sample size, realized-vs-
+  // breakeven, calibration adequacy, uptime, and data-source health.
+  if (path === "/api/trading/readiness" && (req.method === "GET" || req.method === "POST")) {
+    try {
+      const { tradingReadiness } = await import("./services/autopilot.mjs")
+      writeJson(res, 200, await withTimeout(tradingReadiness(), 15000))
+    } catch (err) {
+      console.warn("[picc] readiness failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   // Phase 14 — rolling decision log ("why is it / isn't it trading").
   if (path === "/api/trading/autopilot/decisions" && (req.method === "GET" || req.method === "POST")) {
     try {

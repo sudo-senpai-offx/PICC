@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { Badge, Button, Card, Field, Input, Select, Spinner, Textarea } from "@/components/ui"
+import { ReadinessPanel } from "@/components/ReadinessPanel"
 import { LiveMarketBoard } from "@/components/LiveMarketBoard"
 import { MarketIntelPanel } from "@/components/MarketIntelPanel"
 import { LiveDecisionsPanel } from "@/components/LiveDecisionsPanel"
@@ -309,6 +310,8 @@ export function AutopilotSuite() {
         Automated trading engine — configure strategy, risk controls, and asset scope.
         The autopilot monitors markets and executes within your rules. You always stay in control.
       </p>
+
+      <ReadinessPanel />
 
       {/* ─── Control Bar ─── */}
       <Card className="pad" style={{ border: running ? "1px solid var(--success, #22c55e)" : undefined }}>

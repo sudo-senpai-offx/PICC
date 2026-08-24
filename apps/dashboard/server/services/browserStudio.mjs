@@ -183,9 +183,11 @@ const DEFAULT_SETTINGS = {
   // Pages always render in PICC's own embedded engine and stream to the
   // content window — a separate Chrome/Edge window is never spawned.
   stealth: true,
-  // Humanized interaction — types with variable per-key latency instead of
-  // instant insertText. On by default; disable for debugging.
-  humanizeInput: true,
+  // Humanized interaction (variable per-key latency, burst typing). OFF by
+  // default per the project's no-behavioral-camouflage boundary: plain
+  // insertText fills fields without mimicking human cadence. Opt in
+  // explicitly via settings or PICC_HUMANIZE=1 if you accept that tradeoff.
+  humanizeInput: false,
   defaultProfile: "studio",
   homepage: "",
   devTools: false,
@@ -251,7 +253,7 @@ export async function saveBrowserSettings(partial = {}) {
     }
   }
   if (clean.humanizeInput != null) {
-    HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "0" ? false : next.humanizeInput !== false
+    HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "1" ? true : next.humanizeInput === true
   }
   if (clean.perfMode != null) {
     studio.perf = resolvePerf(next)
@@ -577,7 +579,9 @@ const studio = {
 // Cached pause/freeze timeouts (refreshed from settings on open + save + each
 // pause check). Synchronously readable so per-tab intel gating is cheap.
 let PAUSE_CFG = { tabFreezeMs: 90_000, suiteDeactivateMs: 600_000 }
-let HUMANIZE_INPUT = true
+// Opt-in only: default OFF (no-camouflage boundary). PICC_HUMANIZE=1 or the
+// settings toggle re-enables latency-jittered typing explicitly.
+let HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "1"
 
 // Cap each intelligence buffer so a busy page can't leak memory.
 const MAX_INTEL = { console: 300, network: 300, dom: 300, ws: 200, dialog: 30 }
@@ -1043,7 +1047,7 @@ async function pauseCheck() {
       tabFreezeMs: Number(s.tabFreezeMs) || 90_000,
       suiteDeactivateMs: Number(s.suiteDeactivateMs) || 600_000
     }
-    HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "0" ? false : s.humanizeInput !== false
+    HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "1" ? true : s.humanizeInput === true
   }
   const now = Date.now()
   for (const tab of studio.tabs) {
@@ -1374,7 +1378,7 @@ export function resolveStudioHeadless(headless, env = process.env) {
 export async function openStudio({ headless, profile, homepage } = {}) {
   const settings = await readSettings()
   studio.perf = resolvePerf(settings)
-  HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "0" ? false : settings.humanizeInput !== false
+  HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "1" ? true : settings.humanizeInput === true
   // Default: a real headed Edge window so every interaction (click, keyboard,
   // hover, drag, file dialogs, video, 2FA) is fully native. The screencast
   // still streams to the content window as a live mirror of the same session.
