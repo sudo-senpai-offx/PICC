@@ -441,6 +441,9 @@ async function seedAll(assetIds = watching.map((w) => w.id)) {
       } catch {
         /* one failed seed never blocks the loop */
       }
+      // Smooth the burst: N assets × 4 timeframes back-to-back is exactly the
+      // pattern that looks abusive regardless of intent — space requests out.
+      await new Promise((r) => setTimeout(r, 200))
     }
   }
   emit("status", { status: "connected", mode: currentMode, account })
@@ -911,6 +914,9 @@ export function liveEOStats() {
   }
 }
 
+const lastLiveFetch = new Map() // `${assetId}:${period}` -> ts (per-key re-fetch throttle)
+const LIVE_FETCH_MIN_MS = 3000
+
 /**
  * On-demand candle fetch for an arbitrary asset. Returns OHLC from the buffer
  * if already seeded; otherwise issues a live headless request and caches the
@@ -924,7 +930,14 @@ export async function fetchAssetCandles(assetId, period = 60, count = 120) {
     return { ohlc: buf.ohlc.slice(-count), source: "buffer" }
   }
   if (!session) return { ohlc: buf?.ohlc ?? [], source: buf?.ohlc?.length ? "buffer" : null }
+  // Per-asset/period throttle: rapid asset switching in the UI must not fire
+  // a burst of near-simultaneous history pulls at the gateway.
+  const lastAt = Number(lastLiveFetch.get(key)) || 0
+  if (Date.now() - lastAt < LIVE_FETCH_MIN_MS) {
+    return { ohlc: buf?.ohlc ?? [], source: buf?.ohlc?.length ? "buffer" : null }
+  }
   try {
+    lastLiveFetch.set(key, Date.now())
     const hist = await session.candles(assetId, period, count)
     if (hist?.ohlc?.length) {
       reseedBuffer(assetId, period, hist.ohlc)

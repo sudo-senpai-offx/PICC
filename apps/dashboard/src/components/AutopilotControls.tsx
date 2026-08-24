@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Badge, Button, Card, Field, Input, Select, Spinner } from "@/components/ui"
-import { getAutopilotConfig, saveAutopilotConfig, startAutopilot, stopAutopilot, getExpertOptionDemoStatus } from "@/lib/trading"
-import type { AutopilotConfig, ExpertOptionDemoStatus } from "@/lib/trading"
+import {
+  getAutopilotConfig,
+  saveAutopilotConfig,
+  startAutopilot,
+  stopAutopilot,
+  getExpertOptionDemoStatus,
+  getAutopilotDecisions,
+  whyAutopilot,
+} from "@/lib/trading"
+import type { AutopilotConfig, ExpertOptionDemoStatus, AutopilotDecisionsResult, AutopilotWhyResult } from "@/lib/trading"
 
 const REFRESH_MS = 10_000
 const SAVE_DEBOUNCE_MS = 600
@@ -9,6 +17,10 @@ const SAVE_DEBOUNCE_MS = 600
 export function AutopilotControls() {
   const [config, setConfig] = useState<AutopilotConfig | null>(null)
   const [status, setStatus] = useState<ExpertOptionDemoStatus | null>(null)
+  const [decisions, setDecisions] = useState<AutopilotDecisionsResult | null>(null)
+  const [why, setWhy] = useState<AutopilotWhyResult | null>(null)
+  const [whyLoading, setWhyLoading] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -18,9 +30,14 @@ export function AutopilotControls() {
 
   const refresh = useCallback(async () => {
     try {
-      const [cfgRes, stRes] = await Promise.allSettled([getAutopilotConfig(), getExpertOptionDemoStatus()])
+      const [cfgRes, stRes, decRes] = await Promise.allSettled([
+        getAutopilotConfig(),
+        getExpertOptionDemoStatus(),
+        getAutopilotDecisions(50),
+      ])
       if (cfgRes.status === "fulfilled") setConfig(cfgRes.value.config)
       if (stRes.status === "fulfilled") setStatus(stRes.value)
+      if (decRes.status === "fulfilled") setDecisions(decRes.value)
     } finally {
       setLoading(false)
     }
@@ -89,32 +106,121 @@ export function AutopilotControls() {
     }
   }
 
+  const runWhy = async () => {
+    setWhyLoading(true)
+    setError(null)
+    try {
+      const res = await whyAutopilot(config?.assetId)
+      setWhy(res)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Dry-run failed")
+    } finally {
+      setWhyLoading(false)
+    }
+  }
+
   if (loading) return <Spinner label="Loading autopilot…" />
 
   const running = config?.enabled ?? false
   const connected = status?.connected ?? false
+  const sessionLive = status?.sessionLive
+  const lastDecision = status?.autopilot?.lastDecision ?? null
 
   return (
     <div>
       <Card className="pad" style={{ marginBottom: 12 }}>
         <div className="row-between" style={{ marginBottom: 8 }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <strong>Autopilot</strong>
             <Badge tone={running ? "success" : "muted"}>{running ? "RUNNING" : "STOPPED"}</Badge>
             <Badge tone={connected ? "success" : "danger"}>{connected ? "Connected" : "Disconnected"}</Badge>
+            {sessionLive != null && (
+              <Badge tone={sessionLive ? "success" : "warn"}>
+                {sessionLive ? "Tab live" : "No live tab"}
+              </Badge>
+            )}
           </div>
-          <Button
-            variant={running ? "danger" : "primary"}
-            onClick={toggleAutopilot}
-            disabled={saving || !status?.configured}
-          >
-            {saving ? "…" : running ? "Stop" : "Start"}
-          </Button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Button variant="ghost" onClick={runWhy} disabled={whyLoading || !status?.configured} title="Evaluate the full gate chain against current data — places nothing">
+              {whyLoading ? "…" : "Why?"}
+            </Button>
+            <Button
+              variant={running ? "danger" : "primary"}
+              onClick={toggleAutopilot}
+              disabled={saving || !status?.configured}
+            >
+              {saving ? "…" : running ? "Stop" : "Start"}
+            </Button>
+          </div>
         </div>
+
+        {/* Phase 14 — the actual answer to "why didn't it trade just now" */}
+        {lastDecision && (
+          <div className="small" style={{ padding: 8, background: "var(--bg)", borderRadius: 6, marginBottom: 8 }}>
+            <span className="muted">Last decision: </span>
+            <span style={{ color: /tick error|failed|stale/i.test(lastDecision) ? "var(--danger)" : "var(--text)" }}>
+              {lastDecision}
+            </span>
+          </div>
+        )}
 
         {!status?.configured && (
           <div className="muted small" style={{ padding: 8, background: "var(--bg)", borderRadius: 6 }}>
             Configure your ExpertOption token in Trading Suite settings first.
+          </div>
+        )}
+
+        {why && (
+          <div className="small" style={{ padding: 10, background: "var(--bg)", borderRadius: 6, marginBottom: 8 }}>
+            <div style={{ marginBottom: 6 }}>
+              <strong>Dry run ({why.assetId}):</strong>{" "}
+              <span style={{ color: why.wouldTrade ? "var(--success)" : "var(--warning)" }}>
+                {why.wouldTrade ? `WOULD TRADE ${why.direction} @ ${why.confidence}%` : "WOULD SKIP"}
+              </span>{" "}
+              — {why.reason}
+            </div>
+            {why.gates && why.gates.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 4 }}>
+                {why.gates.map((g) => (
+                  <div key={g.name} title={g.detail ?? undefined}>
+                    <span style={{ color: g.pass ? "var(--success)" : "var(--danger)" }}>{g.pass ? "✓" : "✗"}</span>{" "}
+                    {g.name}
+                    {g.detail ? <span className="muted"> — {g.detail}</span> : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {decisions && decisions.decisions.length > 0 && (
+          <div style={{ marginBottom: 8 }}>
+            <button
+              className="muted small"
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
+              onClick={() => setShowHistory((v) => !v)}
+            >
+              Decision log ({decisions.window.trades} trades / {decisions.window.skips} skips) {showHistory ? "▾" : "▸"}
+            </button>
+            {showHistory && (
+              <div style={{ marginTop: 6, maxHeight: 180, overflowY: "auto", fontSize: 11 }}>
+                {Object.entries(decisions.tally).length > 0 && (
+                  <div className="muted" style={{ marginBottom: 4 }}>
+                    Skip reasons:{" "}
+                    {Object.entries(decisions.tally)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([gate, n]) => `${gate} ×${n}`)
+                      .join(" · ")}
+                  </div>
+                )}
+                {decisions.decisions.map((d, i) => (
+                  <div key={`${d.at}-${i}`} style={{ display: "flex", gap: 6, padding: "2px 0", borderTop: "1px solid var(--border)" }}>
+                    <span className="muted" style={{ minWidth: 64 }}>{new Date(d.at).toLocaleTimeString()}</span>
+                    <span>{d.reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

@@ -559,6 +559,51 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
   let lastFrameAt = Date.now()
   const MAX_RECONNECT_ATTEMPTS = 8
 
+  // ── Phase 12: gateway pacing (be a well-behaved client) ──────────────────
+  // A token bucket over ALL outbound gateway frames — subscriptions, history
+  // pulls, balance checks, trades. Not disguise: a bounded steady request rate
+  // is what normal software looks like. Ceiling configurable via
+  // PICC_EO_GATEWAY_RPM; default deliberately conservative.
+  const RPM_LIMIT = Math.max(30, Number(process.env.PICC_EO_GATEWAY_RPM) || 120)
+  const pacer = {
+    capacity: Math.max(5, Math.ceil(RPM_LIMIT / 12)),
+    tokens: Math.max(5, Math.ceil(RPM_LIMIT / 12)),
+    lastRefill: Date.now(),
+    minuteWindow: []
+  }
+  function pacerRefill() {
+    const now = Date.now()
+    const add = ((now - pacer.lastRefill) / 60_000) * RPM_LIMIT
+    if (add > 0) {
+      pacer.tokens = Math.min(pacer.capacity, pacer.tokens + add)
+      pacer.lastRefill = now
+    }
+  }
+  async function gatewayAcquire({ priority = false, waitMs = 2500 } = {}) {
+    const now = Date.now()
+    pacer.minuteWindow.push(now)
+    while (pacer.minuteWindow.length && now - pacer.minuteWindow[0] > 60_000) pacer.minuteWindow.shift()
+    pacerRefill()
+    // Trades never wait behind the budget (timing matters; they're already
+    // rare by cooldown design) — but they still count against the meter.
+    if (priority) {
+      pacer.tokens = Math.max(0, pacer.tokens - 1)
+      return
+    }
+    const deadline = Date.now() + waitMs
+    while (pacer.tokens < 1) {
+      if (Date.now() >= deadline) throw new WsError("gateway rate budget exhausted — backing off")
+      await new Promise((r) => setTimeout(r, 120))
+      pacerRefill()
+    }
+    pacer.tokens -= 1
+  }
+  function gatewayStats() {
+    const now = Date.now()
+    while (pacer.minuteWindow.length && now - pacer.minuteWindow[0] > 60_000) pacer.minuteWindow.shift()
+    return { limitRpm: RPM_LIMIT, usedLastMinute: pacer.minuteWindow.length, bucket: Math.floor(pacer.tokens) }
+  }
+
   const pendingNs = new Map() // ns -> { resolve, reject, timer }
   const pendingAction = new Map() // key (request ns or action name) -> { resolve, reject }
   const frameListeners = new Set()
@@ -848,15 +893,18 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
         reject(new Error(`no response for "${payload.action}" (${ns})`))
       }, timeoutMs)
       pendingNs.set(ns, { resolve: (v) => resolve(v), reject: (e) => reject(e), timer })
-      try {
-        ws.sendText(JSON.stringify(framed))
-      } catch (err) {
-        // Socket died between ensureOpen() and the write — clean up the
-        // just-registered entry instead of leaving it to age out.
-        clearTimeout(timer)
-        pendingNs.delete(ns)
-        reject(err)
-      }
+      void (async () => {
+        try {
+          await gatewayAcquire()
+          ws.sendText(JSON.stringify(framed))
+        } catch (err) {
+          // Socket death OR rate-budget exhaustion — clean up the just-
+          // registered entry instead of leaving it to age out.
+          clearTimeout(timer)
+          pendingNs.delete(ns)
+          reject(err)
+        }
+      })()
     })
   }
 
@@ -892,15 +940,23 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
         if (!pendingAction.has(k)) pendingAction.set(k, waiter)
       }
       timers.push(setTimeout(() => settle(reject, new Error(`no response for "${payload.action}" (${list.join("/")})`)), timeoutMs))
-      try {
-        ws.sendText(JSON.stringify(framed))
-      } catch (err) {
-        settle(reject, err)
-      }
+      void (async () => {
+        try {
+          await gatewayAcquire()
+          ws.sendText(JSON.stringify(framed))
+        } catch (err) {
+          settle(reject, err)
+        }
+      })()
     })
   }
 
   function send(payload) {
+    // Priority lane: trade placements and their lifecycle messages must never
+    // queue behind the read budget (they're already rate-rare by design).
+    const priority = /^(buy|openTrade|closeTrade)/i.test(String(payload?.action ?? ""))
+    const chain = gatewayAcquire({ priority, waitMs: 0 }).catch(() => { /* budget exhaustion on non-priority send: still deliver — outbox semantics below are for disconnects, not pacing */ })
+    void chain
     if (ws && !userClosed) {
       ws.sendText(JSON.stringify(payload))
     } else if (!userClosed && !authFailed) {
@@ -997,7 +1053,8 @@ function createTransport({ token, isDemo, wsUrl, timeoutMs, regionUrls }) {
     },
     get connected() {
       return !userClosed && Boolean(ws)
-    }
+    },
+    gatewayStats
   }
 }
 
@@ -1075,7 +1132,8 @@ export async function connectSession({ token, isDemo = true, wsUrl = DEFAULT_WS_
     onGiveUp: (cb) => transport.onGiveUp(cb),
     get connected() {
       return Boolean(transport.connected)
-    }
+    },
+    gatewayStats: () => transport.gatewayStats()
   }
 }
 
@@ -1320,6 +1378,7 @@ export async function connectTradingSession({ token, isDemo = true, wsUrl = DEFA
     deals: () => [...activeDeals.values()],
     settled: () => settledDeals.slice(),
     livePrice: (serverId) => activeDeals.get(String(serverId))?.lastPrice ?? null,
+    gatewayStats: () => transport.gatewayStats(),
     onDeal: (cb) => {
       listeners.add(cb)
       return () => listeners.delete(cb)

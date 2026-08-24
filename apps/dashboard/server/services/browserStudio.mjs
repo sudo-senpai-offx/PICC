@@ -1262,6 +1262,40 @@ async function stopScreencast() {
 // ---------------------------------------------------------------------
 // Public session API
 // ---------------------------------------------------------------------
+
+/** The ExpertOption app SPA, on either domain. Shared so every consumer
+ * (capture script, liveness checks) agrees on what "the app tab" means. */
+export const EO_APP_URL_RE = /^https?:\/\/(www\.)?app\.expertoption\.(com|finance)\//i
+/** URL substrings that mean the user is NOT in a trading session. */
+const EO_NON_APP_RE = /login|register|signin|authorize|choose-account/i
+
+/**
+ * Phase 13 — session-liveness verification (correctness, not camouflage):
+ * confirm a real, currently-open ExpertOption app tab exists behind the
+ * cached token. A token with no live tab is exactly the orphaned-token
+ * pattern; catching it keeps the system from acting on data nobody can see.
+ *
+ * @returns {{ live: boolean, reason: string, url: string|null }}
+ */
+export function checkExpertOptionSessionLive() {
+  try {
+    if (!studio.open) return { live: false, reason: "PICC browser not open", url: null }
+    const tabs = Array.isArray(studio.tabs) ? studio.tabs : []
+    const appTabs = tabs.filter((t) => t?.url && EO_APP_URL_RE.test(String(t.url)))
+    if (!appTabs.length) {
+      return { live: false, reason: "no app.expertoption tab open in the PICC browser", url: null }
+    }
+    // An app tab stuck on login/register/error is not a live trading session.
+    const loggedIn = appTabs.find((t) => !EO_NON_APP_RE.test(String(t.url).toLowerCase()))
+    if (!loggedIn) {
+      return { live: false, reason: "ExpertOption tab is on a login/register page — sign in", url: String(appTabs[0].url) }
+    }
+    return { live: true, reason: "ExpertOption app tab open", url: String(loggedIn.url) }
+  } catch (err) {
+    return { live: false, reason: `liveness check failed: ${err?.message ?? err}`, url: null }
+  }
+}
+
 export function studioStatus() {
   const active = studio.tabs.find((t) => t.id === studio.activeId)
   const currentSite = active?.url ? detectSite(active.url) : null

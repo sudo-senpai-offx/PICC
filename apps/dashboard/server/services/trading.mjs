@@ -811,6 +811,9 @@ export async function tradingStatus() {
   let eoConnected = false
   let eoDemoWallet = null
   let eoRealWallet = null
+  let sessionLive = null
+  let sessionLiveReason = null
+  let gatewayRpm = null
   try {
     const { liveSnapshot, fetchFreshAccount } = await import("./liveEO.mjs")
     const snap = liveSnapshot()
@@ -830,6 +833,22 @@ export async function tradingStatus() {
       eoRealWallet = snap.account.realWallet || null
     }
   } catch { /* liveEO not loaded */ }
+  // Phase 13/12: cached liveness verdict + gateway pacing meter.
+  try {
+    const { cachedSessionLive } = await import("./autopilot.mjs")
+    const cached = cachedSessionLive()
+    sessionLive = cached.sessionLive
+    sessionLiveReason = cached.sessionLiveReason
+  } catch { /* ignore */ }
+  try {
+    const { getDemoSession } = await import("./autopilot.mjs")
+    gatewayRpm = getDemoSession()?.gatewayStats?.() ?? null
+  } catch { /* ignore */ }
+  let uptime24h = null
+  try {
+    const { sessionUptime24h } = await import("./scheduler.mjs")
+    uptime24h = sessionUptime24h()
+  } catch { /* ignore */ }
   return {
     ok: true,
     mode: "paper",
@@ -840,11 +859,15 @@ export async function tradingStatus() {
       demo: creds.expertoptionDemo,
       wsUrl: creds.expertoptionWsUrl,
       connected: eoConnected,
+      sessionLive,
+      sessionLiveReason,
       balance: eoBalance,
       currency: eoCurrency,
       demoWallet: eoDemoWallet,
-      realWallet: eoRealWallet
+      realWallet: eoRealWallet,
+      gatewayRpm
     },
+    uptime24h,
     paper: overview
   }
 }

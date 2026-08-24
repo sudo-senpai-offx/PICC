@@ -1548,6 +1548,51 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // Phase 14 — rolling decision log ("why is it / isn't it trading").
+  if (path === "/api/trading/autopilot/decisions" && (req.method === "GET" || req.method === "POST")) {
+    try {
+      const { getAutopilotDecisions } = await import("./services/autopilot.mjs")
+      const limit = Math.min(Math.max(Number(body?.limit ?? parsed.searchParams.get("limit")) || 50, 1), 50)
+      writeJson(res, 200, getAutopilotDecisions(limit))
+    } catch (err) {
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // Phase 14 — dry-run decision support. Evaluates the FULL gate chain
+  // against current data and reports what would happen — places nothing.
+  if (path === "/api/trading/autopilot/why" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      const { whyAutopilot } = await import("./services/autopilot.mjs")
+      writeJson(res, 200, await withTimeout(whyAutopilot({ assetId: body?.assetId }), 30000))
+    } catch (err) {
+      console.warn("[picc] autopilot why failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // Phase 16 — manually close an open demo position.
+  if (path === "/api/trading/demo/close" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const dealId = String(body?.dealId ?? "").trim()
+    if (!dealId) return writeJson(res, 400, { ok: false, error: "dealId required" })
+    try {
+      const { getDemoSession } = await import("./services/autopilot.mjs")
+      const session = getDemoSession()
+      if (!session) return writeJson(res, 409, { ok: false, error: "no connected demo session" })
+      if (typeof session.closeTrade !== "function") return writeJson(res, 501, { ok: false, error: "closeTrade unavailable on this session" })
+      const result = await withTimeout(session.closeTrade(dealId), 12000)
+      bustRealtimeSuite()
+      writeJson(res, 200, { ok: true, result })
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: String(err?.message ?? err).slice(0, 200) })
+    }
+    return
+  }
+
   if (path === "/api/trading/demo/analytics" && (req.method === "GET" || req.method === "POST")) {
     try {
       writeJson(res, 200, await withTimeout(demoAnalytics(), 10000))
@@ -1565,6 +1610,42 @@ async function _handleApiInner(req, res, url, reqId) {
       writeJson(res, 500, { ok: false, error: err.message })
     }
     return
+  }
+
+  // Phase 15 — full export of the decision log + resolved trade history
+  // (JSON or CSV) so the data can be analyzed outside the dashboard.
+  if (path === "/api/trading/export" && req.method === "GET") {
+    try {
+      const format = String(parsed.searchParams.get("format") || "json").toLowerCase()
+      const [{ getAutopilotDecisions }, { ledgerHistory }, { perAssetStats }] = await Promise.all([
+        import("./services/autopilot.mjs"),
+        import("./services/accuracyLedger.mjs"),
+        import("./services/accuracyLedger.mjs")
+      ])
+      const decisions = getAutopilotDecisions(50).decisions
+      const ledger = ledgerHistory(500).filter((e) => e.status === "resolved")
+      const assets = perAssetStats().assets
+      if (format === "csv") {
+        const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`
+        const lines = []
+        lines.push("type,at,asset,direction,confidence,outcome,reason")
+        for (const d of decisions) lines.push(["decision", d.at, d.assetId ?? "", d.direction ?? "", d.confidence ?? "", d.trade ? "trade" : "skip", d.reason].map(esc).join(","))
+        for (const e of ledger) lines.push(["ledger", e.resolvedAt ?? "", e.asset ?? e.assetId ?? "", e.direction ?? "", e.winProb ?? "", e.result ?? "", ""].map(esc).join(","))
+        const body = lines.join("\n")
+        res.writeHead(200, {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="picc-trading-export-${new Date().toISOString().slice(0, 10)}.csv"`,
+          "Content-Length": Buffer.byteLength(body)
+        })
+        res.end(body)
+        return true
+      }
+      writeJson(res, 200, { ok: true, exportedAt: new Date().toISOString(), decisions, ledger, perAsset: assets })
+      return true
+    } catch (err) {
+      writeJson(res, 502, { ok: false, error: err.message })
+      return true
+    }
   }
 
   if (path === "/api/trading/watchlist" && req.method === "GET") {

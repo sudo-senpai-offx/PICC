@@ -244,6 +244,57 @@ every(
   { staggerMs: 15_000 }
 )
 
+// ── Phase 13/15 — session liveness re-check + uptime sampling ───────────────
+// Independent of autopilot ticking: the dashboard should honestly reflect
+// "is there a live browser session behind this token" at all times, and the
+// 24h uptime ring gives you a real reliability number, not a vibe.
+const UPTIME_RING_CAP = 2880 // 24h at 30s samples
+const uptimeRing = []
+export function sessionUptime24h() {
+  const n = uptimeRing.length
+  if (!n) return { samples: 0, connectedPct: null, livePct: null, windowHours: 0 }
+  const connected = uptimeRing.filter((s) => s.connected).length
+  const live = uptimeRing.filter((s) => s.live).length
+  const spanMs = Date.now() - Number(uptimeRing[0]?.ts || Date.now())
+  return {
+    samples: n,
+    connectedPct: Math.round((connected / n) * 1000) / 10,
+    livePct: Math.round((live / n) * 1000) / 10,
+    windowHours: Math.round((spanMs / 3_600_000) * 10) / 10
+  }
+}
+
+let livenessJobStarted = false
+export function startLivenessMonitor() {
+  if (livenessJobStarted) return true
+  livenessJobStarted = true
+  return every(
+    "eo-liveness",
+    30 * 1000,
+    async () => {
+      try {
+        const { getSessionLive, refreshSessionLiveCache } = await import("./autopilot.mjs")
+        const verdict = await getSessionLive()
+        refreshSessionLiveCache(verdict)
+        const { liveEOStats } = await import("./liveEO.mjs")
+        const st = liveEOStats() ?? {}
+        uptimeRing.push({ ts: Date.now(), connected: st.status === "connected", live: Boolean(verdict.live) })
+        if (uptimeRing.length > UPTIME_RING_CAP) uptimeRing.splice(0, uptimeRing.length - UPTIME_RING_CAP)
+        // Transition warnings — silent degradation is the enemy.
+        const prev = uptimeRing[uptimeRing.length - 2]
+        if (prev && prev.live !== Boolean(verdict.live)) {
+          import("./notificationCenter.mjs")
+            .then((m) => m.emitEvent(verdict.live ? "session.live-restored" : "session.lost", { reason: verdict.reason, via: verdict.via }))
+            .catch(() => {})
+        }
+      } catch (err) {
+        log.warn("liveness check failed", { error: String(err?.message ?? err) })
+      }
+    },
+    { staggerMs: 5_000 }
+  )
+}
+
 // Phase 9 — multi-exchange market data via CCXT. Every 15s (matching the
 // decision engine's cadence) poll each exchange/symbol pair configured in the
 // credential store, normalize OHLCV through the read-only connector, and store

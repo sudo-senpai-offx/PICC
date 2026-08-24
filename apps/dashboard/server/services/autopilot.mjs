@@ -70,7 +70,68 @@ const state = {
   loopTimer: null,
   lastRun: null,
   lastDecision: null,
-  dataHealth: "unknown"
+  dataHealth: "unknown",
+  // Rolling decision log (Phase 14): every tick's outcome with a human-readable
+  // reason, newest first. Turns "why didn't it trade just now" into "why has
+  // it been skipping for the last 20 minutes".
+  decisionLog: [],
+  // Phase 13: cached liveness verdict from the scheduler's periodic re-check.
+  sessionLive: null,
+  sessionLiveReason: "not checked yet"
+}
+
+const DECISION_LOG_CAP = 50
+
+/** Record a decision-log entry and set state.lastDecision in one place. */
+function setLastDecision(reason, extra = {}) {
+  state.lastDecision = reason
+  state.decisionLog.unshift({
+    at: new Date().toISOString(),
+    reason,
+    ...extra
+  })
+  if (state.decisionLog.length > DECISION_LOG_CAP) state.decisionLog.length = DECISION_LOG_CAP
+}
+
+/** Classify a refusal reason into its gate bucket (Phase 15 rejection tally). */
+export function classifyGateReason(reason) {
+  const r = String(reason ?? "")
+  if (/disabled/i.test(r)) return "disabled"
+  if (/no directional signal|flat/i.test(r)) return "no-signal"
+  if (/below .*minConfidence|confidence .* below/i.test(r)) return "confidence"
+  if (/cooldown/i.test(r)) return "cooldown"
+  if (/max concurrent/i.test(r)) return "max-concurrent"
+  if (/daily trade cap/i.test(r)) return "daily-cap"
+  if (/AI gate/i.test(r)) return "ai-veto"
+  if (/MTF gate/i.test(r)) return "mtf-gate"
+  if (/pro analysis|pro confluence/i.test(r)) return "pro-gate"
+  if (/sentiment gate/i.test(r)) return "sentiment-gate"
+  if (/loss limit/i.test(r)) return "daily-loss-limit"
+  if (/consecutive-loss/i.test(r)) return "loss-breaker"
+  if (/regime-shift/i.test(r)) return "regime-breaker"
+  if (/stale|not enough candles|candle fetch failed/i.test(r)) return "data-quality"
+  if (/balance fetch failed|no token|demo mode disabled/i.test(r)) return "session"
+  if (/no live browser session/i.test(r)) return "liveness"
+  if (/tick error/i.test(r)) return "error"
+  return "other"
+}
+
+/** Rolling decision log + per-gate rejection tally over the log window. */
+export function getAutopilotDecisions(limit = 50) {
+  const decisions = state.decisionLog.slice(0, Math.max(1, Math.min(Number(limit) || 50, DECISION_LOG_CAP)))
+  const tally = {}
+  for (const d of decisions) {
+    if (d.trade) continue
+    const gate = d.gate || classifyGateReason(d.reason)
+    tally[gate] = (tally[gate] || 0) + 1
+  }
+  const trades = decisions.filter((d) => d.trade).length
+  return {
+    ok: true,
+    decisions,
+    tally,
+    window: { size: decisions.length, trades, skips: decisions.length - trades }
+  }
 }
 
 function clamp(n, lo, hi) {
@@ -768,6 +829,48 @@ export async function autopilotTick() {
   }
 }
 
+/**
+ * Phase 13 — is a real, live browser session behind the cached token?
+ * Honest union of two legitimate live legs: (a) the PICC studio browser has
+ * an open ExpertOption app tab, or (b) the user's own browser is streaming
+ * broker frames through the extension feed right now. Either way a human
+ * -visible session exists; neither means we'd be acting on orphaned data.
+ */
+export async function getSessionLive() {
+  // Leg 0: an authenticated gateway session IS a live session — the broker
+  // validated the token at connect and keeps the socket alive.
+  try {
+    if (state.session && state.session.connected) {
+      return { live: true, reason: "authenticated gateway session active", url: null, via: "gateway-session" }
+    }
+  } catch { /* ignore */ }
+  try {
+    const { checkExpertOptionSessionLive } = await import("./browserStudio.mjs")
+    const studioCheck = checkExpertOptionSessionLive()
+    if (studioCheck.live) return { ...studioCheck, via: "studio" }
+    var studioReason = studioCheck.reason
+  } catch { var studioReason = "studio browser unavailable" }
+  try {
+    const { liveEOStats } = await import("./liveEO.mjs")
+    const upAt = Number(liveEOStats()?.upstream?.lastAt) || 0
+    if (upAt && Date.now() - upAt < 60_000) {
+      return { live: true, reason: "extension feed streaming from your browser", url: null, via: "extension" }
+    }
+  } catch { /* ignore */ }
+  return { live: false, reason: studioReason, url: null, via: "none" }
+}
+
+/** Cached liveness for status endpoints — refreshed by the scheduler job. */
+export function cachedSessionLive() {
+  return { sessionLive: state.sessionLive, sessionLiveReason: state.sessionLiveReason }
+}
+
+export function refreshSessionLiveCache(verdict) {
+  state.sessionLive = Boolean(verdict?.live)
+  state.sessionLiveReason = String(verdict?.reason ?? "")
+  return cachedSessionLive()
+}
+
 async function runAutopilotTick() {
   const tickId = randomBytes(4).toString("hex")
   const config = await getAutopilotConfig()
@@ -775,22 +878,32 @@ async function runAutopilotTick() {
 
   const creds = await getCredentials()
   if (!creds.expertoptionToken) {
-    state.lastDecision = "no token configured"
+    setLastDecision("no token configured")
     return { ok: false, reason: "no token" }
   }
   if (!creds.expertoptionDemo) {
-    state.lastDecision = "demo mode disabled — enable demo in credentials"
+    setLastDecision("demo mode disabled — enable demo in credentials")
     console.warn("[picc-autopilot] demo mode is disabled; enable it in credentials to allow autopilot trading")
     return { ok: false, reason: "demo mode disabled" }
   }
 
   const session = await ensureSession()
+
+  // Phase 13 liveness (after ensureSession so the connected gateway counts as
+  // a live leg): refuse to act when NOTHING live exists behind the token —
+  // no authenticated socket, no studio tab, no extension feed.
+  const liveVerdict = await getSessionLive()
+  refreshSessionLiveCache(liveVerdict)
+  if (!liveVerdict.live) {
+    setLastDecision(`no live browser session — ${liveVerdict.reason}`, { gate: "liveness" })
+    return { ok: false, reason: `no live browser session (${liveVerdict.reason})` }
+  }
   let balance = 0
   try {
     balance = (await session.balance()).balance ?? 0
   } catch (err) {
     state.dataHealth = "stale"
-    state.lastDecision = `balance fetch failed: ${err?.message ?? err}`
+    setLastDecision(`balance fetch failed: ${err?.message ?? err}`)
     console.warn("[picc-autopilot] balance fetch failed — treating data as stale:", err?.message ?? err)
     return { ok: false, reason: `session unreachable (${err?.message ?? err})`, stale: true }
   }
@@ -809,14 +922,14 @@ async function runAutopilotTick() {
     raw = await session.candles(config.assetId, config.timeframe, config.count)
   } catch (err) {
     state.dataHealth = "stale"
-    state.lastDecision = `candle fetch failed: ${err?.message ?? err}`
+    setLastDecision(`candle fetch failed: ${err?.message ?? err}`)
     console.warn("[picc-autopilot] candle fetch failed — marking data stale:", err?.message ?? err)
     return { ok: false, reason: `candle fetch failed (${err?.message ?? err})`, stale: true }
   }
   const { closes, ohlc } = candlesFrom(raw)
   if (closes.length < 30) {
     state.dataHealth = "stale"
-    state.lastDecision = `not enough candles (${closes.length})`
+    setLastDecision(`not enough candles (${closes.length})`)
     return { ok: false, reason: "not enough candles" }
   }
   state.dataHealth = "live"
@@ -836,7 +949,7 @@ async function runAutopilotTick() {
     if (nowSec > staleAfterSec) {
       const overdueSec = nowSec - (newestCandleSec + tfSec)
       state.dataHealth = "stale"
-      state.lastDecision = `candle data stale (${overdueSec}s past bar close, limit ${config.maxCandleAgeSec}s)`
+      setLastDecision(`candle data stale (${overdueSec}s past bar close, limit ${config.maxCandleAgeSec}s)`, { gate: "data-quality" })
       return { ok: false, reason: state.lastDecision, stale: true }
     }
   }
@@ -879,12 +992,12 @@ async function runAutopilotTick() {
   }
   const regimeNow = regimeStatus()
   if (config.regimeShiftPause && regimeNow.paused) {
-    state.lastDecision = `regime-shift breaker: ${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization`
+    setLastDecision(`regime-shift breaker: ${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization`, { gate: "regime-breaker" })
     return { ok: false, reason: `regime-shift breaker paused entries (${regimeNow.stable} -> ${regimeNow.candidate}, awaiting stable readings)` }
   }
   const lossRefusal = await checkLossBreaker(config, Date.now())
   if (lossRefusal) {
-    state.lastDecision = lossRefusal
+    setLastDecision(lossRefusal, { gate: "loss-breaker" })
     return { ok: false, reason: lossRefusal }
   }
 
@@ -951,9 +1064,18 @@ async function runAutopilotTick() {
     balance,
     open: open.length
   }
-  state.lastDecision = decision.trade
-    ? `${decision.direction} ${decision.confidence}% — ${decision.reason}`
-    : decision.reason
+  setLastDecision(
+    decision.trade
+      ? `${decision.direction} ${decision.confidence}% — ${decision.reason}`
+      : decision.reason,
+    {
+      trade: Boolean(decision.trade),
+      direction: decision.direction ?? null,
+      confidence: decision.confidence ?? null,
+      assetId: config.assetId,
+      gate: decision.trade ? null : classifyGateReason(decision.reason)
+    }
+  )
 
   if (!decision.trade) {
     if (/cap|loss limit/i.test(String(decision.reason))) {
@@ -990,13 +1112,13 @@ export async function startAutopilot() {
     state.loopTimer = setInterval(() => {
       autopilotTick().catch((err) => {
         console.warn("[picc-autopilot] tick error:", err?.message ?? err)
-        state.lastDecision = `tick error: ${err?.message ?? err}`
+        setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
       })
     }, 60_000)
   }
   void autopilotTick().catch((err) => {
     console.warn("[picc-autopilot] initial tick error:", err?.message ?? err)
-    state.lastDecision = `tick error: ${err?.message ?? err}`
+    setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
   })
   return getAutopilotConfig()
 }
@@ -1037,6 +1159,8 @@ export async function demoStatus() {
     configured: Boolean(creds.expertoptionToken),
     demo: creds.expertoptionDemo,
     connected: Boolean(state.session && state.session.connected),
+    sessionLive: state.sessionLive,
+    sessionLiveReason: state.sessionLiveReason,
     sessionError: state.sessionError,
     balance,
     currency,
@@ -1049,10 +1173,16 @@ export async function demoStatus() {
       running: Boolean(state.loopTimer),
       lastRun: state.lastRun,
       lastDecision: state.lastDecision,
+      decisionWindow: getAutopilotDecisions(50).window,
       dataHealth: state.dataHealth,
       breakers: breakerStatus()
     }
   }
+}
+
+/** Read-only accessor for the current demo session (e.g. manual close). */
+export function getDemoSession() {
+  return state.session && state.session.connected ? state.session : null
 }
 
 /** Test hook — wipe config + demo deals and drop the socket. */
@@ -1062,8 +1192,158 @@ export async function _resetAutopilotData() {
   await writeJSON(DEALS_FILE, { deals: [] })
   state.lastRun = null
   state.lastDecision = null
+  state.decisionLog = []
   state.dataHealth = "unknown"
   resetBreakers({ manualHold: false })
+}
+
+/**
+ * Phase 14 — dry-run decision support: run the FULL gate chain against
+ * current data and report exactly what would happen, WITHOUT placing any
+ * order, waiting the review delay, or mutating breaker/latch/config state.
+ * This is what powers the "why would it trade right now?" button.
+ *
+ * KEEP IN SYNC with runAutopilotTick()'s data-gathering sequence — the value
+ * of this feature is that its answer matches what the next real tick would do.
+ */
+export async function whyAutopilot({ assetId } = {}) {
+  const config = { ...(await getAutopilotConfig()) }
+  if (assetId) {
+    config.assetId = String(assetId).trim().toUpperCase() || config.assetId
+  }
+  const gates = []
+  const note = (name, pass, detail) => gates.push({ name, pass: Boolean(pass), detail: detail ?? null })
+
+  note("enabled", config.enabled, config.enabled ? null : "autopilot disabled")
+
+  const creds = await getCredentials()
+  note("token", Boolean(creds.expertoptionToken), creds.expertoptionToken ? null : "no token configured")
+  note("demo-only", Boolean(creds.expertoptionDemo), creds.expertoptionDemo ? null : "demo mode disabled")
+  if (!config.enabled || !creds.expertoptionToken || !creds.expertoptionDemo) {
+    return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "precondition failed" }
+  }
+
+  // Liveness (read-only cache refresh is fine here).
+  const liveVerdict = await getSessionLive()
+  refreshSessionLiveCache(liveVerdict)
+  note("liveness", liveVerdict.live, `${liveVerdict.via}: ${liveVerdict.reason}`)
+
+  let balance = 0
+  try {
+    const session = await ensureSession()
+    balance = (await session.balance()).balance ?? 0
+    note("session", true, `balance ${balance}`)
+    var sessionRef = session
+  } catch (err) {
+    note("session", false, `balance fetch failed: ${err?.message ?? err}`)
+    return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "session unreachable" }
+  }
+
+  let raw = null
+  try {
+    raw = await sessionRef.candles(config.assetId, config.timeframe, config.count)
+  } catch (err) {
+    note("candles", false, `candle fetch failed: ${err?.message ?? err}`)
+    return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "candle fetch failed" }
+  }
+  const { closes, ohlc } = candlesFrom(raw)
+  note("candles", closes.length >= 30, `${closes.length} bars`)
+  if (closes.length < 30) return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "not enough candles" }
+
+  // Freshness mirror of the tick guard.
+  const newestCandleSec = Number(ohlc[ohlc.length - 1]?.time)
+  const tfSec = Math.max(1, Math.round(Number(config.timeframe) || 60))
+  let fresh = true
+  if (Number.isFinite(newestCandleSec) && newestCandleSec > 1_000_000_000 && Number(config.maxCandleAgeSec) > 0) {
+    fresh = Math.floor(Date.now() / 1000) <= newestCandleSec + tfSec + Number(config.maxCandleAgeSec)
+  }
+  note("freshness", fresh, fresh ? null : "candle data stale")
+
+  const pred = predictDirection(closes, 3, { maxWindows: 200 })
+  note("signal", Boolean(pred.direction && pred.direction !== "flat"), `${pred.direction ?? "flat"} @ ${pred.confidence ?? "?"}%`)
+
+  let pro = null
+  if (config.proGate) {
+    try {
+      pro = proAnalyzeCandles({ candles: ohlc, symbol: config.assetId, timeframe: `${config.timeframe}s`, horizonDays: 3 })
+      if (!pro.ok) pro = null
+    } catch { pro = null }
+  }
+
+  const pnl = await todayPnl()
+  const todayTrades = await todayTradeCount()
+
+  // Breakers evaluated WITHOUT mutating their latch state (pure evaluation).
+  const regimeNow = regimeStatus()
+  note(
+    "regime-breaker",
+    !(config.regimeShiftPause && regimeNow.paused),
+    regimeNow.paused ? `${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization` : null
+  )
+  let lossSignals = []
+  try {
+    const acc = await signalAccuracy()
+    lossSignals = Array.isArray(acc?.recent) ? acc.recent : []
+  } catch { /* treat as empty */ }
+  const lossEval = evaluateLossBreaker(lossSignals, { limit: config.consecutiveLossLimit, windowMs: config.consecutiveLossWindowMs })
+  const lossBlocked = lossEval.tripped || breakers.lossTrippedUntil > Date.now()
+  note("loss-breaker", !lossBlocked, lossBlocked ? `streak ${lossEval.streak}/${config.consecutiveLossLimit}` : null)
+
+  const aiVeto = config.aiGate ? !(await aiConsents(pred)) : false
+  note("ai-gate", !aiVeto, config.aiGate ? (aiVeto ? "AI vetoed the signal" : "AI consents") : "off")
+
+  let mtf = null
+  if (config.mtfGate !== false) {
+    try {
+      const eoData = liveEOData()
+      const asset = (eoData.assets || []).find((a) => a.id === config.assetId)
+      if (asset) {
+        const dir = pred.direction === "down" ? -1 : pred.direction === "up" ? 1 : 0
+        mtf = quickMtfCheck(asset, dir)
+      }
+    } catch { /* skip */ }
+  }
+  note("mtf-gate", true, mtf ? `agree ${mtf.agree}/${mtf.total}` : "no MTF data (skipped)")
+
+  let sent = null
+  if (config.sentimentGate) {
+    try {
+      const { getSentiment } = await import("./sentimentEngine.mjs")
+      sent = await getSentiment(config.assetId)
+    } catch { /* skip */ }
+  }
+
+  const decision = decideAutopilot({
+    config,
+    pred,
+    pro,
+    mtf,
+    sentiment: sent,
+    openCount: sessionRef.deals().length,
+    lastEntryAt: config.lastEntryAt || 0,
+    now: Date.now(),
+    dailyPnl: pnl,
+    dayStartBalance: config.dayStartBalance,
+    todayTrades,
+    aiVeto
+  })
+
+  return {
+    ok: true,
+    dryRun: true,
+    wouldTrade: Boolean(decision.trade),
+    reason: decision.trade ? decision.reason : decision.reason,
+    direction: decision.direction ?? null,
+    confidence: decision.confidence ?? null,
+    assetId: config.assetId,
+    balance,
+    openDeals: sessionRef.deals().length,
+    todayTrades,
+    todayPnl: round2(pnl),
+    durationSec: config.duration,
+    signalNote: pred.note ?? null,
+    gates
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -1149,13 +1429,13 @@ export async function bootstrapAutopilot() {
         state.loopTimer = setInterval(() => {
           autopilotTick().catch((err) => {
             console.warn("[picc-autopilot] tick error:", err?.message ?? err)
-            state.lastDecision = `tick error: ${err?.message ?? err}`
+            setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
           })
         }, 60_000)
       }
       void autopilotTick().catch((err) => {
         console.warn("[picc-autopilot] bootstrap tick failed:", err?.message ?? err)
-        state.lastDecision = `tick error: ${err?.message ?? err}`
+        setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
       })
     }
   } catch {

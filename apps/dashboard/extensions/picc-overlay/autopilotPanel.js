@@ -74,6 +74,27 @@
         `<span${healthTitle} style="color:${healthColor}">${healthName}</span></div>`
     )
 
+    // Phase 13 — live-tab liveness: "token cached, no live tab" is a
+    // meaningfully different state than a real session behind the feed.
+    if (demo.sessionLive != null) {
+      const liveName = demo.sessionLive ? "Tab live" : "No live tab"
+      const liveColor = demo.sessionLive ? "#4ade80" : "#f59e0b"
+      const liveTitle = demo.sessionLiveReason ? ` title="${esc(demo.sessionLiveReason)}"` : ""
+      rows.push(
+        `<div style="display:flex;justify-content:space-between;font-size:10px"><span>Browser</span>` +
+          `<span${liveTitle} style="color:${liveColor}">${liveName}</span></div>`
+      )
+    }
+
+    // Phase 14 — the actual answer to "why didn't it trade just now".
+    if (ap.lastDecision) {
+      rows.push(
+        `<div style="font-size:9px;color:#9aa0c0;margin:3px 0;padding:3px 4px;background:#0d0d1a;border-radius:3px;` +
+          `border-left:2px solid #6c63ff;word-break:break-word">` +
+          `<span style="color:#6c63ff;font-weight:600">Last decision:</span> ${esc(ap.lastDecision)}</div>`
+      )
+    }
+
     const lr = ap.lastRun
     if (lr && lr.at) {
       const dir = lr.direction ? String(lr.direction).toUpperCase() : "\u2014"

@@ -1630,7 +1630,12 @@
       lines.push(`<div style="padding:4px 0;border-bottom:1px solid #6c63ff15${isActive ? ';background:#6c63ff08;border-radius:3px' : ''}">`)
       lines.push(`<div style="display:flex;justify-content:space-between;align-items:center">`)
       lines.push(`<span style="font-weight:600;font-size:11px${isActive ? ';color:#6c63ff' : ''}">${esc(dealAsset || "\u2014")}${isActive ? ' \u25cf' : ''}</span>`)
+      lines.push(`<span style="display:flex;gap:4px;align-items:center">`)
       lines.push(`<span style="font-size:10px;font-weight:600;color:${dirColor};padding:0 4px;border:1px solid ${dirColor}44;border-radius:3px">${esc(dirLabel)}</span>`)
+      if (deal.serverId != null) {
+        lines.push(`<button data-picc-action="close-deal" data-deal-id="${esc(deal.serverId)}" title="Close this position early" style="background:none;border:none;color:#9aa0c0;cursor:pointer;font-size:10px;padding:0 2px;line-height:1">\u2715</button>`)
+      }
+      lines.push(`</span>`)
       lines.push(`</div>`)
       lines.push(`<div style="display:flex;justify-content:space-between;font-size:10px;color:#9aa0c0">`)
       lines.push(`<span>${amount} \u00b7 ${durationStr}</span>`)
@@ -3018,6 +3023,26 @@
         showToast("Kill Switch", `Kill switch failed: ${err?.message ?? err}`, "error")
       }
       btn.disabled = false
+    }
+    if (action === "close-deal") {
+      const dealId = btn.getAttribute("data-deal-id")
+      if (!dealId) return
+      if (!window.confirm(`Close position ${dealId} early?`)) return
+      btn.disabled = true
+      try {
+        const result = await serverFetch("/api/trading/demo/close", { method: "POST", body: { dealId } })
+        if (result?.ok) {
+          showToast("Position", `Close requested for ${dealId}`, "success")
+          await fetchTradingData()
+          updateAllDockables()
+        } else {
+          showToast("Position", result?.error || "Close failed — no connected demo session?", "error")
+        }
+      } catch (err) {
+        showToast("Position", `Close failed: ${err?.message ?? err}`, "error")
+      } finally {
+        btn.disabled = false
+      }
     }
   })
 

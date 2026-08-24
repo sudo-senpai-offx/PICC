@@ -6,7 +6,7 @@ import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { isApiRequest, handleApi, writeJson } from "./handlers.mjs"
-import { startScheduler } from "./services/scheduler.mjs"
+import { startScheduler, startLivenessMonitor } from "./services/scheduler.mjs"
 import { startLedger } from "./services/accuracyLedger.mjs"
 import { log } from "./logger.mjs"
 
@@ -150,6 +150,9 @@ if (!process.env.PICC_NO_LISTEN) {
   // control plane.
   server.listen(PORT, "127.0.0.1", () => {
     log.info("server started", { port: PORT, host: "127.0.0.1", dist: ROOT })
+    // Register the liveness/uptime monitor BEFORE the scheduler starts —
+    // jobs registered after startScheduler() never get an interval.
+    startLivenessMonitor()
     if (startScheduler()) {
       console.log("[picc-scheduler] started")
     }

@@ -196,6 +196,42 @@ export function ledgerStats() {
 }
 
 /**
+ * Phase 15 — per-asset performance breakdown. Groups resolved ledger entries
+ * by asset so you can see whether the engine is genuinely better on some
+ * instruments rather than trusting one blended number.
+ */
+export function perAssetStats() {
+  const resolved = entries.filter((e) => e.status === "resolved" && e.result !== "unresolved")
+  const map = new Map()
+  for (const e of resolved) {
+    const key = String(e.asset || e.assetId || "UNKNOWN").toUpperCase()
+    let b = map.get(key)
+    if (!b) {
+      b = { asset: key, n: 0, hits: 0, misses: 0, pushes: 0, predWin: 0, realEv: 0 }
+      map.set(key, b)
+    }
+    b.n++
+    if (e.result === "hit") b.hits++
+    else if (e.result === "miss") b.misses++
+    else b.pushes++
+    b.predWin += e.winProb ?? 0
+    b.realEv += realizedEvTerm(e)
+  }
+  const rows = [...map.values()].map((b) => ({
+    asset: b.asset,
+    n: b.n,
+    hits: b.hits,
+    misses: b.misses,
+    pushes: b.pushes,
+    hitRate: b.hits + b.misses > 0 ? Math.round((b.hits / (b.hits + b.misses)) * 10000) / 10000 : null,
+    predictedWin: b.n ? Math.round((b.predWin / b.n) * 10000) / 10000 : null,
+    realizedEv: b.n ? Math.round((b.realEv / b.n) * 10000) / 10000 : null
+  }))
+  rows.sort((a, b2) => b2.n - a.n)
+  return { ok: true, assets: rows }
+}
+
+/**
  * Gate backtest — engine predictions (resolved in this ledger) vs actual demo
  * deals, bucketed by expiry/duration. Shows whether the engine's predicted
  * win probability and EV actually materialized on real demo outcomes.

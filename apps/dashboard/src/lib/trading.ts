@@ -352,6 +352,8 @@ export interface ExpertOptionDemoStatus {
   configured: boolean
   demo: boolean
   connected: boolean
+  sessionLive: boolean | null
+  sessionLiveReason: string | null
   sessionError: string | null
   balance: number | null
   currency: string
@@ -363,11 +365,61 @@ export interface ExpertOptionDemoStatus {
     running: boolean
     lastRun: Record<string, unknown> | null
     lastDecision: string | null
+    decisionWindow?: { size: number; trades: number; skips: number }
   }
 }
 
 export function getExpertOptionDemoStatus(): Promise<ExpertOptionDemoStatus> {
   return request("/trading/demo")
+}
+
+// Phase 14 — decision support: rolling decision log + dry-run gate evaluation.
+export interface AutopilotDecisionEntry {
+  at: string
+  reason: string
+  trade?: boolean
+  direction?: string | null
+  confidence?: number | null
+  assetId?: string
+  gate?: string | null
+}
+
+export interface AutopilotDecisionsResult {
+  ok: boolean
+  decisions: AutopilotDecisionEntry[]
+  tally: Record<string, number>
+  window: { size: number; trades: number; skips: number }
+}
+
+export function getAutopilotDecisions(limit = 50): Promise<AutopilotDecisionsResult> {
+  return request(`/trading/autopilot/decisions?limit=${limit}`)
+}
+
+export interface AutopilotWhyGate {
+  name: string
+  pass: boolean
+  detail: string | null
+}
+
+export interface AutopilotWhyResult {
+  ok: boolean
+  dryRun: true
+  wouldTrade: boolean
+  reason: string
+  direction?: string | null
+  confidence?: number | null
+  assetId?: string
+  balance?: number
+  openDeals?: number
+  todayTrades?: number
+  todayPnl?: number
+  durationSec?: number
+  signalNote?: string | null
+  gates: AutopilotWhyGate[]
+}
+
+export function whyAutopilot(assetId?: string): Promise<AutopilotWhyResult> {
+  return post("/trading/autopilot/why", assetId ? { assetId } : {})
 }
 
 export function placeDemoTrade(input: {
