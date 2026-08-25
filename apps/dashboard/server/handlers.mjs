@@ -4,6 +4,8 @@
 // Supabase sync. Every provider degrades with an honest fallback.
 import { createHash } from "node:crypto"
 import { env, providers } from "./config.mjs"
+import { errorLogEnabled, recordClientReport } from "./errorLog.mjs"
+import { assetsEquivalent } from "./services/assetCatalog.mjs"
 import { getHistory, statsFromHistory, downsample, clampDrift, clampVol, getQuote } from "./services/yahoo.mjs"
 import { researchTopic } from "./services/serper.mjs"
 import { chatJSON, chatText, asSuggestionArray, provider, llmConfigured } from "./services/llm.mjs"
@@ -298,20 +300,34 @@ function clientIp(req) {
   return req.socket?.remoteAddress ?? "unknown"
 }
 
+// Throttle repeated identical warnings (per-poll candle fallbacks used to
+// spam the log once per consumer per poll). One emission per key per window.
+const warnThrottle = new Map()
+function throttledWarn(message, cooldownMs = 60_000) {
+  const now = Date.now()
+  if (now - (warnThrottle.get(message) ?? 0) < cooldownMs) return
+  warnThrottle.set(message, now)
+  console.warn(message)
+}
+
 /** True when the TCP connection originates from localhost (the extension's background.js). */
 function isLocalhostRequest(req) {
   const ip = clientIp(req).replace(/^::ffff:/, "")
   return ip === "127.0.0.1" || ip === "::1" || ip === "localhost"
 }
 
-/** EO asset ids are numeric strings while clients send symbols ("EURUSD") — match either. */
+/**
+ * EO asset ids are numeric strings while clients send symbols ("EURUSD",
+ * "GOLD", "Bitcoin", "US30"…). Match either, with alias-aware canonical
+ * comparison so broker labels like "XAU/USD" resolve to the same instrument
+ * the overlay normalized to GOLD.
+ */
 function eoAssetMatches(a, key) {
   if (!a) return false
   const k = String(key ?? "").toLowerCase()
   if (!k) return false
   if (String(a.id) === String(key)) return true
-  const norm = (s) => String(s ?? "").toLowerCase().replace(/[/\s-]/g, "")
-  return norm(a.name) === k || norm(a.displayName) === k
+  return assetsEquivalent(a.name, key) || assetsEquivalent(a.displayName, key)
 }
 
 function isHttpUrl(value) {
@@ -516,7 +532,7 @@ const SCHEMAS = {
     exit: [required, isNumber(0, 1e12)]
   },
   autopilot: {
-    assetId: [maxLength(20)],
+    assetId: [maxLength(24)],
     duration: [isNumber(5, 43200)],
     minConfidence: [isNumber(30, 95)],
     cooldownMs: [isNumber(10000, 86400000)],
@@ -526,7 +542,23 @@ const SCHEMAS = {
     maxDailyTrades: [isNumber(0, 100)],
     consecutiveLossLimit: [isNumber(1, 20)],
     consecutiveLossWindowMs: [isNumber(60000, 86400000)],
-    maxCandleAgeSec: [isNumber(10, 3600)]
+    maxCandleAgeSec: [isNumber(10, 3600)],
+    assets: [
+      (v) => {
+        if (v == null) return null
+        if (!Array.isArray(v)) return "must be an array"
+        if (v.length > 20) return "max 20 assets"
+        for (const a of v) {
+          if (!a || typeof a !== "object") return "each asset must be an object"
+          if (typeof a.assetId !== "string" || !a.assetId.trim()) return "assetId required per asset"
+          if (a.assetId.length > 24) return "assetId max 24 chars"
+          if (a.duration != null && a.duration !== "" && (!Number.isFinite(Number(a.duration)) || Number(a.duration) < 5 || Number(a.duration) > 43200)) return "asset duration must be 5-43200"
+          if (a.amount != null && a.amount !== "" && Number(a.amount) <= 0) return "asset amount must be positive"
+          if (a.minConfidence != null && a.minConfidence !== "" && (!Number.isFinite(Number(a.minConfidence)) || Number(a.minConfidence) < 30 || Number(a.minConfidence) > 95)) return "asset minConfidence must be 30-95"
+        }
+        return null
+      }
+    ]
   },
   demoPlace: {
     assetId: [required, maxLength(20)],
@@ -1753,7 +1785,7 @@ async function _handleApiInner(req, res, url, reqId) {
         return writeJson(res, 200, { ok: true, source: result.source || "live", assetId, timeframe, candles: result.ohlc })
       }
       const { getHistory } = await import("./services/yahoo.mjs")
-      console.warn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
+      throttledWarn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
       const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
       const candles = history.dates.map((ts, i) => ({
         time: Math.floor(ts / 1000),
@@ -2004,13 +2036,19 @@ async function _handleApiInner(req, res, url, reqId) {
       const range = count > 500 ? "5y" : count > 200 ? "2y" : count > 100 ? "1y" : "6mo"
       const hist = await getHistory(symbol, range)
       if (!hist || !hist.closes?.length) return writeJson(res, 404, { error: "No data" })
-      const candles = hist.dates.map((time, i) => ({
-        time,
-        open: hist.opens[i],
-        high: hist.highs[i],
-        low: hist.lows[i],
-        close: hist.closes[i]
-      }))
+      // Drop rows with non-finite OHLC — Yahoo FX series carry null gaps and
+      // pattern math coerces null→0 into phantom signals (plus a client crash
+      // on .toFixed of null OHLC downstream).
+      const candles = hist.dates
+        .map((time, i) => ({
+          time,
+          open: hist.opens[i],
+          high: hist.highs[i],
+          low: hist.lows[i],
+          close: hist.closes[i]
+        }))
+        .filter((c) => [c.open, c.high, c.low, c.close].every((v) => Number.isFinite(Number(v)) && Number(v) > 0))
+        .slice(-count)
       const detected = detectPatterns(candles)
       const summary = patternSummary(candles)
       writeJson(res, 200, { ok: true, symbol, count: candles.length, detected, summary })
@@ -2247,9 +2285,110 @@ async function _handleApiInner(req, res, url, reqId) {
     if (req.method === "GET") { writeJson(res, 200, { ok: true, ...kellySnapshot() }); return true }
     if (req.method === "POST") {
       if (body.settings) { writeJson(res, 200, { ok: true, settings: saveKellySettings(body.settings) }); return true }
-      if (body.winRate != null && body.avgPayout != null) { writeJson(res, 200, { ok: true, kelly: computeKelly(body.winRate, body.avgPayout, body.mode) }); return true }
+      if (body.winRate != null && body.avgPayout != null) {
+        // Accept winRate as EITHER a fraction (0..1) or a percent (1..100) —
+        // callers used to get a silent zero-object back for posting 68.
+        // computeKelly normalizes units defensively itself; pass through.
+        writeJson(res, 200, { ok: true, kelly: computeKelly(Number(body.winRate), Number(body.avgPayout), body.mode) })
+        return true
+      }
     }
     return false
+  }
+
+  // ── Ideal buy/sell price points near the current timeframe ────────────
+  if (path === "/api/trading/levels" && req.method === "POST") {
+    const assetId = String(body?.assetId ?? "").trim().toUpperCase() || "EURUSD"
+    const timeframe = Math.min(Math.max(Number(body?.timeframe) || 60, 5), 3600)
+    const count = Math.min(Math.max(Number(body?.count) || 200, 30), 500)
+    try {
+      const { computeEntryLevels } = await import("./services/entryLevels.mjs")
+      const { liveEOData, fetchAssetCandles, ensureWatchingAsset } = await import("./services/liveEO.mjs")
+      const data = liveEOData()
+      const asset = data.assets.find((a) => eoAssetMatches(a, assetId))
+      let candles = []
+      let source = "none"
+      if (asset && asset.periods[timeframe]?.length) {
+        candles = asset.periods[timeframe].slice(-count)
+        source = "live"
+      }
+      if (!candles.length) {
+        await ensureWatchingAsset(assetId).catch(() => null)
+        const result = await withTimeout(fetchAssetCandles(assetId, timeframe, count), 10000).catch(() => ({ ohlc: [], source: null }))
+        if (result.ohlc?.length) {
+          candles = result.ohlc
+          source = result.source || "live"
+        }
+      }
+      if (!candles.length) {
+        try {
+          const { getHistory } = await import("./services/yahoo.mjs")
+          throttledWarn(`[picc] ${assetId}: entry levels falling back to Yahoo DAILY bars`)
+          const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
+          candles = history.dates.map((ts, i) => ({
+            time: Math.floor(ts / 1000),
+            open: Number(history.opens[i]) || 0,
+            high: Number(history.highs[i]) || 0,
+            low: Number(history.lows[i]) || 0,
+            close: Number(history.closes[i]) || 0,
+            timeframe: 86400
+          })).filter((c) => c.close > 0 && c.time > 0).slice(-count)
+          source = "yahoo-daily"
+        } catch { /* no data at all */ }
+      }
+      const levels = computeEntryLevels(candles, { timeframe })
+      writeJson(res, 200, { ok: Boolean(levels.ok), assetId, timeframe, source, ...levels })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // ── Model matrix — multiplexing multi-model consensus ──────────────────
+  if (path === "/api/trading/models" && req.method === "POST") {
+    const assetId = String(body?.assetId ?? "").trim().toUpperCase() || "EURUSD"
+    const timeframe = Math.min(Math.max(Number(body?.timeframe) || 60, 5), 3600)
+    const count = Math.min(Math.max(Number(body?.count) || 200, 40), 500)
+    try {
+      const { computeModelMatrix } = await import("./services/modelMatrix.mjs")
+      const { liveEOData, fetchAssetCandles, ensureWatchingAsset } = await import("./services/liveEO.mjs")
+      const data = liveEOData()
+      const asset = data.assets.find((a) => eoAssetMatches(a, assetId))
+      let candles = []
+      let source = "none"
+      if (asset && asset.periods[timeframe]?.length) {
+        candles = asset.periods[timeframe].slice(-count)
+        source = "live"
+      }
+      if (!candles.length) {
+        await ensureWatchingAsset(assetId).catch(() => null)
+        const result = await withTimeout(fetchAssetCandles(assetId, timeframe, count), 10000).catch(() => ({ ohlc: [], source: null }))
+        if (result.ohlc?.length) {
+          candles = result.ohlc
+          source = result.source || "live"
+        }
+      }
+      if (!candles.length) {
+        try {
+          const { getHistory } = await import("./services/yahoo.mjs")
+          throttledWarn(`[picc] ${assetId}: model matrix falling back to Yahoo DAILY bars`)
+          const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
+          candles = history.dates.map((ts, i) => ({
+            time: Math.floor(ts / 1000),
+            open: Number(history.opens[i]) || 0,
+            high: Number(history.highs[i]) || 0,
+            low: Number(history.lows[i]) || 0,
+            close: Number(history.closes[i]) || 0,
+            timeframe: 86400
+          })).filter((c) => c.close > 0 && c.time > 0).slice(-count)
+          source = "yahoo-daily"
+        } catch { /* no data */ }
+      }
+      writeJson(res, 200, { assetId, timeframe, source, ...computeModelMatrix(candles) })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
   }
   if (path === "/api/trading/regime") {
     if (!(await requireAuth(req, res))) return true
@@ -2911,6 +3050,23 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // Client error reports (web dashboard browser console + extension contexts).
+  // Gated by PICC_ERROR_LOG — when disabled, reports are acknowledged but
+  // dropped so clients stop buffering.
+  if (path === "/api/client-logs" && req.method === "POST") {
+    if (!errorLogEnabled()) {
+      writeJson(res, 200, { ok: true, written: 0, disabled: true })
+      return
+    }
+    if (rateLimited(`clientlogs:${clientIp(req)}`, 30, 60_000)) {
+      writeJson(res, 429, { error: "rate limit exceeded — try again later" })
+      return
+    }
+    const written = recordClientReport(body)
+    writeJson(res, 200, { ok: true, written })
+    return
+  }
+
   if (path === "/api/agents/run" && req.method === "POST") {
     if (!env.agentsUrl) return writeJson(res, 503, { error: "agents service not configured (set PICC_AGENTS_URL)" })
     if (!(await verifyUser(auth)) && (await hasUsers())) {
@@ -3354,7 +3510,7 @@ async function _handleApiInner(req, res, url, reqId) {
       if (!candles.length) {
         try {
           const { getHistory } = await import("./services/yahoo.mjs")
-          console.warn(`[picc] ${primaryAsset}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
+          throttledWarn(`[picc] ${primaryAsset}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
           const history = await withTimeout(getHistory(primaryAsset, "6mo"), 10000)
           candles = (history.dates ?? []).map((ts, i) => ({
             time: Math.floor(ts / 1000),
@@ -3393,8 +3549,20 @@ async function _handleApiInner(req, res, url, reqId) {
         return analyzeOrderFlow(candles)
       })(), 4000).catch(() => null) : Promise.resolve(null)
 
-      const [kelly, regime, expiry, sentiment, orderFlow] = await Promise.all([
-        kellyProm, regimeProm, expiryProm, sentimentProm, orderFlowProm
+      // Ideal buy/sell price points for the ACTIVE asset near its timeframe.
+      const levelsProm = candles.length ? withTimeout((async () => {
+        const { computeEntryLevels } = await import("./services/entryLevels.mjs")
+        return computeEntryLevels(candles, { timeframe: 60 })
+      })(), 4000).catch(() => null) : Promise.resolve(null)
+
+      // Multiplexing model-matrix consensus for the ACTIVE asset.
+      const modelsProm = candles.length ? withTimeout((async () => {
+        const { computeModelMatrix } = await import("./services/modelMatrix.mjs")
+        return computeModelMatrix(candles)
+      })(), 4000).catch(() => null) : Promise.resolve(null)
+
+      const [kelly, regime, expiry, sentiment, orderFlow, entryLevels, models] = await Promise.all([
+        kellyProm, regimeProm, expiryProm, sentimentProm, orderFlowProm, levelsProm, modelsProm
       ])
 
       if (eoBalance && statusVal?.expertOption) {
@@ -3425,11 +3593,14 @@ async function _handleApiInner(req, res, url, reqId) {
         decisions: decisionsVal?.decisions ?? decisionsVal,
         candles,
         candleSource,
+        candleTimeframe: candles[0]?.timeframe ?? 60,
         kelly,
         regime,
         expiry,
         sentiment,
-        orderFlow
+        orderFlow,
+        entryLevels,
+        models
       })
     } catch (err) {
       log.warn("extension trading-data failed", { error: err.message })

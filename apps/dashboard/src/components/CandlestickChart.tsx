@@ -1,6 +1,6 @@
-import { useEffect, useRef, useCallback, memo } from "react"
+import { useEffect, useRef, useCallback, useMemo, memo } from "react"
 import { createChart, CandlestickSeries, HistogramSeries, LineSeries, ColorType } from "lightweight-charts"
-import type { IChartApi, ISeriesApi, CandlestickData, HistogramData, Time, DeepPartial, TimeChartOptions } from "lightweight-charts"
+import type { IChartApi, ISeriesApi, CandlestickData, HistogramData, Time, DeepPartial, TimeChartOptions, IPriceLine } from "lightweight-charts"
 
 export interface CandleDatum {
   time: Time
@@ -21,6 +21,13 @@ export interface EmaDatum {
   value: number
 }
 
+export interface PriceLine {
+  price: number
+  color: string
+  title: string
+  dashed?: boolean
+}
+
 interface CandlestickChartProps {
   candles: CandleDatum[]
   volumes?: VolumeDatum[]
@@ -33,6 +40,8 @@ interface CandlestickChartProps {
   kcUpper?: EmaDatum[]
   kcMiddle?: EmaDatum[]
   kcLower?: EmaDatum[]
+  /** Ideal buy/sell levels drawn as horizontal price lines. */
+  priceLines?: PriceLine[]
   height?: number
   onCrosshair?: (data: { time: Time; open: number; high: number; low: number; close: number } | null) => void
   autoScroll?: boolean
@@ -65,6 +74,24 @@ const THEME: DeepPartial<TimeChartOptions> = {
   }
 }
 
+/**
+ * lightweight-charts requires STRICTLY ascending, unique timestamps — equal
+ * times throw "data must be asc ordered by time" and kill the chart (seen in
+ * picc-errors.log with duplicated Yahoo daily bars). Sort AND dedupe every
+ * series; the newest row wins for duplicate timestamps.
+ */
+function sanitizeSeries<T extends { time: Time }>(rows: T[] | undefined): T[] {
+  if (!rows?.length) return []
+  const toSec = (t: Time) => (typeof t === "number" ? t : new Date(t as string).getTime() / 1000)
+  const byTime = new Map<number, T>()
+  for (const row of rows) {
+    const sec = toSec(row.time)
+    if (!Number.isFinite(sec)) continue
+    byTime.set(sec, row) // later rows overwrite earlier duplicates
+  }
+  return [...byTime.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v)
+}
+
 function CandlestickChartInner({
   candles,
   volumes,
@@ -77,6 +104,7 @@ function CandlestickChartInner({
   kcUpper,
   kcMiddle,
   kcLower,
+  priceLines,
   height = 360,
   onCrosshair,
   autoScroll = true
@@ -94,8 +122,22 @@ function CandlestickChartInner({
   const kcUpperSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const kcMiddleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const kcLowerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const priceLineRefs = useRef<IPriceLine[]>([])
   const onCrosshairRef = useRef(onCrosshair)
   onCrosshairRef.current = onCrosshair
+
+  // Sanitize once per render pass — every series below consumes sorted output.
+  const safeCandles = useMemo(() => sanitizeSeries(candles), [candles])
+  const safeVolumes = useMemo(() => sanitizeSeries(volumes), [volumes])
+  const safeEma20 = useMemo(() => sanitizeSeries(ema20), [ema20])
+  const safeEma50 = useMemo(() => sanitizeSeries(ema50), [ema50])
+  const safeTenkan = useMemo(() => sanitizeSeries(tenkan), [tenkan])
+  const safeKijun = useMemo(() => sanitizeSeries(kijun), [kijun])
+  const safeSenkouA = useMemo(() => sanitizeSeries(senkouA), [senkouA])
+  const safeSenkouB = useMemo(() => sanitizeSeries(senkouB), [senkouB])
+  const safeKcUpper = useMemo(() => sanitizeSeries(kcUpper), [kcUpper])
+  const safeKcMiddle = useMemo(() => sanitizeSeries(kcMiddle), [kcMiddle])
+  const safeKcLower = useMemo(() => sanitizeSeries(kcLower), [kcLower])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -104,7 +146,7 @@ function CandlestickChartInner({
       ...THEME,
       width: containerRef.current.clientWidth,
       height,
-      autoSize: true
+      autoSize: false
     })
 
     const cs = chart.addSeries(CandlestickSeries, {
@@ -195,6 +237,7 @@ function CandlestickChartInner({
     kcLowerSeriesRef.current = kl
 
     return () => {
+      priceLineRefs.current = []
       chart.remove()
       chartRef.current = null
       candleSeriesRef.current = null
@@ -209,60 +252,68 @@ function CandlestickChartInner({
       kcMiddleSeriesRef.current = null
       kcLowerSeriesRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only create chart once on mount
 
-  // Apply height changes without recreating the chart
+  // Keep the fixed-size option in sync with prop changes (autoSize is off).
   useEffect(() => {
     if (chartRef.current) {
-      chartRef.current.applyOptions({ height })
+      chartRef.current.applyOptions({ height, width: containerRef.current?.clientWidth })
     }
   }, [height])
 
   // Update candle data
   useEffect(() => {
-    if (!candleSeriesRef.current || !candles.length) return
-    const sorted = [...candles].sort((a, b) => {
-      const ta = typeof a.time === "number" ? a.time : new Date(a.time as string).getTime() / 1000
-      const tb = typeof b.time === "number" ? b.time : new Date(b.time as string).getTime() / 1000
-      return ta - tb
-    })
-    candleSeriesRef.current.setData(sorted as CandlestickData[])
+    if (!candleSeriesRef.current || !safeCandles.length) return
+    candleSeriesRef.current.setData(safeCandles as unknown as CandlestickData[])
     if (autoScroll) {
       chartRef.current?.timeScale().scrollToRealTime()
     }
-  }, [candles, autoScroll])
+  }, [safeCandles, autoScroll])
 
   // Update volume data
   useEffect(() => {
-    if (!volumeSeriesRef.current || !volumes?.length) return
-    const sorted = [...volumes].sort((a, b) => {
-      const ta = typeof a.time === "number" ? a.time : new Date(a.time as string).getTime() / 1000
-      const tb = typeof b.time === "number" ? b.time : new Date(b.time as string).getTime() / 1000
-      return ta - tb
-    })
-    volumeSeriesRef.current.setData(sorted as HistogramData[])
-  }, [volumes])
+    if (!volumeSeriesRef.current) return
+    volumeSeriesRef.current.setData(safeVolumes as unknown as HistogramData[])
+  }, [safeVolumes])
 
-  // Update EMA lines
+  // Update overlay line series
   useEffect(() => {
-    if (ema20SeriesRef.current && ema20?.length) {
-      ema20SeriesRef.current.setData(ema20 as never[])
-    }
-  }, [ema20])
+    if (ema20SeriesRef.current && safeEma20.length) ema20SeriesRef.current.setData(safeEma20 as never[])
+    if (ema50SeriesRef.current && safeEma50.length) ema50SeriesRef.current.setData(safeEma50 as never[])
+    if (tenkanSeriesRef.current && safeTenkan.length) tenkanSeriesRef.current.setData(safeTenkan as never[])
+    if (kijunSeriesRef.current && safeKijun.length) kijunSeriesRef.current.setData(safeKijun as never[])
+    if (senkouASeriesRef.current && safeSenkouA.length) senkouASeriesRef.current.setData(safeSenkouA as never[])
+    if (senkouBSeriesRef.current && safeSenkouB.length) senkouBSeriesRef.current.setData(safeSenkouB as never[])
+    if (kcUpperSeriesRef.current && safeKcUpper.length) kcUpperSeriesRef.current.setData(safeKcUpper as never[])
+    if (kcMiddleSeriesRef.current && safeKcMiddle.length) kcMiddleSeriesRef.current.setData(safeKcMiddle as never[])
+    if (kcLowerSeriesRef.current && safeKcLower.length) kcLowerSeriesRef.current.setData(safeKcLower as never[])
+  }, [safeEma20, safeEma50, safeTenkan, safeKijun, safeSenkouA, safeSenkouB, safeKcUpper, safeKcMiddle, safeKcLower])
 
+  // Ideal buy/sell level price lines — recreated whenever the set changes.
   useEffect(() => {
-    if (ema50SeriesRef.current && ema50?.length) {
-      ema50SeriesRef.current.setData(ema50 as never[])
+    const series = candleSeriesRef.current
+    if (!series) return
+    for (const line of priceLineRefs.current) {
+      try { series.removePriceLine(line) } catch { /* series already detached */ }
     }
-  }, [ema50])
-
-  useEffect(() => { if (tenkanSeriesRef.current && tenkan?.length) tenkanSeriesRef.current.setData(tenkan as never[]) }, [tenkan])
-  useEffect(() => { if (kijunSeriesRef.current && kijun?.length) kijunSeriesRef.current.setData(kijun as never[]) }, [kijun])
-  useEffect(() => { if (senkouASeriesRef.current && senkouA?.length) senkouASeriesRef.current.setData(senkouA as never[]) }, [senkouA])
-  useEffect(() => { if (senkouBSeriesRef.current && senkouB?.length) senkouBSeriesRef.current.setData(senkouB as never[]) }, [senkouB])
-  useEffect(() => { if (kcUpperSeriesRef.current && kcUpper?.length) kcUpperSeriesRef.current.setData(kcUpper as never[]) }, [kcUpper])
-  useEffect(() => { if (kcMiddleSeriesRef.current && kcMiddle?.length) kcMiddleSeriesRef.current.setData(kcMiddle as never[]) }, [kcMiddle])
-  useEffect(() => { if (kcLowerSeriesRef.current && kcLower?.length) kcLowerSeriesRef.current.setData(kcLower as never[]) }, [kcLower])
+    priceLineRefs.current = []
+    for (const pl of priceLines ?? []) {
+      if (!Number.isFinite(pl.price) || pl.price <= 0) continue
+      try {
+        priceLineRefs.current.push(
+          series.createPriceLine({
+            price: pl.price,
+            color: pl.color,
+            lineWidth: 1,
+            lineStyle: pl.dashed === false ? 0 : 2,
+            axisLabelVisible: true,
+            title: pl.title
+          })
+        )
+      } catch { /* skip malformed line */ }
+    }
+  }, [priceLines])
 
   const refFn = useCallback((el: HTMLDivElement | null) => {
     containerRef.current = el

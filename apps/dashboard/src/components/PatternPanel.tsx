@@ -8,6 +8,11 @@ const DIRECTION_COLORS: Record<string, string> = {
   neutral: "#9aa0c0"
 }
 
+/** Null-safe price formatting — Yahoo FX bars can carry gaps. */
+function fmtPx(v: number | null | undefined): string {
+  return typeof v === "number" && Number.isFinite(v) ? v.toFixed(4) : "—"
+}
+
 export function PatternPanel() {
   const [symbol, setSymbol] = useState("EURUSD")
   const [data, setData] = useState<{ detected: PatternDetection[]; summary: PatternSummary } | null>(null)
@@ -22,7 +27,9 @@ export function PatternPanel() {
     setLoading(false)
   }, [symbol])
 
-  useEffect(() => { refresh() }, [])
+  // Rescan automatically when the symbol changes (was previously mount-only,
+  // so editing the symbol did nothing until "Scan" was clicked).
+  useEffect(() => { void refresh() }, [refresh])
 
   const summary = data?.summary
 
@@ -88,7 +95,7 @@ export function PatternPanel() {
             <div key={i} style={{ padding: "3px 0", borderBottom: "1px solid var(--border)" }}>
               <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
                 {new Date(d.time).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                {" "}O:{d.open.toFixed(4)} H:{d.high.toFixed(4)} L:{d.low.toFixed(4)} C:{d.close.toFixed(4)}
+                {" "}O:{fmtPx(d.open)} H:{fmtPx(d.high)} L:{fmtPx(d.low)} C:{fmtPx(d.close)}
               </div>
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 }}>
                 {d.patterns.map((p, j) => (

@@ -60,7 +60,7 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
   }
 }
 
-function post<T>(path: string, body: unknown, token?: string): Promise<T> {
+export function post<T>(path: string, body: unknown, token?: string): Promise<T> {
   return request<T>(path, { method: "POST", body: JSON.stringify(body) }, token)
 }
 
@@ -1325,21 +1325,11 @@ export interface BrowserPreference {
   headless?: boolean
   homepage?: string
   overlay?: boolean
-  overlaySettings?: {
-    enabled?: boolean
-    position?: { x: number; y: number }
-    size?: { width: number; height: number }
-    opacity?: number
-    collapsed?: boolean
-    features?: {
-      assistance?: boolean
-      decisionSupport?: boolean
-      automation?: boolean
-      autopilot?: boolean
-      analysis?: boolean
-      ai?: boolean
-    }
-  }
+  // The extension round-trips its full overlay state through this field.
+  // Using the SHARED OverlaySettings type (which includes dockables,
+  // dockableLayout and groups) fixes the old drift where TS callers silently
+  // dropped those fields when saving per-site prefs.
+  overlaySettings?: import("@/lib/overlaySettings").OverlaySettings
 }
 
 export function getBrowserPreferences(): Promise<{ ok: boolean; prefs: Record<string, BrowserPreference> }> {

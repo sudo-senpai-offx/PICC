@@ -22,6 +22,7 @@ import { volatilityPositionSize, realizedVolatility } from "./volatility.mjs"
 import { quickMtfCheck } from "./multiTimeframe.mjs"
 import { liveEOData } from "./liveEO.mjs"
 import { detectRegime } from "./regimeDetection.mjs"
+import { computeModelMatrix, recordModelOutcomes } from "./modelMatrix.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -37,6 +38,9 @@ try {
 const DEFAULTS = {
   enabled: false,
   assetId: "BTCUSD",
+  // Multi-asset scope: each entry can carry its own overrides. Empty list =
+  // legacy single-asset mode driven by `assetId` above (backward compatible).
+  assets: [], // [{ assetId, enabled, duration?, amount?, minConfidence? }]
   duration: 60,
   amount: null, // null => auto: riskPerTradePct of balance
   minConfidence: 55,
@@ -51,6 +55,8 @@ const DEFAULTS = {
   minMtfAgree: 0,
   sentimentGate: false, // when true, block trades if sentiment strongly opposes signal direction
   minSentimentAlignment: 0.3, // minimum sentiment alignment threshold (0-1) for sentimentGate
+  consensusGate: false, // require the model-matrix consensus to agree with the entry signal
+  minConsensusAgree: 4, // minimum directional models agreeing when consensusGate is on
   consecutiveLossLimit: 3, // consecutive-loss circuit breaker: pause after N straight losses
   consecutiveLossWindowMs: 30 * 60 * 1000, // ...only when those losses happened inside this window
   regimeShiftPause: true, // regime-shift breaker: pause entries until the new regime stabilizes
@@ -60,7 +66,8 @@ const DEFAULTS = {
   stopReason: null,
   dayKey: null,
   dayStartBalance: null,
-  lastEntryAt: 0
+  lastEntryAt: 0,
+  assetLastEntryAt: {} // per-asset cooldown bookkeeping { ASSETID: epochMs }
 }
 
 const state = {
@@ -225,6 +232,50 @@ export async function getAutopilotConfig() {
   return { ...DEFAULTS, ...saved }
 }
 
+/**
+ * Resolve the effective per-asset targets. Legacy configs (no `assets` array)
+ * keep working: the single `assetId` field becomes the only target, inheriting
+ * every global knob.
+ */
+export function enabledAssetTargets(config) {
+  const raw = Array.isArray(config.assets) ? config.assets : []
+  const cleaned = raw
+    .filter((a) => a && typeof a === "object" && String(a.assetId ?? "").trim())
+    .map((a) => ({
+      assetId: String(a.assetId).trim().toUpperCase(),
+      enabled: a.enabled !== false,
+      duration: a.duration != null ? Number(a.duration) : null,
+      amount: a.amount != null && Number(a.amount) > 0 ? Number(a.amount) : null,
+      minConfidence: a.minConfidence != null && Number.isFinite(Number(a.minConfidence)) ? Number(a.minConfidence) : null
+    }))
+    .filter((a, i, arr) => arr.findIndex((b) => b.assetId === a.assetId) === i)
+  if (cleaned.length > 0) return cleaned.filter((a) => a.enabled)
+  // Legacy fallback — single asset, always "enabled" (engine-level flag rules).
+  return [{
+    assetId: String(config.assetId || "BTCUSD").trim().toUpperCase(),
+    enabled: true,
+    duration: null,
+    amount: null,
+    minConfidence: null
+  }]
+}
+
+/** Per-asset overrides merged over the global config for decision purposes. */
+function configForAsset(config, target) {
+  const override = (Array.isArray(config.assets) ? config.assets : [])
+    .find((a) => a && String(a.assetId ?? "").trim().toUpperCase() === target.assetId)
+  return {
+    ...config,
+    assetId: target.assetId,
+    duration: override?.duration != null ? clamp(Math.round(Number(override.duration)), 5, 43200) : config.duration,
+    amount: override?.amount != null && Number(override.amount) > 0 ? Number(override.amount) : config.amount,
+    minConfidence:
+      override?.minConfidence != null && Number.isFinite(Number(override.minConfidence))
+        ? clamp(Number(override.minConfidence), 30, 95)
+        : config.minConfidence
+  }
+}
+
 // Serialized config mutations: two concurrent saveAutopilotConfig calls used
 // to read-modify-write the same file and silently drop each other's fields.
 const mutateConfig = makeFileChain()
@@ -248,12 +299,45 @@ export async function saveAutopilotConfig(patch) {
     next.minMtfAgree = clamp(Math.round(Number(next.minMtfAgree) || 0), 0, 3)
     next.sentimentGate = Boolean(next.sentimentGate)
     next.minSentimentAlignment = clamp(Number(next.minSentimentAlignment) || 0.3, 0, 1)
+    next.consensusGate = Boolean(next.consensusGate)
+    next.minConsensusAgree = clamp(Math.round(Number(next.minConsensusAgree) || 4), 1, 7)
     next.consecutiveLossLimit = clamp(Math.round(Number(next.consecutiveLossLimit) || 3), 1, 20)
     next.consecutiveLossWindowMs = clamp(Math.round(Number(next.consecutiveLossWindowMs) || 1800000), 60000, 86400000)
     next.regimeShiftPause = next.regimeShiftPause !== false
     next.maxCandleAgeSec = clamp(Math.round(Number(next.maxCandleAgeSec) || 60), 10, 3600)
     next.timeframe = clamp(Math.round(Number(next.timeframe) || 60), 5, 3600)
     next.count = clamp(Math.round(Number(next.count) || 120), 30, 500)
+    // Multi-asset scope: sanitize each entry (dedupe, cap, normalize). Entries
+    // with enabled:false are KEPT so the suite's asset table remembers them.
+    if (Array.isArray(next.assets)) {
+      const seen = new Set()
+      next.assets = next.assets
+        .filter((a) => a && typeof a === "object" && String(a.assetId ?? "").trim())
+        .map((a) => ({
+          assetId: String(a.assetId).trim().toUpperCase().slice(0, 24),
+          enabled: a.enabled !== false,
+          duration: a.duration != null ? clamp(Math.round(Number(a.duration)), 5, 43200) : null,
+          amount: a.amount != null && Number(a.amount) > 0 ? clamp(Number(a.amount), 1, 1000) : null,
+          minConfidence: a.minConfidence != null && Number.isFinite(Number(a.minConfidence)) ? clamp(Number(a.minConfidence), 30, 95) : null
+        }))
+        .filter((a) => (seen.has(a.assetId) ? false : (seen.add(a.assetId), true)))
+        .slice(0, 20)
+      if (!next.assets.some((a) => a.assetId === next.assetId)) {
+        next.assetId = next.assets[0]?.assetId ?? String(next.assetId || "BTCUSD").trim().toUpperCase()
+      }
+    } else {
+      next.assets = []
+    }
+    if (next.assetLastEntryAt == null || typeof next.assetLastEntryAt !== "object" || Array.isArray(next.assetLastEntryAt)) {
+      next.assetLastEntryAt = {}
+    } else {
+      const clean = {}
+      for (const [k, v] of Object.entries(next.assetLastEntryAt)) {
+        const t = Number(v)
+        if (Number.isFinite(t) && t >= 0) clean[String(k).toUpperCase().slice(0, 24)] = Math.floor(t)
+      }
+      next.assetLastEntryAt = clean
+    }
     if (typeof next.stopReason !== "string") next.stopReason = next.stopReason ?? null
     next.lastEntryAt = Math.max(0, Number(next.lastEntryAt) || 0)
     await writeJSON(CONFIG_FILE, next)
@@ -598,6 +682,50 @@ async function recordDealLocked(deal) {
   })
   await recordFeedback(deal)
   await recordKelly(deal)
+  await settleModelOutcomes(deal)
+}
+
+// ── Model-matrix online learning ────────────────────────────────────────────
+// Votes are snapshotted per open deal at entry time; on settlement the
+// outcome feeds each model's EMA win-rate, which drives its consensus weight.
+
+const PENDING_VOTES_STORE = "modelMatrixPending"
+
+function pendingVotesStore() {
+  const store = localStore(PENDING_VOTES_STORE, { pending: {} })
+  if (!store.data.pending || typeof store.data.pending !== "object") store.data.pending = {}
+  return store
+}
+
+function stashModelVotes(serverId, votes) {
+  try {
+    if (!serverId || !Array.isArray(votes) || !votes.length) return
+    const store = pendingVotesStore()
+    store.data.pending[String(serverId)] = {
+      votes: votes.map((v) => ({ short: v.short, direction: v.direction })),
+      at: Date.now()
+    }
+    // Prune entries older than 7 days — unsettled deals shouldn't leak.
+    for (const [id, entry] of Object.entries(store.data.pending)) {
+      if (Date.now() - (entry.at ?? 0) > 7 * 86400_000) delete store.data.pending[id]
+    }
+    store.write()
+  } catch { /* best-effort */ }
+}
+
+function settleModelOutcomes(deal) {
+  try {
+    const serverId = String(deal?.serverId ?? "")
+    if (!serverId) return
+    const store = pendingVotesStore()
+    const entry = store.data.pending[serverId]
+    if (!entry?.votes?.length) return
+    delete store.data.pending[serverId]
+    store.write()
+    // Binary outcome direction: win for a call = price went up (and vice versa).
+    const wentUp = deal.type === "put" ? deal.result === "loss" : deal.result === "win"
+    recordModelOutcomes(entry.votes, wentUp)
+  } catch { /* best-effort */ }
 }
 
 /**
@@ -740,7 +868,7 @@ export async function placeDemoTrade({ assetId, type, amount, duration }) {
  * `pro` is the optional proAnalyzeCandles report; when config.proGate is on the
  * trade is refused unless pro agrees with the ensemble.
  */
-export function decideAutopilot({ config, pred, pro = null, mtf = null, sentiment = null, openCount = 0, lastEntryAt = 0, now = Date.now(), dailyPnl = 0, dayStartBalance = null, todayTrades = 0, aiVeto = false }) {
+export function decideAutopilot({ config, pred, pro = null, mtf = null, sentiment = null, consensus = null, openCount = 0, lastEntryAt = 0, now = Date.now(), dailyPnl = 0, dayStartBalance = null, todayTrades = 0, aiVeto = false }) {
   const refuse = (reason) => ({ trade: false, reason })
   if (!config.enabled) return refuse("autopilot disabled")
   if (!pred || !pred.direction || pred.direction === "flat") return refuse("no directional signal")
@@ -787,6 +915,21 @@ export function decideAutopilot({ config, pred, pro = null, mtf = null, sentimen
     const minAlign = Number(config.minSentimentAlignment) || 0.3
     if (Math.abs(score) >= minAlign && !aligned) {
       return refuse(`sentiment gate: ${score > 0 ? "bullish" : "bearish"} sentiment opposes ${pred.direction} signal (score ${score.toFixed(2)})`)
+    }
+  }
+
+  // Model-matrix consensus gate: the multiplexing model battery must agree
+  // with the entry direction by at least minConsensusAgree models.
+  if (config.consensusGate) {
+    const minModels = Math.max(1, Math.round(Number(config.minConsensusAgree) || 4))
+    if (!consensus || !consensus.ok) return refuse("consensus gate: model matrix unavailable")
+    const dirMatches = consensus.consensus?.direction === pred.direction
+    const agree = consensus.consensus?.agree ?? 0
+    if (!dirMatches) {
+      return refuse(`consensus gate: matrix says ${consensus.consensus?.direction ?? "flat"}, ensemble says ${pred.direction}`)
+    }
+    if (agree < minModels) {
+      return refuse(`consensus gate: only ${agree}/${consensus.consensus?.total ?? "?"} models agree (min ${minModels})`)
     }
   }
 
@@ -871,10 +1014,20 @@ export function refreshSessionLiveCache(verdict) {
   return cachedSessionLive()
 }
 
+/**
+ * One autopilot pass across EVERY enabled asset.
+ *
+ * Shared preconditions (token/demo/session/liveness/balance/day-reset/loss
+ * breaker/daily caps) are evaluated ONCE — they are account-level facts. The
+ * per-asset pipeline (candles → freshness → prediction → gates → decision →
+ * order) then runs for each target, honoring per-asset overrides for duration,
+ * amount and min-confidence, and per-asset cooldowns via assetLastEntryAt.
+ * maxConcurrent is enforced across ALL assets combined (open-deal budget).
+ */
 async function runAutopilotTick() {
   const tickId = randomBytes(4).toString("hex")
-  const config = await getAutopilotConfig()
-  if (!config.enabled) return { ok: false, reason: "autopilot disabled" }
+  const baseConfig = await getAutopilotConfig()
+  if (!baseConfig.enabled) return { ok: false, reason: "autopilot disabled" }
 
   const creds = await getCredentials()
   if (!creds.expertoptionToken) {
@@ -907,202 +1060,294 @@ async function runAutopilotTick() {
     console.warn("[picc-autopilot] balance fetch failed — treating data as stale:", err?.message ?? err)
     return { ok: false, reason: `session unreachable (${err?.message ?? err})`, stale: true }
   }
-  const open = session.deals()
+  let openCount = session.deals().length
 
   // Daily reset: lock the day-start balance once per day for the loss limit.
   const today = new Date().toISOString().slice(0, 10)
-  if (config.dayKey !== today) {
-    config.dayStartBalance = balance
-    config.dayKey = today
+  if (baseConfig.dayKey !== today) {
+    baseConfig.dayStartBalance = balance
+    baseConfig.dayKey = today
     await saveAutopilotConfig({ dayKey: today, dayStartBalance: balance })
   }
 
-  let raw = null
-  try {
-    raw = await session.candles(config.assetId, config.timeframe, config.count)
-  } catch (err) {
-    state.dataHealth = "stale"
-    setLastDecision(`candle fetch failed: ${err?.message ?? err}`)
-    console.warn("[picc-autopilot] candle fetch failed — marking data stale:", err?.message ?? err)
-    return { ok: false, reason: `candle fetch failed (${err?.message ?? err})`, stale: true }
-  }
-  const { closes, ohlc } = candlesFrom(raw)
-  if (closes.length < 30) {
-    state.dataHealth = "stale"
-    setLastDecision(`not enough candles (${closes.length})`)
-    return { ok: false, reason: "not enough candles" }
-  }
-  state.dataHealth = "live"
-
-  // Candle-freshness guard: refuse to act on data that stopped updating —
-  // a frozen feed must never look like a quiet market. The newest bar is the
-  // one currently forming, so its open time is legitimately up to one full
-  // timeframe in the past; staleness is measured from the moment that bar
-  // should have been replaced by a newer one (open + timeframe). Only enforced
-  // when the newest candle carries a plausible epoch timestamp (synthetic
-  // fixtures with tiny/zero times have no meaningful age).
-  const newestCandleSec = Number(ohlc[ohlc.length - 1]?.time)
-  const tfSec = Math.max(1, Math.round(Number(config.timeframe) || 60))
-  if (Number.isFinite(newestCandleSec) && newestCandleSec > 1_000_000_000 && Number(config.maxCandleAgeSec) > 0) {
-    const staleAfterSec = newestCandleSec + tfSec + Number(config.maxCandleAgeSec)
-    const nowSec = Math.floor(Date.now() / 1000)
-    if (nowSec > staleAfterSec) {
-      const overdueSec = nowSec - (newestCandleSec + tfSec)
-      state.dataHealth = "stale"
-      setLastDecision(`candle data stale (${overdueSec}s past bar close, limit ${config.maxCandleAgeSec}s)`, { gate: "data-quality" })
-      return { ok: false, reason: state.lastDecision, stale: true }
-    }
-  }
-
-  const pred = predictDirection(closes, 3, { maxWindows: 200 })
-
-  // Optional pro-analysis confluence gate (full indicator dashboard + regime
-  // classification + weekly bias). Best-effort: on failure it vetoes when the
-  // gate is enabled and otherwise is ignored.
-  let pro = null
-  if (config.proGate) {
-    try {
-      pro = proAnalyzeCandles({
-        candles: ohlc,
-        symbol: config.assetId,
-        timeframe: `${config.timeframe}s`,
-        horizonDays: 3
-      })
-      if (!pro.ok) pro = null
-    } catch (err) {
-      pro = null
-      console.warn("[picc-autopilot] pro analysis failed:", err.message)
-    }
-  }
-
   const pnl = await todayPnl()
-  const todayTrades = await todayTradeCount()
+  let todayTrades = await todayTradeCount()
 
   // Risk-threshold notifications fire regardless of breaker state — the user
   // wants to know about an approaching loss limit even when trading is paused.
-  maybeEmitRiskEvents(config, today, config.dayStartBalance, pnl)
+  maybeEmitRiskEvents(baseConfig, today, baseConfig.dayStartBalance, pnl)
 
-  // Circuit breakers — evaluated fresh every tick, in front of the decision.
-  if (config.regimeShiftPause) {
-    try {
-      updateRegimeBreaker(detectRegime(ohlc, `${config.timeframe}s`).regime, Date.now())
-    } catch {
-      /* regime detection is best-effort */
-    }
-  }
-  const regimeNow = regimeStatus()
-  if (config.regimeShiftPause && regimeNow.paused) {
-    setLastDecision(`regime-shift breaker: ${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization`, { gate: "regime-breaker" })
-    return { ok: false, reason: `regime-shift breaker paused entries (${regimeNow.stable} -> ${regimeNow.candidate}, awaiting stable readings)` }
-  }
-  const lossRefusal = await checkLossBreaker(config, Date.now())
+  // Consecutive-loss breaker — account-level, evaluated once per tick.
+  const lossRefusal = await checkLossBreaker(baseConfig, Date.now())
   if (lossRefusal) {
     setLastDecision(lossRefusal, { gate: "loss-breaker" })
     return { ok: false, reason: lossRefusal }
   }
 
-  const aiVeto = config.aiGate ? !(await aiConsents(pred)) : false
+  const targets = enabledAssetTargets(baseConfig)
+  if (!targets.length) {
+    setLastDecision("no assets enabled in autopilot scope", { gate: "other" })
+    return { ok: false, reason: "no assets enabled" }
+  }
 
-  // Multi-timeframe confluence gate: check if higher timeframes agree with
-  // the entry signal direction. Uses liveEO's candle buffers when available.
-  let mtf = null
-  if (config.mtfGate !== false) {
-    try {
-      const eoData = liveEOData()
-      const asset = (eoData.assets || []).find((a) => a.id === config.assetId)
-      if (asset) {
-        const dir = pred.direction === "down" ? -1 : pred.direction === "up" ? 1 : 0
-        mtf = quickMtfCheck(asset, dir)
-      }
-    } catch {
-      /* best-effort: skip MTF gate on failure */
+  const entryTimes = {}
+  const results = []
+  let preLoopRefusal = null
+  let sawStaleData = false
+  let lastDeal = null
+
+  for (const target of targets) {
+    if (openCount >= Number(baseConfig.maxConcurrent)) {
+      preLoopRefusal = `max concurrent deals reached (${baseConfig.maxConcurrent}) — remaining assets skipped`
+      console.warn(`[picc-autopilot] safety limit engaged — max concurrent deals reached (${baseConfig.maxConcurrent})`)
+      setLastDecision(preLoopRefusal, { gate: "max-concurrent", assetId: target.assetId })
+      break
     }
-  }
-
-  // Sentiment gate: fetch current sentiment for the asset
-  let sent = null
-  if (config.sentimentGate) {
-    try {
-      const { getSentiment } = await import("./sentimentEngine.mjs")
-      const raw = await getSentiment(config.assetId)
-      if (raw?.composite) {
-        sent = { score: raw.composite.score ?? 0, source: raw.composite.label || "fusion" }
-      }
-    } catch {
-      /* sentiment unavailable — skip gate */
+    if (Number(baseConfig.maxDailyTrades) > 0 && todayTrades >= Number(baseConfig.maxDailyTrades)) {
+      preLoopRefusal = `daily trade cap ${baseConfig.maxDailyTrades} reached`
+      console.warn(`[picc-autopilot] safety limit engaged — daily trade cap ${baseConfig.maxDailyTrades} reached`)
+      setLastDecision(`${preLoopRefusal} — remaining assets skipped`, { gate: "daily-cap", assetId: target.assetId })
+      break
     }
-  }
 
-  const decision = decideAutopilot({
-    config,
-    pred,
-    pro,
-    mtf,
-    sentiment: sent,
-    openCount: open.length,
-    lastEntryAt: config.lastEntryAt || 0,
-    now: Date.now(),
-    dailyPnl: pnl,
-    dayStartBalance: config.dayStartBalance,
-    todayTrades,
-    aiVeto
-  })
+    const config = configForAsset(baseConfig, target)
 
-  state.lastRun = {
-    tickId,
-    at: new Date().toISOString(),
-    ok: decision.trade,
-    reason: decision.reason,
-    direction: decision.direction ?? null,
-    confidence: decision.confidence ?? null,
-    proVerdict: pro?.confluence?.verdict ?? null,
-    proConfidence: pro?.confluence?.confidence ?? null,
-    proPhase: pro?.phase?.phase ?? null,
-    mtfAgree: mtf?.agree ?? null,
-    mtfTotal: mtf?.total ?? null,
-    mtfBoost: mtf?.boost ?? null,
-    balance,
-    open: open.length
-  }
-  setLastDecision(
-    decision.trade
-      ? `${decision.direction} ${decision.confidence}% — ${decision.reason}`
-      : decision.reason,
-    {
-      trade: Boolean(decision.trade),
+    let raw = null
+    try {
+      raw = await session.candles(config.assetId, config.timeframe, config.count)
+    } catch (err) {
+      state.dataHealth = "stale"
+      setLastDecision(`${config.assetId}: candle fetch failed: ${err?.message ?? err}`, { gate: "data-quality", assetId: config.assetId })
+      results.push({ assetId: config.assetId, traded: false, reason: "candle fetch failed" })
+      sawStaleData = true
+      continue
+    }
+    const { closes, ohlc } = candlesFrom(raw)
+    if (closes.length < 30) {
+      state.dataHealth = "stale"
+      setLastDecision(`${config.assetId}: not enough candles (${closes.length})`, { gate: "data-quality", assetId: config.assetId })
+      results.push({ assetId: config.assetId, traded: false, reason: "not enough candles" })
+      sawStaleData = true
+      continue
+    }
+    state.dataHealth = "live"
+
+    // Candle-freshness guard (per asset): refuse to act on data that stopped
+    // updating. The newest bar is still forming, so staleness is measured from
+    // when that bar should have been REPLACED (open + timeframe).
+    const newestCandleSec = Number(ohlc[ohlc.length - 1]?.time)
+    const tfSec = Math.max(1, Math.round(Number(config.timeframe) || 60))
+    if (Number.isFinite(newestCandleSec) && newestCandleSec > 1_000_000_000 && Number(config.maxCandleAgeSec) > 0) {
+      const staleAfterSec = newestCandleSec + tfSec + Number(config.maxCandleAgeSec)
+      const nowSec = Math.floor(Date.now() / 1000)
+      if (nowSec > staleAfterSec) {
+        const overdueSec = nowSec - (newestCandleSec + tfSec)
+        state.dataHealth = "stale"
+        setLastDecision(`${config.assetId}: candle data stale (${overdueSec}s past bar close)`, { gate: "data-quality", assetId: config.assetId })
+        results.push({ assetId: config.assetId, traded: false, reason: "candle data stale" })
+        sawStaleData = true
+        continue
+      }
+    }
+
+    const pred = predictDirection(closes, 3, { maxWindows: 200 })
+
+    // Model-matrix snapshot for this asset — always computed (cheap) so every
+    // entry records per-model votes for online weight learning; doubles as a
+    // hard entry gate when config.consensusGate is on.
+    let matrix = null
+    try {
+      matrix = computeModelMatrix(ohlc)
+    } catch {
+      matrix = null
+    }
+
+    // Optional pro-analysis confluence gate (per asset).
+    let pro = null
+    if (config.proGate) {
+      try {
+        pro = proAnalyzeCandles({
+          candles: ohlc,
+          symbol: config.assetId,
+          timeframe: `${config.timeframe}s`,
+          horizonDays: 3
+        })
+        if (!pro.ok) pro = null
+      } catch (err) {
+        pro = null
+        console.warn("[picc-autopilot] pro analysis failed:", err.message)
+      }
+    }
+
+    // Regime-shift breaker — latched globally, fed by each asset's readings.
+    if (config.regimeShiftPause) {
+      try {
+        updateRegimeBreaker(detectRegime(ohlc, `${config.timeframe}s`).regime, Date.now())
+      } catch {
+        /* regime detection is best-effort */
+      }
+    }
+    const regimeNow = regimeStatus()
+    if (config.regimeShiftPause && regimeNow.paused) {
+      setLastDecision(`regime-shift breaker: ${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization`, { gate: "regime-breaker", assetId: config.assetId })
+      results.push({ assetId: config.assetId, traded: false, reason: "regime-shift breaker" })
+      continue
+    }
+
+    const aiVeto = config.aiGate ? !(await aiConsents(pred)) : false
+
+    // Multi-timeframe confluence gate (per asset, from liveEO buffers).
+    let mtf = null
+    if (config.mtfGate !== false) {
+      try {
+        const eoData = liveEOData()
+        const asset = (eoData.assets || []).find((a) => a.id === config.assetId)
+        if (asset) {
+          const dir = pred.direction === "down" ? -1 : pred.direction === "up" ? 1 : 0
+          mtf = quickMtfCheck(asset, dir)
+        }
+      } catch {
+        /* best-effort: skip MTF gate on failure */
+      }
+    }
+
+    // Sentiment gate (per asset).
+    let sent = null
+    if (config.sentimentGate) {
+      try {
+        const { getSentiment } = await import("./sentimentEngine.mjs")
+        const rawSent = await getSentiment(config.assetId)
+        if (rawSent?.composite) {
+          sent = { score: rawSent.composite.score ?? 0, source: rawSent.composite.label || "fusion" }
+        }
+      } catch {
+        /* sentiment unavailable — skip gate */
+      }
+    }
+
+    // Legacy single-asset configs keep the GLOBAL lastEntryAt contract (the
+    // suite resets it via saveAutopilotConfig({lastEntryAt: 0})); explicit
+    // multi-asset scopes use the per-asset cooldown map.
+    const usesPerAssetCooldown = Array.isArray(baseConfig.assets) && baseConfig.assets.length > 0
+
+    const decision = decideAutopilot({
+      config,
+      pred,
+      pro,
+      mtf,
+      sentiment: sent,
+      consensus: matrix,
+      openCount,
+      lastEntryAt: usesPerAssetCooldown
+        ? baseConfig.assetLastEntryAt?.[config.assetId] || 0
+        : baseConfig.lastEntryAt || 0,
+      now: Date.now(),
+      dailyPnl: pnl,
+      dayStartBalance: baseConfig.dayStartBalance,
+      todayTrades,
+      aiVeto
+    })
+
+    state.lastRun = {
+      tickId,
+      at: new Date().toISOString(),
+      assetId: config.assetId,
+      ok: decision.trade,
+      reason: decision.reason,
       direction: decision.direction ?? null,
       confidence: decision.confidence ?? null,
-      assetId: config.assetId,
-      gate: decision.trade ? null : classifyGateReason(decision.reason)
+      proVerdict: pro?.confluence?.verdict ?? null,
+      proConfidence: pro?.confluence?.confidence ?? null,
+      proPhase: pro?.phase?.phase ?? null,
+      mtfAgree: mtf?.agree ?? null,
+      mtfTotal: mtf?.total ?? null,
+      mtfBoost: mtf?.boost ?? null,
+      balance,
+      open: openCount
     }
-  )
+    setLastDecision(
+      decision.trade
+        ? `${config.assetId}: ${decision.direction} ${decision.confidence}% — ${decision.reason}`
+        : `${config.assetId}: ${decision.reason}`,
+      {
+        trade: Boolean(decision.trade),
+        direction: decision.direction ?? null,
+        confidence: decision.confidence ?? null,
+        assetId: config.assetId,
+        gate: decision.trade ? null : classifyGateReason(decision.reason)
+      }
+    )
 
-  if (!decision.trade) {
-    if (/cap|loss limit/i.test(String(decision.reason))) {
-      console.warn(`[picc-autopilot] safety limit engaged — ${decision.reason}`)
+    if (!decision.trade) {
+      if (/cap|loss limit/i.test(String(decision.reason))) {
+        console.warn(`[picc-autopilot] safety limit engaged — ${decision.reason}`)
+      }
+      results.push({ assetId: config.assetId, traded: false, reason: decision.reason })
+      continue
     }
-    return { ok: false, reason: decision.reason }
-  }
 
-  const amount = await defaultAmount(balance, creds.riskPerTradePct, closes, ohlc.map((c) => c.time))
-  if (config.humanReviewMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, config.humanReviewMs))
-  }
-  const now = Date.now()
-  let deal
-  try {
-    deal = await session.buy({
+    const amount =
+      config.amount != null && Number(config.amount) > 0
+        ? clamp(round2(Number(config.amount)), 1, 1000)
+        : await defaultAmount(balance, creds.riskPerTradePct, closes, ohlc.map((c) => c.time))
+    if (config.humanReviewMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, config.humanReviewMs))
+    }
+    const now = Date.now()
+    let deal
+    try {
+      deal = await session.buy({
+        assetId: config.assetId,
+        type: decision.direction,
+        amount,
+        duration: config.duration
+      })
+    } finally {
+      entryTimes[config.assetId] = now
+      baseConfig.assetLastEntryAt[config.assetId] = now
+      baseConfig.lastEntryAt = now
+    }
+    state.lastRun.deal = deal.serverId
+    state.lastRun.amount = amount
+    state.lastRun.consensus = matrix?.consensus ?? null
+    stashModelVotes(deal.serverId, matrix?.votes ?? [])
+    lastDeal = deal
+    openCount += 1
+    todayTrades += 1
+    results.push({
       assetId: config.assetId,
-      type: decision.direction,
+      traded: true,
+      direction: decision.direction,
       amount,
-      duration: config.duration
+      reason: decision.reason,
+      confidence: decision.confidence
     })
-  } finally {
-    await saveAutopilotConfig({ lastEntryAt: now })
   }
-  state.lastRun.deal = deal.serverId
-  state.lastRun.amount = amount
-  return { ok: true, reason: decision.reason, deal, amount, direction: decision.direction }
+
+  if (Object.keys(entryTimes).length) {
+    await saveAutopilotConfig({ assetLastEntryAt: { ...(baseConfig.assetLastEntryAt ?? {}), ...entryTimes }, lastEntryAt: baseConfig.lastEntryAt })
+  }
+  const traded = results.filter((r) => r.traded)
+  const lastResult = results[results.length - 1]
+  return {
+    ok: traded.length > 0,
+    multi: true,
+    scanned: results.length,
+    trades: traded.length,
+    deal: lastDeal,
+    amount: traded.length ? state.lastRun.amount : undefined,
+    direction: traded.length ? state.lastRun.direction : undefined,
+    stale: sawStaleData || undefined,
+    results,
+    // Prefer the LAST TRADE's reason when anything traded (matches the old
+    // single-asset contract where ok:true carried the signal note), else the
+    // last refusal / pre-loop cap.
+    reason:
+      (traded.length ? [...results].reverse().find((r) => r.traded)?.reason : null) ??
+      lastResult?.reason ??
+      preLoopRefusal ??
+      "no assets scanned"
+  }
 }
 
 export async function startAutopilot() {
@@ -1171,6 +1416,13 @@ export async function demoStatus() {
     autopilot: {
       ...config,
       running: Boolean(state.loopTimer),
+      // Resolved per-asset scope: what the engine will actually trade.
+      assetScope: enabledAssetTargets(config).map((t) => ({
+        assetId: t.assetId,
+        duration: t.duration ?? config.duration,
+        amount: t.amount ?? config.amount,
+        minConfidence: t.minConfidence ?? config.minConfidence
+      })),
       lastRun: state.lastRun,
       lastDecision: state.lastDecision,
       decisionWindow: getAutopilotDecisions(50).window,
@@ -1329,6 +1581,9 @@ export async function whyAutopilot({ assetId } = {}) {
   if (assetId) {
     config.assetId = String(assetId).trim().toUpperCase() || config.assetId
   }
+  // Honor per-asset overrides (duration/amount/min-confidence) for the
+  // evaluated asset so the dry-run matches what a real tick would decide.
+  Object.assign(config, configForAsset(config, { assetId: config.assetId }))
   const gates = []
   const note = (name, pass, detail) => gates.push({ name, pass: Boolean(pass), detail: detail ?? null })
 

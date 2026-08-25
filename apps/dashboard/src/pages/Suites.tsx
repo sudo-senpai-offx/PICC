@@ -10,16 +10,12 @@ import { DockablePreview } from "@/components/DockablePreview"
 
 const SUITE_CATEGORIES = Object.values(SUITE_META) as SuiteMeta[]
 
+// Feature badges only promise what each suite actually ships. Suites without
+// PICC-managed panels are honestly labeled "Site-only" instead of advertising
+// features that do not exist yet.
 const SUITE_FEATURE_BADGES: Record<string, string[]> = {
   trading: ["Markets", "Decisions", "Autopilot", "Ledger", "Payouts", "Overlay HUD"],
-  bandwidth: ["Automator", "Connectors", "Earnings"],
-  depin: ["Node Health", "Earnings"],
-  nft: ["Floor Price", "Volume", "Royalties"],
-  defi: ["Yield Vault", "Staking"],
-  crypto: ["Exchange", "Staking", "Portfolio"],
-  p2p: ["Loan Tracking", "Earnings"],
-  agent: ["Agent Economy", "Bounties"],
-  other: ["Site Intelligence"]
+  bandwidth: ["Automator", "Connectors"]
 }
 
 const SUITE_DETAIL_COMPONENTS: Record<string, { label: string; Component: React.FC }[]> = {

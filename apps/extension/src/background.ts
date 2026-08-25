@@ -1,3 +1,9 @@
+import { installErrorLogging } from "./errorLog"
+
+// Track every possible error (console + uncaught) into the root-level error
+// log on the dashboard server — gated by PICC_ERROR_LOG in apps/dashboard/.env.
+installErrorLogging("background")
+
 export interface PiccSettings {
   enabled: boolean
   platforms: { amazon: boolean; youtube: boolean; brokerage: boolean }

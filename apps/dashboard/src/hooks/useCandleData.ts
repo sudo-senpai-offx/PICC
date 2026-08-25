@@ -38,11 +38,22 @@ interface UseCandleDataResult {
   lastPrice: number | null
   timeframe: Timeframe
   setTimeframe: (tf: Timeframe) => void
+  /** Where the candles came from: live / buffer / yahoo-daily fallback. */
+  source: string | null
+  /** Actual bar resolution of the returned series (86400 = Yahoo daily). */
+  resolvedTimeframe: number | null
 }
 
 const BASE = "/api"
 
-async function fetchCandles(assetId: string, timeframe: Timeframe, count: number): Promise<CandleDatum[]> {
+interface CandleResponse {
+  ok: boolean
+  candles: Array<{ time: number; open: number; high: number; low: number; close: number; timeframe?: number }>
+  source?: string
+  error?: string
+}
+
+async function fetchCandles(assetId: string, timeframe: Timeframe, count: number): Promise<{ rows: CandleDatum[]; source: string | null; resolvedTimeframe: number | null }> {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -55,9 +66,9 @@ async function fetchCandles(assetId: string, timeframe: Timeframe, count: number
     const j = await res.json().catch(() => null) as { error?: string } | null
     throw new Error(j?.error ?? `candles request failed (${res.status})`)
   }
-  const data = await res.json() as { ok: boolean; candles: Array<{ time: number; open: number; high: number; low: number; close: number }>; error?: string }
+  const data = await res.json() as CandleResponse
   if (!data.ok) throw new Error(data.error ?? "candles fetch failed")
-  return data.candles
+  const rows = data.candles
     .filter((c) => typeof c.open === "number" && typeof c.high === "number" && typeof c.low === "number" && typeof c.close === "number" && c.open > 0 && c.close > 0)
     .map((c) => ({
       time: c.time as unknown as import("lightweight-charts").Time,
@@ -66,6 +77,7 @@ async function fetchCandles(assetId: string, timeframe: Timeframe, count: number
       low: c.low,
       close: c.close
     }))
+  return { rows, source: data.source ?? null, resolvedTimeframe: data.candles[0]?.timeframe ?? timeframe }
 }
 
 function computeEma(candles: CandleDatum[], period: number): EmaDatum[] {
@@ -170,6 +182,8 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
   const [streamError, setStreamError] = useState<string | null>(null)
   const [lastPrice, setLastPrice] = useState<number | null>(null)
   const [timeframe, setTimeframe] = useState<Timeframe>(initialTf)
+  const [source, setSource] = useState<string | null>(null)
+  const [resolvedTimeframe, setResolvedTimeframe] = useState<number | null>(null)
   const candlesRef = useRef<CandleDatum[]>([])
 
   // Fetch initial candle data
@@ -178,11 +192,13 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     setLoading(true)
     setError(null)
     fetchCandles(assetId, timeframe, count)
-      .then((data) => {
+      .then(({ rows, source: src, resolvedTimeframe: rtf }) => {
         if (!alive) return
-        candlesRef.current = data
-        setCandles(data)
-        if (data.length > 0) setLastPrice(data[data.length - 1].close)
+        candlesRef.current = rows
+        setCandles(rows)
+        setSource(src)
+        setResolvedTimeframe(rtf)
+        if (rows.length > 0) setLastPrice(rows[rows.length - 1].close)
         setLoading(false)
       })
       .catch((err) => {
@@ -236,30 +252,46 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
                   if (tick.assetId === assetId && typeof tick.price === "number" && tick.price > 0) {
                     setLastPrice(tick.price)
                     const tfSec = timeframe
+                    // Mixed-resolution guard: when the base series is a coarser
+                    // fallback (e.g. Yahoo daily bars), minute ticks must NOT
+                    // append buckets onto it — only the live price updates.
+                    const rtf = resolvedTimeframe ?? tfSec
                     const bucket = Math.floor(tick.ts / 1000 / tfSec) * tfSec
-                    setCandles((prev) => {
-                      const next = [...prev]
-                      const last = next[next.length - 1]
-                      if (last && (last.time as unknown as number) === bucket) {
-                        next[next.length - 1] = {
-                          ...last,
-                          high: Math.max(last.high, tick.price),
-                          low: Math.min(last.low, tick.price),
-                          close: tick.price
+                    if (!(rtf > tfSec * 4)) {
+                      setCandles((prev) => {
+                        const next = [...prev]
+                        const last = next[next.length - 1]
+                        if (last && (last.time as unknown as number) === bucket) {
+                          next[next.length - 1] = {
+                            ...last,
+                            high: Math.max(last.high, tick.price),
+                            low: Math.min(last.low, tick.price),
+                            close: tick.price
+                          }
+                        } else if (!last || (last.time as unknown as number) < bucket) {
+                          next.push({
+                            time: bucket as unknown as import("lightweight-charts").Time,
+                            open: tick.price,
+                            high: tick.price,
+                            low: tick.price,
+                            close: tick.price
+                          })
+                          if (next.length > count) next.shift()
                         }
-                      } else if (!last || (last.time as unknown as number) < bucket) {
-                        next.push({
-                          time: bucket as unknown as import("lightweight-charts").Time,
-                          open: tick.price,
-                          high: tick.price,
-                          low: tick.price,
-                          close: tick.price
-                        })
-                        if (next.length > count) next.shift()
-                      }
-                      candlesRef.current = next
-                      return next
-                    })
+                        candlesRef.current = next
+                        return next
+                      })
+                    } else {
+                      // Coarse series — keep the displayed candle's close in
+                      // sync with the live price without mutating history.
+                      setCandles((prev) => {
+                        if (!prev.length) return prev
+                        const next = [...prev]
+                        const last = next[next.length - 1]
+                        next[next.length - 1] = { ...last, close: tick.price, high: Math.max(last.high, tick.price), low: Math.min(last.low, tick.price) }
+                        return next
+                      })
+                    }
                   }
                 } catch {
                   /* ignore malformed ticks */
@@ -284,7 +316,7 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
       ctrl.abort()
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [assetId, count, timeframe])
+  }, [assetId, count, timeframe, resolvedTimeframe])
 
   const volumes = computeVolumes(candles)
   const ema20 = computeEma(candles, 20)
@@ -296,5 +328,5 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     setTimeframe(tf)
   }, [])
 
-  return { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe }
+  return { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source, resolvedTimeframe }
 }

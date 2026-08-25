@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react"
 import { getSettings, setSettings } from "./background"
 import type { PiccSettings } from "./background"
+import { installErrorLogging } from "./errorLog"
+
+// Track every possible error (console + uncaught) into the root-level error
+// log on the dashboard server — gated by PICC_ERROR_LOG in apps/dashboard/.env.
+installErrorLogging("popup")
 
 const PLATFORMS = [
   { key: "amazon", label: "Amazon Seller" },

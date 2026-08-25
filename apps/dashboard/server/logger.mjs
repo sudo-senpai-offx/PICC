@@ -1,7 +1,10 @@
 // Structured logger for PICC server.
 // Replaces raw console.log/warn/error with JSON-structured output + request-ID correlation.
 // Every log line includes: timestamp, level, component, message, and optional metadata.
+// Error-level entries are also mirrored into the root-level error log file
+// (see errorLog.mjs — gated by PICC_ERROR_LOG in .env).
 import { randomUUID } from "node:crypto"
+import { writeErrorEntry } from "./errorLog.mjs"
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 }
 const CURRENT_LEVEL = LEVELS[process.env.LOG_LEVEL ?? "info"] ?? 20
@@ -113,6 +116,15 @@ function emit(level, component, message, extra = {}) {
   const line = JSON.stringify(entry)
   if (level === "error") {
     process.stderr.write(line + "\n")
+    // Mirror into the root-level error log file (no-op when flag off).
+    writeErrorEntry({
+      type: "server",
+      source: "server",
+      channel: "log.error",
+      component,
+      message: message,
+      stack: extra?.stack ?? extra?.error?.stack
+    })
   } else {
     process.stdout.write(line + "\n")
   }

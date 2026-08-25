@@ -94,14 +94,22 @@ export const STATIC_ASSETS = {
   BTCUSD: 160,
   ETHUSD: 162,
   UKOIL: 177,
+  // Canonical aliases so the watch resolver finds metals/energies/indices
+  // under their PICC ids even before the live asset list arrives.
+  GOLD: 251, // XAUUSD (OTC feed)
+  SILVER: 268,
+  BRENT: 177, // UKOIL IS brent crude on ExpertOption
+  PLATINUM: 221,
+  COPPER: 247,
+  US30: 224, // WALLST30
+  GER40: 227, // GERMANY30
+  HK50: 225, // HONGKONG33
   WALLST30: 224,
   GERMANY30: 227,
   HONGKONG33: 225,
   USDX: 233,
   QQQ: 239,
   SMRTY: 240,
-  PLATINUM: 221,
-  COPPER: 247,
   ALTCOIN: 229,
   TOPCRYPTO: 230,
   EURUSD_OTC: 245,

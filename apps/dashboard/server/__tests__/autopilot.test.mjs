@@ -330,6 +330,75 @@ describe("autopilotTick (integration with mocked broker)", () => {
   })
 })
 
+describe("multi-asset autopilot scope", () => {
+  beforeEach(async () => {
+    await trading.saveCredentials({ expertoptionToken: "demo-token", expertoptionDemo: true })
+  })
+
+  it("evaluates every ENABLED asset and applies per-asset overrides", async () => {
+    predictDirection.mockReturnValue({ direction: "up", confidence: 80, models: {}, reason: "momentum" })
+    await autopilot.saveAutopilotConfig({
+      enabled: true,
+      minConfidence: 50,
+      cooldownMs: 10000,
+      humanReviewMs: 0,
+      assets: [
+        { assetId: "BTCUSD", enabled: true, duration: null, amount: null, minConfidence: null },
+        { assetId: "ETHUSD", enabled: true, duration: 120, amount: 25, minConfidence: null },
+        { assetId: "DISABLED", enabled: false }
+      ]
+    })
+
+    const out = await autopilot.autopilotTick()
+    expect(out.multi).toBe(true)
+    expect(out.trades).toBe(2)
+    expect(buy).toHaveBeenCalledTimes(2)
+
+    const first = buy.mock.calls[0][0]
+    const second = buy.mock.calls[1][0]
+    expect(first.assetId).toBe("BTCUSD")
+    expect(second.assetId).toBe("ETHUSD")
+    // Per-asset duration + amount overrides applied; disabled asset skipped.
+    expect(second.duration).toBe(120)
+    expect(second.amount).toBe(25)
+    expect(buy.mock.calls.some(([a]) => a.assetId === "DISABLED")).toBe(false)
+
+    // Per-asset cooldowns were recorded for both traded assets.
+    const cfg = await autopilot.getAutopilotConfig()
+    expect(cfg.assetLastEntryAt.BTCUSD).toBeGreaterThan(0)
+    expect(cfg.assetLastEntryAt.ETHUSD).toBeGreaterThan(0)
+  })
+
+  it("keeps legacy single-asset configs working via the assetId fallback", async () => {
+    predictDirection.mockReturnValue({ direction: "down", confidence: 90, models: {}, reason: "revert" })
+    await autopilot.saveAutopilotConfig({ enabled: true, minConfidence: 50, cooldownMs: 10000, humanReviewMs: 0, assetId: "EURUSD" })
+
+    const out = await autopilot.autopilotTick()
+    expect(out.ok).toBe(true)
+    expect(buy).toHaveBeenCalledTimes(1)
+    expect(buy.mock.calls[0][0]).toMatchObject({ assetId: "EURUSD", type: "put" })
+  })
+
+  it("honors per-asset min-confidence overrides", async () => {
+    predictDirection.mockReturnValue({ direction: "up", confidence: 55, models: {}, reason: "weak-ish" })
+    await autopilot.saveAutopilotConfig({
+      enabled: true,
+      minConfidence: 50,
+      cooldownMs: 10000,
+      humanReviewMs: 0,
+      assets: [
+        { assetId: "BTCUSD", enabled: true, duration: null, amount: null, minConfidence: null },
+        { assetId: "ETHUSD", enabled: true, duration: null, amount: null, minConfidence: 70 }
+      ]
+    })
+
+    await autopilot.autopilotTick()
+    // BTCUSD (global 50%) trades at 55% confidence; ETHUSD (override 70%) refuses.
+    expect(buy).toHaveBeenCalledTimes(1)
+    expect(buy.mock.calls[0][0].assetId).toBe("BTCUSD")
+  })
+})
+
 describe("placeDemoTrade validations", () => {
   it("requires a configured token", async () => {
     await autopilot.saveAutopilotConfig({ enabled: true })

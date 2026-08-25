@@ -9,6 +9,7 @@ import { isApiRequest, handleApi, writeJson } from "./handlers.mjs"
 import { startScheduler, startLivenessMonitor } from "./services/scheduler.mjs"
 import { startLedger } from "./services/accuracyLedger.mjs"
 import { log } from "./logger.mjs"
+import { initErrorLog } from "./errorLog.mjs"
 
 const ROOT = process.env.PICC_DIST_DIR || fileURLToPath(new URL("../dist", import.meta.url))
 const PORT = Number(process.env.PORT ?? 3000)
@@ -84,6 +85,9 @@ const server = createServer(async (req, res) => {
 })
 
 if (!process.env.PICC_NO_LISTEN) {
+  // Root-level error log: emptied + rewritten on every launch, then captures
+  // every server-side error (console.error/warn, crashes, rejections).
+  initErrorLog()
   process.on("unhandledRejection", (reason) => {
     console.error("[picc-server] unhandledRejection:", reason)
   })

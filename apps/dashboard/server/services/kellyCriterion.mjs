@@ -17,12 +17,18 @@ export function saveKellySettings(settings) {
 }
 
 export function computeKelly(winRate, avgPayout, mode = "half") {
-  if (!winRate || !avgPayout || winRate <= 0 || winRate >= 1 || avgPayout <= 0) {
+  // Defensive unit handling: winRate may arrive as a fraction (0..1) or a
+  // percent (1..100); payout likewise as odds (e.g. 1.85) or a percentage
+  // (e.g. 82). Binary payouts above 2x don't exist, so anything larger is
+  // treated as a percentage.
+  let w = Number(winRate)
+  if (Number.isFinite(w) && w > 1 && w <= 100) w = w / 100
+  let p = Number(avgPayout)
+  if (Number.isFinite(p) && p > 2 && p <= 100) p = p / 100
+  if (!w || !p || w <= 0 || w >= 1 || p <= 0) {
     return { fullKelly: 0, suggested: 0, breakEven: 0, mode }
   }
-  const w = winRate
   const l = 1 - w
-  const p = avgPayout
   const fullKelly = (w * p - l) / p
   const fraction = mode === "quarter" ? 0.25 : mode === "half" ? 0.5 : 1
   const suggested = Math.max(0, fullKelly * fraction)

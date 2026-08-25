@@ -142,10 +142,11 @@
     const gc = document.createElement("div")
     gc.id = `__PICC_GROUP_${groupId}__`
     gc.setAttribute("data-picc-group", groupId)
-    // Position at the first member's position
+    // Position at the first member's position (clamped to the viewport)
     const firstDock = shadowRoot.getElementById(`__PICC_DOCK_${members[0]}__`)
-    const firstPos = dockablePositions[members[0]] || { x: 16, y: 16 }
+    const firstPosRaw = dockablePositions[members[0]] || { x: 16, y: 16 }
     const firstSize = dockableSizes[members[0]] || { width: 280, height: 200 }
+    const firstPos = clampToViewport(firstPosRaw.x, firstPosRaw.y, firstSize.width, Math.min(firstSize.height, window.innerHeight - 2 * DOCK_MARGIN))
     gc.style.cssText = `position:fixed;top:${firstPos.y}px;left:${firstPos.x}px;width:${firstSize.width}px;max-height:${firstSize.height}px;overflow:auto;z-index:2147483646;` +
       `background:rgba(20,20,48,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:#eef0ff;` +
       `border:1px solid rgba(108,99,255,0.4);border-radius:8px;font:12px/1.4 system-ui,sans-serif;` +
@@ -202,11 +203,10 @@
             const el = shadowRoot.getElementById(`__PICC_DOCK_${dId}__`)
             if (el) {
               el.style.display = ""
-              el.style.left = ev.clientX - 40 + "px"
-              el.style.top = ev.clientY - 18 + "px"
-              el.style.right = "auto"
-              el.style.bottom = "auto"
-              dockablePositions[dId] = { x: Math.round(ev.clientX - 40), y: Math.round(ev.clientY - 18) }
+              const raw = { x: ev.clientX - 40, y: ev.clientY - 18 }
+              const clamped = clampToViewport(raw.x, raw.y, el.offsetWidth || 260, el.offsetHeight || 120)
+              applyDockXY(el, clamped.x, clamped.y)
+              dockablePositions[dId] = { x: clamped.x, y: clamped.y }
               saveDockableLayout()
             }
           }
@@ -239,17 +239,18 @@
     if (activeBody) contentBody.innerHTML = activeBody.innerHTML
     gc.appendChild(contentBody)
 
-    // Make group draggable via tab bar
+    // Make group draggable via tab bar (viewport-clamped + focus)
     let gDrag = false, gsx = 0, gsy = 0
     tabBar.addEventListener("mousedown", (e) => {
       if (e.target.tagName === "BUTTON" || e.target.closest("[data-picc-group-body]")) return
+      bringToFront(gc)
       gDrag = true; gsx = e.clientX; gsy = e.clientY
       const rect = gc.getBoundingClientRect()
       gc.style.transition = "none"
       const onMove = (ev) => {
         if (!gDrag) return
-        gc.style.left = (rect.left + ev.clientX - gsx) + "px"
-        gc.style.top = (rect.top + ev.clientY - gsy) + "px"
+        const clamped = clampToViewport(rect.left + ev.clientX - gsx, rect.top + ev.clientY - gsy, gc.offsetWidth, gc.offsetHeight)
+        applyDockXY(gc, clamped.x, clamped.y)
       }
       const onUp = () => {
         gDrag = false
@@ -281,19 +282,26 @@
         e.preventDefault()
         e.stopPropagation()
         isResizing = true
+        bringToFront(gc)
         rsx = e.clientX; rsy = e.clientY
         rw = gc.offsetWidth; rh = gc.offsetHeight
         gc.style.transition = "none"
         const onMove = (ev) => {
           if (!isResizing) return
-          if (isH || isD) gc.style.width = Math.max(200, rw + ev.clientX - rsx) + "px"
-          if (isV || isD) gc.style.maxHeight = Math.max(100, rh + ev.clientY - rsy) + "px"
+          // Stay inside the viewport while growing.
+          const left = gc.getBoundingClientRect().left
+          const top = gc.getBoundingClientRect().top
+          const maxW = Math.max(200, window.innerWidth - left - DOCK_MARGIN)
+          const maxH = Math.max(100, window.innerHeight - top - DOCK_MARGIN)
+          if (isH || isD) gc.style.width = Math.min(Math.max(200, rw + ev.clientX - rsx), maxW) + "px"
+          if (isV || isD) gc.style.maxHeight = Math.min(Math.max(100, rh + ev.clientY - rsy), maxH) + "px"
         }
         const onUp = () => {
           isResizing = false
           gc.style.transition = ""
           document.removeEventListener("mousemove", onMove)
           document.removeEventListener("mouseup", onUp)
+          clampDockEl(gc)
           for (const dId of members) {
             dockableSizes[dId] = { width: Math.round(gc.offsetWidth), height: Math.round(gc.offsetHeight) }
           }
@@ -315,16 +323,21 @@
     const layout = currentSettings?.dockableLayout?.[id]
     if (!layout) return
     if (layout.position) {
-      dockEl.style.left = layout.position.x + "px"
-      dockEl.style.top = layout.position.y + "px"
-      dockEl.style.right = "auto"
-      dockEl.style.bottom = "auto"
-      dockablePositions[id] = layout.position
+      // Clamp restored positions against the CURRENT viewport — a layout
+      // saved on a 4K monitor must not land off-screen on a laptop.
+      const w = layout.size?.width ?? dockEl.offsetWidth ?? 280
+      const h = layout.size?.height ?? dockEl.offsetHeight ?? 200
+      const { x, y } = clampToViewport(layout.position.x, layout.position.y, w, h)
+      applyDockXY(dockEl, x, y)
+      dockablePositions[id] = { x, y }
     }
     if (layout.size) {
-      dockEl.style.width = layout.size.width + "px"
-      dockEl.style.maxHeight = layout.size.height + "px"
-      dockableSizes[id] = layout.size
+      const maxW = Math.max(200, window.innerWidth - 2 * DOCK_MARGIN)
+      const maxH = Math.max(100, window.innerHeight - 2 * DOCK_MARGIN)
+      const size = { width: Math.min(layout.size.width, maxW), height: Math.min(layout.size.height, maxH) }
+      dockEl.style.width = size.width + "px"
+      dockEl.style.maxHeight = size.height + "px"
+      dockableSizes[id] = size
     }
     if (layout.opacity != null) {
       dockEl.style.opacity = String(layout.opacity)
@@ -357,6 +370,8 @@
       { id: "expiry-opt", title: "Expiry Optimizer", icon: "⏱️", description: "Optimal expiry selection with volatility analysis", defaultPos: "right", defaultSize: { width: 260, height: 200 }, defaultCollapsed: true },
       { id: "sentiment", title: "Sentiment", icon: "🎭", description: "News + social sentiment fusion with extremes", defaultPos: "top-right", defaultSize: { width: 280, height: 180 }, defaultCollapsed: true },
       { id: "calibration", title: "Calibration", icon: "📐", description: "Predicted vs realized win rate per confidence bucket, breakeven line", defaultPos: "left", defaultSize: { width: 280, height: 220 }, defaultCollapsed: true },
+      { id: "entry-points", title: "Buy/Sell Points", icon: "🎯", description: "Ideal buy/sell zones with live mini-chart, hover crosshair and one-click simulation", defaultPos: "left", defaultSize: { width: 280, height: 300 }, defaultCollapsed: false },
+      { id: "model-matrix", title: "Model Matrix", icon: "🧬", description: "Multiplexing multi-model consensus with adaptive weights, per active asset", defaultPos: "right", defaultSize: { width: 270, height: 280 }, defaultCollapsed: true },
       { id: "server-status", title: "PICC Status", icon: "🔌", description: "Server connection health and data pipeline status", defaultPos: "bottom-right", defaultSize: { width: 260, height: 160 }, defaultCollapsed: true },
       { id: "data-sources", title: "Data Sources", icon: "🩺", description: "Honesty status of every feed: live, local, stale, unconfigured", defaultPos: "right", defaultSize: { width: 280, height: 260 }, defaultCollapsed: true },
     ],
@@ -737,6 +752,74 @@
   // - Stacked (when docked to sides)
   // - Transformed (rotate, scale)
 
+  // ── Viewport containment + stacking ──────────────────────────────────────
+  // Dockables are position:fixed overlays: they must NEVER extend past the
+  // live browser viewport, no matter what a restored layout says, how far the
+  // user drags, how big they resize, or how narrow the window gets.
+  const DOCK_MARGIN = 2 // keep at least this much of the panel on-screen
+  let dockZTop = 2147483000 // stacking allocator (< shadow host's own z-index)
+  const Z_CEILING = 2147483620
+
+  /** Clamp an (x, y) position for a w×h element inside the viewport. */
+  function clampToViewport(x, y, w, h) {
+    const vw = Math.max(60, window.innerWidth)
+    const vh = Math.max(60, window.innerHeight)
+    const maxX = Math.max(DOCK_MARGIN, vw - w - DOCK_MARGIN)
+    const maxY = Math.max(DOCK_MARGIN, vh - h - DOCK_MARGIN)
+    return {
+      x: Math.min(Math.max(DOCK_MARGIN, x), maxX),
+      y: Math.min(Math.max(DOCK_MARGIN, y), maxY)
+    }
+  }
+
+  /** Write explicit left/top coords (clearing any CSS anchor sides). */
+  function applyDockXY(el, x, y) {
+    el.style.left = x + "px"
+    el.style.top = y + "px"
+    el.style.right = "auto"
+    el.style.bottom = "auto"
+    el.style.transform = "none" // clear translateY(-50%) anchors
+  }
+
+  /** Clamp an already-placed fixed element into the viewport. Returns true when it moved. */
+  function clampDockEl(el) {
+    if (!el || !el.isConnected) return false
+    const r = el.getBoundingClientRect()
+    if (r.width === 0 && r.height === 0) return false
+    const { x, y } = clampToViewport(r.left, r.top, r.width, r.height)
+    const moved = Math.round(r.left) !== x || Math.round(r.top) !== y
+    if (moved) applyDockXY(el, x, y)
+    return moved
+  }
+
+  /** Bring a floating panel above its siblings. */
+  function bringToFront(el) {
+    if (!el) return
+    if (dockZTop >= Z_CEILING) {
+      // Recycle: flatten everyone back to base, then hand out fresh slots.
+      dockZTop = 2147483000
+      for (const d of shadowRoot.querySelectorAll("[data-picc-dock], [data-picc-group]")) {
+        d.style.zIndex = String(2147483000)
+      }
+    }
+    dockZTop += 1
+    el.style.zIndex = String(dockZTop)
+  }
+
+  /** Re-clamp every visible panel (viewport shrink / rotation / zoom). */
+  function reclampAllDockables() {
+    for (const el of shadowRoot.querySelectorAll("[data-picc-dock], [data-picc-group]")) {
+      if (el.style.display === "none") continue
+      clampDockEl(el)
+    }
+  }
+
+  let reclampTimer = null
+  window.addEventListener("resize", () => {
+    clearTimeout(reclampTimer)
+    reclampTimer = setTimeout(reclampAllDockables, 120)
+  })
+
   function createDockable(opts) {
     const {
       id, title, icon, content, position = "bottom-left",
@@ -792,6 +875,13 @@
       toggleBtn.textContent = c ? "\u25BE" : "\u25B8"
       toggleBtn.title = c ? "Collapse" : "Expand"
       if (body) body.style.display = c ? "" : "none"
+      if (c) {
+        // Expanded panel must fit the live viewport: cap width, then re-clamp
+        // the whole rect (it may have been restored near an edge while collapsed).
+        const maxW = Math.max(200, window.innerWidth - 2 * DOCK_MARGIN)
+        if (width > maxW) dock.style.width = maxW + "px"
+        requestAnimationFrame(() => clampDockEl(dock))
+      }
     })
 
     const closeBtn = document.createElement("button")
@@ -845,10 +935,17 @@
       let isDragging = false
       let dragStartX, dragStartY, dragElStartX, dragElStartY
 
+      titleBar.addEventListener("dblclick", (e) => {
+        if (e.target.closest("[data-picc-action]")) return
+        e.preventDefault()
+        toggleBtn.click()
+      })
+
       titleBar.addEventListener("mousedown", (e) => {
         if (e.target.closest("[data-picc-action]")) return
         e.preventDefault()
         isDragging = true
+        bringToFront(dock)
         dragStartX = e.clientX
         dragStartY = e.clientY
         const rect = dock.getBoundingClientRect()
@@ -861,15 +958,14 @@
           const dy = ev.clientY - dragStartY
           let nx = dragElStartX + dx
           let ny = dragElStartY + dy
-          // Edge docking
+          // Edge docking (snap near borders), then HARD viewport clamp — the
+          // panel can never leave the live viewport even on tiny windows.
           if (nx < DOCK_THRESHOLD) nx = EDGE_OFFSET
           if (ny < DOCK_THRESHOLD) ny = EDGE_OFFSET
           if (nx + dock.offsetWidth > window.innerWidth - DOCK_THRESHOLD) nx = window.innerWidth - dock.offsetWidth - EDGE_OFFSET
           if (ny + dock.offsetHeight > window.innerHeight - DOCK_THRESHOLD) ny = window.innerHeight - dock.offsetHeight - EDGE_OFFSET
-          dock.style.left = nx + "px"
-          dock.style.top = ny + "px"
-          dock.style.right = "auto"
-          dock.style.bottom = "auto"
+          const clamped = clampToViewport(nx, ny, dock.offsetWidth, dock.offsetHeight)
+          applyDockXY(dock, clamped.x, clamped.y)
         }
         const onUp = () => {
           isDragging = false
@@ -922,6 +1018,7 @@
         if (e.target.closest("[data-picc-action]")) return
         const touch = e.touches[0]
         isDragging = true
+        bringToFront(dock)
         dragStartX = touch.clientX
         dragStartY = touch.clientY
         const rect = dock.getBoundingClientRect()
@@ -942,10 +1039,8 @@
         if (ny < DOCK_THRESHOLD) ny = EDGE_OFFSET
         if (nx + dock.offsetWidth > window.innerWidth - DOCK_THRESHOLD) nx = window.innerWidth - dock.offsetWidth - EDGE_OFFSET
         if (ny + dock.offsetHeight > window.innerHeight - DOCK_THRESHOLD) ny = window.innerHeight - dock.offsetHeight - EDGE_OFFSET
-        dock.style.left = nx + "px"
-        dock.style.top = ny + "px"
-        dock.style.right = "auto"
-        dock.style.bottom = "auto"
+        const clamped = clampToViewport(nx, ny, dock.offsetWidth, dock.offsetHeight)
+        applyDockXY(dock, clamped.x, clamped.y)
       }, { passive: false })
 
       titleBar.addEventListener("touchend", () => {
@@ -975,19 +1070,26 @@
           e.preventDefault()
           e.stopPropagation()
           isResizing = true
+          bringToFront(dock)
           rsx = e.clientX; rsy = e.clientY
           rw = dock.offsetWidth; rh = dock.offsetHeight
           dock.style.transition = "none"
           const onMove = (ev) => {
             if (!isResizing) return
-            if (isH || isD) dock.style.width = Math.max(200, rw + ev.clientX - rsx) + "px"
-            if (isV || isD) dock.style.maxHeight = Math.max(100, rh + ev.clientY - rsy) + "px"
+            // Never grow past the viewport edge — the rect must stay on-screen.
+            const left = dock.getBoundingClientRect().left
+            const top = dock.getBoundingClientRect().top
+            const maxW = Math.max(200, window.innerWidth - left - DOCK_MARGIN)
+            const maxH = Math.max(100, window.innerHeight - top - DOCK_MARGIN)
+            if (isH || isD) dock.style.width = Math.min(Math.max(200, rw + ev.clientX - rsx), maxW) + "px"
+            if (isV || isD) dock.style.maxHeight = Math.min(Math.max(100, rh + ev.clientY - rsy), maxH) + "px"
           }
           const onUp = () => {
             isResizing = false
             dock.style.transition = ""
             document.removeEventListener("mousemove", onMove)
             document.removeEventListener("mouseup", onUp)
+            clampDockEl(dock)
             dockableSizes[id] = { width: Math.round(dock.offsetWidth), height: Math.round(dock.offsetHeight) }
             saveDockableLayout()
           }
@@ -1021,6 +1123,11 @@
     sentiment: null,
     calibration: null,
     calibrationFetchedAt: 0,
+    entryLevels: null,
+    entryHoverPrice: null,
+    models: null,
+    calendar: null,
+    calendarFetchedAt: 0,
     lastCandles: [],
     lastFetchError: null,
     lastFetchAt: 0,
@@ -1149,10 +1256,6 @@
     const sym = CURRENCY_SYMBOLS[(currency || "USD").toUpperCase()] || (esc(currency || "$") + " ")
     return sym + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   }
-  function fmtPct(n) {
-    if (n == null || !isFinite(n)) return "\u2014"
-    return n.toFixed(2) + "%"
-  }
   function tone(val, pos, neg) {
     if (val > 0) return pos || "#4ade80"
     if (val < 0) return neg || "#ff6b6b"
@@ -1203,34 +1306,57 @@
       : ""
     return `<div style="font-size:9px;color:${color};margin-top:2px">Last update ${ago}s ago${badge}</div>`
   }
-  function staleRow() {
-    if (!tradingState.lastFetchAt) return ""
-    const ago = Math.round((Date.now() - tradingState.lastFetchAt) / 1000)
-    if (ago < 5) return ""
-    const color = ago > 60 ? "#ff6b6b" : ago > 15 ? "#f59e0b" : "#9aa0c0"
-    return `<div style="display:flex;justify-content:space-between;font-size:9px;color:${color};margin-top:2px"><span>Stale</span><span>${ago}s ago</span></div>`
-  }
   function sourceLabel(text) {
     return `<div style="font-size:9px;color:#9aa0c0;margin-top:2px">source: ${text}</div>`
   }
 
   // Normalize a scraped asset name for server API calls and Yahoo Finance.
-  // "EUR/USD" → "EURUSD", "Gold" → "GOLD", "BTC/USD" → "BTCUSD", "EUR/USD (OTC)" → "EURUSD"
+  // Mirrors server/services/assetCatalog.mjs — client and server MUST agree
+  // on canonical ids, or active-asset detection silently fails for anything
+  // beyond plain forex pairs (commodities, crypto full names, indices...).
+  const ASSET_ALIAS_MAP = {
+    // metals
+    GOLD: "GOLD", XAUUSD: "GOLD", XAU: "GOLD", GOLDUSD: "GOLD",
+    SILVER: "SILVER", XAGUSD: "SILVER", XAG: "SILVER",
+    PLATINUM: "PLATINUM", XPTUSD: "PLATINUM",
+    PALLADIUM: "PALLADIUM", XPDUSD: "PALLADIUM",
+    COPPER: "COPPER",
+    // energies
+    OIL: "OIL", WTI: "OIL", WTIUSD: "OIL", USOIL: "OIL", CRUDE: "OIL", CRUDEOIL: "OIL",
+    BRENT: "BRENT", UKOIL: "BRENT",
+    NATGAS: "NATGAS", NATURALGAS: "NATGAS",
+    // indices
+    US30: "US30", DOW: "US30", DJI: "US30", WALLSTREET: "US30", WALLST30: "US30",
+    NAS100: "NAS100", USTEC: "NAS100", NASDAQ: "NAS100",
+    SPX500: "SPX500", US500: "SPX500", SP500: "SPX500",
+    GER40: "GER40", GER30: "GER40", DAX: "GER40", GERMANY30: "GER40",
+    UK100: "UK100", FTSE: "UK100",
+    JP225: "JP225", NIKKEI: "JP225",
+    HK50: "HK50", HANGSENG: "HK50",
+    AUS200: "AUS200", ASX200: "AUS200",
+    // crypto full names + shorts
+    BTCUSD: "BTCUSD", BITCOIN: "BTCUSD", BTC: "BTCUSD", XBTUSD: "BTCUSD",
+    ETHUSD: "ETHUSD", ETHEREUM: "ETHUSD", ETH: "ETHUSD",
+    LTCUSD: "LTCUSD", LITECOIN: "LTCUSD",
+    XRPUSD: "XRPUSD", RIPPLE: "XRPUSD",
+    SOLUSD: "SOLUSD", SOLANA: "SOLUSD",
+    ADAUSD: "ADAUSD", CARDANO: "ADAUSD",
+    DOGEUSD: "DOGEUSD", DOGECOIN: "DOGEUSD"
+  }
   function normalizeAssetId(raw) {
     if (!raw) return "EURUSD"
     let s = raw.replace(/\s*\(otc\)/gi, "").replace(/\s+/g, "").toUpperCase()
     if (/^[A-Z]{3}\/[A-Z]{3}$/.test(s)) s = s.replace("/", "")
     if (/^[A-Z]{3}\.[A-Z]{3}$/.test(s)) s = s.replace(".", "")
-    const MAP = { GOLD: "GOLD", SILVER: "SILVER", BTCUSD: "BTCUSD", ETHUSD: "ETHUSD", XAUUSD: "GOLD", XAGUSD: "SILVER" }
-    return MAP[s] || s || "EURUSD"
+    return ASSET_ALIAS_MAP[s] || s || "EURUSD"
   }
 
   // Scrape-failure placeholders must never become the primary asset key.
   const GARBAGE_ASSET_RE = /^(asset\s*\d+|live[_\s-]*asset)$/i
   function detectPrimaryAssetFromPage() {
     try {
-      const m = String(document.title || "").match(/[A-Z]{3,6}\s*\/\s*[A-Z]{3,6}|\b(Bitcoin|Ethereum|Gold|Silver|Oil|Platinum)\b/i)
-      if (m && !GARBAGE_ASSET_RE.test(m[0].trim())) return m[0].replace(/\s+/g, "").trim()
+      const m = String(document.title || "").match(/[A-Z]{3,6}\s*\/\s*[A-Z]{3,6}|(?:^|[\s\-—–|(])(?:Bitcoin|Ethereum|Litecoin|Ripple|Solana|Cardano|Dogecoin|Polkadot|Chainlink|Avalanche|Gold|Silver|Platinum|Palladium|Copper|Oil|Crude|WTI|Brent|Dow|Nasdaq|FTSE|DAX|Nikkei)(?=$|[\s\-—–)|])/i)
+      if (m && !GARBAGE_ASSET_RE.test(m[0].trim())) return m[0].replace(/[\s\-—–|(]+/g, "").trim()
     } catch {}
     try {
       const m = String(window.location.href || "").match(/[?&](?:asset|symbol)=([A-Za-z0-9_%./-]+)/)
@@ -1263,6 +1389,8 @@
     "expiry-opt": ["analysis"],
     "sentiment": ["analysis"],
     "calibration": ["analysis"],
+    "entry-points": ["analysis"],
+    "model-matrix": ["analysis"],
   }
   function checkFeatures(dockId) {
     const needed = DOCKABLE_FEATURES[dockId]
@@ -1424,20 +1552,95 @@
   }
 
   // ── Autopilot Control Renderer ─────────────────────────────────────────────
+  // Per-asset scope helpers shared by the renderer + click handlers below.
+  function autopilotScopeList() {
+    const auto = tradingState.autopilot || {}
+    let list = Array.isArray(auto.assets) ? auto.assets.map((a) => ({ ...a })) : []
+    // Legacy configs trade exactly ONE asset via auto.assetId. Seed the scope
+    // with it so enabling another asset never silently drops the old target.
+    if (!list.length && auto.assetId) {
+      list = [{ assetId: String(auto.assetId).toUpperCase(), enabled: true, duration: null, amount: null, minConfidence: null }]
+    }
+    return list
+  }
+
+  async function saveAutopilotScope(mutate) {
+    const auto = tradingState.autopilot
+    if (!auto) return
+    const list = mutate(autopilotScopeList())
+    try {
+      await serverFetch("/api/trading/autopilot", {
+        method: "POST",
+        body: {
+          assets: list,
+          // keep primary display asset = first enabled entry
+          assetId: (list.find((a) => a.enabled !== false) ?? {}).assetId ?? auto.assetId
+        },
+        timeout: 8000
+      })
+      showToast("Autopilot", "Asset scope saved", "success")
+    } catch {
+      showToast("Autopilot", "Could not save asset scope", "error")
+    }
+    void fetchTradingData().then(updateAllDockables).catch(() => {})
+  }
+
   function renderAutopilot() {
     const auto = tradingState.autopilot
+    const demo = tradingState.demo
     const running = auto?.enabled ?? false
+    const activeAsset = tradingState.activeAsset || ""
     const banner = checkFeatures("autopilot")
     const body = typeof piccRenderAutopilotPanel === "function"
-      ? piccRenderAutopilotPanel({ auto, demo: tradingState.demo })
+      ? piccRenderAutopilotPanel({ auto, demo })
       : ""
-    const assetLabel = auto?.assetId ? `<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(String(auto.assetId).toUpperCase())} \u25cf</div>` : ""
     const lines = []
+
+    // Per-asset quick-config for the ACTIVE asset — writes to the SAME server
+    // config the suite page manages, so both stay in sync.
+    if (auto && activeAsset) {
+      const scope = autopilotScopeList()
+      const mine = scope.find((a) => String(a.assetId).toUpperCase() === activeAsset.toUpperCase())
+      const knownElsewhere = !mine && String(auto.assetId || "").toUpperCase() === activeAsset.toUpperCase()
+      const inScope = mine ? mine.enabled !== false : knownElsewhere
+      const effDur = Number(mine?.duration ?? auto.duration ?? 60)
+      const effConf = Math.round(Number(mine?.minConfidence ?? auto.minConfidence ?? 55))
+      const scopeSummary = scope
+        .slice(0, 4)
+        .map((a) => `${esc(String(a.assetId).toUpperCase())}${a.enabled !== false ? "" : "\u2717"}`)
+        .join(" \u00b7 ")
+
+      lines.push(`<div style="margin-top:6px;padding-top:5px;border-top:1px solid #6c63ff20">`)
+      lines.push(`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">`)
+      lines.push(`<span style="font-size:9px;color:#9aa0c0">ACTIVE ASSET</span>`)
+      lines.push(`<button data-picc-action="apx-toggle" title="${inScope ? "Remove from engine scope" : "Add to engine scope"}" style="background:${inScope ? "#4ade8025" : "#2a2a4a"};border:1px solid ${inScope ? "#4ade80" : "#555"};color:${inScope ? "#4ade80" : "#9aa0c0"};font-size:9px;font-weight:600;padding:1px 7px;border-radius:10px;cursor:pointer">${inScope ? "\u2713 trading" : "+ enable"}</button>`)
+      lines.push(`</div>`)
+      lines.push(`<div style="font-size:11px;font-weight:700;color:#eef0ff;margin-bottom:4px">${esc(activeAsset)}</div>`)
+      lines.push(`<div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">`)
+      lines.push(`<span style="font-size:9px;color:#9aa0c0;width:52px">duration</span>`)
+      lines.push(`<select data-picc-action="apx-duration" style="flex:1;background:#16162c;border:1px solid #2a2a4a;color:#eef0ff;font-size:10px;border-radius:3px;padding:1px 3px">`)
+      for (const s of [15, 30, 60, 120, 300, 900]) {
+        lines.push(`<option value="${s}"${effDur === s ? " selected" : ""}>${s}s</option>`)
+      }
+      lines.push(`</select></div>`)
+      lines.push(`<div style="display:flex;gap:4px;align-items:center">`)
+      lines.push(`<span style="font-size:9px;color:#9aa0c0;width:52px">min conf</span>`)
+      lines.push(`<button data-picc-action="apx-conf-dec" style="background:#2a2a4a;border:none;color:#eef0ff;width:18px;height:16px;border-radius:3px;cursor:pointer;font-size:10px">\u2212</button>`)
+      lines.push(`<span style="font-size:11px;font-weight:600;color:#6c63ff;width:34px;text-align:center">${effConf}%</span>`)
+      lines.push(`<button data-picc-action="apx-conf-inc" style="background:#2a2a4a;border:none;color:#eef0ff;width:18px;height:16px;border-radius:3px;cursor:pointer;font-size:10px">+</button>`)
+      lines.push(`<span style="font-size:8px;color:#5a6078;margin-left:auto">(asset override)</span>`)
+      lines.push(`</div>`)
+      if (scopeSummary) {
+        lines.push(`<div style="font-size:8px;color:#5a6078;margin-top:3px">engine scope: ${scopeSummary}${scope.length > 4 ? " \u2026" : ""}</div>`)
+      }
+      lines.push(`</div>`)
+    }
+
     lines.push(`<div style="display:flex;gap:4px;margin-top:6px">`)
     lines.push(`<button data-picc-action="autopilot-toggle" style="flex:1;background:${running ? "#ff6b6b30" : "#4ade8030"};border:1px solid ${running ? "#ff6b6b" : "#4ade80"};color:#eef0ff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">${running ? "Stop" : "Start"}</button>`)
     lines.push(`<button data-picc-action="autopilot-kill" style="background:#ff6b6b30;border:1px solid #ff6b6b;color:#ff6b6b;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600">Kill</button>`)
     lines.push(`</div>`)
-    return banner + `<div style="padding:2px 0">${assetLabel}${body}${lines.join("")}</div>` + staleLabel()
+    return banner + `<div style="padding:2px 0">${body}${lines.join("")}</div>` + staleLabel()
   }
 
   // ── Kelly Sizing Renderer ──────────────────────────────────────────────────
@@ -1451,13 +1654,16 @@
     }
     const stats = kelly.stats || {}
     const k = kelly.kelly || {}
+    const balance = Number(tradingState.account?.balance ?? tradingState.demo?.balance ?? 0)
+    const suggested = Number(k.suggested)
+    const suggestedUsd = Number.isFinite(suggested) && balance > 0 ? (suggested / 100) * balance : null
     const lines = []
     if (activeAsset) lines.push(`<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Win rate</span><span>${stats.winRate != null ? stats.winRate + "%" : "\u2014"}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Avg payout</span><span>${stats.avgPayout != null ? stats.avgPayout + "x" : "—"}</span></div>`)
     lines.push(`<div style="border-top:1px solid #6c63ff20;margin:4px 0"></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Full Kelly</span><span style="color:#6c63ff">${k.fullKelly != null ? k.fullKelly + "%" : "—"}</span></div>`)
-    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Suggested (${k.mode || "half"})</span><span style="font-weight:600;color:#4ade80">${k.suggested != null ? k.suggested + "%" : "—"}</span></div>`)
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Suggested (${k.mode || "half"})</span><span style="font-weight:600;color:#4ade80">${k.suggested != null ? k.suggested + "%" : "—"}${suggestedUsd != null ? ` \u2248 ${fmt$(suggestedUsd, tradingState.account?.currency)}` : ""}</span></div>`)
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Break-even WR</span><span>${k.breakEven != null ? k.breakEven + "%" : "—"}</span></div>`)
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel(stats.totalTrades > 0 ? "trade history" : "using defaults (no history)")
   }
@@ -1601,6 +1807,226 @@
       sourceLabel(cal.totalResolved > 0 ? "trade history" : "insufficient data") + staleLabel()
   }
 
+  // ── Entry Points Renderer — ideal buy/sell zones for the ACTIVE asset ─────
+  // v2: embedded realtime mini-candle-chart; hovering a zone/level row draws a
+  // live crosshair at that exact price on the chart; each zone carries a
+  // confirm-to-simulate buy button (paper trade).
+  const ENTRY_CHART_H = 74
+
+  function drawEntryChart() {
+    try {
+      const canvas = shadowRoot.getElementById("__PICC_ENTRY_CHART__")
+      if (!canvas) return
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
+      const W = canvas.width
+      const H = canvas.height
+      ctx.clearRect(0, 0, W, H)
+      ctx.fillStyle = "#0d0d1a"
+      ctx.fillRect(0, 0, W, H)
+
+      const candles = Array.isArray(tradingState.lastCandles) ? tradingState.lastCandles : []
+      const levels = tradingState.entryLevels
+      if (!candles.length || !levels?.ok) {
+        ctx.fillStyle = "#5a6078"
+        ctx.font = "9px system-ui"
+        ctx.fillText("waiting for candle data…", 8, H / 2)
+        return
+      }
+      // Price range = candles ∪ hovered level so the crosshair is always visible.
+      let hi = -Infinity
+      let lo = Infinity
+      for (const c of candles) {
+        if (Number(c.high) > hi) hi = Number(c.high)
+        if (Number(c.low) < lo) lo = Number(c.low)
+      }
+      const hoverP = Number(tradingState.entryHoverPrice)
+      if (Number.isFinite(hoverP)) {
+        hi = Math.max(hi, hoverP)
+        lo = Math.min(lo, hoverP)
+      }
+      if (!(hi > lo)) { hi += 1; lo -= 1 }
+      const pad = (hi - lo) * 0.08
+      hi += pad
+      lo -= pad
+      const yOf = (p) => H - ((p - lo) / (hi - lo)) * H
+
+      // Zone bands behind the candles.
+      const band = (zone, color) => {
+        if (!zone) return
+        const y1 = yOf(Math.min(Number(zone.high), hi))
+        const y2 = yOf(Math.max(Number(zone.low), lo))
+        ctx.fillStyle = color
+        ctx.fillRect(0, y1, W, Math.max(2, y2 - y1))
+      }
+      band(levels.buyZone, "rgba(74,222,128,0.14)")
+      band(levels.sellZone, "rgba(255,107,107,0.12)")
+
+      // Candles: thin bodies + wicks.
+      const n = candles.length
+      const step = W / n
+      for (let i = 0; i < n; i++) {
+        const c = candles[i]
+        const up = Number(c.close) >= Number(c.open)
+        ctx.strokeStyle = up ? "rgba(74,222,128,0.75)" : "rgba(255,107,107,0.75)"
+        ctx.fillStyle = up ? "rgba(74,222,128,0.55)" : "rgba(255,107,107,0.55)"
+        const x = i * step + step / 2
+        ctx.beginPath()
+        ctx.moveTo(x, yOf(Number(c.high)))
+        ctx.lineTo(x, yOf(Number(c.low)))
+        ctx.stroke()
+        const bodyTop = yOf(Math.max(Number(c.open), Number(c.close)))
+        const bodyH = Math.max(1, Math.abs(yOf(Number(c.open)) - yOf(Number(c.close))))
+        ctx.fillRect(x - Math.max(0.6, step * 0.3), bodyTop, Math.max(1.2, step * 0.6), bodyH)
+      }
+
+      // Live spot line.
+      const spotY = yOf(Number(levels.spot))
+      ctx.strokeStyle = "rgba(108,99,255,0.85)"
+      ctx.setLineDash([4, 3])
+      ctx.beginPath()
+      ctx.moveTo(0, spotY)
+      ctx.lineTo(W, spotY)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      // Hovered level crosshair — realtime via delegated mousemove.
+      if (Number.isFinite(hoverP)) {
+        const hy = yOf(hoverP)
+        ctx.strokeStyle = "#f59e0b"
+        ctx.lineWidth = 1.4
+        ctx.setLineDash([2, 2])
+        ctx.beginPath()
+        ctx.moveTo(0, hy)
+        ctx.lineTo(W, hy)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.lineWidth = 1
+        ctx.fillStyle = "#f59e0b"
+        ctx.font = "bold 9px system-ui"
+        const label = Number(hoverP) < 10 ? Number(hoverP).toFixed(4) : Number(hoverP).toFixed(2)
+        ctx.fillText(label, 4, Math.max(10, hy - 3))
+      }
+
+      // Timestamp footer.
+      ctx.fillStyle = "#5a6078"
+      ctx.font = "8px system-ui"
+      ctx.fillText(`${n} bars · ${tradingState.candleSource === "yahoo" ? "daily" : "live"}`, 4, H - 2)
+    } catch { /* chart must never break the dockable */ }
+  }
+
+  function renderEntryPoints() {
+    const levels = tradingState.entryLevels
+    const activeAsset = tradingState.activeAsset || ""
+    const banner = checkFeatures("entry-points")
+    if (!levels || !levels.ok) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner +
+        `<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>` +
+        `<div style="color:#a5a0ff;padding:4px">${esc(levels?.reason || "Computing ideal buy/sell zones\u2026")}</div>`
+    }
+    const spot = Number(levels.spot)
+    const fmtPx = (v) => {
+      const n = Number(v)
+      if (!Number.isFinite(n)) return "\u2014"
+      return n < 10 ? n.toFixed(4) : n < 1000 ? n.toFixed(2) : n.toLocaleString("en-US", { maximumFractionDigits: 2 })
+    }
+    const lines = []
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:2px"><span style="color:#6c63ff">${esc(activeAsset)} \u25cf</span><span style="color:#eef0ff">spot ${fmtPx(spot)}</span></div>`)
+    lines.push(`<canvas id="__PICC_ENTRY_CHART__" width="248" height="${ENTRY_CHART_H}" style="width:100%;border-radius:4px;display:block;margin-bottom:4px"></canvas>`)
+
+    const zoneRow = (z, label, color, side) => {
+      if (!z) return ""
+      const dist = (((Number(z.anchor)) - spot) / spot * 100).toFixed(2)
+      return `<div data-entry-hover-price="${Number(z.anchor)}" style="border:1px solid ${color}44;border-radius:4px;padding:3px 6px;margin-bottom:3px;background:${color}08;cursor:crosshair">` +
+        `<div style="display:flex;justify-content:space-between;font-size:10px;font-weight:600;color:${color}">` +
+        `<span>${label}</span><span>${fmtPx(z.low)} \u2013 ${fmtPx(z.high)}</span></div>` +
+        `<div style="display:flex;justify-content:space-between;align-items:center;font-size:9px;color:#9aa0c0">` +
+        `<span>${dist > 0 ? "+" : ""}${dist}% from spot \u00b7 strength ${Number(z.strength) || 1}/5</span>` +
+        `<button data-picc-action="entry-simulate" data-side="${side}" data-price="${Number(z.anchor)}" title="Simulate a paper trade at this level" style="background:${color}25;border:1px solid ${color};color:${color};font-size:9px;font-weight:600;padding:1px 6px;border-radius:3px;cursor:pointer">\u25b6 simulate</button>` +
+        `</div></div>`
+    }
+    lines.push(zoneRow(levels.buyZone, "\u25bc IDEAL BUY", "#4ade80", "up"))
+    lines.push(zoneRow(levels.sellZone, "\u25b2 IDEAL SELL", "#ff6b6b", "down"))
+
+    for (const l of (levels.levels || []).filter((l) => l.kind !== "spot").slice(0, 5)) {
+      lines.push(`<div data-entry-hover-price="${Number(l.price)}" style="display:flex;justify-content:space-between;font-size:9px;color:#9aa0c0;padding:1px 0;cursor:crosshair${l.kind === "support" ? ';background:#4ade8006' : ';background:#ff6b6b06'}">` +
+        `<span>${l.kind === "support" ? "\ud83d\udfe2" : "\ud83d\udd34"} ${fmtPx(l.price)}</span>` +
+        `<span>+${Math.abs(Number(l.distancePct)).toFixed(2)}% \u00b7 ${esc(String((l.sources || [])[0] ?? ""))}</span></div>`)
+    }
+    lines.push(`<div style="font-size:8px;color:#5a6078;margin-top:2px">hover a level \u2192 live crosshair \u00b7 pivots+swings+EMA</div>`)
+    // Draw once the DOM exists (updateAllDockables assigns synchronously after render).
+    setTimeout(drawEntryChart, 0)
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + staleLabel()
+  }
+
+  // ── Model Matrix Renderer — multiplexing multi-model consensus ────────────
+  function renderModelMatrix() {
+    const matrix = tradingState.models
+    const activeAsset = tradingState.activeAsset || ""
+    const banner = checkFeatures("model-matrix")
+    if (!matrix || !matrix.ok) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner +
+        `<div style="font-size:9px;color:#6c63ff;margin-bottom:2px">${esc(activeAsset)} \u25cf</div>` +
+        `<div style="color:#a5a0ff;padding:4px">${esc(matrix?.reason || "Running model battery\u2026")}</div>`
+    }
+    const c = matrix.consensus || {}
+    const dirColor = c.direction === "up" ? "#4ade80" : c.direction === "down" ? "#ff6b6b" : "#f59e0b"
+    const dirArrow = c.direction === "up" ? "\u25b2" : c.direction === "down" ? "\u25bc" : "\u25c6"
+    const lines = []
+    lines.push(`<div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:3px"><span style="color:#6c63ff">${esc(activeAsset)} \u25cf ${matrix.modelsRun} models</span><span style="color:#9aa0c0">agree ${c.agree}/${c.total}</span></div>`)
+    lines.push(`<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">` +
+      `<span style="font-size:13px;font-weight:700;color:${dirColor}">${dirArrow} ${esc(String(c.direction ?? "flat").toUpperCase())}</span>` +
+      `<span style="font-size:10px;color:#9aa0c0">${Number(c.confidence) ?? 0}% conf</span>` +
+      `<div style="flex:1;background:#1a1a2e;border-radius:3px;height:6px;overflow:hidden">` +
+      `<div style="height:100%;width:${Math.round(Number(c.confidence) || 0)}%;background:${dirColor};border-radius:3px"></div></div>` +
+      `</div>`)
+    for (const v of (matrix.votes || []).slice(0, 7)) {
+      const vc = v.direction === "up" ? "#4ade80" : v.direction === "down" ? "#ff6b6b" : "#a5a0ff"
+      const arrow = v.direction === "up" ? "\u25b2" : v.direction === "down" ? "\u25bc" : "\u25c6"
+      lines.push(`<div style="padding:2px 0;border-bottom:1px solid #6c63ff10" title="${esc(v.note || "")}">` +
+        `<div style="display:flex;justify-content:space-between;font-size:10px">` +
+        `<span style="color:#c9cdf0">${esc(v.name)}</span>` +
+        `<span style="color:${vc};font-weight:600">${arrow} ${Math.round(Number(v.confidence))}%</span></div>` +
+        `<div style="display:flex;gap:4px;align-items:center">` +
+        `<div style="flex:1;background:#1a1a2e;border-radius:2px;height:3px;overflow:hidden">` +
+        `<div style="height:100%;width:${Math.round(Number(v.confidence))}%;background:${vc};border-radius:2px"></div></div>` +
+        `<span style="font-size:8px;color:#5a6078">\u00d7${v.weight}</span></div>` +
+        `</div>`)
+    }
+    lines.push(`<div style="font-size:8px;color:#5a6078;margin-top:3px">weights adapt online from settled outcomes \u00b7 multiplexed per tick</div>`)
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + staleLabel()
+  }
+
+  // ── Economic Calendar Renderer (feeds the dividend suite's calendar dock) ─
+  function renderCalendar() {
+    const cal = tradingState.calendar
+    const banner = checkFeatures("calendar")
+    if (!cal || !Array.isArray(cal.events)) {
+      if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
+      return banner + '<div style="color:#a5a0ff;padding:4px">Loading economic calendar\u2026</div>'
+    }
+    const impactColor = { high: "#ff6b6b", medium: "#f59e0b", low: "#9aa0c0" }
+    const events = cal.events.slice(0, 10)
+    if (!events.length) {
+      return banner + '<div style="color:#a5a0ff;padding:4px">No calendar events in the next 7 days.</div>' + sourceLabel("provider feed")
+    }
+    const lines = []
+    const summary = cal.summary || {}
+    lines.push(`<div style="font-size:9px;color:#9aa0c0;margin-bottom:3px">${events.length} upcoming \u00b7 ${summary.high ?? 0} high-impact</div>`)
+    for (const ev of events) {
+      const c = impactColor[ev.impact] || "#9aa0c0"
+      lines.push(`<div style="padding:2px 0;border-bottom:1px solid #6c63ff15">` +
+        `<div style="display:flex;justify-content:space-between;font-size:10px">` +
+        `<span style="font-weight:600;color:${c}">${esc(ev.currency || "")} ${esc(ev.event || "")}</span>` +
+        `<span style="color:#9aa0c0;font-size:9px">${esc(String(ev.date || "").slice(5))}</span></div>` +
+        (ev.forecast ? `<div style="font-size:9px;color:#5a6078">forecast ${esc(ev.forecast)}${ev.previous ? ` \u00b7 prev ${esc(ev.previous)}` : ""}</div>` : "") +
+        `</div>`)
+    }
+    return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + sourceLabel("economic calendar")
+  }
+
   // ── Positions Renderer (multi-trade tracker) ──────────────────────────────
   function renderPositions() {
     const openDeals = tradingState.openDeals || tradingState.demo?.openDeals || []
@@ -1609,7 +2035,14 @@
     const settled = tradingState.demo?.settled || []
     if (!openDeals.length && !settled.length) {
       if (serverOnline === false || isTimedOut()) return banner + offlineBanner()
-      return banner + '<div style="color:#a5a0ff;padding:4px">No open positions</div>' + staleLabel()
+      // Honest empty state: explain WHY there are no positions instead of a
+      // bare placeholder.
+      const demo = tradingState.demo
+      let hint = "No open positions — waiting for signals."
+      if (!demo?.configured) hint = "No ExpertOption token configured — add it in the Trading Suite to enable live demo deals."
+      else if (/expir|invalid|stale|token|reject/i.test(String(demo?.sessionError ?? ""))) hint = `Session problem: ${demo.sessionError}`
+      else if (!tradingState.autopilot?.enabled) hint = "No open positions. Autopilot is off — start it below or trade manually from the suite."
+      return banner + `<div style="color:#a5a0ff;padding:4px">${esc(hint)}</div>` + staleLabel()
     }
     const lines = []
     lines.push(`<div style="font-size:10px;color:#9aa0c0;margin-bottom:4px">${openDeals.length} open position${openDeals.length !== 1 ? "s" : ""}</div>`)
@@ -2238,7 +2671,6 @@
           if (tradingState.account) tradingState.account.balance = scraped.balance
         }
       }
-      if (scraped?.pageMetrics) tradingState.pageMetrics = scraped.pageMetrics
       tradingState.pageMetrics = collectPageMetricsLocal()
 
       // Use the consolidated server endpoint — returns ALL dockable data in one call
@@ -2267,6 +2699,9 @@
           tradingState.orderFlow = null
           tradingState.sentiment = null
           tradingState.lastCandles = null
+          tradingState.entryLevels = null
+          tradingState.entryHoverPrice = null
+          tradingState.models = null
           tradingState.decisions = []
         }
         tradingState.activeAsset = activeAsset
@@ -2337,6 +2772,8 @@
         if (d?.expiry) tradingState.expiry = d.expiry
         if (d?.sentiment) tradingState.sentiment = d.sentiment
         if (d?.orderFlow) tradingState.orderFlow = d.orderFlow
+        if (d?.entryLevels) tradingState.entryLevels = d.entryLevels
+        if (d?.models) tradingState.models = d.models
 
         // Calibration panel — daily refresh, cached for 24h
         const CALIBRATION_REFRESH_MS = 24 * 60 * 60 * 1000
@@ -2345,6 +2782,17 @@
           void serverFetch("/api/trading/health").then((h) => {
             if (h?.ok && h.data?.calibration) {
               tradingState.calibration = h.data.calibration
+              updateAllDockables()
+            }
+          }).catch(() => {})
+        }
+        // Economic calendar (dividend suite's Ex-Date Calendar dockable) —
+        // was stuck on "Loading…" forever because no renderer ever fed it.
+        if (Date.now() - tradingState.calendarFetchedAt > 30 * 60 * 1000) {
+          tradingState.calendarFetchedAt = Date.now()
+          void serverFetch("/api/trading/calendar?days=7").then((cal) => {
+            if (cal?.ok && cal.data?.events) {
+              tradingState.calendar = cal.data
               updateAllDockables()
             }
           }).catch(() => {})
@@ -2470,6 +2918,9 @@
       "expiry-opt": renderExpiryOpt,
       "sentiment": renderSentiment,
       "calibration": renderCalibration,
+      "entry-points": renderEntryPoints,
+      "model-matrix": renderModelMatrix,
+      "calendar": renderCalendar,
       "page-overview": renderPageOverview,
       "page-content": renderPageContent,
       "server-status": renderServerStatus,
@@ -2623,6 +3074,9 @@
           dockEl.style.opacity = String(settings.opacity)
         }
       }
+      // Visibility changes can expose panels restored while hidden — re-clamp
+      // so nothing sits outside the live viewport.
+      requestAnimationFrame(reclampAllDockables)
     }
 
     el.style.cssText =
@@ -3056,6 +3510,91 @@
         btn.disabled = false
       }
     }
+
+    // ── Per-asset autopilot scope controls (ACTIVE asset) ──
+    const activeAsset = String(tradingState.activeAsset || "").toUpperCase()
+    if (activeAsset && (action === "apx-toggle" || action === "apx-conf-dec" || action === "apx-conf-inc")) {
+      const auto = tradingState.autopilot || {}
+      await saveAutopilotScope((list) => {
+        let entry = list.find((a) => String(a.assetId).toUpperCase() === activeAsset)
+        if (!entry) {
+          entry = { assetId: activeAsset, enabled: true, duration: null, amount: null, minConfidence: null }
+          list.push(entry)
+        }
+        if (action === "apx-toggle") {
+          entry.enabled = !(entry.enabled !== false)
+        } else {
+          const cur = Number(entry.minConfidence ?? auto.minConfidence ?? 55)
+          entry.minConfidence = Math.max(30, Math.min(95, action === "apx-conf-inc" ? cur + 5 : cur - 5))
+        }
+        return list
+      })
+    }
+
+    // ── Simulate buy/sell from the entry-points dockable (paper trade) ──
+    if (action === "entry-simulate") {
+      const side = btn.getAttribute("data-side") === "down" ? "down" : "up"
+      const price = Number(btn.getAttribute("data-price"))
+      const symbol = String(tradingState.activeAsset || "EURUSD")
+      const spot = Number(tradingState.entryLevels?.spot) || price
+      const kellyPct = Number(tradingState.kelly?.kelly?.suggested) || 2
+      const balance = Number(tradingState.account?.balance ?? 0)
+      const amount = balance > 0 ? Math.max(1, Math.round(((kellyPct / 100) * balance) * 100) / 100) : 100
+      const label = `${side.toUpperCase()} ${symbol} @ ${Number.isFinite(price) ? price : spot}`
+      if (!window.confirm(`SIMULATE TRADE (paper only)\n\n${label}\nAmount: ${amount} (Kelly ${kellyPct}% of balance)\n\nOpen this paper position?`)) return
+      btn.disabled = true
+      try {
+        const result = await serverFetch("/api/trading/paper/trade", {
+          method: "POST",
+          body: { symbol, side, entry: spot || price, amount },
+          timeout: 8000
+        })
+        if (result?.ok) {
+          playAlertSound("success")
+          showToast("Paper trade", `Simulated ${label} · $${amount}`, "success")
+        } else {
+          showToast("Paper trade", result?.error || "Simulation failed — is the paper engine available?", "error")
+        }
+      } catch (err) {
+        showToast("Paper trade", `Failed: ${err?.message ?? err}`, "error")
+      } finally {
+        btn.disabled = false
+      }
+    }
+  })
+
+  // ── Entry-points hover crosshair — delegated so it survives re-renders ──
+  // mousemove keeps the crosshair glued while the pointer travels within a row.
+  shadowRoot.addEventListener("mousemove", (e) => {
+    const row = e.composedPath().find((el) => el.hasAttribute?.("data-entry-hover-price"))
+    const price = row ? Number(row.getAttribute("data-entry-hover-price")) : NaN
+    if (Number.isFinite(price)) {
+      if (tradingState.entryHoverPrice !== price) {
+        tradingState.entryHoverPrice = price
+        drawEntryChart()
+      }
+    } else if (tradingState.entryHoverPrice != null) {
+      tradingState.entryHoverPrice = null
+      drawEntryChart()
+    }
+  }, true)
+
+  // Duration select needs a change event, not click.
+  shadowRoot.addEventListener("change", async (e) => {
+    const el = e.composedPath().find((node) => node?.getAttribute?.("data-picc-action") === "apx-duration")
+    if (!el) return
+    const activeAsset = String(tradingState.activeAsset || "").toUpperCase()
+    if (!activeAsset) return
+    const value = Number(el.value) || 60
+    await saveAutopilotScope((list) => {
+      let entry = list.find((a) => String(a.assetId).toUpperCase() === activeAsset)
+      if (!entry) {
+        entry = { assetId: activeAsset, enabled: true, duration: null, amount: null, minConfidence: null }
+        list.push(entry)
+      }
+      entry.duration = value
+      return list
+    })
   })
 
   // ── Message listener from background/popup ──────────────────────────────────

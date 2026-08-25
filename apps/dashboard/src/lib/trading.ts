@@ -330,9 +330,19 @@ export interface DemoDeal {
   closedAt?: string
 }
 
+export interface AutopilotAssetTarget {
+  assetId: string
+  enabled: boolean
+  /** Per-asset overrides; null inherits the global value. */
+  duration: number | null
+  amount: number | null
+  minConfidence: number | null
+}
+
 export interface AutopilotConfig {
   enabled: boolean
   assetId: string
+  assets: AutopilotAssetTarget[]
   duration: number
   amount: number | null
   minConfidence: number
@@ -342,9 +352,24 @@ export interface AutopilotConfig {
   maxDailyTrades: number
   aiGate: boolean
   proGate: boolean
+  consensusGate?: boolean
+  minConsensusAgree?: number
   timeframe: number
   count: number
   stopReason: string | null
+}
+
+export function normalizeAutopilotAssets(raw: unknown): AutopilotAssetTarget[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((a): a is AutopilotAssetTarget => Boolean(a) && typeof a === "object" && typeof (a as AutopilotAssetTarget).assetId === "string")
+    .map((a) => ({
+      assetId: a.assetId.toUpperCase(),
+      enabled: a.enabled !== false,
+      duration: a.duration ?? null,
+      amount: a.amount ?? null,
+      minConfidence: a.minConfidence ?? null
+    }))
 }
 
 export interface ExpertOptionDemoStatus {
@@ -363,6 +388,7 @@ export interface ExpertOptionDemoStatus {
   todayTrades: number
   autopilot: AutopilotConfig & {
     running: boolean
+    assetScope?: AutopilotAssetTarget[]
     lastRun: Record<string, unknown> | null
     lastDecision: string | null
     decisionWindow?: { size: number; trades: number; skips: number }
@@ -1093,6 +1119,69 @@ export interface PatternSummary {
 
 export function getPatterns(symbol: string, timeframe = "daily", count = 200): Promise<{ ok: boolean; detected: PatternDetection[]; summary: PatternSummary }> {
   return post("/trading/patterns", { symbol, timeframe, count })
+}
+
+// ── Ideal buy/sell price points near the current timeframe ────────────────
+export interface EntryLevel {
+  price: number
+  kind: "support" | "resistance"
+  strength: number
+  sources: string[]
+  distancePct: number
+  atrMultiple: number
+}
+
+export interface EntryZone {
+  low: number
+  high: number
+  anchor: number
+  strength: number
+  sources: string[]
+}
+
+export interface EntryLevelsResult {
+  ok: boolean
+  assetId?: string
+  source?: string
+  spot?: number
+  atr?: number
+  levels?: EntryLevel[]
+  buyZone?: EntryZone | null
+  sellZone?: EntryZone | null
+  note?: string
+  reason?: string
+}
+
+/** Ideal buy/sell zones + confluence levels for the active asset/timeframe. */
+export function getEntryLevels(assetId: string, timeframe = 300): Promise<EntryLevelsResult> {
+  return post("/trading/levels", { assetId, timeframe })
+}
+
+// ── Model matrix — multiplexing multi-model consensus ─────────────────────
+export interface ModelVote {
+  name: string
+  short: string
+  direction: "up" | "down" | "flat"
+  confidence: number
+  note?: string
+  weight: number
+}
+
+export interface ModelMatrixResult {
+  ok: boolean
+  assetId?: string
+  source?: string
+  spot?: number
+  modelsRun?: number
+  consensus?: { direction: "up" | "down" | "flat"; confidence: number; agree: number; total: number }
+  votes?: ModelVote[]
+  weights?: Record<string, { accuracy: number; samples: number; weight: number }>
+  reason?: string
+}
+
+/** Run the multiplexing model battery against the active asset. */
+export function getModelMatrix(assetId: string, timeframe = 300): Promise<ModelMatrixResult> {
+  return post("/trading/models", { assetId, timeframe })
 }
 
 export interface TradeJournalEntry {

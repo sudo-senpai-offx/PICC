@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react"
 import type { PlasmoCSConfig } from "plasmo"
+import { installErrorLogging } from "./errorLog"
+
+// Track every possible error (console + uncaught) into the root-level error
+// log on the dashboard server — gated by PICC_ERROR_LOG in apps/dashboard/.env.
+installErrorLogging("content")
 
 export const config: PlasmoCSConfig = {
   matches: [

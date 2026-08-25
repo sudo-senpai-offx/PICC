@@ -1,38 +1,24 @@
 // Real historical market data from Yahoo Finance (free, no key).
 // query1.finance.yahoo.com/v8/finance/chart returns daily OHLCV + timestamps.
 import { env } from "../config.mjs"
+import { canonicalAssetId, yahooSymbolFor } from "./assetCatalog.mjs"
 
 const BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 const CACHE_TTL_MS = 10 * 60 * 1000
 const cache = new Map()
 
-// ExpertOption-style 6-letter ids (EURUSD, BTCUSD, ...) are not valid Yahoo
-// symbols on their own. Map the base currency to the Yahoo convention: crypto
-// pairs use BASE-QUOTE, everything else uses QUOTE=X (forex futures).
-const CRYPTO_BASES = new Set([
-  "BTC", "ETH", "LTC", "XRP", "SOL", "DOGE", "ADA", "DOT", "BNB", "MATIC",
-  "AVAX", "LINK", "UNI", "ATOM", "ETC", "FIL", "XLM", "XTZ", "VET", "TRX",
-  "SHIB", "NEAR", "APT", "ARB", "OP", "SUI", "PEPE", "TON", "INJ", "SEI",
-  "JUP", "WBTC", "BCH", "LDO", "AAVE", "MKR", "DYDX", "CRV", "GRT", "SAND",
-  "MANA", "AXS", "ENJ", "CHZ", "ZIL", "HBAR", "ALGO", "EGLD", "FTM", "KAVA",
-  "ROSE", "RUNE", "BLUR", "JTO", "WIF", "BONK", "ORDI", "LUNC", "LINA", "1INCH"
-])
-
 /**
- * Convert a user-supplied id (e.g. "eurusd", "BTCUSD", "gold") to a valid
- * Yahoo Finance symbol. Ids that already carry a Yahoo separator are kept
- * as-is. Anything else 6-letter uppercase is treated as a currency pair.
+ * Convert a user-supplied id (e.g. "eurusd", "BTCUSD", "gold", "US30",
+ * "Bitcoin") to a valid Yahoo Finance symbol. Delegates alias resolution and
+ * commodity/index mapping to the shared asset catalog; unknown ids fall back
+ * to forex/crypto pair conventions.
  */
 export function normalizeYahooSymbol(symbol) {
   const s = String(symbol ?? "").trim().toUpperCase().replace(/[/\s.]+/g, "")
   if (!s) return s
-  if (s === "GOLD") return "GC=F"
-  if (s === "SILVER") return "SI=F"
-  if (!/^[A-Z]{6}$/.test(s)) return s
-  const base = s.slice(0, 3)
-  const quote = s.slice(3)
-  if (CRYPTO_BASES.has(base)) return `${base}-${quote}`
-  return `${s}=X`
+  // Ids that already carry a Yahoo separator are kept as-is.
+  if (/^[\^]/.test(s) || s.endsWith("=F")) return s
+  return yahooSymbolFor(canonicalAssetId(s))
 }
 
 /**

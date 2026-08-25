@@ -14,6 +14,7 @@ import { PortfolioPanel } from "@/components/PortfolioPanel"
 import { WatchlistPanel } from "@/components/WatchlistPanel"
 import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { PatternPanel } from "@/components/PatternPanel"
+import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
@@ -34,6 +35,7 @@ import {
   getPaperHistory,
   getPaperPositions,
   getSignalAccuracy,
+  getTradingCredentials,
   getTradingSignals,
   getTradingStatus,
   getWatchlistQuotes,
@@ -45,12 +47,14 @@ import {
   removeFromWatchlist,
   resolveTradingSignal,
   saveAutopilotConfig,
+  saveTradingCredentials,
   scanSymbols,
   startAutopilot,
   stopAutopilot,
   summarizeProAnalysis
 } from "@/lib/trading"
 import type {
+  AutopilotAssetTarget,
   AutopilotConfig,
   ClosedTrade,
   DemoAnalyticsResult,
@@ -65,21 +69,12 @@ import type {
   ProNarrativeResult,
   ScanResult,
   SignalAccuracy,
+  TradingCredentials,
   TradingMetrics,
   TradingSignal,
   WatchlistQuote
 } from "@/lib/trading"
-
-const STRATEGY_PROFILES = [
-  { id: "grid", label: "Grid Trading", desc: "Orders at fixed intervals across a price range. Buy low, sell high on every swing." },
-  { id: "dca", label: "DCA (Dollar-Cost)", desc: "Buys dips via dollar-cost averaging. Lowers average cost over time." },
-  { id: "trailing", label: "Adaptive Trailing", desc: "Grid + DCA with trailing. Follows trends upward, sells on reversals." },
-  { id: "momentum", label: "Momentum", desc: "Rides directional moves with RSI/MACD entry signals and ATR-based stops." },
-  { id: "mean-reversion", label: "Mean Reversion", desc: "Fades extended moves. Enters when price deviates >2σ from rolling mean." },
-  { id: "custom", label: "Custom / Pro Analysis", desc: "Uses PICC pro-analysis confluence score as the entry gate. Full indicator fusion." }
-] as const
-
-type StrategyId = typeof STRATEGY_PROFILES[number]["id"]
+import { normalizeAutopilotAssets } from "@/lib/trading"
 
 const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
 function fmtMoney(n: number | null | undefined, currency?: string | null): string {
@@ -176,6 +171,7 @@ export function MarketsSuite() {
             </div>
             <TradingChart assetId={chartAsset} height={380} />
           </Card>
+          <ModelMatrixPanel assetId={chartAsset} />
           <MarketIntelPanel />
           <LiveMarketBoard />
           <LiveDecisionsPanel />
@@ -215,42 +211,63 @@ export function MarketsSuite() {
 // Autopilot Suite — automation-focused with extension metrics
 // ---------------------------------------------------------------------
 export function AutopilotSuite() {
-  const [config, setConfig] = useState<AutopilotConfig | null>(null)
   const [cfg, setCfg] = useState<AutopilotConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [strategy, setStrategy] = useState<StrategyId>("grid")
   const [demo, setDemo] = useState<ExpertOptionDemoStatus | null>(null)
   const [analytics, setAnalytics] = useState<DemoAnalyticsResult | null>(null)
   const [deals, setDeals] = useState<DemoDeal[]>([])
   const [extension, setExtension] = useState<ExtensionStatus | null>(null)
+  const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number }>({ token: "", demo: true, riskPct: 2 })
+  const [credsMsg, setCredsMsg] = useState<string | null>(null)
+  const [scopeAsset, setScopeAsset] = useState<string>("")
   const lastLoadAt = useRef(0)
   const { snapshot } = useRealtimeSuite()
 
   const load = async () => {
     try {
-      const [c, d, a, dl, ext] = await Promise.allSettled([
+      const [c, d, a, dl, ext, cr] = await Promise.allSettled([
         getAutopilotConfig(),
         getExpertOptionDemoStatus(),
         getDemoAnalytics().catch(() => null),
         getDemoDeals(30).catch(() => ({ ok: false, deals: [] as DemoDeal[] })),
-        getExtensionStatus()
+        getExtensionStatus(),
+        getTradingCredentials()
       ])
       lastLoadAt.current = Date.now()
       if (c.status === "fulfilled" && c.value.ok) {
-        setConfig(c.value.config)
         setCfg(c.value.config)
+        if (!scopeAsset) setScopeAsset(c.value.config.assetId)
       }
       if (d.status === "fulfilled") setDemo(d.value)
       if (a.status === "fulfilled" && a.value) setAnalytics(a.value)
       if (dl.status === "fulfilled" && dl.value.ok) setDeals(dl.value.deals)
       if (ext.status === "fulfilled") setExtension(ext.value)
+      if (cr.status === "fulfilled") {
+        // Token comes back masked ("••••••") — only show whether one exists.
+        const raw = cr.value as unknown as Record<string, unknown>
+        const masked = typeof raw.expertoptionToken === "string" ? raw.expertoptionToken : ""
+        setCreds((prev) => ({
+          ...prev,
+          demo: raw.expertoptionDemo !== false,
+          riskPct: Number(raw.riskPerTradePct) || 2,
+          token: masked && !masked.includes("•") ? masked : ""
+        }))
+      }
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message })
     }
   }
 
   useEffect(() => { void load() }, [])
+
+  // Settings stay in sync with the overlay dockables: re-pull the shared
+  // server config when the tab regains focus (overlay may have changed it).
+  useEffect(() => {
+    const onFocus = () => { void load() }
+    window.addEventListener("focus", onFocus)
+    return () => window.removeEventListener("focus", onFocus)
+  }, [])
 
   useEffect(() => {
     if (!snapshot || snapshot.ts < lastLoadAt.current) return
@@ -259,11 +276,21 @@ export function AutopilotSuite() {
     if (snapshot.deals) setDeals(snapshot.deals.ok ? snapshot.deals.deals : [])
   }, [snapshot])
 
+  // Keep in sync when autopilot config changes elsewhere (overlay dockables).
+  useEffect(() => {
+    if (!demo?.autopilot || !cfg) return
+    const serverCfg = demo.autopilot
+    if (serverCfg.enabled !== cfg.enabled || serverCfg.stopReason !== cfg.stopReason) {
+      setCfg((c) => (c ? { ...c, enabled: serverCfg.enabled, stopReason: serverCfg.stopReason } : c))
+    }
+  }, [demo?.autopilot?.enabled, demo?.autopilot?.stopReason])
+
   const toggleAuto = async () => {
+    if (!cfg) return
     setBusy(true)
     try {
-      const r = config?.enabled ? await stopAutopilot("user") : await startAutopilot()
-      if (r.ok) { setConfig(r.config); setCfg(r.config) }
+      const r = cfg.enabled ? await stopAutopilot("user") : await startAutopilot()
+      if (r.ok) setCfg(r.config)
       await load()
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message })
@@ -276,7 +303,7 @@ export function AutopilotSuite() {
     setBusy(true)
     try {
       const r = await stopAutopilot("emergency-kill-switch")
-      if (r.ok) { setConfig(r.config); setCfg(r.config) }
+      if (r.ok) setCfg(r.config)
       setMsg({ ok: true, text: "Emergency stop executed. All autopilot activity halted." })
       await load()
     } catch (e) {
@@ -290,9 +317,10 @@ export function AutopilotSuite() {
     if (!cfg) return
     setBusy(true)
     try {
-      const patch: Record<string, unknown> = { ...cfg, strategy }
-      const r = await saveAutopilotConfig(patch as Partial<AutopilotConfig>)
-      if (r.ok) { setConfig(r.config); setCfg(r.config); setMsg({ ok: true, text: "Autopilot settings saved." }) }
+      const assets = normalizeAutopilotAssets(cfg.assets)
+      const primary = assets.find((a) => a.enabled)?.assetId ?? cfg.assetId
+      const r = await saveAutopilotConfig({ ...cfg, assets, assetId: primary } as Partial<AutopilotConfig>)
+      if (r.ok) { setCfg(r.config); setScopeAsset(primary); setMsg({ ok: true, text: "Autopilot settings saved." }) }
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message })
     } finally {
@@ -301,14 +329,64 @@ export function AutopilotSuite() {
   }
 
   const updateCfg = (patch: Partial<AutopilotConfig>) => setCfg((c) => (c ? { ...c, ...patch } : c))
-  const running = config?.enabled ?? false
+
+  // ── Asset scope management ────────────────────────────────────────────
+  const assets = normalizeAutopilotAssets(cfg?.assets)
+  const enabledAssets = assets.filter((a) => a.enabled)
+
+  const updateAsset = (assetId: string, patch: Partial<AutopilotAssetTarget>) =>
+    updateCfg({
+      assets: normalizeAutopilotAssets(cfg?.assets).map((a) => (a.assetId === assetId ? { ...a, ...patch } : a))
+    })
+
+  const addAsset = () => {
+    if (!cfg) return
+    const existing = new Set(normalizeAutopilotAssets(cfg.assets).map((a) => a.assetId))
+    const candidates = ["EURUSD", "GBPUSD", "BTCUSD", "ETHUSD", "GOLD", "AUDUSD"]
+    const nextId = candidates.find((c) => !existing.has(c)) ?? `ASSET${existing.size + 1}`
+    updateCfg({
+      assets: [
+        ...normalizeAutopilotAssets(cfg.assets),
+        { assetId: nextId, enabled: true, duration: null, amount: null, minConfidence: null }
+      ]
+    })
+  }
+
+  const removeAsset = (assetId: string) =>
+    updateCfg({ assets: normalizeAutopilotAssets(cfg?.assets).filter((a) => a.assetId !== assetId) })
+
+  const saveCredentials = async () => {
+    setBusy(true)
+    setCredsMsg(null)
+    try {
+      const patch: Partial<TradingCredentials> = {
+        expertoptionDemo: creds.demo,
+        riskPerTradePct: Math.min(20, Math.max(1, Number(creds.riskPct) || 2))
+      }
+      // Only send the token when the user typed a NEW one (masked reads stay untouched).
+      if (creds.token.trim()) patch.expertoptionToken = creds.token.trim()
+      await saveTradingCredentials(patch)
+      setCreds((p) => ({ ...p, token: "" }))
+      setCredsMsg("Credentials saved.")
+      await load()
+    } catch (e) {
+      setCredsMsg((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const running = cfg?.enabled ?? false
   const auto = demo?.autopilot ?? null
+  const scopeOptions = [...new Set([...enabledAssets.map((a) => a.assetId), cfg?.assetId ?? ""])].filter(Boolean)
+  const chartAssetId = scopeAsset || scopeOptions[0]
 
   return (
     <div className="stack">
       <p className="muted">
-        Automated trading engine — configure strategy, risk controls, and asset scope.
-        The autopilot monitors markets and executes within your rules. You always stay in control.
+        Automated demo-trading engine. The engine scans EVERY asset enabled below each tick and applies your
+        risk rules per asset. Configure individual assets here or from the overlay Autopilot dockable — both
+        write to the same shared configuration. You always stay in control.
       </p>
 
       <ReadinessPanel />
@@ -319,6 +397,7 @@ export function AutopilotSuite() {
           <div className="row gap" style={{ alignItems: "center" }}>
             <div style={{ width: 10, height: 10, borderRadius: "50%", background: running ? "#22c55e" : "#666" }} />
             <strong>{running ? "Autopilot Running" : "Autopilot Stopped"}</strong>
+            <Badge tone="muted">{enabledAssets.length || 1} asset{(enabledAssets.length || 1) === 1 ? "" : "s"} in scope</Badge>
             {auto?.lastDecision ? <span className="muted small">last: {auto.lastDecision}</span> : null}
           </div>
           <div className="row gap">
@@ -332,10 +411,22 @@ export function AutopilotSuite() {
         </div>
       </Card>
 
-      {/* ─── Live Chart ─── */}
-      {cfg?.assetId ? (
+      {/* ─── Live Chart (follows the selected scope asset) ─── */}
+      {chartAssetId ? (
         <Card className="pad stack">
-          <TradingChart assetId={cfg.assetId} height={340} />
+          <div className="row-between" style={{ alignItems: "center" }}>
+            <h3 style={{ margin: 0 }}>Engine chart</h3>
+            {scopeOptions.length > 1 ? (
+              <Select value={chartAssetId} onChange={(e) => setScopeAsset(e.target.value)}>
+                {scopeOptions.map((a) => (
+                  <option key={a} value={a}>{a}</option>
+                ))}
+              </Select>
+            ) : (
+              <span className="muted small">{chartAssetId}</span>
+            )}
+          </div>
+          <TradingChart assetId={chartAssetId} height={340} />
         </Card>
       ) : null}
 
@@ -379,11 +470,6 @@ export function AutopilotSuite() {
             <div>cookies: <strong>{extension.lastHeartbeat?.cookieCount ?? 0}</strong></div>
             <div>last heartbeat: <strong>{extension.lastHeartbeat?.timestamp ? new Date(extension.lastHeartbeat.timestamp).toLocaleTimeString() : "—"}</strong></div>
           </div>
-          <p className="muted small" style={{ marginTop: 4 }}>
-            Extension is injecting automation hooks into target pages. Background service worker
-            relays heartbeat every 12s. Autopilot can leverage browser-level metrics, page state,
-            form detection, safe clicking, cookie access, and DOM analysis for smarter decisions.
-          </p>
         </Card>
       ) : (
         <Card className="pad">
@@ -395,60 +481,92 @@ export function AutopilotSuite() {
             <Badge tone="muted">not installed</Badge>
           </div>
           <p className="muted small">
-            Install the PICC browser extension for full autopilot automation. It provides page-level hooks,
-            form detection, safe clicking, cookie access, and real-time metrics relay to the server.
-            Load as unpacked from <code>extensions/picc-overlay/</code>.
+            Optional. Load it unpacked from <code>extensions/picc-overlay/</code> for page-level metrics relay.
           </p>
         </Card>
       )}
 
       <div className="grid">
-        {/* ─── Strategy Selector ─── */}
+        {/* ─── Asset Scope (per-asset control) ─── */}
         <Card className="pad stack">
-          <h3>Strategy</h3>
-          <p className="muted small">Pick the engine logic. Each strategy has different entry/exit rules and risk behavior.</p>
-          <div className="stack">
-            {STRATEGY_PROFILES.map((s) => (
-              <div
-                key={s.id}
-                role="button"
-                tabIndex={0}
-                className="card pad"
-                style={{
-                  border: strategy === s.id ? "1px solid var(--accent, #6c63ff)" : "1px solid transparent",
-                  cursor: "pointer",
-                  transition: "border-color 0.15s"
-                }}
-                onClick={() => setStrategy(s.id)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setStrategy(s.id) }}
-              >
-                <div className="row-between">
-                  <strong className="small">{s.label}</strong>
-                  {strategy === s.id ? <Badge tone="success">selected</Badge> : null}
+          <h3>Asset Scope</h3>
+          <p className="muted small">
+            The engine evaluates every ENABLED asset on every tick. Empty fields inherit the global defaults;
+            filled values override them for that asset only.
+          </p>
+          {cfg ? (
+            <div className="stack">
+              {(assets.length ? assets : [{ assetId: cfg.assetId, enabled: true, duration: null, amount: null, minConfidence: null }]).map((a) => (
+                <div key={a.assetId} className="card pad" style={{ opacity: a.enabled ? 1 : 0.55 }}>
+                  <div className="row-between" style={{ marginBottom: 4 }}>
+                    <ToggleRow label="" checked={a.enabled} onChange={() => updateAsset(a.assetId, { enabled: !a.enabled })} />
+                    <Button variant="ghost" className="btn-sm" disabled={busy} onClick={() => removeAsset(a.assetId)} title="Remove from scope">
+                      ✕
+                    </Button>
+                  </div>
+                  <div className="grid grid-2">
+                    <Field label="Asset">
+                      <Input
+                        value={a.assetId}
+                        onChange={(e) => updateAsset(a.assetId, { assetId: e.target.value.toUpperCase() })}
+                      />
+                    </Field>
+                    <Field label={`Duration (s) · global ${cfg.duration}`}>
+                      <Input
+                        type="number"
+                        placeholder={`${cfg.duration}`}
+                        value={a.duration ?? ""}
+                        onChange={(e) => updateAsset(a.assetId, { duration: e.target.value ? Number(e.target.value) : null })}
+                      />
+                    </Field>
+                    <Field label="Amount (blank = auto)">
+                      <Input
+                        type="number"
+                        min={1}
+                        placeholder={cfg.amount != null ? String(cfg.amount) : "auto"}
+                        value={a.amount ?? ""}
+                        onChange={(e) => updateAsset(a.assetId, { amount: e.target.value ? Number(e.target.value) : null })}
+                      />
+                    </Field>
+                    <Field label={`Min confidence % · global ${cfg.minConfidence}`}>
+                      <Input
+                        type="number"
+                        min={30}
+                        max={95}
+                        placeholder={`${cfg.minConfidence}`}
+                        value={a.minConfidence ?? ""}
+                        onChange={(e) => updateAsset(a.assetId, { minConfidence: e.target.value ? Number(e.target.value) : null })}
+                      />
+                    </Field>
+                  </div>
                 </div>
-                <p className="muted small" style={{ margin: 0 }}>{s.desc}</p>
-              </div>
-            ))}
-          </div>
+              ))}
+              <Button variant="ghost" disabled={assets.length >= 20} onClick={addAsset}>
+                + Add asset to scope
+              </Button>
+            </div>
+          ) : (
+            <Spinner label="Loading scope…" />
+          )}
         </Card>
 
         {/* ─── Risk Controls ─── */}
         <Card className="pad stack">
           <h3>Risk Controls</h3>
-          <p className="muted small">Hard limits that the autopilot must respect. These cannot be overridden during runtime.</p>
+          <p className="muted small">Global limits the autopilot must respect across ALL scoped assets.</p>
           {cfg ? (
             <div className="stack">
               <div className="grid grid-2">
-                <Field label="Asset">
+                <Field label="Primary asset (legacy display)">
                   <Input value={cfg.assetId} onChange={(e) => updateCfg({ assetId: e.target.value.toUpperCase() })} />
                 </Field>
-                <Field label="Duration (s)">
+                <Field label="Default duration (s)">
                   <Input type="number" value={cfg.duration} onChange={(e) => updateCfg({ duration: Number(e.target.value) || 60 })} />
                 </Field>
-                <Field label="Amount per trade">
+                <Field label="Default amount per trade">
                   <Input type="number" min={1} placeholder="auto" value={cfg.amount ?? ""} onChange={(e) => updateCfg({ amount: e.target.value ? Number(e.target.value) : null })} />
                 </Field>
-                <Field label="Min confidence %">
+                <Field label="Default min confidence %">
                   <Input type="number" min={1} max={100} value={cfg.minConfidence} onChange={(e) => updateCfg({ minConfidence: Number(e.target.value) })} />
                 </Field>
               </div>
@@ -458,7 +576,7 @@ export function AutopilotSuite() {
                 <Field label="Cooldown between trades (ms)">
                   <Input type="number" min={0} value={cfg.cooldownMs} onChange={(e) => updateCfg({ cooldownMs: Number(e.target.value) })} />
                 </Field>
-                <Field label="Max concurrent positions">
+                <Field label="Max concurrent positions (all assets)">
                   <Input type="number" min={1} value={cfg.maxConcurrent} onChange={(e) => updateCfg({ maxConcurrent: Number(e.target.value) })} />
                 </Field>
               </div>
@@ -475,13 +593,30 @@ export function AutopilotSuite() {
 
               <h4 className="small" style={{ marginTop: 8 }}>Signal Gates</h4>
               <div className="grid grid-2">
-                <Field label="Confidence horizon (s)">
+                <Field label="Signal timeframe (s)">
                   <Input type="number" value={cfg.timeframe} onChange={(e) => updateCfg({ timeframe: Number(e.target.value) || 60 })} />
                 </Field>
                 <div />
               </div>
               <ToggleRow label="AI gate (confirm with assistant)" checked={cfg.aiGate} onChange={() => updateCfg({ aiGate: !cfg.aiGate })} />
               <ToggleRow label="Pro-analysis gate (full indicator read)" checked={cfg.proGate} onChange={() => updateCfg({ proGate: !cfg.proGate })} />
+              <ToggleRow
+                label="Model-matrix consensus gate (multiplexed models must agree)"
+                checked={cfg.consensusGate ?? false}
+                onChange={() => updateCfg({ consensusGate: !(cfg.consensusGate ?? false) })}
+              />
+              {(cfg.consensusGate ?? false) ? (
+                <Field label={`Min models agreeing (of 7) · now ${Math.min(7, Math.max(1, Number(cfg.minConsensusAgree) || 4))}`}>
+                  <input
+                    type="range"
+                    min={1}
+                    max={7}
+                    value={Math.min(7, Math.max(1, Number(cfg.minConsensusAgree) || 4))}
+                    onChange={(e) => updateCfg({ minConsensusAgree: Number(e.target.value) })}
+                    style={{ width: "100%" }}
+                  />
+                </Field>
+              ) : null}
 
               <Button variant="primary" disabled={busy} onClick={saveCfg}>
                 {busy ? "Saving…" : "Save Autopilot Settings"}
@@ -492,6 +627,42 @@ export function AutopilotSuite() {
           )}
         </Card>
       </div>
+
+      {/* ─── ExpertOption credentials (required to run) ─── */}
+      <Card className="pad stack">
+        <h3>ExpertOption Session</h3>
+        <p className="muted small">
+          The engine refuses to trade without a DEMO session token here. Token is stored server-side and never
+          echoed back in full.
+        </p>
+        <div className="grid grid-3">
+          <Field label="Session token (paste to replace)">
+            <Input
+              type="password"
+              placeholder={demo?.configured ? "token saved ✓" : "paste session token"}
+              value={creds.token}
+              onChange={(e) => setCreds((p) => ({ ...p, token: e.target.value }))}
+            />
+          </Field>
+          <Field label="Risk cap per trade %">
+            <Input
+              type="number"
+              min={1}
+              max={20}
+              value={creds.riskPct}
+              onChange={(e) => setCreds((p) => ({ ...p, riskPct: Number(e.target.value) }))}
+            />
+          </Field>
+          <div className="stack" style={{ justifyContent: "flex-end" }}>
+            <ToggleRow label="Demo account (required)" checked={creds.demo} onChange={() => setCreds((p) => ({ ...p, demo: !p.demo }))} />
+            <Button variant="secondary" disabled={busy} onClick={saveCredentials}>Save credentials</Button>
+          </div>
+        </div>
+        {!demo?.configured ? (
+          <p className="muted small">No token configured yet — autopilot ticks will report “no token configured” until saved.</p>
+        ) : null}
+        {credsMsg ? <p className="muted small">{credsMsg}</p> : null}
+      </Card>
 
       {/* ─── Open Deals + Settlements ─── */}
       <div className="grid">
@@ -640,26 +811,26 @@ function StatusCards({
   demo: ExpertOptionDemoStatus | null
   liveAccount: import("@/lib/liveTrading").LiveAccount | null
 }) {
-  const stat = (label: string, value: string, tone?: "success" | "danger") => (
+  const stat = (label: string, value: string, sub?: string) => (
     <Card className="pad">
       <div className="stat-label muted">{label}</div>
       <div className="stat-value">{value}</div>
-      {tone ? <div className="muted small">{" "}</div> : null}
+      {sub ? <div className="muted small">{sub}</div> : null}
     </Card>
   )
   return (
     <div className="grid grid-4">
       {stat("Paper cash available", fmtMoney(paper?.cash))}
-      {stat("Open notional", fmtMoney(paper?.committed))}
+      {stat("Open notional", fmtMoney(paper?.committed), paper?.openCount ? `${paper.openCount} open` : undefined)}
       {stat(
         "Realized PnL",
         fmtMoney(paper?.realizedPnl),
-        paper && paper.realizedPnl >= 0 ? "success" : "danger"
+        paper && paper.realizedPnl >= 0 ? "in profit" : "in drawdown"
       )}
       {stat(
         "Win rate",
         paper && paper.winRate != null ? `${paper.winRate}%` : "—",
-        paper && paper.winRate != null && paper.winRate < 50 ? "danger" : "success"
+        paper && paper.winRate != null && paper.winRate < 50 ? "below coin flip" : "at/above coin flip"
       )}
       <Card className="pad">
         <div className="stat-label muted">Risk cap / trade</div>

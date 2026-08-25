@@ -25,6 +25,7 @@ import { connectSession, assetsFrom, balanceFrom, accountFrom, mergeBalanceIntoA
 import { getCredentials } from "./trading.mjs"
 import { STATIC_ASSETS } from "./expertoption.mjs"
 import { createLogger } from "../logger.mjs"
+import { assetsEquivalent } from "./assetCatalog.mjs"
 
 const log = createLogger("picc-live")
 const AUTH_FAIL_RE = /(unauthorized|auth_failed|authfail|token_expired|tokenexpire|forbidden|rejected the session token|session token rejected)/i
@@ -32,7 +33,15 @@ const AUTH_FAIL_RE = /(unauthorized|auth_failed|authfail|token_expired|tokenexpi
 const BASE_PERIOD = 60 // board display / sparkline timeframe (seconds)
 const WATCH_PERIODS = [60, 300, 900, 3600] // 1m, 5m, 15m, 1h
 const LIVE_BAR_PERIOD = 5 // the app's live bar timeframe (seconds)
-const WATCH_DEFAULT = ["EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "ETHUSD", "GOLD", "AAPL", "US500"]
+// Multi-class watch coverage: forex, crypto, metals, energies, indices and
+// equities — so active-asset detection works across every instrument class.
+const WATCH_DEFAULT = [
+  "EURUSD", "GBPUSD", "USDJPY",
+  "BTCUSD", "ETHUSD",
+  "GOLD", "SILVER", "PLATINUM", "BRENT",
+  "US30", "GER40", "SPX500",
+  "AAPL", "TSLA"
+]
 const HISTORY_COUNT = 240
 const BUFFER_CAP = 400
 const IDLE_CLOSE_MS = 30_000
@@ -415,6 +424,12 @@ function resolveWatchSet(assets) {
       const n = normName(a.name)
       return n && (n === key || n.includes(key) || (key === "us500" && n.includes("sp500")))
     })
+    // Alias-aware fallback: broker labels like "Gold"/"XAU/USD"/"Wall Street"
+    // must still resolve even when spelled nothing like the canonical key.
+    if (!matches.length) {
+      const aliased = assets.filter((a) => assetsEquivalent(a.name, symbol))
+      matches.push(...aliased)
+    }
     let found = matches.find((a) => a.visible !== false) ?? matches[0] ?? null
     let id = found ? String(found.id) : null
     if (!id && STATIC_ASSETS[symbol] != null) {
