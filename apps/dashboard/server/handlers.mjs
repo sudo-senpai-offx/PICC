@@ -1784,6 +1784,25 @@ async function _handleApiInner(req, res, url, reqId) {
       if (result.ohlc?.length) {
         return writeJson(res, 200, { ok: true, source: result.source || "live", assetId, timeframe, candles: result.ohlc })
       }
+      // CCXT tier: multi-exchange market data (read-only) before the daily
+      // Yahoo fallback. Matches by canonical base symbol (BTCUSD ↔ BTC/USDT).
+      try {
+        const { liveCCXTData } = await import("./services/liveCCXT.mjs")
+        const ccxtAssets = liveCCXTData()?.assets ?? []
+        const want = String(assetId).replace(/[^A-Z]/g, "")
+        const ccxtAsset = ccxtAssets.find((a) => {
+          const sym = String(a.name ?? a.symbol ?? "").toUpperCase().replace("/", "")
+          if (sym === want) return true
+          // BTCUSD request matches BTCUSDT (stablecoin quote) and vice versa.
+          const base = want.slice(0, 3)
+          const alt = want.endsWith("USD") ? `${base}USDT` : want.replace(/USDT$/, "USD")
+          return sym === alt
+        })
+        const tf = ccxtAsset?.periods?.[timeframe]
+        if (ccxtAsset && Array.isArray(tf) && tf.length) {
+          return writeJson(res, 200, { ok: true, source: "ccxt", assetId, timeframe, candles: tf.slice(-count) })
+        }
+      } catch { /* liveCCXT not populated — fall through */ }
       const { getHistory } = await import("./services/yahoo.mjs")
       throttledWarn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
       const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
@@ -2338,6 +2357,17 @@ async function _handleApiInner(req, res, url, reqId) {
       }
       const levels = computeEntryLevels(candles, { timeframe })
       writeJson(res, 200, { ok: Boolean(levels.ok), assetId, timeframe, source, ...levels })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // ── Broker adapter registry — plug-and-play venue status ──────────────
+  if (path === "/api/trading/brokers" && req.method === "GET") {
+    try {
+      const { listBrokers } = await import("./services/brokers.mjs")
+      writeJson(res, 200, await listBrokers())
     } catch (err) {
       writeJson(res, 500, { ok: false, error: err.message })
     }

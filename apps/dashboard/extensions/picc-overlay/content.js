@@ -1807,10 +1807,210 @@
       sourceLabel(cal.totalResolved > 0 ? "trade history" : "insufficient data") + staleLabel()
   }
 
+  // ── Host-chart hover projection ────────────────────────────────────────────
+  // When hovering an ideal buy/sell level, the point is displayed ON THE
+  // BROKER'S OWN LIVE CHART (the trading graph rendered by the host page),
+  // not on an emulated chart. We locate the page's chart <canvas>, build a
+  // price→y pixel mapping from the broker's own price-axis labels (least-
+  // squares fit over ≥2 labels), and float an amber marker line at the exact
+  // projected position — recomputed every animation frame so it MOVES with
+  // the live chart (rescales, scrolls, ticks).
+  const HOST_CHART_ID = "__PICC_HOST_CHART_MARKER__"
+  let hostChartCache = { canvas: null, checkedAt: 0 }
+  let hostChartRaf = 0
+
+  function isVisibleEl(el) {
+    return Boolean(el && el.getBoundingClientRect && (() => {
+      const r = el.getBoundingClientRect()
+      return r.width > 120 && r.height > 120 && r.top < window.innerHeight && r.bottom > 0
+    })())
+  }
+
+  /** Locate the host page's main chart canvas (largest visible canvas). */
+  function findChartCanvas() {
+    const now = Date.now()
+    if (hostChartCache.canvas && isCanvasLive(hostChartCache.canvas)) {
+      hostChartCache.checkedAt = now
+      return hostChartCache.canvas
+    }
+    if (now - hostChartCache.checkedAt < 1500) return null // throttle DOM scans
+    hostChartCache.checkedAt = now
+    let best = null
+    let bestArea = 0
+    try {
+      for (const c of document.querySelectorAll("canvas")) {
+        if (!isCanvasLive(c)) continue
+        const r = c.getBoundingClientRect()
+        const area = r.width * r.height
+        if (area > bestArea) { best = c; bestArea = area }
+      }
+    } catch { return null }
+    hostChartCache.canvas = bestArea >= 120 * 120 ? best : null
+    return hostChartCache.canvas
+  }
+
+  function isCanvasLive(c) {
+    try {
+      const r = c.getBoundingClientRect()
+      return r.width > 120 && r.height > 120 && r.bottom > 0 && r.top < window.innerHeight
+    } catch { return false }
+  }
+
+  /**
+   * Build a price→y linear map from the broker's own price-axis labels.
+   * Collects numeric texts in the right-hand band beside/over the chart,
+   * keeps strictly monotonic samples, least-squares fits y = a·price + b.
+   * Returns {a, b, ok, source:"axis"} or null.
+   */
+  function fitPriceMapFromAxis(canvasRect) {
+    try {
+      const bandLeft = canvasRect.right - Math.max(90, canvasRect.width * 0.18)
+      const samples = []
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+      let node
+      while ((node = walker.nextNode())) {
+        const txt = node.textContent.trim()
+        if (!txt || txt.length > 12) continue
+        const m = txt.match(/^\d{1,3}(?:[ ,.]?\d{3})*(?:[.,]\d+)?$|^\d+[.,]\d+$/)
+        if (!m) continue
+        const price = parseFloat(txt.replace(/[ ,](?=\d{3}\b)/g, "").replace(",", "."))
+        if (!Number.isFinite(price) || price <= 0) continue
+        const el = node.parentElement
+        if (!el) continue
+        const r = el.getBoundingClientRect()
+        if (r.width === 0 || r.height === 0) continue
+        // Must sit inside-or-right-of the chart, vertically overlapping it.
+        if (r.left < bandLeft - 8) continue
+        if (r.bottom < canvasRect.top || r.top > canvasRect.bottom) continue
+        samples.push({ price, y: r.top + r.height / 2 })
+        if (samples.length >= 40) break
+      }
+      // Keep distinct-price samples; require ≥2 separated levels.
+      const seen = new Map()
+      for (const s of samples) {
+        const key = s.price.toFixed(6)
+        if (!seen.has(key)) seen.set(key, s)
+      }
+      const pts = [...seen.values()].sort((p, q) => p.price - q.price)
+      if (pts.length < 2) return null
+      const spanP = pts[pts.length - 1].price - pts[0].price
+      const spanY = Math.abs(pts[pts.length - 1].y - pts[0].y)
+      if (!(spanP > 0) || !(spanY > 24)) return null
+      // Least squares y = a*price + b
+      let sx = 0, sy = 0, sxx = 0, sxy = 0
+      for (const p of pts) { sx += p.price; sy += p.y; sxx += p.price * p.price; sxy += p.price * p.y }
+      const n = pts.length
+      const denom = n * sxx - sx * sx
+      if (Math.abs(denom) < 1e-9) return null
+      const a = (n * sxy - sx * sy) / denom
+      const b = (sy - a * sx) / n
+      if (!Number.isFinite(a) || a === 0) return null
+      return { a, b, ok: true, source: "axis" }
+    } catch { return null }
+  }
+
+  /**
+   * Fallback mapping: assume the canvas displays the recent candle range with
+   ~8% padding. Approximate — the marker renders dashed + tagged "~".
+   */
+  function approxPriceMapFromCandles(canvasRect) {
+    try {
+      const candles = Array.isArray(tradingState.lastCandles) ? tradingState.lastCandles.slice(-80) : []
+      if (candles.length < 5) return null
+      let hi = -Infinity, lo = Infinity
+      for (const c of candles) {
+        hi = Math.max(hi, Number(c.high))
+        lo = Math.min(lo, Number(c.low))
+      }
+      if (!(hi > lo)) return null
+      const pad = (hi - lo) * 0.08
+      const top = hi + pad
+      const bottom = lo - pad
+      const a = -(canvasRect.height) / (top - bottom)
+      const b = canvasRect.top - a * top
+      return { a, b, ok: true, source: "approx" }
+    } catch { return null }
+  }
+
+  function priceToY(map, price) {
+    return map.a * price + map.b
+  }
+
+  function ensureHostMarkerLayer(canvas) {
+    let layer = document.getElementById(HOST_CHART_ID)
+    if (!layer) {
+      layer = document.createElement("div")
+      layer.id = HOST_CHART_ID
+      layer.style.cssText = "all:initial;position:fixed;z-index:2147483640;pointer-events:none;"
+      const line = document.createElement("div")
+      line.id = HOST_CHART_ID + "_LINE"
+      line.style.cssText = "position:absolute;left:0;height:0;border-top:2px solid #fbbf24;box-shadow:0 0 8px rgba(251,191,36,.7);"
+      const chip = document.createElement("div")
+      chip.id = HOST_CHART_ID + "_CHIP"
+      chip.style.cssText = "position:absolute;right:0;transform:translateY(-50%);background:#fbbf24;color:#111;font:bold 10px system-ui;padding:2px 7px;border-radius:4px;white-space:nowrap;"
+      layer.appendChild(line)
+      layer.appendChild(chip)
+      document.documentElement.appendChild(layer)
+    }
+    return layer
+  }
+
+  /**
+   * Show/move the marker for `price` on the host chart. Starts a rAF loop so
+   * the marker tracks the LIVE chart (scroll, rescale, tick updates).
+   */
+  function hostChartShow(price) {
+    try {
+      const target = Number(price)
+      if (!Number.isFinite(target) || target <= 0) return hostChartHide()
+      cancelAnimationFrame(hostChartRaf)
+
+      const render = () => {
+        const canvas = findChartCanvas()
+        if (!canvas) { hostChartHide(); return }
+        const rect = canvas.getBoundingClientRect()
+        let map = fitPriceMapFromAxis(rect)
+        if (!map) map = approxPriceMapFromCandles(rect)
+        if (!map) { hostChartHide(); return }
+
+        const y = priceToY(map, target)
+        if (!Number.isFinite(y)) { hostChartHide(); return }
+        // Off-chart price: clamp marker to the edge instead of vanishing.
+        const clampedY = Math.min(Math.max(y, rect.top + 4), rect.bottom - 4)
+        const offChart = Math.abs(clampedY - y) > 1
+
+        const layer = ensureHostMarkerLayer(canvas)
+        layer.style.display = "block"
+        layer.style.left = rect.left + "px"
+        layer.style.top = "0px"
+        layer.style.width = rect.width + "px"
+        layer.style.height = rect.height + "px"
+        const line = layer.firstChild
+        line.style.top = (clampedY - rect.top) + "px"
+        line.style.width = rect.width + "px"
+        line.style.borderTopStyle = map.source === "approx" || offChart ? "dashed" : "solid"
+        const chip = layer.lastChild
+        chip.style.top = (clampedY - rect.top) + "px"
+        const pretty = target < 10 ? target.toFixed(4) : target < 1000 ? target.toFixed(2) : target.toLocaleString("en-US", { maximumFractionDigits: 2 })
+        chip.textContent = `${map.source === "approx" ? "~" : ""}${offChart ? "↕ " : ""}${pretty}`
+        hostChartRaf = requestAnimationFrame(render)
+      }
+      render()
+    } catch { hostChartHide() }
+  }
+
+  function hostChartHide() {
+    cancelAnimationFrame(hostChartRaf)
+    hostChartRaf = 0
+    const layer = document.getElementById(HOST_CHART_ID)
+    if (layer) layer.style.display = "none"
+  }
+
   // ── Entry Points Renderer — ideal buy/sell zones for the ACTIVE asset ─────
-  // v2: embedded realtime mini-candle-chart; hovering a zone/level row draws a
-  // live crosshair at that exact price on the chart; each zone carries a
-  // confirm-to-simulate buy button (paper trade).
+  // Hovering a zone/level PROJECTS the price point onto the broker's own live
+  // chart (see host-chart projection above). The compact in-dock candle
+  // reference remains only as a fallback when no host chart is detectable.
+  // Each zone carries a confirm-to-simulate buy button (paper trade).
   const ENTRY_CHART_H = 74
 
   function drawEntryChart() {
@@ -1926,6 +2126,10 @@
         `<div style="color:#a5a0ff;padding:4px">${esc(levels?.reason || "Computing ideal buy/sell zones\u2026")}</div>`
     }
     const spot = Number(levels.spot)
+    // Primary display = the BROKER'S OWN LIVE CHART via projection. The
+    // compact in-dock candle strip renders ONLY when no host chart can be
+    // located (e.g. unusual layout), so the feature never goes blind.
+    const hasHostChart = Boolean(findChartCanvas())
     const fmtPx = (v) => {
       const n = Number(v)
       if (!Number.isFinite(n)) return "\u2014"
@@ -1933,7 +2137,9 @@
     }
     const lines = []
     lines.push(`<div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:2px"><span style="color:#6c63ff">${esc(activeAsset)} \u25cf</span><span style="color:#eef0ff">spot ${fmtPx(spot)}</span></div>`)
-    lines.push(`<canvas id="__PICC_ENTRY_CHART__" width="248" height="${ENTRY_CHART_H}" style="width:100%;border-radius:4px;display:block;margin-bottom:4px"></canvas>`)
+    if (!hasHostChart) {
+      lines.push(`<canvas id="__PICC_ENTRY_CHART__" width="248" height="${ENTRY_CHART_H}" style="width:100%;border-radius:4px;display:block;margin-bottom:4px"></canvas>`)
+    }
 
     const zoneRow = (z, label, color, side) => {
       if (!z) return ""
@@ -1954,9 +2160,10 @@
         `<span>${l.kind === "support" ? "\ud83d\udfe2" : "\ud83d\udd34"} ${fmtPx(l.price)}</span>` +
         `<span>+${Math.abs(Number(l.distancePct)).toFixed(2)}% \u00b7 ${esc(String((l.sources || [])[0] ?? ""))}</span></div>`)
     }
-    lines.push(`<div style="font-size:8px;color:#5a6078;margin-top:2px">hover a level \u2192 live crosshair \u00b7 pivots+swings+EMA</div>`)
-    // Draw once the DOM exists (updateAllDockables assigns synchronously after render).
-    setTimeout(drawEntryChart, 0)
+    lines.push(`<div style="font-size:8px;color:#5a6078;margin-top:2px">hover a level \u2192 point projected on the live broker chart \u00b7 pivots+swings+EMA</div>`)
+    // Fallback strip needs a draw pass once its DOM exists; the host-chart
+    // marker draws itself via rAF from the hover delegation.
+    if (!hasHostChart) setTimeout(drawEntryChart, 0)
     return banner + `<div style="padding:2px 0">${lines.join("")}</div>` + staleLabel()
   }
 
@@ -3563,19 +3770,22 @@
     }
   })
 
-  // ── Entry-points hover crosshair — delegated so it survives re-renders ──
-  // mousemove keeps the crosshair glued while the pointer travels within a row.
+  // ── Entry-points hover → host-chart projection — delegated so it survives
+  // re-renders. The hovered price is displayed ON THE BROKER'S LIVE CHART and
+  // tracks it in realtime via the rAF loop inside hostChartShow().
   shadowRoot.addEventListener("mousemove", (e) => {
     const row = e.composedPath().find((el) => el.hasAttribute?.("data-entry-hover-price"))
     const price = row ? Number(row.getAttribute("data-entry-hover-price")) : NaN
     if (Number.isFinite(price)) {
       if (tradingState.entryHoverPrice !== price) {
         tradingState.entryHoverPrice = price
-        drawEntryChart()
+        drawEntryChart() // fallback strip (only present without a host chart)
       }
+      hostChartShow(price)
     } else if (tradingState.entryHoverPrice != null) {
       tradingState.entryHoverPrice = null
       drawEntryChart()
+      hostChartHide()
     }
   }, true)
 

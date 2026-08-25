@@ -1184,6 +1184,33 @@ export function getModelMatrix(assetId: string, timeframe = 300): Promise<ModelM
   return post("/trading/models", { assetId, timeframe })
 }
 
+// ── Broker adapter registry (plug-and-play venue status) ──────────────────
+export interface BrokerRow {
+  slug: string
+  label: string
+  category: string
+  capabilities: string[]
+  configured: boolean
+  connected: boolean
+  demoOnly?: boolean
+  notes?: string
+  pairs?: Array<{ exchange: string; symbol: string; timeframe?: string }>
+  liveExchanges?: string[]
+  sessionLive?: boolean | null
+}
+
+export interface BrokersResult {
+  ok: boolean
+  activeExecutor: string
+  brokers: BrokerRow[]
+  summary: { total: number; configured: number; connected: number }
+}
+
+/** Live status of every registered trading venue/adapter. */
+export function getBrokers(): Promise<BrokersResult> {
+  return request("/trading/brokers")
+}
+
 export interface TradeJournalEntry {
   id: string
   symbol: string

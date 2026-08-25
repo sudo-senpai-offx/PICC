@@ -15,6 +15,7 @@ import { WatchlistPanel } from "@/components/WatchlistPanel"
 import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { PatternPanel } from "@/components/PatternPanel"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
+import { getBrokers, type BrokersResult } from "@/lib/trading"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
@@ -220,19 +221,21 @@ export function AutopilotSuite() {
   const [extension, setExtension] = useState<ExtensionStatus | null>(null)
   const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number }>({ token: "", demo: true, riskPct: 2 })
   const [credsMsg, setCredsMsg] = useState<string | null>(null)
+  const [brokers, setBrokers] = useState<BrokersResult | null>(null)
   const [scopeAsset, setScopeAsset] = useState<string>("")
   const lastLoadAt = useRef(0)
   const { snapshot } = useRealtimeSuite()
 
   const load = async () => {
     try {
-      const [c, d, a, dl, ext, cr] = await Promise.allSettled([
+      const [c, d, a, dl, ext, cr, br] = await Promise.allSettled([
         getAutopilotConfig(),
         getExpertOptionDemoStatus(),
         getDemoAnalytics().catch(() => null),
         getDemoDeals(30).catch(() => ({ ok: false, deals: [] as DemoDeal[] })),
         getExtensionStatus(),
-        getTradingCredentials()
+        getTradingCredentials(),
+        getBrokers().catch(() => null)
       ])
       lastLoadAt.current = Date.now()
       if (c.status === "fulfilled" && c.value.ok) {
@@ -243,6 +246,7 @@ export function AutopilotSuite() {
       if (a.status === "fulfilled" && a.value) setAnalytics(a.value)
       if (dl.status === "fulfilled" && dl.value.ok) setDeals(dl.value.deals)
       if (ext.status === "fulfilled") setExtension(ext.value)
+      if (br.status === "fulfilled" && br.value?.ok) setBrokers(br.value)
       if (cr.status === "fulfilled") {
         // Token comes back masked ("••••••") — only show whether one exists.
         const raw = cr.value as unknown as Record<string, unknown>
@@ -485,6 +489,40 @@ export function AutopilotSuite() {
           </p>
         </Card>
       )}
+
+      {/* ─── Trading venues (broker adapter registry) ─── */}
+      {brokers?.ok ? (
+        <Card className="pad stack">
+          <div className="row-between">
+            <h3 style={{ margin: 0 }}>Trading venues</h3>
+            <Badge tone="muted">executor: {brokers.activeExecutor}</Badge>
+          </div>
+          <div className="stack">
+            {brokers.brokers.map((b) => (
+              <div key={b.slug} className="card pad" style={{ opacity: b.configured ? 1 : 0.55 }}>
+                <div className="row-between" style={{ alignItems: "center" }}>
+                  <strong className="small">{b.label}</strong>
+                  <span className="row gap" style={{ alignItems: "center" }}>
+                    <Badge tone={b.connected ? "success" : b.configured ? "warn" : "muted"}>
+                      {b.connected ? "connected" : b.configured ? "configured" : "not set up"}
+                    </Badge>
+                    {b.demoOnly ? <Badge tone="muted">demo-only</Badge> : null}
+                  </span>
+                </div>
+                <div className="row gap muted small" style={{ flexWrap: "wrap", marginTop: 4 }}>
+                  {b.capabilities.map((cap) => <span key={cap} className="badge badge-muted">{cap}</span>)}
+                </div>
+                {b.pairs && b.pairs.length ? (
+                  <p className="muted small" style={{ margin: "4px 0 0" }}>
+                    pairs: {b.pairs.map((p) => `${p.exchange}:${p.symbol}`).join(", ")}
+                  </p>
+                ) : null}
+                {b.notes ? <p className="muted small" style={{ margin: "4px 0 0" }}>{b.notes}</p> : null}
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       <div className="grid">
         {/* ─── Asset Scope (per-asset control) ─── */}
