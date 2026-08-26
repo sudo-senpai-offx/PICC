@@ -2282,6 +2282,48 @@ async function _handleApiInner(req, res, url, reqId) {
     return true
   }
 
+  // ── System capabilities probe ────────────────────────────────────────────
+  // Read-only machine-level snapshot: what this instance can reach and what
+  // channels are live. No auth required — intentionally public on localhost.
+  if (path === "/api/system/capabilities" && req.method === "POST") {
+    try {
+      const { getPrefs } = await import("./services/notifier.mjs")
+      const prefs = getPrefs()
+      const notifierChannels = {
+        inApp: true,
+        webpush: Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
+        email: Boolean(process.env.RESEND_API_KEY && process.env.ALERT_EMAIL_TO),
+      }
+
+      const hb = globalThis.__picc_ext_heartbeat || null
+      const extensionSensor = {
+        seen: Boolean(hb && (Date.now() - hb.timestamp < 30_000)),
+        lastSeen: hb?.timestamp || null,
+      }
+
+      let browserFound = false
+      try {
+        const { browserAvailable } = await import("./services/browserBridge.mjs")
+        browserFound = browserAvailable()
+      } catch { /* browser bridge optional */ }
+
+      writeJson(res, 200, {
+        ok: true,
+        arch: process.arch,
+        platform: process.platform,
+        node: process.version,
+        browserFound,
+        extensionSensor,
+        notifierChannels,
+        signalEngine: process.env.PICC_SIGNAL_ENGINE !== "0",
+        uptime: Math.floor(process.uptime()),
+      })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
   // ── Cross-platform portfolio: aggregate exposure + risk check ─────────
   if (path === "/api/trading/portfolio" && req.method === "POST") {
     try {

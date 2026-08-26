@@ -13,7 +13,6 @@
 //
 // The bridge is read-only by contract: it never clicks buy/withdraw. The
 // PICC overlay it injects only displays metrics and suggestions.
-import { chromium } from "playwright-core"
 import { execSync } from "node:child_process"
 import { cpSync, mkdirSync, writeFileSync, unlinkSync, existsSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -382,6 +381,7 @@ export async function openBridge({
   let launchErr = null
   let sawLockError = false
   const attempt = async () => {
+    const { chromium } = await import("playwright-core")
     for (const strategy of launchStrategies()) {
       try {
         return await chromium.launchPersistentContext(userDataDir, { ...strategy, ...baseOpts })
