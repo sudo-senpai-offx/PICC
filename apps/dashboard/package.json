@@ -1,35 +1,36 @@
 {
-    "name":  "@picc/dashboard",
-    "version":  "0.1.0",
-    "private":  true,
-    "type":  "module",
-    "scripts":  {
-                    "dev":  "vite",
-                    "build":  "tsc -b \u0026\u0026 vite build",
-                    "typecheck":  "tsc -b --noEmit",
-                    "preview":  "vite preview",
-                    "serve":  "node server/index.mjs",
-                    "start":  "vite",
-                    "test":  "vitest run --maxWorkers=3",
-                    "smoke:trading":  "node ../../scripts/probe-e2e-decisions.mjs",
-                    "test:ci":  "npm audit --audit-level=high \u0026\u0026 npm test \u0026\u0026 npm run typecheck"
-                },
-    "dependencies":  {
-                         "@supabase/supabase-js":  "^2.49.4",
-                         "ccxt":  "^4.5.75",
-                         "lightweight-charts":  "^5.2.1",
-                         "playwright-core":  "^1.49.1",
-                         "react":  "^19.1.0",
-                         "react-dom":  "^19.1.0",
-                         "react-router-dom":  "^7.18.2",
-                         "stripe":  "^17.5.0"
-                     },
-    "devDependencies":  {
-                            "@types/react":  "^19.1.2",
-                            "@types/react-dom":  "^19.1.2",
-                            "@vitejs/plugin-react":  "^4.5.0",
-                            "typescript":  "^5.8.3",
-                            "vite":  "^7.0.0",
-                            "vitest":  "^3.0.0"
-                        }
+    "name": "@picc/dashboard",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc -b && vite build",
+        "typecheck": "tsc -b --noEmit",
+        "preview": "vite preview",
+        "serve": "node server/index.mjs",
+        "start": "vite",
+        "test": "vitest run --maxWorkers=3",
+        "smoke:trading": "node ../../scripts/probe-e2e-decisions.mjs",
+        "test:ci": "npm audit --audit-level=high && npm test && npm run typecheck"
+    },
+    "dependencies": {
+        "@supabase/supabase-js": "^2.49.4",
+        "ccxt": "^4.5.75",
+        "lightweight-charts": "^5.2.1",
+        "playwright-core": "^1.49.1",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0",
+        "react-router-dom": "^7.18.2",
+        "stripe": "^17.5.0",
+        "web-push": "^3.6.7"
+    },
+    "devDependencies": {
+        "@types/react": "^19.1.2",
+        "@types/react-dom": "^19.1.2",
+        "@vitejs/plugin-react": "^4.5.0",
+        "typescript": "^5.8.3",
+        "vite": "^7.0.0",
+        "vitest": "^3.0.0"
+    }
 }

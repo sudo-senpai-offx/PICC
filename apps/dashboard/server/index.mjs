@@ -10,6 +10,7 @@ import { startScheduler, startLivenessMonitor } from "./services/scheduler.mjs"
 import { startLedger } from "./services/accuracyLedger.mjs"
 import { log } from "./logger.mjs"
 import { initErrorLog } from "./errorLog.mjs"
+import { startSignalEngine, stopSignalEngine } from "./services/signalEngine.mjs"
 
 const ROOT = process.env.PICC_DIST_DIR || fileURLToPath(new URL("../dist", import.meta.url))
 const PORT = Number(process.env.PORT ?? 3000)
@@ -101,6 +102,7 @@ if (!process.env.PICC_NO_LISTEN) {
   let shuttingDown = false
   async function gracefulShutdown(signal) {
     if (shuttingDown) return
+    try { stopSignalEngine() } catch { /* best effort */ }
     shuttingDown = true
     console.log(`[picc-server] ${signal} received — shutting down gracefully...`)
     log.info("shutdown initiated", { signal })
@@ -145,6 +147,8 @@ if (!process.env.PICC_NO_LISTEN) {
   // token", so binding all interfaces would hand LAN neighbors (and any
   // tunnel forwarder, which connects from 127.0.0.1) an unauthenticated
   // control plane.
+  // Advisory Signal Engine replaces the deprecated execution autopilot.
+  startSignalEngine()
   server.listen(PORT, "127.0.0.1", () => {
     log.info("server started", { port: PORT, host: "127.0.0.1", dist: ROOT })
     // Register the liveness/uptime monitor BEFORE the scheduler starts —

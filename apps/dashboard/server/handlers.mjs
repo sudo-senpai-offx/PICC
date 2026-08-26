@@ -2238,6 +2238,39 @@ async function _handleApiInner(req, res, url, reqId) {
     return true
   }
 
+  // ── Notifications — universal attention layer (advisory signals) ──────
+  if (path.startsWith("/api/notifications")) {
+    try {
+      const n = await import("./services/notifier.mjs")
+      if (path === "/api/notifications/status" && req.method === "GET") {
+        writeJson(res, 200, n.notifierStatus())
+        return true
+      }
+      if (path === "/api/notifications/prefs" && req.method === "POST") {
+        writeJson(res, 200, { ok: true, prefs: n.setPrefs(body) })
+        return true
+      }
+      if (path === "/api/notifications/subscribe-push" && req.method === "POST") {
+        if (!body?.endpoint) return writeJson(res, 400, { ok: false, error: "subscription endpoint required" })
+        writeJson(res, 200, { ok: n.addPushSubscription(body), subscriptions: n.listPushSubscriptions() })
+        return true
+      }
+      if (path === "/api/notifications/test" && req.method === "POST") {
+        const rec = await n.dispatchAlert({
+          kind: "TEST",
+          assetId: String(body?.assetId ?? "TEST"),
+          title: "🔔 PICC test notification",
+          body: "If you can read this on any channel, the advisory pipeline is wired end-to-end."
+        })
+        writeJson(res, 200, { ok: true, record: rec })
+        return true
+      }
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+      return true
+    }
+  }
+
   // ── Broker adapter registry — plug-and-play venue status ──────────────
   if (path === "/api/trading/brokers" && req.method === "GET") {
     try {
