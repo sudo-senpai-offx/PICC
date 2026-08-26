@@ -106,14 +106,7 @@ if (!process.env.PICC_NO_LISTEN) {
     log.info("shutdown initiated", { signal })
 
     const shutdownFns = []
-    try {
-      const { stopAutopilot, _closeSession } = await import("./services/autopilot.mjs")
-      shutdownFns.push(async () => {
-        await stopAutopilot("server shutdown")
-        await _closeSession()
-      })
-    } catch { /* optional */ }
-    try {
+        try {
       const { stopDecisionEngine } = await import("./services/adaptiveConfluence.mjs")
       shutdownFns.push(stopDecisionEngine)
     } catch { /* optional */ }
@@ -162,10 +155,7 @@ if (!process.env.PICC_NO_LISTEN) {
     }
     startLedger()
     console.log("[picc-accuracy-ledger] auto-resolving trading decisions")
-    import("./services/autopilot.mjs").then(({ bootstrapAutopilot }) => {
-      bootstrapAutopilot()
-    }).catch(() => {})
-    import("./services/adaptiveConfluence.mjs").then(({ startDecisionEngine }) => {
+        import("./services/adaptiveConfluence.mjs").then(({ startDecisionEngine }) => {
       startDecisionEngine()
       console.log("[picc-decision-engine] started — AI signals + liveEO active")
     }).catch(() => {})

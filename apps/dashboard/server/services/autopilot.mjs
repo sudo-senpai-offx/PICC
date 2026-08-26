@@ -585,53 +585,6 @@ function maybeEmitRiskEvents(config, dayKey, dayStartBalance, pnl) {
 // Demo trades + session
 // ---------------------------------------------------------------------
 
-function ensureSession() {
-  if (state.session && state.session.connected) return Promise.resolve(state.session)
-  if (state.sessionPromise) return state.sessionPromise
-
-  state.sessionPromise = (async () => {
-    const creds = await getCredentials()
-    if (!creds.expertoptionToken) throw new Error("ExpertOption not configured — add your session token first")
-    if (!creds.expertoptionDemo) throw new Error("demo mode disabled — autopilot refuses to trade a live account")
-    const session = await connectTradingSession({
-      token: creds.expertoptionToken,
-      isDemo: creds.expertoptionDemo,
-      wsUrl: creds.expertoptionWsUrl
-    })
-    state.session?.close?.()
-    state.session = session
-    state.sessionError = null
-    session.onDeal((kind, deal) => {
-      if (kind === "settled") void recordDeal(deal)
-    })
-    return session
-  })().catch((err) => {
-    state.sessionError = err.message
-    throw err
-  }).finally(() => {
-    state.sessionPromise = null
-  })
-
-  return state.sessionPromise
-}
-
-export async function _closeSession() {
-  if (state.loopTimer) {
-    clearInterval(state.loopTimer)
-    state.loopTimer = null
-  }
-  if (state.session) {
-    try {
-      state.session.close()
-    } catch {
-      /* ignore */
-    }
-    state.session = null
-  }
-  state.sessionPromise = null
-  state.sessionError = null
-}
-
 async function recordDeal(deal) {
   const write = dealWrite.then(
     () => recordDealLocked(deal),
@@ -830,45 +783,6 @@ async function defaultAmount(balance, riskPct, closes, times) {
  * Place a single demo trade (explicit, from the UI). Validates that the account
  * is a demo account before anything is sent to the broker.
  */
-export async function placeDemoTrade({ assetId, type, amount, duration }) {
-  const creds = await getCredentials()
-  if (!creds.expertoptionToken) throw new Error("ExpertOption not configured — add your session token first")
-  if (!creds.expertoptionDemo) throw new Error("demo trading disabled — expertoptionDemo is off")
-
-  const session = await ensureSession()
-  const direction = type === "put" ? "put" : "call"
-  const balance = (await session.balance()).balance ?? 0
-  const finalAmount =
-    amount != null && Number(amount) > 0
-      ? clamp(Number(amount), 1, 50000)
-      : await defaultAmount(balance, creds.riskPerTradePct)
-  const dur = Math.round(Number(duration) || 60)
-
-  const deal = await session.buy({ assetId, type: direction, amount: finalAmount, duration: dur })
-  await appendRow("agent_logs", {
-    role: "tool",
-    name: "expertoption_demo_trade",
-    content: JSON.stringify({
-      symbol: String(assetId),
-      direction,
-      amount: finalAmount,
-      duration: dur,
-      serverId: deal.serverId
-    })
-  })
-  return deal
-}
-
-// ---------------------------------------------------------------------
-// Autopilot decision + loop
-// ---------------------------------------------------------------------
-
-/**
- * Pure decision function — no I/O, easy to unit test.
- * `pred` is the predictDirection result ({ direction, confidence, reason }).
- * `pro` is the optional proAnalyzeCandles report; when config.proGate is on the
- * trade is refused unless pro agrees with the ensemble.
- */
 export function decideAutopilot({ config, pred, pro = null, mtf = null, sentiment = null, consensus = null, openCount = 0, lastEntryAt = 0, now = Date.now(), dailyPnl = 0, dayStartBalance = null, todayTrades = 0, aiVeto = false }) {
   const refuse = (reason) => ({ trade: false, reason })
   if (!config.enabled) return refuse("autopilot disabled")
@@ -970,23 +884,6 @@ async function aiConsents(pred) {
 
 let tickInFlight = false
 
-export async function autopilotTick() {
-  if (tickInFlight) return { ok: false, reason: "tick already in flight" }
-  tickInFlight = true
-  try {
-    return await runAutopilotTick()
-  } finally {
-    tickInFlight = false
-  }
-}
-
-/**
- * Phase 13 — is a real, live browser session behind the cached token?
- * Honest union of two legitimate live legs: (a) the PICC studio browser has
- * an open ExpertOption app tab, or (b) the user's own browser is streaming
- * broker frames through the extension feed right now. Either way a human
- * -visible session exists; neither means we'd be acting on orphaned data.
- */
 export async function getSessionLive() {
   // Leg 0: an authenticated gateway session IS a live session — the broker
   // validated the token at connect and keeps the socket alive.
@@ -1032,365 +929,6 @@ export function refreshSessionLiveCache(verdict) {
  * amount and min-confidence, and per-asset cooldowns via assetLastEntryAt.
  * maxConcurrent is enforced across ALL assets combined (open-deal budget).
  */
-async function runAutopilotTick() {
-  const tickId = randomBytes(4).toString("hex")
-  const baseConfig = await getAutopilotConfig()
-  if (!baseConfig.enabled) return { ok: false, reason: "autopilot disabled" }
-
-  const creds = await getCredentials()
-  if (!creds.expertoptionToken) {
-    setLastDecision("no token configured")
-    return { ok: false, reason: "no token" }
-  }
-  if (!creds.expertoptionDemo) {
-    setLastDecision("demo mode disabled — enable demo in credentials")
-    console.warn("[picc-autopilot] demo mode is disabled; enable it in credentials to allow autopilot trading")
-    return { ok: false, reason: "demo mode disabled" }
-  }
-
-  const session = await ensureSession()
-
-  // Phase 13 liveness (after ensureSession so the connected gateway counts as
-  // a live leg): refuse to act when NOTHING live exists behind the token —
-  // no authenticated socket, no studio tab, no extension feed.
-  const liveVerdict = await getSessionLive()
-  refreshSessionLiveCache(liveVerdict)
-  if (!liveVerdict.live) {
-    setLastDecision(`no live browser session — ${liveVerdict.reason}`, { gate: "liveness" })
-    return { ok: false, reason: `no live browser session (${liveVerdict.reason})` }
-  }
-  let balance = 0
-  try {
-    balance = (await session.balance()).balance ?? 0
-  } catch (err) {
-    state.dataHealth = "stale"
-    setLastDecision(`balance fetch failed: ${err?.message ?? err}`)
-    console.warn("[picc-autopilot] balance fetch failed — treating data as stale:", err?.message ?? err)
-    return { ok: false, reason: `session unreachable (${err?.message ?? err})`, stale: true }
-  }
-  let openCount = session.deals().length
-
-  // Daily reset: lock the day-start balance once per day for the loss limit.
-  const today = new Date().toISOString().slice(0, 10)
-  if (baseConfig.dayKey !== today) {
-    baseConfig.dayStartBalance = balance
-    baseConfig.dayKey = today
-    await saveAutopilotConfig({ dayKey: today, dayStartBalance: balance })
-  }
-
-  const pnl = await todayPnl()
-  let todayTrades = await todayTradeCount()
-
-  // Risk-threshold notifications fire regardless of breaker state — the user
-  // wants to know about an approaching loss limit even when trading is paused.
-  maybeEmitRiskEvents(baseConfig, today, baseConfig.dayStartBalance, pnl)
-
-  // Consecutive-loss breaker — account-level, evaluated once per tick.
-  const lossRefusal = await checkLossBreaker(baseConfig, Date.now())
-  if (lossRefusal) {
-    setLastDecision(lossRefusal, { gate: "loss-breaker" })
-    return { ok: false, reason: lossRefusal }
-  }
-
-  const targets = enabledAssetTargets(baseConfig)
-  if (!targets.length) {
-    setLastDecision("no assets enabled in autopilot scope", { gate: "other" })
-    return { ok: false, reason: "no assets enabled" }
-  }
-
-  const entryTimes = {}
-  const results = []
-  let preLoopRefusal = null
-  let sawStaleData = false
-  let lastDeal = null
-
-  for (const target of targets) {
-    if (openCount >= Number(baseConfig.maxConcurrent)) {
-      preLoopRefusal = `max concurrent deals reached (${baseConfig.maxConcurrent}) — remaining assets skipped`
-      console.warn(`[picc-autopilot] safety limit engaged — max concurrent deals reached (${baseConfig.maxConcurrent})`)
-      setLastDecision(preLoopRefusal, { gate: "max-concurrent", assetId: target.assetId })
-      break
-    }
-    if (Number(baseConfig.maxDailyTrades) > 0 && todayTrades >= Number(baseConfig.maxDailyTrades)) {
-      preLoopRefusal = `daily trade cap ${baseConfig.maxDailyTrades} reached`
-      console.warn(`[picc-autopilot] safety limit engaged — daily trade cap ${baseConfig.maxDailyTrades} reached`)
-      setLastDecision(`${preLoopRefusal} — remaining assets skipped`, { gate: "daily-cap", assetId: target.assetId })
-      break
-    }
-
-    const config = configForAsset(baseConfig, target)
-
-    let raw = null
-    try {
-      raw = await session.candles(config.assetId, config.timeframe, config.count)
-    } catch (err) {
-      state.dataHealth = "stale"
-      setLastDecision(`${config.assetId}: candle fetch failed: ${err?.message ?? err}`, { gate: "data-quality", assetId: config.assetId })
-      results.push({ assetId: config.assetId, traded: false, reason: "candle fetch failed" })
-      sawStaleData = true
-      continue
-    }
-    const { closes, ohlc } = candlesFrom(raw)
-    if (closes.length < 30) {
-      state.dataHealth = "stale"
-      setLastDecision(`${config.assetId}: not enough candles (${closes.length})`, { gate: "data-quality", assetId: config.assetId })
-      results.push({ assetId: config.assetId, traded: false, reason: "not enough candles" })
-      sawStaleData = true
-      continue
-    }
-    state.dataHealth = "live"
-
-    // Candle-freshness guard (per asset): refuse to act on data that stopped
-    // updating. The newest bar is still forming, so staleness is measured from
-    // when that bar should have been REPLACED (open + timeframe).
-    const newestCandleSec = Number(ohlc[ohlc.length - 1]?.time)
-    const tfSec = Math.max(1, Math.round(Number(config.timeframe) || 60))
-    if (Number.isFinite(newestCandleSec) && newestCandleSec > 1_000_000_000 && Number(config.maxCandleAgeSec) > 0) {
-      const staleAfterSec = newestCandleSec + tfSec + Number(config.maxCandleAgeSec)
-      const nowSec = Math.floor(Date.now() / 1000)
-      if (nowSec > staleAfterSec) {
-        const overdueSec = nowSec - (newestCandleSec + tfSec)
-        state.dataHealth = "stale"
-        setLastDecision(`${config.assetId}: candle data stale (${overdueSec}s past bar close)`, { gate: "data-quality", assetId: config.assetId })
-        results.push({ assetId: config.assetId, traded: false, reason: "candle data stale" })
-        sawStaleData = true
-        continue
-      }
-    }
-
-    const pred = predictDirection(closes, 3, { maxWindows: 200 })
-
-    // Model-matrix snapshot for this asset — always computed (cheap) so every
-    // entry records per-model votes for online weight learning; doubles as a
-    // hard entry gate when config.consensusGate is on.
-    let matrix = null
-    try {
-      matrix = computeModelMatrix(ohlc)
-    } catch {
-      matrix = null
-    }
-
-    // Optional pro-analysis confluence gate (per asset).
-    let pro = null
-    if (config.proGate) {
-      try {
-        pro = proAnalyzeCandles({
-          candles: ohlc,
-          symbol: config.assetId,
-          timeframe: `${config.timeframe}s`,
-          horizonDays: 3
-        })
-        if (!pro.ok) pro = null
-      } catch (err) {
-        pro = null
-        console.warn("[picc-autopilot] pro analysis failed:", err.message)
-      }
-    }
-
-    // Regime-shift breaker — latched globally, fed by each asset's readings.
-    if (config.regimeShiftPause) {
-      try {
-        updateRegimeBreaker(detectRegime(ohlc, `${config.timeframe}s`).regime, Date.now())
-      } catch {
-        /* regime detection is best-effort */
-      }
-    }
-    const regimeNow = regimeStatus()
-    if (config.regimeShiftPause && regimeNow.paused) {
-      setLastDecision(`regime-shift breaker: ${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization`, { gate: "regime-breaker", assetId: config.assetId })
-      results.push({ assetId: config.assetId, traded: false, reason: "regime-shift breaker" })
-      continue
-    }
-
-    const aiVeto = config.aiGate ? !(await aiConsents(pred)) : false
-
-    // Multi-timeframe confluence gate (per asset, from liveEO buffers).
-    let mtf = null
-    if (config.mtfGate !== false) {
-      try {
-        const eoData = liveEOData()
-        const asset = (eoData.assets || []).find((a) => a.id === config.assetId)
-        if (asset) {
-          const dir = pred.direction === "down" ? -1 : pred.direction === "up" ? 1 : 0
-          mtf = quickMtfCheck(asset, dir)
-        }
-      } catch {
-        /* best-effort: skip MTF gate on failure */
-      }
-    }
-
-    // Sentiment gate (per asset).
-    let sent = null
-    if (config.sentimentGate) {
-      try {
-        const { getSentiment } = await import("./sentimentEngine.mjs")
-        const rawSent = await getSentiment(config.assetId)
-        if (rawSent?.composite) {
-          sent = { score: rawSent.composite.score ?? 0, source: rawSent.composite.label || "fusion" }
-        }
-      } catch {
-        /* sentiment unavailable — skip gate */
-      }
-    }
-
-    // Legacy single-asset configs keep the GLOBAL lastEntryAt contract (the
-    // suite resets it via saveAutopilotConfig({lastEntryAt: 0})); explicit
-    // multi-asset scopes use the per-asset cooldown map.
-    const usesPerAssetCooldown = Array.isArray(baseConfig.assets) && baseConfig.assets.length > 0
-
-    const decision = decideAutopilot({
-      config,
-      pred,
-      pro,
-      mtf,
-      sentiment: sent,
-      consensus: matrix,
-      openCount,
-      lastEntryAt: usesPerAssetCooldown
-        ? baseConfig.assetLastEntryAt?.[config.assetId] || 0
-        : baseConfig.lastEntryAt || 0,
-      now: Date.now(),
-      dailyPnl: pnl,
-      dayStartBalance: baseConfig.dayStartBalance,
-      todayTrades,
-      aiVeto
-    })
-
-    state.lastRun = {
-      tickId,
-      at: new Date().toISOString(),
-      assetId: config.assetId,
-      ok: decision.trade,
-      reason: decision.reason,
-      direction: decision.direction ?? null,
-      confidence: decision.confidence ?? null,
-      proVerdict: pro?.confluence?.verdict ?? null,
-      proConfidence: pro?.confluence?.confidence ?? null,
-      proPhase: pro?.phase?.phase ?? null,
-      mtfAgree: mtf?.agree ?? null,
-      mtfTotal: mtf?.total ?? null,
-      mtfBoost: mtf?.boost ?? null,
-      balance,
-      open: openCount
-    }
-    setLastDecision(
-      decision.trade
-        ? `${config.assetId}: ${decision.direction} ${decision.confidence}% — ${decision.reason}`
-        : `${config.assetId}: ${decision.reason}`,
-      {
-        trade: Boolean(decision.trade),
-        direction: decision.direction ?? null,
-        confidence: decision.confidence ?? null,
-        assetId: config.assetId,
-        gate: decision.trade ? null : classifyGateReason(decision.reason)
-      }
-    )
-
-    if (!decision.trade) {
-      if (/cap|loss limit/i.test(String(decision.reason))) {
-        console.warn(`[picc-autopilot] safety limit engaged — ${decision.reason}`)
-      }
-      results.push({ assetId: config.assetId, traded: false, reason: decision.reason })
-      continue
-    }
-
-    const amount =
-      config.amount != null && Number(config.amount) > 0
-        ? clamp(round2(Number(config.amount)), 1, 1000)
-        : await defaultAmount(balance, creds.riskPerTradePct, closes, ohlc.map((c) => c.time))
-    if (config.humanReviewMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, config.humanReviewMs))
-    }
-    const now = Date.now()
-    let deal
-    try {
-      deal = await session.buy({
-        assetId: config.assetId,
-        type: decision.direction,
-        amount,
-        duration: config.duration
-      })
-    } finally {
-      entryTimes[config.assetId] = now
-      baseConfig.assetLastEntryAt[config.assetId] = now
-      baseConfig.lastEntryAt = now
-    }
-    state.lastRun.deal = deal.serverId
-    state.lastRun.amount = amount
-    state.lastRun.consensus = matrix?.consensus ?? null
-    stashModelVotes(deal.serverId, matrix?.votes ?? [])
-    lastDeal = deal
-    openCount += 1
-    todayTrades += 1
-    results.push({
-      assetId: config.assetId,
-      traded: true,
-      direction: decision.direction,
-      amount,
-      reason: decision.reason,
-      confidence: decision.confidence
-    })
-  }
-
-  if (Object.keys(entryTimes).length) {
-    await saveAutopilotConfig({ assetLastEntryAt: { ...(baseConfig.assetLastEntryAt ?? {}), ...entryTimes }, lastEntryAt: baseConfig.lastEntryAt })
-  }
-  const traded = results.filter((r) => r.traded)
-  const lastResult = results[results.length - 1]
-  return {
-    ok: traded.length > 0,
-    multi: true,
-    scanned: results.length,
-    trades: traded.length,
-    deal: lastDeal,
-    amount: traded.length ? state.lastRun.amount : undefined,
-    direction: traded.length ? state.lastRun.direction : undefined,
-    stale: sawStaleData || undefined,
-    results,
-    // Prefer the LAST TRADE's reason when anything traded (matches the old
-    // single-asset contract where ok:true carried the signal note), else the
-    // last refusal / pre-loop cap.
-    reason:
-      (traded.length ? [...results].reverse().find((r) => r.traded)?.reason : null) ??
-      lastResult?.reason ??
-      preLoopRefusal ??
-      "no assets scanned"
-  }
-}
-
-export async function startAutopilot() {
-  const config = await saveAutopilotConfig({ enabled: true, stopReason: null })
-  emitAutopilotEvent("autopilot.start", { assetId: config.assetId, at: new Date().toISOString() })
-  if (!state.loopTimer) {
-    state.loopTimer = setInterval(() => {
-      autopilotTick().catch((err) => {
-        console.warn("[picc-autopilot] tick error:", err?.message ?? err)
-        setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
-      })
-    }, 60_000)
-  }
-  void autopilotTick().catch((err) => {
-    console.warn("[picc-autopilot] initial tick error:", err?.message ?? err)
-    setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
-  })
-  return getAutopilotConfig()
-}
-
-export async function stopAutopilot(reason = "manual") {
-  if (state.loopTimer) {
-    clearInterval(state.loopTimer)
-    state.loopTimer = null
-  }
-  const config = await saveAutopilotConfig({ enabled: false, stopReason: reason })
-  const event = /kill|panic|emergency/i.test(String(reason)) ? "autopilot.kill" : "autopilot.stop"
-  emitAutopilotEvent(event, { reason, at: new Date().toISOString() })
-  return getAutopilotConfig()
-}
-
-// ---------------------------------------------------------------------
-// Status
-// ---------------------------------------------------------------------
-
 export async function demoStatus() {
   const creds = await getCredentials()
   const config = await getAutopilotConfig()
@@ -1423,7 +961,7 @@ export async function demoStatus() {
     todayTrades: await todayTradeCount(),
     autopilot: {
       ...config,
-      running: Boolean(state.loopTimer),
+      running: false, // execution removed — advisory-only
       // Resolved per-asset scope: what the engine will actually trade.
       assetScope: enabledAssetTargets(config).map((t) => ({
         assetId: t.assetId,
@@ -1438,11 +976,6 @@ export async function demoStatus() {
       breakers: breakerStatus()
     }
   }
-}
-
-/** Read-only accessor for the current demo session (e.g. manual close). */
-export function getDemoSession() {
-  return state.session && state.session.connected ? state.session : null
 }
 
 /**
@@ -1565,7 +1098,6 @@ export async function tradingReadiness() {
 
 /** Test hook — wipe config + demo deals and drop the socket. */
 export async function _resetAutopilotData() {
-  await _closeSession()
   await writeJSON(CONFIG_FILE, { ...DEFAULTS })
   await writeJSON(DEALS_FILE, { deals: [] })
   state.lastRun = null
@@ -1799,27 +1331,9 @@ export async function demoAnalytics() {
 }
 
 // ---------------------------------------------------------------------
-// Bootstrap — auto-restart autopilot on server boot if enabled on disk
+// DEPRECATED (execution removal): bootstrapAutopilot, autopilotTick,
+// runAutopilotTick, startAutopilot/stopAutopilot and placeDemoTrade were
+// removed — PICC is advisory-first. The dry-run evaluator (whyAutopilot),
+// decision log, config/scope APIs and read-only demo history remain as the
+// Signal Engine's foundation. See docs/TRADING_MULTIPLATFORM_ROADMAP.md.
 // ---------------------------------------------------------------------
-export async function bootstrapAutopilot() {
-  try {
-    const config = await getAutopilotConfig()
-    if (config.enabled) {
-      console.log("[picc-autopilot] resuming from previous session")
-      if (!state.loopTimer) {
-        state.loopTimer = setInterval(() => {
-          autopilotTick().catch((err) => {
-            console.warn("[picc-autopilot] tick error:", err?.message ?? err)
-            setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
-          })
-        }, 60_000)
-      }
-      void autopilotTick().catch((err) => {
-        console.warn("[picc-autopilot] bootstrap tick failed:", err?.message ?? err)
-        setLastDecision(`tick error: ${err?.message ?? err}`, { gate: "error" })
-      })
-    }
-  } catch {
-    /* config file missing — nothing to resume */
-  }
-}

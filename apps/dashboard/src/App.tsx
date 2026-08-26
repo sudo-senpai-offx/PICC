@@ -7,7 +7,6 @@ import { Simulator } from "@/pages/Simulator"
 import { Agents } from "@/pages/Agents"
 import { Income } from "@/pages/Income"
 import { Suites } from "@/pages/Suites"
-import { TradingDashboard } from "@/pages/TradingDashboard"
 import { StreamPage } from "@/pages/StreamPage"
 import { Profile } from "@/pages/Profile"
 import { Settings } from "@/pages/Settings"
@@ -55,15 +54,7 @@ export default function App() {
           }
         />
         <Route path="trading" element={<Navigate to="/suites" replace />} />
-        <Route
-          path="trading-dashboard"
-          element={
-            <RequireFeature feature="trading">
-              <TradingDashboard />
-            </RequireFeature>
-          }
-        />
-        <Route
+ <Route
           path="agents"
           element={
             <RequireFeature feature="agents">

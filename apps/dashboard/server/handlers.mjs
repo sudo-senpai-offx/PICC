@@ -97,11 +97,8 @@ import {
   demoStatus as expertOptionDemoStatus,
   demoDeals,
   demoAnalytics,
-  placeDemoTrade,
   getAutopilotConfig,
   saveAutopilotConfig,
-  startAutopilot,
-  stopAutopilot
 } from "./services/autopilot.mjs"
 import {
   listConnectors,
@@ -1503,24 +1500,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/demo/place" && req.method === "POST") {
-    if (!(await requireAuth(req, res))) return true
-    if (validateOr400(res, body, "demoPlace")) return
-    try {
-      const deal = await withTimeout(
-        placeDemoTrade({
-          assetId: String(body?.assetId ?? "").trim(),
-          type: String(body?.type ?? "call").toLowerCase(),
-          amount: body?.amount != null ? Number(body.amount) : null,
-          duration: body?.duration != null ? Number(body.duration) : 60
-        }),
-        25000
-      )
-      writeJson(res, 200, { ok: true, deal })
-      bustRealtimeSuite()
-    } catch (err) {
-      console.warn("[picc] demo trade failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
+    writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
     return
   }
 
@@ -1548,85 +1528,12 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/autopilot/start" && req.method === "POST") {
-    if (!(await requireAuth(req, res))) return true
-    try {
-      writeJson(res, 200, { ok: true, config: await startAutopilot() })
-      bustRealtimeSuite()
-    } catch (err) {
-      console.warn("[picc] autopilot start failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
+    writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
     return
   }
 
   if (path === "/api/trading/autopilot/stop" && req.method === "POST") {
-    if (!(await requireAuth(req, res))) return true
-    try {
-      writeJson(res, 200, { ok: true, config: await stopAutopilot(String(body?.reason ?? "manual")) })
-      bustRealtimeSuite()
-    } catch (err) {
-      console.warn("[picc] autopilot stop failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  // Phase 11 — go-live readiness report (decision support, NOT an unlock:
-  // PICC has no live-trading path). Aggregates sample size, realized-vs-
-  // breakeven, calibration adequacy, uptime, and data-source health.
-  if (path === "/api/trading/readiness" && (req.method === "GET" || req.method === "POST")) {
-    try {
-      const { tradingReadiness } = await import("./services/autopilot.mjs")
-      writeJson(res, 200, await withTimeout(tradingReadiness(), 15000))
-    } catch (err) {
-      console.warn("[picc] readiness failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  // Phase 14 — rolling decision log ("why is it / isn't it trading").
-  if (path === "/api/trading/autopilot/decisions" && (req.method === "GET" || req.method === "POST")) {
-    try {
-      const { getAutopilotDecisions } = await import("./services/autopilot.mjs")
-      const limit = Math.min(Math.max(Number(body?.limit ?? parsed.searchParams.get("limit")) || 50, 1), 50)
-      writeJson(res, 200, getAutopilotDecisions(limit))
-    } catch (err) {
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  // Phase 14 — dry-run decision support. Evaluates the FULL gate chain
-  // against current data and reports what would happen — places nothing.
-  if (path === "/api/trading/autopilot/why" && req.method === "POST") {
-    if (!(await requireAuth(req, res))) return true
-    try {
-      const { whyAutopilot } = await import("./services/autopilot.mjs")
-      writeJson(res, 200, await withTimeout(whyAutopilot({ assetId: body?.assetId }), 30000))
-    } catch (err) {
-      console.warn("[picc] autopilot why failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  // Phase 16 — manually close an open demo position.
-  if (path === "/api/trading/demo/close" && req.method === "POST") {
-    if (!(await requireAuth(req, res))) return true
-    const dealId = String(body?.dealId ?? "").trim()
-    if (!dealId) return writeJson(res, 400, { ok: false, error: "dealId required" })
-    try {
-      const { getDemoSession } = await import("./services/autopilot.mjs")
-      const session = getDemoSession()
-      if (!session) return writeJson(res, 409, { ok: false, error: "no connected demo session" })
-      if (typeof session.closeTrade !== "function") return writeJson(res, 501, { ok: false, error: "closeTrade unavailable on this session" })
-      const result = await withTimeout(session.closeTrade(dealId), 12000)
-      bustRealtimeSuite()
-      writeJson(res, 200, { ok: true, result })
-    } catch (err) {
-      writeJson(res, 400, { ok: false, error: String(err?.message ?? err).slice(0, 200) })
-    }
+    writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
     return
   }
 

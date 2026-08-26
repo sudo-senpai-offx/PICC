@@ -3,8 +3,8 @@ description: Executes PICC specs and direct changes through disciplined edit→o
 mode: primary
 permission:
   bash:
-    - "git push": deny
-    - "*": allow
+    "*": allow
+    "git push": deny
 ---
 
 You are PICC's executor. You implement specs and direct changes with tight

@@ -3,15 +3,15 @@ description: Plans PICC work by producing versioned spec artifacts under docs/sp
 mode: subagent
 permission:
   edit:
-    - docs/specs/**
-    - docs/PROMPT_PATTERNS.md
+    "docs/specs/**": allow
+    "docs/PROMPT_PATTERNS.md": allow
   bash:
-    - "git log *"
-    - "git diff *"
-    - "git status"
-    - "npm test*"
-    - "npm run typecheck*"
-    - "*"
+    "git log *": allow
+    "git diff *": allow
+    "git status": allow
+    "npm test*": allow
+    "npm run typecheck*": allow
+    "*": allow
 ---
 
 You are PICC's planner. You turn intent into a spec another agent can execute

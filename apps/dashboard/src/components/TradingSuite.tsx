@@ -50,8 +50,6 @@ import {
   saveAutopilotConfig,
   saveTradingCredentials,
   scanSymbols,
-  startAutopilot,
-  stopAutopilot,
   summarizeProAnalysis
 } from "@/lib/trading"
 import type {
@@ -289,34 +287,6 @@ export function AutopilotSuite() {
     }
   }, [demo?.autopilot?.enabled, demo?.autopilot?.stopReason])
 
-  const toggleAuto = async () => {
-    if (!cfg) return
-    setBusy(true)
-    try {
-      const r = cfg.enabled ? await stopAutopilot("user") : await startAutopilot()
-      if (r.ok) setCfg(r.config)
-      await load()
-    } catch (e) {
-      setMsg({ ok: false, text: (e as Error).message })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const emergencyStop = async () => {
-    setBusy(true)
-    try {
-      const r = await stopAutopilot("emergency-kill-switch")
-      if (r.ok) setCfg(r.config)
-      setMsg({ ok: true, text: "Emergency stop executed. All autopilot activity halted." })
-      await load()
-    } catch (e) {
-      setMsg({ ok: false, text: (e as Error).message })
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const saveCfg = async () => {
     if (!cfg) return
     setBusy(true)
@@ -380,8 +350,6 @@ export function AutopilotSuite() {
     }
   }
 
-  const running = cfg?.enabled ?? false
-  const auto = demo?.autopilot ?? null
   const scopeOptions = [...new Set([...enabledAssets.map((a) => a.assetId), cfg?.assetId ?? ""])].filter(Boolean)
   const chartAssetId = scopeAsset || scopeOptions[0]
 
@@ -394,26 +362,6 @@ export function AutopilotSuite() {
       </p>
 
       <ReadinessPanel />
-
-      {/* ─── Control Bar ─── */}
-      <Card className="pad" style={{ border: running ? "1px solid var(--success, #22c55e)" : undefined }}>
-        <div className="row-between" style={{ alignItems: "center" }}>
-          <div className="row gap" style={{ alignItems: "center" }}>
-            <div style={{ width: 10, height: 10, borderRadius: "50%", background: running ? "#22c55e" : "#666" }} />
-            <strong>{running ? "Autopilot Running" : "Autopilot Stopped"}</strong>
-            <Badge tone="muted">{enabledAssets.length || 1} asset{(enabledAssets.length || 1) === 1 ? "" : "s"} in scope</Badge>
-            {auto?.lastDecision ? <span className="muted small">last: {auto.lastDecision}</span> : null}
-          </div>
-          <div className="row gap">
-            <Button variant="danger" className="btn-sm" disabled={busy} onClick={emergencyStop}>
-              Kill Switch
-            </Button>
-            <Button variant={running ? "secondary" : "primary"} disabled={busy} onClick={toggleAuto}>
-              {running ? "Stop Autopilot" : "Start Autopilot"}
-            </Button>
-          </div>
-        </div>
-      </Card>
 
       {/* ─── Live Chart (follows the selected scope asset) ─── */}
       {chartAssetId ? (
