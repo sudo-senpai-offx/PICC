@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Badge, Button, Card, Field, Input, Select, Spinner, Textarea } from "@/components/ui"
 import { ReadinessPanel } from "@/components/ReadinessPanel"
 import { LiveMarketBoard } from "@/components/LiveMarketBoard"
@@ -16,6 +16,7 @@ import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { PatternPanel } from "@/components/PatternPanel"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
 import { getBrokers, type BrokersResult } from "@/lib/trading"
+import { request, post } from "@/lib/api"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
@@ -362,6 +363,8 @@ export function AutopilotSuite() {
       </p>
 
       <ReadinessPanel />
+
+      <SignalNotificationsCard />
 
       {/* ─── Live Chart (follows the selected scope asset) ─── */}
       {chartAssetId ? (
@@ -763,6 +766,87 @@ export function AutopilotSuite() {
 
       {msg ? <p className={msg.ok ? "muted" : "danger-text"}>{msg.text}</p> : null}
     </div>
+  )
+}
+
+/** Advisory notification preferences — channels, thresholds, test send. */
+export function SignalNotificationsCard() {
+  const [status, setStatus] = useState<{ ok: boolean; prefs: { minConfidence: number; leadMinutes: number; windowMinutes: number; channels: Record<string, boolean> }; subscriptions: number; channels: Array<{ name: string; configured: boolean; userEnabled: boolean }> } | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [draft, setDraft] = useState<{ minConfidence: number; leadMinutes: number } | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const r = await request<{ ok: boolean; prefs: any; subscriptions: number; channels: any[] }>("/notifications/status")
+      setStatus(r)
+      setDraft({ minConfidence: r.prefs.minConfidence, leadMinutes: r.prefs.leadMinutes })
+    } catch { setStatus(null) }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
+
+  const save = async () => {
+    if (!draft) return
+    try {
+      await post("/notifications/prefs", draft)
+      setMsg("Notification preferences saved.")
+      await load()
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
+  const testSend = async () => {
+    try {
+      await post("/notifications/test", {})
+      setMsg("Test dispatched — check bell/email/push.")
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
+  const toggleChannel = async (name: string, enabled: boolean) => {
+    try {
+      await post("/notifications/prefs", { channels: { [name]: enabled } })
+      await load()
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
+  return (
+    <Card className="pad stack">
+      <h3>Advisory alerts</h3>
+      <p className="muted small">
+        The Signal Engine watches your scoped assets and notifies you ahead of ideal buy/sell windows.
+        Execution is removed — you act on your platform; PICC watches and tells you.
+      </p>
+      {!status ? (
+        <Spinner label="Loading notification settings…" />
+      ) : (
+        <>
+          <div className="grid grid-2">
+            <Field label="Min consensus confidence %">
+              <Input type="number" min={30} max={95} value={draft?.minConfidence ?? status.prefs.minConfidence}
+                onChange={(e) => setDraft((d) => ({ ...(d ?? { leadMinutes: status.prefs.leadMinutes }), minConfidence: Number(e.target.value) }))} />
+            </Field>
+            <Field label="Lead time (minutes)">
+              <Input type="number" min={0} max={60} value={draft?.leadMinutes ?? status.prefs.leadMinutes}
+                onChange={(e) => setDraft((d) => ({ ...(d ?? { minConfidence: status.prefs.minConfidence }), leadMinutes: Number(e.target.value) }))} />
+            </Field>
+          </div>
+          <div className="stack">
+            {(status.channels ?? []).map((c) => (
+              <div key={c.name} className="row-between">
+                <span className="field-label">
+                  {c.name}{c.configured ? "" : " (not configured — set env keys)"}
+                </span>
+                <ToggleRow label="" checked={c.userEnabled} onChange={() => void toggleChannel(c.name, !c.userEnabled)} />
+              </div>
+            ))}
+          </div>
+          <div className="row gap">
+            <Button variant="primary" onClick={save}>Save preferences</Button>
+            <Button variant="secondary" onClick={testSend}>Send test</Button>
+          </div>
+          {msg ? <p className="muted small">{msg}</p> : null}
+        </>
+      )}
+    </Card>
   )
 }
 

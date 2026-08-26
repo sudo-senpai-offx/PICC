@@ -32,7 +32,7 @@ export interface HealthInfo {
   agents?: { ok: boolean; agents?: string[] } | null
 }
 
-async function request<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
+export async function request<T>path: string, init: RequestInit = {}, token?: string): Promise<T> {
   const headers: Record<string, string> = {}
   // Only set Content-Type for non-GET requests to avoid triggering unnecessary CORS preflight
   if (init.method && init.method !== "GET") headers["Content-Type"] = "application/json"

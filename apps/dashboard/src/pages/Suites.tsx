@@ -5,8 +5,6 @@ import { Card } from "@/components/ui"
 import { MarketsSuite, AutopilotSuite } from "@/components/TradingSuite"
 import { AutomatorPanel } from "@/components/AutomatorPanel"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
-import { OverlaySettingsPanel } from "@/components/OverlaySettingsPanel"
-import { DockablePreview } from "@/components/DockablePreview"
 
 const SUITE_CATEGORIES = Object.values(SUITE_META) as SuiteMeta[]
 
@@ -68,107 +66,13 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
   )
 }
 
-function DashboardOverlay({ suiteId, onClose }: { suiteId: string; onClose: () => void }) {
-  const meta = SUITE_META[suiteId]
-  const [overlayTab, setOverlayTab] = useState<"preview" | "settings">("preview")
-
-  if (!meta) return null
-
-  // Preview mode: DockablePreview is fullscreen, renders its own close mechanism
-  if (overlayTab === "preview") {
-    return <DockablePreview suiteId={suiteId} onClose={onClose} />
-  }
-
-  // Settings mode: modal dialog
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 2147483647,
-        background: "rgba(10, 10, 30, 0.6)",
-        backdropFilter: "blur(8px)",
-        WebkitBackdropFilter: "blur(8px)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div
-        style={{
-          background: "rgba(20, 20, 48, 0.95)",
-          border: "1px solid rgba(108, 99, 255, 0.5)",
-          borderRadius: 16,
-          padding: "20px 24px",
-          maxWidth: 600,
-          width: "100%",
-          maxHeight: "85vh",
-          overflow: "auto",
-          boxShadow: "0 16px 64px rgba(0,0,0,.6), 0 0 0 1px rgba(108,99,255,0.15)",
-          color: "#eef0ff",
-          fontFamily: "13px/1.5 system-ui, sans-serif",
-        }}
-      >
-        <div className="row gap" style={{ alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <div className="row gap" style={{ alignItems: "center" }}>
-            <span style={{ fontSize: 24 }}>{meta.icon}</span>
-            <div>
-              <h3 style={{ margin: 0, color: "#eef0ff" }}>PICC Overlay — {meta.label}</h3>
-              <p className="muted small" style={{ margin: 0 }}>
-                Default preset for all {meta.label.toLowerCase()} sites. Per-site overrides available via pill settings.
-              </p>
-            </div>
-          </div>
-          <button
-            className="btn btn-sm btn-ghost"
-            onClick={onClose}
-            title="Close overlay settings"
-            style={{ color: "#eef0ff", fontSize: 18, lineHeight: 1, padding: "4px 8px" }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <div className="tabs" style={{ marginBottom: 12 }}>
-          <button
-            type="button"
-            className="tab"
-            onClick={() => setOverlayTab("preview")}
-          >
-            🖥 Preview (Full Viewport)
-          </button>
-          <button
-            type="button"
-            className="tab active"
-            onClick={() => setOverlayTab("settings")}
-          >
-            ⚙ Settings & Toggles
-          </button>
-        </div>
-
-        <p className="muted small" style={{ margin: "0 0 8px" }}>
-          Configure which dockable panels appear and which PICC intervention features are enabled.
-          Layout is configured in the Preview tab (drag to reposition, group by stacking).
-        </p>
-        <OverlaySettingsPanel site={`__suite_default__${suiteId}`} mode="suite-default" suiteId={suiteId} />
-      </div>
-    </div>
-  )
-}
-
 export function Suites() {
   const [activeSuite, setActiveSuite] = useState<string | null>(null)
-  const [overlaySuite, setOverlaySuite] = useState<string | null>(null)
 
   const toggleSuite = useCallback((id: string) => {
     setActiveSuite((prev) => (prev === id ? null : id))
   }, [])
 
-  const toggleSuiteOverlay = useCallback((suiteId: string) => {
-    setOverlaySuite((prev) => (prev === suiteId ? null : suiteId))
-  }, [])
 
   return (
     <div className="stack stack-lg">
@@ -183,14 +87,7 @@ export function Suites() {
             </p>
           </div>
           <div className="row gap" style={{ alignItems: "center" }}>
-            {overlaySuite ? (
-              <span className="badge badge-success">Overlay: {SUITE_META[overlaySuite]?.label ?? overlaySuite}</span>
-            ) : (
-              <span className="badge badge-muted">No overlay active</span>
-            )}
-            <span className="muted small" style={{ whiteSpace: "nowrap" }}>
-              <kbd style={{ fontSize: 10 }}>Ctrl</kbd>+<kbd style={{ fontSize: 10 }}>Alt</kbd>+<kbd style={{ fontSize: 10 }}>Shift</kbd>+<kbd style={{ fontSize: 10 }}>O</kbd>
-            </span>
+            <span className="muted small">One command centre · every income pillar</span>
           </div>
         </div>
       </header>
@@ -200,7 +97,6 @@ export function Suites() {
           const badges = SUITE_FEATURE_BADGES[suite.id] ?? []
           const isActive = activeSuite === suite.id
           const hasPanel = !!SUITE_DETAIL_COMPONENTS[suite.id]
-          const isOverlayActive = overlaySuite === suite.id
 
           return (
             <div
@@ -234,26 +130,18 @@ export function Suites() {
                   <span className="badge badge-muted">Site-only</span>
                 )}
               </div>
-              <div className="row gap" style={{ marginTop: 10, alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ marginTop: 10 }}>
                 <p className="muted small" style={{ margin: 0 }}>
                   {isActive ? "Click to collapse" : "Click to manage"}
                 </p>
-                <button
-                  className={`btn btn-sm ${isOverlayActive ? "btn-secondary" : "btn-primary"}`}
-                  onClick={(e) => { e.stopPropagation(); toggleSuiteOverlay(suite.id) }}
-                  title={isOverlayActive ? "Hide overlay" : "Show overlay for this suite"}
-                >
-                  {isOverlayActive ? "✕ Hide Overlay" : "🎯 Show Overlay"}
-                </button>
               </div>
             </Card>
-            </div>
+          </div>
           )
         })}
       </div>
 
       {activeSuite ? <SuiteDetail suiteId={activeSuite} /> : null}
-      {overlaySuite ? <DashboardOverlay suiteId={overlaySuite} onClose={() => setOverlaySuite(null)} /> : null}
     </div>
   )
 }
