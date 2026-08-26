@@ -23,6 +23,7 @@ import { quickMtfCheck } from "./multiTimeframe.mjs"
 import { liveEOData } from "./liveEO.mjs"
 import { detectRegime } from "./regimeDetection.mjs"
 import { computeModelMatrix, recordModelOutcomes } from "./modelMatrix.mjs"
+import { aiGatePrompts, GATE_PROMPT_VERSION } from "./prompts.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -949,11 +950,18 @@ export function decideAutopilot({ config, pred, pro = null, mtf = null, sentimen
 
 async function aiConsents(pred) {
   if (!llmConfigured()) return true // gate is advisory without a configured model
+  // Prompt template lives in prompts.mjs (versioned) — patterns P3/P4/P5 of
+  // docs/PROMPT_PATTERNS.md: role/rules/policy blocks, fail-open on missing
+  // context, one-word verdict.
+  const p = aiGatePrompts({
+    direction: pred.direction,
+    confidence: pred.confidence,
+    models: pred.models,
+    reason: pred.note ?? pred.reason,
+    assetId: pred.assetId
+  })
   try {
-    const out = await chatText(
-      "You are the PICC binary-options DEMO risk gate. Judge the trade signal and decide whether a demo trade is reasonable.",
-      `Signal: ${pred.direction} with ${pred.confidence}% confidence.\nModels: ${JSON.stringify(pred.models ?? {})}\nReason: ${pred.note ?? pred.reason}\n\nReply with exactly one word: APPROVE or REJECT.`
-    )
+    const out = await chatText(p.system, p.user)
     return /approve/i.test(String(out ?? ""))
   } catch {
     return true

@@ -9,6 +9,7 @@ import { assetsEquivalent } from "./services/assetCatalog.mjs"
 import { getHistory, statsFromHistory, downsample, clampDrift, clampVol, getQuote } from "./services/yahoo.mjs"
 import { researchTopic } from "./services/serper.mjs"
 import { chatJSON, chatText, asSuggestionArray, provider, llmConfigured } from "./services/llm.mjs"
+import { suggestPrompt } from "./services/prompts.mjs"
 import { createCheckoutSession, createPortalSession, constructWebhookEvent, hasStripe } from "./services/stripe.mjs"
 import { createPayPalOrder, capturePayPalOrder, hasPayPal } from "./services/paypal.mjs"
 import { createEwalletOrder, submitEwalletOrder, walletInfo, WALLET_IDS } from "./services/ewallet.mjs"
@@ -907,21 +908,11 @@ async function handleExtensionSuggest(body) {
 
   if (llmConfigured() && pageData && (pageData.title || pageData.videoTitle)) {
     try {
-      const context =
-        platform === "amazon"
-          ? `Amazon listing\nTitle: ${pageData.title ?? pageTitle}\nBrand: ${pageData.brand ?? ""}\nBullets:\n${(pageData.bullets ?? []).map((b) => `- ${b}`).join("\n")}`
-          : platform === "youtube"
-            ? `YouTube video\nTitle: ${pageData.videoTitle ?? pageTitle}\nChannel: ${pageData.channelName ?? ""}\nDescription: ${(pageData.description ?? "").slice(0, 800)}`
-            : `Page title: ${pageTitle}`
-
+      // Versioned prompt template (docs/PROMPT_PATTERNS.md P3/P4): role/task
+      // schema contract, platform guidance, explicit empty-result refusal path.
+      const p = suggestPrompt({ platform, pageTitle, pageData })
       const parsed = await withTimeout(
-        chatJSON(
-          "You are PICC, a decision-support assistant for passive income creators. " +
-            "Return JSON: { suggestions: [ { id, title, body (<=220 chars, specific and actionable), confidence (0-1) } ] }. " +
-            "Amazon: optimize listing title/bullets for CTR and conversion. YouTube: better title pattern, tags, description hook. Brokerage: rebalancing or DCA guidance. 2-4 suggestions. No code, no claims of guaranteed results.",
-          context,
-          { maxTokens: 1000 }
-        ),
+        chatJSON(p.system, p.user, { maxTokens: 1000 }),
         25000
       )
       return { suggestions: asSuggestionArray(parsed.suggestions), source: provider() }
