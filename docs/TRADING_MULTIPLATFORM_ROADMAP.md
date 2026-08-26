@@ -218,10 +218,45 @@ is shared. Remaining work:
 - [ ] 8. For each new venue: `docs/TRADING_RUNBOOK.md` Part-B section listing the human-only
       verification steps (real login, live ticks, one demo cycle, network-drop recovery).
 
-## 7. Definition of done (per venue)
+## 7. Appendix — reconciliation with the external "Complete Audit & Evolution Plan"
+
+An externally-generated plan circulated alongside this document. Its **direction is right**; several
+of its **facts about the codebase are not**, and its snippets would fail against real APIs. Where
+the two documents disagree, THIS file wins. Corrections of record:
+
+| External claim | Reality (verified) | Resolution |
+|---|---|---|
+| "8-model ensemble: ARIMA, Prophet-style, LSTM-lite, GARCH-lite" | `prediction.mjs` = walk-forward statistical ensemble; `modelMatrix.mjs` = **7** models (trend EMA, momentum ROC, RSI reversion, Donchian, MACD, MC-drift, candle pressure). No ARIMA/Prophet/LSTM/GARCH exists. | Do not import those names into docs/code. Extending the matrix: add a pure `(candles)→vote` fn to `MODELS` + a test. |
+| `dataBus.getCandles` calling `liveEOData().getCandles(...)` / `liveCCXTData().subscribe(...)` | Both expose **snapshot objects**, not clients/methods. Subscriptions live in `liveEO.subscribeLiveEO`/connector `subscribeLive`. | Implemented correctly in `services/marketDataBus.mjs`. |
+| New per-venue files (`binanceAdapter.mjs`, `bybitAdapter.mjs`) each doing `import ccxt from 'ccxt'` + own connect/cache/guards | Repo convention: **lazy dynamic import**, instance cache, read-only amputation and rate-limit handling already centralized in `ccxtConnector.mjs`. Per-venue CCXT files would duplicate all of it. | One CCXT adapter wraps `ccxtConnector`; venue differences are config, not code forks. |
+| `exchange.demo` property gates live orders on ccxt instances | No such property. Sandbox gating uses `exchange.setSandboxMode(true)` + key presence. | Sandbox-default rule in §4 stands; gate on stored config flag, never on an invented attribute. |
+| Separate `credentialManager.mjs` plaintext JSON vault | Duplicates `trading.mjs` credentials store + browser vault; plaintext keys contradict §4 encryption rule. | Extend ONE vault with encrypted per-venue sections (§4). |
+| Arbitrage = raw spread between venues | Ignores taker fees/slippage/withdrawal friction — would report fake opportunities. | Implemented honestly in `/api/trading/spread`: net-of-fees edge, ≥0.1% bar for `opportunity`, refuses meaning when <2 venues quote. |
+| Position manager writing a JSON array unlocked | Repo pattern: atomic tmp+rename writes behind promise-chain locks (`makeFileChain`). | `positionManager.mjs` reads existing locked stores instead of inventing a new unlocked one. |
+
+### What WAS adopted from the external plan (now implemented)
+
+- **Unified Market Data Bus** → `services/marketDataBus.mjs` (`getBestCandles`, source priority
+  EO-push → EO-fetch → CCXT → Yahoo-daily, per-source median/p95 latency via `dataBusStats()`);
+  `/api/trading/candles` now routes through it.
+- **Cross-platform position manager** → `services/positionManager.mjs`
+  (`aggregateOpenPositions`, `combinedTodayPnl`, `portfolioRiskCheck`) exposed at
+  `POST /api/trading/portfolio` (optional `proposed:{symbol,amount}` runs the pre-trade check:
+  notional cap, instrument concentration, single-venue share, hedged-leg warning).
+- **Honest cross-venue spread engine** → `POST /api/trading/spread` (fee-adjusted, multi-venue).
+
+### Still queued from it (folded into §6 checklist)
+
+- Portfolio card in the webui suite consuming `/api/trading/portfolio`.
+- Latency stats surfaced next to broker rows (data already collected via `dataBusStats()`).
+- Multi-platform autopilot routing — blocked behind Wave-1 executor work (§6 items 1–3), by design.
+
+## 8. Definition of done (per venue)
+
 
 - [ ] Adapter passes contract tests against a scripted mock (no network)
 - [ ] Demo/sandbox execution verified end-to-end by a human (Part-B checklist)
 - [ ] `brokers.mjs` row shows honest live status in the suite UI
 - [ ] Overlay dockables work on the venue's web app (site profile + platformKind set)
 - [ ] Autopilot can scope ≥1 asset on the venue and log decisions with correct gate attribution
+

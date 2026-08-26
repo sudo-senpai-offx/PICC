@@ -1772,51 +1772,28 @@ async function _handleApiInner(req, res, url, reqId) {
     const count = Math.min(Math.max(Number(body?.count) || 200, 20), 500)
     if (!assetId) return writeJson(res, 400, { error: "assetId required" })
     try {
-      const { liveEOData, fetchAssetCandles, ensureWatchingAsset } = await import("./services/liveEO.mjs")
-      const data = liveEOData()
-      const asset = data.assets.find((a) => eoAssetMatches(a, assetId))
-      if (asset && asset.periods[timeframe]?.length) {
-        const ohlc = asset.periods[timeframe].slice(-count)
-        return writeJson(res, 200, { ok: true, source: "live", assetId, timeframe, candles: ohlc })
+      // Unified fan-in: EO push buffers → live EO fetch → CCXT aggregates →
+      // Yahoo daily fallback. Source + staleness tagged for honest labeling.
+      const { getBestCandles } = await import("./services/marketDataBus.mjs")
+      const { ensureWatchingAsset } = await import("./services/liveEO.mjs")
+      const out = await getBestCandles(assetId, {
+        timeframe,
+        count,
+        ensureWatch: ensureWatchingAsset
+      })
+      if (!out.candles.length) {
+        return writeJson(res, 200, { ok: true, source: "none", assetId, timeframe, candles: [] })
       }
-      await ensureWatchingAsset(assetId).catch(() => null)
-      const result = await withTimeout(fetchAssetCandles(assetId, timeframe, count), 10000).catch(() => ({ ohlc: [], source: null }))
-      if (result.ohlc?.length) {
-        return writeJson(res, 200, { ok: true, source: result.source || "live", assetId, timeframe, candles: result.ohlc })
-      }
-      // CCXT tier: multi-exchange market data (read-only) before the daily
-      // Yahoo fallback. Matches by canonical base symbol (BTCUSD ↔ BTC/USDT).
-      try {
-        const { liveCCXTData } = await import("./services/liveCCXT.mjs")
-        const ccxtAssets = liveCCXTData()?.assets ?? []
-        const want = String(assetId).replace(/[^A-Z]/g, "")
-        const ccxtAsset = ccxtAssets.find((a) => {
-          const sym = String(a.name ?? a.symbol ?? "").toUpperCase().replace("/", "")
-          if (sym === want) return true
-          // BTCUSD request matches BTCUSDT (stablecoin quote) and vice versa.
-          const base = want.slice(0, 3)
-          const alt = want.endsWith("USD") ? `${base}USDT` : want.replace(/USDT$/, "USD")
-          return sym === alt
-        })
-        const tf = ccxtAsset?.periods?.[timeframe]
-        if (ccxtAsset && Array.isArray(tf) && tf.length) {
-          return writeJson(res, 200, { ok: true, source: "ccxt", assetId, timeframe, candles: tf.slice(-count) })
-        }
-      } catch { /* liveCCXT not populated — fall through */ }
-      const { getHistory } = await import("./services/yahoo.mjs")
-      throttledWarn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
-      const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
-      const candles = history.dates.map((ts, i) => ({
-        time: Math.floor(ts / 1000),
-        open: Number(history.opens[i]) || 0,
-        high: Number(history.highs[i]) || 0,
-        low: Number(history.lows[i]) || 0,
-        close: Number(history.closes[i]) || 0,
-        timeframe: 86400
-      })).filter((c) => c.close > 0 && c.time > 0).slice(-count)
-      writeJson(res, 200, { ok: true, source: "yahoo", assetId, timeframe, candles, name: history.name })
+      writeJson(res, 200, {
+        ok: true,
+        source: out.source,
+        stale: out.stale,
+        assetId,
+        timeframe: out.timeframe,
+        candles: out.candles
+      })
     } catch (err) {
-      console.warn("[picc] candles failed:", err.message)
+      throttledWarn(`[picc] candles failed for ${assetId}: ${err.message}`)
       writeJson(res, 502, { ok: false, error: err.message })
     }
     return
@@ -2368,6 +2345,97 @@ async function _handleApiInner(req, res, url, reqId) {
     try {
       const { listBrokers } = await import("./services/brokers.mjs")
       writeJson(res, 200, await listBrokers())
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // ── Cross-platform portfolio: aggregate exposure + risk check ─────────
+  if (path === "/api/trading/portfolio" && req.method === "POST") {
+    try {
+      const { aggregateOpenPositions, combinedTodayPnl, portfolioRiskCheck } = await import("./services/positionManager.mjs")
+      const agg = await aggregateOpenPositions()
+      const pnl = await combinedTodayPnl()
+      const risk = body?.proposed?.amount != null
+        ? await portfolioRiskCheck({ symbol: body.proposed.symbol ?? body.proposed.assetId, amount: body.proposed.amount })
+        : null
+      writeJson(res, 200, { ok: true, ...agg, todayPnl: pnl, riskCheck: risk })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // ── Cross-venue price spread (honest arbitrage pre-check) ─────────────
+  // Compares the same instrument across venues that are ACTUALLY live. A raw
+  // spread is NOT free money: taker fees on both legs + slippage must clear
+  // first, so the result carries the fee-adjusted edge and refuses to call
+  // anything an opportunity below that bar.
+  if (path === "/api/trading/spread" && req.method === "POST") {
+    const assetId = String(body?.assetId ?? "").trim().toUpperCase() || "BTCUSD"
+    try {
+      const quotes = []
+      // EO mid from the newest buffered candle.
+      try {
+        const { liveEOData, fetchAssetCandles } = await import("./services/liveEO.mjs")
+        let eoCandles = []
+        const eoAsset = liveEOData().assets.find((a) => assetsEquivalent(a.name, assetId) || String(a.id) === assetId)
+        if (eoAsset?.periods?.[60]?.length) eoCandles = eoAsset.periods[60]
+        else {
+          const r = await withTimeout(fetchAssetCandles(assetId, 60, 3), 8000).catch(() => ({ ohlc: [] }))
+          eoCandles = r.ohlc ?? []
+        }
+        if (eoCandles.length) quotes.push({ venue: "expertoption", price: Number(eoCandles[eoCandles.length - 1].close) })
+      } catch { /* EO offline */ }
+      // CCXT tickers from configured pairs.
+      try {
+        const { fetchTicker, toCcxtSymbol } = await import("./services/ccxtConnector.mjs")
+        const creds = await getCredentials()
+        for (const cfg of (Array.isArray(creds.ccxtExchanges) ? creds.ccxtExchanges : []).slice(0, 4)) {
+          const sym = toCcxtSymbol(cfg.symbol)
+          const wantBase = assetId.replace(/[^A-Z]/g, "").slice(0, 3)
+          const symCompact = String(sym).toUpperCase().replace("/", "")
+          const alt = wantBase && symCompact.startsWith(wantBase) ? symCompact : null
+          if (!alt || (symCompact !== assetId && alt !== assetId.replace(/USD$/, "USDT"))) {
+            if (!symCompact.includes(wantBase)) continue
+          }
+          const t = await withTimeout(fetchTicker(cfg.exchange, sym), 6000).catch(() => null)
+          if (t?.price > 0) quotes.push({ venue: `ccxt:${cfg.exchange}`, symbol: sym, price: Number(t.price) })
+        }
+      } catch { /* CCXT unavailable */ }
+
+      const TAKER_FEE_RATE = 0.001 // 0.1% per leg, conservative default
+      let best = null
+      if (quotes.length >= 2) {
+        for (let i = 0; i < quotes.length; i++) {
+          for (let j = 0; j < quotes.length; j++) {
+            if (i === j) continue
+            const buy = quotes[i].price
+            const sell = quotes[j].price
+            const grossPct = ((sell - buy) / buy) * 100
+            const netPct = grossPct - TAKER_FEE_RATE * 100 * 2 // both legs
+            if (!best || netPct > best.netPct) {
+              best = {
+                buyVenue: quotes[i].venue, sellVenue: quotes[j].venue,
+                buyPrice: round2(buy), sellPrice: round2(sell),
+                grossPct: Math.round(grossPct * 1000) / 1000,
+                netPct: Math.round(netPct * 1000) / 1000,
+                opportunity: netPct >= 0.1 // ≥0.1% AFTER fees, else noise
+              }
+            }
+          }
+        }
+      }
+      writeJson(res, 200, {
+        ok: true,
+        assetId,
+        venuesPolled: quotes,
+        note: quotes.length < 2
+          ? "need ≥2 live venues quoting this instrument for a meaningful spread"
+          : "net edge is AFTER ~0.1% taker fees per leg — sub-fee spreads are not opportunities",
+        best
+      })
     } catch (err) {
       writeJson(res, 500, { ok: false, error: err.message })
     }
