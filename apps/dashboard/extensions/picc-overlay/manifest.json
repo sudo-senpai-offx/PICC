@@ -1,19 +1,13 @@
 {
   "manifest_version": 3,
   "name": "PICC — Personal Income Command Center",
-  "version": "1.0.0",
-  "description": "Full browser intervention, automation, overlay and intelligence for your income sites.",
+  "version": "2.0.0",
+  "description": "Passive market-data sensor for PICC — relays your broker pages' realtime feeds to your command centre. Read-only.",
   "permissions": [
-    "activeTab",
     "storage",
-    "scripting",
     "tabs",
-    "cookies",
     "alarms",
-    "notifications",
-    "contextMenus",
-    "sidePanel",
-    "downloads"
+    "notifications"
   ],
   "host_permissions": [
     "http://localhost:*/*",
@@ -25,8 +19,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["autopilotPanel.js", "content.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     },
@@ -35,7 +34,9 @@
         "*://*.expertoption.com/*",
         "*://*.expertoption.finance/*"
       ],
-      "js": ["inject.js"],
+      "js": [
+        "inject.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": true
@@ -43,18 +44,10 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "PICC Overlay",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png"
-    }
-  },
-  "side_panel": {
-    "default_path": "sidepanel.html"
+    "default_title": "PICC Sensor"
   },
   "icons": {
     "16": "icons/icon16.png",
-    "32": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   }

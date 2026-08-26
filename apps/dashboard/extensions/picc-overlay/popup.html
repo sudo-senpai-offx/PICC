@@ -1,58 +1,49 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      width: 320px;
-      font: 13px/1.5 system-ui, sans-serif;
-      background: #0a0a1e;
-      color: #eef0ff;
-      padding: 16px;
-    }
-    h1 { font-size: 15px; color: #6c63ff; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-    h1 span { font-size: 18px; }
-    .status { font-size: 11px; padding: 6px 8px; border-radius: 6px; margin-bottom: 12px; }
-    .status.online { background: rgba(78, 205, 196, 0.1); color: #4ecdc4; }
-    .status.offline { background: rgba(255, 107, 107, 0.1); color: #ff6b6b; }
-    .section { margin-bottom: 12px; }
-    .section-title { font-size: 11px; color: #a5a0ff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-    .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-    label { font-size: 12px; color: #a5a0ff; min-width: 60px; }
-    input[type="text"], input[type="number"] {
-      background: #1a1a2e; border: 1px solid #6c63ff40; color: #eef0ff;
-      padding: 4px 8px; border-radius: 4px; font-size: 12px; flex: 1;
-    }
-    input[type="range"] { width: 100px; }
-    button {
-      background: #6c63ff30; border: 1px solid #6c63ff40; color: #a5a0ff;
-      cursor: pointer; font-size: 12px; padding: 6px 12px; border-radius: 6px;
-      width: 100%; margin-top: 8px;
-    }
-    button:hover { background: #6c63ff50; color: #eef0ff; }
-    .shortcut { font-size: 11px; color: #666; margin-top: 12px; text-align: center; }
-    .shortcut kbd { background: #1a1a2e; border: 1px solid #6c63ff40; padding: 1px 5px; border-radius: 3px; font-size: 10px; }
-  </style>
+<meta charset="utf-8" />
+<style>
+  body { width: 320px; padding: 14px; background: #0d0d1a; color: #eef0ff;
+         font-family: system-ui, sans-serif; font-size: 13px; margin: 0; }
+  h2 { margin: 0 0 4px; font-size: 16px; color: #6c63ff; }
+  .sub { color: #888; font-size: 11px; margin-bottom: 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+  .lbl { color: #ddd; }
+  .st { font-weight: 600; }
+  .ok { color: #4ade80; } .bad { color: #ff6b6b; } .warn { color: #fbbf24; }
+  input { width: 100%; box-sizing: border-box; background: #16162c; border: 1px solid #2a2a4a;
+          color: #eef0ff; border-radius: 6px; padding: 7px; font-size: 12px; }
+  button { width: 100%; margin-top: 10px; padding: 9px; background: #6c63ff; border: none;
+           color: #fff; border-radius: 7px; cursor: pointer; font-weight: 600; }
+  button.ghost { background: #1c1c38; margin-top: 6px; }
+  .switch { position: relative; width: 40px; height: 22px; border-radius: 999px;
+            background: #3a3a5c; border: none; cursor: pointer; }
+  .switch.on { background: #6c63ff; }
+  .knob { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+          border-radius: 50%; background: #fff; transition: left .18s; }
+  .switch.on .knob { left: 21px; }
+  .note { color: #666; font-size: 10px; margin-top: 10px; line-height: 1.45; }
+</style>
 </head>
 <body>
-  <h1><span>\uD83E\uDDE0</span> PICC Overlay</h1>
-  <div id="status" class="status offline">Checking server...</div>
+  <h2>PICC Sensor</h2>
+  <div class="sub">Passive relay · read-only · no overlay</div>
 
-  <div class="section">
-    <div class="section-title">Current Site</div>
-    <div id="site-info" style="font-size:12px;color:#eef0ff;">Loading...</div>
+  <div class="row"><span class="lbl">Connection</span><span id="conn" class="st warn">checking…</span></div>
+  <div class="row"><span class="lbl">Frames queued</span><span id="queued" class="st">0</span></div>
+  <div class="row"><span class="lbl">Relay enabled</span><button id="relay" class="switch"><span class="knob"></span></button></div>
+
+  <label class="lbl" style="display:block;margin:10px 0 4px;font-size:11px;">Dashboard URL</label>
+  <input id="backend" placeholder="http://localhost:5173" />
+
+  <button id="open">Open Command Centre</button>
+  <button id="save" class="ghost">Save URL</button>
+
+  <div class="note">
+    Analysis, signals and notifications run in your PICC web app — this sensor only
+    relays realtime broker data so they stay accurate. Works in Chrome, Edge, Brave,
+    Arc and Firefox (MV3).
   </div>
-
-  <div class="section">
-    <div class="section-title">Quick Actions</div>
-    <button id="toggle-btn">Toggle Overlay</button>
-  </div>
-
-  <div class="shortcut">
-    Shortcut: <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd>
-  </div>
-
   <script src="popup.js"></script>
 </body>
 </html>
