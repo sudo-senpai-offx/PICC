@@ -39,17 +39,20 @@ export const ASSET_ALIASES = {
   HK50: ["HK50", "HANGSENG", "HSI"],
   VIX: ["VIX", "VOLATILITY"],
 
-  // ── Crypto (full names + short handles) ─────────────────────────────────
-  BTCUSD: ["BTCUSD", "BTC/USD", "BITCOIN", "BTC", "XBTUSD"],
-  ETHUSD: ["ETHUSD", "ETH/USD", "ETHEREUM", "ETH"],
-  LTCUSD: ["LTCUSD", "LITECOIN", "LTC"],
-  XRPUSD: ["XRPUSD", "RIPPLE", "XRP"],
-  SOLUSD: ["SOLUSD", "SOLANA", "SOL"],
-  ADAUSD: ["ADAUSD", "CARDANO", "ADA"],
-  DOGEUSD: ["DOGEUSD", "DOGECOIN", "DOGE"],
-  DOTUSD: ["DOTUSD", "POLKADOT", "DOT"],
-  LINKUSD: ["LINKUSD", "CHAINLINK", "LINK"],
-  AVAXUSD: ["AVAXUSD", "AVALANCHE", "AVAX"]
+  // ── Crypto (full names + short handles + stablecoin-quoted variants) ────
+  // Most venues quote crypto against USDT (BTCUSDT) while EO/Yahoo quote USD
+  // (BTCUSD). These are the same underlying instrument to PICC — canonicalize
+  // both spellings so one asset id is used engine-wide.
+  BTCUSD: ["BTCUSD", "BTC/USD", "BITCOIN", "BTC", "XBTUSD", "BTCUSDT", "BTC/USDT", "XBTUSDT", "BTCUSDC"],
+  ETHUSD: ["ETHUSD", "ETH/USD", "ETHEREUM", "ETH", "ETHUSDT", "ETH/USDT", "ETHUSDC"],
+  LTCUSD: ["LTCUSD", "LITECOIN", "LTC", "LTCUSDT", "LTC/USDT"],
+  XRPUSD: ["XRPUSD", "RIPPLE", "XRP", "XRPUSDT", "XRP/USDT"],
+  SOLUSD: ["SOLUSD", "SOLANA", "SOL", "SOLUSDT", "SOL/USDT"],
+  ADAUSD: ["ADAUSD", "CARDANO", "ADA", "ADAUSDT", "ADA/USDT"],
+  DOGEUSD: ["DOGEUSD", "DOGECOIN", "DOGE", "DOGEUSDT", "DOGE/USDT"],
+  DOTUSD: ["DOTUSD", "POLKADOT", "DOT", "DOTUSDT", "DOT/USDT"],
+  LINKUSD: ["LINKUSD", "CHAINLINK", "LINK", "LINKUSDT", "LINK/USDT"],
+  AVAXUSD: ["AVAXUSD", "AVALANCHE", "AVAX", "AVAXUSDT", "AVAX/USDT"]
 }
 
 // alias (already separator-stripped, uppercased) → canonical id

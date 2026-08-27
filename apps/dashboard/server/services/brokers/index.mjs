@@ -17,7 +17,7 @@
 // @property {(assetId: string, opts?: {timeframe?: number, count?: number}) => Array} getCandles - buffered candles for an asset
 // @property {(assetId: string, cb: Function) => Function} subscribe - live candle updates (returns unsubscribe)
 // @property {() => number[]} availableTimeframes - supported timeframe options
-// @property {() => Object|null} getAccountState - balance + positions (null if unauthenticated)
+// @property {() => Object|null|Promise<Object|null>} getAccountState - balance + positions (null if unauthenticated)
 // @property {(assetClass: string) => number[]|null} getExpiryDurations - available expiry per asset class
 
 const brokers = new Map()

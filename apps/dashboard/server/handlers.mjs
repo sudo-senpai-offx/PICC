@@ -99,6 +99,7 @@ import {
   demoAnalytics,
   getAutopilotConfig,
   saveAutopilotConfig,
+  tradingReadiness,
 } from "./services/autopilot.mjs"
 import {
   listConnectors,
@@ -1537,6 +1538,16 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  if (path === "/api/trading/readiness" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      writeJson(res, 200, await withTimeout(tradingReadiness(), 15000))
+    } catch (err) {
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/demo/analytics" && (req.method === "GET" || req.method === "POST")) {
     try {
       writeJson(res, 200, await withTimeout(demoAnalytics(), 10000))
@@ -2325,7 +2336,8 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   // ── Cross-platform portfolio: aggregate exposure + risk check ─────────
-  if (path === "/api/trading/portfolio" && req.method === "POST") {
+  // Own path — POST /api/trading/portfolio is the analytics endpoint above.
+  if (path === "/api/trading/portfolio/aggregate" && req.method === "POST") {
     try {
       const { aggregateOpenPositions, combinedTodayPnl, portfolioRiskCheck } = await import("./services/positionManager.mjs")
       const agg = await aggregateOpenPositions()

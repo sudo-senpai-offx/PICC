@@ -255,6 +255,58 @@ describe("PICC API handlers", () => {
     expect(res.status).toBe(404)
   })
 
+  it("trading/readiness requires auth then returns a structured report", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "picc-ready-test-"))
+    const token = randomBytes(32).toString("hex")
+    writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
+    writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
+    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    vi.resetModules()
+    const { handleApi: hApi } = await import("../handlers.mjs?readiness-test")
+
+    const anon = makeRes()
+    await hApi(makeReq("GET", "/api/trading/readiness", undefined, {}), anon, "/api/trading/readiness")
+    expect(anon.status).toBe(401)
+
+    const authed = makeRes()
+    await hApi(makeReq("GET", "/api/trading/readiness", undefined, { authorization: `Bearer ${token}` }), authed, "/api/trading/readiness")
+    expect(authed.status).toBe(200)
+    expect(authed.body.ok).toBe(true)
+    expect(Array.isArray(authed.body.blockers)).toBe(true)
+    expect(Array.isArray(authed.body.warnings)).toBe(true)
+    expect(authed.body.facts).toBeDefined()
+    expect(typeof authed.body.readyForRealConsideration).toBe("boolean")
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("portfolio analytics and cross-venue aggregate are BOTH reachable (no shadowing)", async () => {
+    // Regression: two handlers used to share POST /api/trading/portfolio — the
+    // analytics one won the dispatch chain and the cross-venue aggregator was
+    // permanently unreachable. It now lives at /api/trading/portfolio/aggregate.
+    const dir = mkdtempSync(join(tmpdir(), "picc-portfolio-test-"))
+    const token = randomBytes(32).toString("hex")
+    writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
+    writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
+    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    vi.resetModules()
+    const { handleApi: hApi } = await import("../handlers.mjs?portfolio-test")
+    const authed = { authorization: `Bearer ${token}` }
+
+    // Analytics: 400 with a clear error for an empty symbol list (route is alive).
+    const analytics = makeRes()
+    await hApi(makeReq("POST", "/api/trading/portfolio", { symbols: [] }, authed), analytics, "/api/trading/portfolio")
+    expect(analytics.status).toBe(400)
+    expect(analytics.body.error).toMatch(/symbol/i)
+
+    // Aggregate: distinct route, distinct shape.
+    const agg = makeRes()
+    await hApi(makeReq("POST", "/api/trading/portfolio/aggregate", {}, authed), agg, "/api/trading/portfolio/aggregate")
+    expect(agg.status).toBe(200)
+    expect(agg.body.ok).toBe(true)
+    expect(agg.body).toHaveProperty("positions")
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   it("workflows/run returns 400 (not a crash) when the browser is closed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "picc-wf-test-"))
     const token = randomBytes(32).toString("hex")

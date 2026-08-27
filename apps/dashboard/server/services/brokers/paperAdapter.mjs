@@ -30,7 +30,13 @@ registerBroker({
 
   getAccountState() {
     // Paper account state comes from the paper ledger, not a live connection.
-    return null // TODO: read from paper ledger
+    // Dynamic import avoids a load-time cycle: trading.mjs imports the broker
+    // registry, and the registry must be ready before this adapter registers.
+    try {
+      return import("../trading.mjs").then((t) => t.paperOverview())
+    } catch {
+      return null
+    }
   },
 
   getExpiryDurations(assetClass) {

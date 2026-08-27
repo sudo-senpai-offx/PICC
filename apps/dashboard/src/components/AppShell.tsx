@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react"
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { NavLink, Outlet, useNavigate } from "react-router-dom"
 import { signOutLocal } from "@/lib/auth"
 import { useAuth } from "@/hooks/useAuth"
 import { isFeatureOn } from "@/lib/settings"
 import type { FeatureKey } from "@/lib/settings"
 import { CommandPalette } from "@/components/CommandPalette"
 import { TopBar } from "@/components/TopBar"
-import { browserOverlay, browserOverlayToggle, browserTab, getBrowserStatus, getHealth, openBrowser } from "@/lib/api"
+import { browserTab, getBrowserStatus, getHealth, openBrowser } from "@/lib/api"
 import type { HealthInfo } from "@/lib/api"
 
 /**
  * Route external "open in new tab" links into the PICC in-app browser instead of
  * a separate Chrome/Edge window, so every platform page keeps PICC intervention
- * (overlay, autofill, safe automation). Internal PICC links, downloads and
+ * (autofill, safe automation). Internal PICC links, downloads and
  * modified clicks (Ctrl/Cmd) are left untouched.
  */
 function useExternalLinkRouter() {
@@ -35,7 +35,6 @@ function useExternalLinkRouter() {
         try {
           const s = await getBrowserStatus()
           if (!s.open) await openBrowser()
-          await browserOverlayToggle(true)
           await browserTab({ action: "new", url: url.href })
         } catch {
           window.open(url.href, "_blank", "noopener,noreferrer")
@@ -126,18 +125,10 @@ function ShellFooter() {
 export function AppShell() {
   const { session } = useAuth()
   const navigate = useNavigate()
-  const location = useLocation()
   const { collapsed, toggle } = useSidebarState()
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   useExternalLinkRouter()
-
-  // Hide overlays when navigating within PICC to avoid display conflicts
-  useEffect(() => {
-    void getBrowserStatus()
-      .then((s) => { if (s.open) return browserOverlay({ clear: true }) })
-      .catch(() => {})
-  }, [location.pathname])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

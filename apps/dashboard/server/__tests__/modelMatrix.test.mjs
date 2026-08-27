@@ -44,6 +44,16 @@ describe("asset catalog (active-asset detection)", () => {
     expect(assetsEquivalent("EURUSD", "GBPUSD")).toBe(false)
   })
 
+  it("treats stablecoin-quoted crypto as the same instrument as USD-quoted", () => {
+    // Binance-style BTCUSDT and Coinbase-style BTC-USD are the same asset to PICC.
+    expect(canonicalAssetId("BTCUSDT")).toBe("BTCUSD")
+    expect(canonicalAssetId("BTC/USDT")).toBe("BTCUSD")
+    expect(canonicalAssetId("ETHUSDT")).toBe("ETHUSD")
+    expect(canonicalAssetId("SOLUSDT")).toBe("SOLUSD")
+    expect(assetsEquivalent("BTCUSDT", "BTCUSD")).toBe(true)
+    expect(assetsEquivalent("BTC/USDT", "BTC-USD")).toBe(true)
+  })
+
   it("maps every commodity/index to a real Yahoo symbol", () => {
     expect(yahooSymbolFor("GOLD")).toBe("GC=F")
     expect(yahooSymbolFor("SILVER")).toBe("SI=F")
