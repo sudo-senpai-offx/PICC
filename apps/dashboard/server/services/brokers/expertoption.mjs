@@ -11,6 +11,11 @@ async function getLiveEO() {
   return _liveEO
 }
 
+// Eagerly import liveEO at registration time so the adapter is ready
+// when the registry is queried. Without this, _liveEO stays null and
+// isAlive() always returns false.
+getLiveEO().catch(() => null)
+
 registerBroker({
   slug: "expertoption",
   label: "ExpertOption",
@@ -51,8 +56,13 @@ registerBroker({
   subscribe(assetId, cb) {
     if (!_liveEO) return () => {}
     return _liveEO.subscribeLiveEO((data) => {
-      const asset = data.assets?.find((a) => a.id === assetId || a.name === assetId)
-      if (asset) cb(asset)
+      if (assetId == null) {
+        // Wildcard: forward the full snapshot
+        cb(data)
+      } else {
+        const asset = data.assets?.find((a) => a.id === assetId || a.name === assetId)
+        if (asset) cb(asset)
+      }
     })
   },
 

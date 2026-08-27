@@ -15,6 +15,9 @@ async function getCcxtConn() {
   return _ccxtConn
 }
 
+// Eagerly import CCXT modules at registration time
+Promise.all([getLiveCCXT(), getCcxtConn()]).catch(() => null)
+
 registerBroker({
   slug: "ccxt",
   label: "CCXT exchanges",

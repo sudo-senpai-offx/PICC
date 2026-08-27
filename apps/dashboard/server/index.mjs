@@ -11,6 +11,7 @@ import { startLedger } from "./services/accuracyLedger.mjs"
 import { log } from "./logger.mjs"
 import { initErrorLog } from "./errorLog.mjs"
 import { startSignalEngine, stopSignalEngine } from "./services/signalEngine.mjs"
+import { loadBrokers } from "./services/marketDataBus.mjs"
 
 const ROOT = process.env.PICC_DIST_DIR || fileURLToPath(new URL("../dist", import.meta.url))
 const PORT = Number(process.env.PORT ?? 3000)
@@ -148,6 +149,10 @@ if (!process.env.PICC_NO_LISTEN) {
   // tunnel forwarder, which connects from 127.0.0.1) an unauthenticated
   // control plane.
   // Advisory Signal Engine replaces the deprecated execution autopilot.
+  // Broker registry must load BEFORE the signal engine and decision engine,
+  // as they depend on getBrokerData/getBestCandles.
+  await loadBrokers()
+  log.info("broker registry loaded")
   startSignalEngine()
   server.listen(PORT, "127.0.0.1", () => {
     log.info("server started", { port: PORT, host: "127.0.0.1", dist: ROOT })

@@ -32,7 +32,7 @@ export function registerBroker(adapter) {
   brokers.set(adapter.slug, {
     weight: 50,
     isAlive: () => false,
-    stats: () => ({ medianMs: 0, p95Ms: 0, lastMs: 0 }),
+    stats: () => ({ status: "disconnected", error: null, lastSeen: 0, stale: false, upstream: {} }),
     dataSnapshot: () => ({ assets: [], account: null, viewed: null, watching: [], ts: 0 }),
     setStaleness: () => {},
     getCandles: () => [],

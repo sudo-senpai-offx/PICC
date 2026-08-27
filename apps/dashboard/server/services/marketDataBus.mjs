@@ -53,15 +53,6 @@ export function dataBusStats() {
       lastMs: sorted[sorted.length - 1] ?? null
     }
   }
-  // Also include broker-level stats from the registry
-  registry().then((r) => {
-    for (const b of r.getActiveBrokers()) {
-      if (!out[b.slug]) {
-        const s = b.stats()
-        out[b.slug] = { samples: 0, ...s }
-      }
-    }
-  }).catch(() => {})
   return out
 }
 

@@ -13,7 +13,7 @@ registerBroker({
   },
 
   stats() {
-    return { medianMs: 0, p95Ms: 0, lastMs: 0 }
+    return { status: "idle", error: null, lastSeen: 0, stale: false, upstream: {} }
   },
 
   getCandles() {
