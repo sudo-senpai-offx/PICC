@@ -624,9 +624,223 @@ The webui catalog shows each trading platform with:
 - Catalog UI: activation per-platform, notification toggle
 - Tests: component rendering with generic broker data
 
+### Phase L — Platform Integration + Notification Delivery
+
+**Files:** 15+ files, ~3-4 sessions | **Spec:** §12, §13, §14
+
+This phase closes the three remaining gaps. Detailed specs in their respective
+sections above.
+
+- **L1** — Extension headless data fetching: DOM selectors for Priority 1
+  platform (EO refactor), connector registration, LiveBroker adapter wrapping
+  browser bridge, extension platform detection + data relay, session health
+  monitoring. Tests: mock DOM, session capture.
+- **L2** — Email delivery: Resend API key configuration, daily digest
+  scheduler, email template (HTML + plain-text), confidence filter + rate
+  limiter. Tests: mock Resend, batching, rate limiting.
+- **L3** — Web-push subscription: `/api/notifications/vapid-public-key`
+  endpoint, service worker, "Enable push" button, subscription lifecycle,
+  dead subscription cleanup. Tests: subscription storage, key endpoint.
+
 ---
 
-## 12. Test strategy
+## 12. Extension headless data fetching (Phase L)
+
+### 12.1 Architecture (defined in §9)
+
+The extension accesses trading sites headless via the browser bridge to fetch
+market data + account state. The browser bridge (`browserBridge.mjs`) already
+handles Chromium launch, profile management, DOM reading, and WebSocket frame
+sniffing. The extension provides the user's real browser session — the
+highest-fidelity data source.
+
+### 12.2 What needs building
+
+The browser bridge infrastructure exists but the **per-platform DOM selectors**
+and **session capture flows** are the missing piece. Each trading platform
+(Binance, Bybit, OANDA, IQ Option, etc.) renders its dashboard differently.
+
+**Per-platform work (repeats for each supported platform):**
+
+| Step | What | Effort |
+|---|---|---|
+| 1 | DOM selector mapping — identify CSS selectors for: price display, candle feed, order book, balance, open positions | 1-2 hours per platform |
+| 2 | Session capture — `captureSession()` function to extract auth tokens from the platform's cookies/localStorage | 1-2 hours per platform |
+| 3 | Live data subscription — hook into the platform's WebSocket or DOM mutation observer for real-time candle updates | 2-4 hours per platform |
+| 4 | Account state reader — extract balance + positions from DOM | 1 hour per platform |
+| 5 | Connector registration — add to `connectors.mjs` with slug, label, selectors, transports | 30 min per platform |
+| 6 | `LiveBroker` adapter — implement `brokers/{platform}.mjs` wrapping the browser bridge | 2-3 hours per platform |
+
+**Platform priority order (recommended):**
+
+| Priority | Platform | Why | Est. effort |
+|---|---|---|---|
+| 1 | ExpertOption | Already has `browserStudio.mjs` integration — mostly moving existing code | 4-6 hours (refactor) |
+| 2 | Binance | Largest crypto exchange, CCXT already supports it, browser bridge can add live data on top | 6-8 hours |
+| 3 | Bybit | Second largest, similar structure to Binance | 4-6 hours (after Binance) |
+| 4 | IQ Option | Binary options platform, similar to EO | 6-8 hours |
+| 5 | OANDA | Forex leader, REST API + browser | 6-8 hours |
+| 6 | TradingView | Web-based, HMAC webhook already in spec §6 item 7 | 4-6 hours |
+
+### 12.3 Extension integration
+
+The extension's `content.js` currently relays frames from `inject.js`. For
+headless data fetching, the extension also needs to:
+
+1. **Detect which trading platform tab is active** — URL matching against a
+   registry of supported platforms (reuses the `EO_APP_URL_RE` pattern from
+   `browserStudio.mjs`, generalized to all platforms).
+
+2. **Forward platform-specific messages** — when the inject.js script detects
+   a candle update or account state change on the platform DOM, it sends a
+   structured message to content.js, which relays it to the server via
+   `/api/extension/ingest`.
+
+3. **Session health monitoring** — periodic heartbeat that reports whether the
+   user's browser session on the platform is still alive (logged in, not
+   expired, 2FA not triggered).
+
+### 12.4 Honest limitations
+
+- **DOM selectors break** when platforms update their UI. Each platform adapter
+  needs a maintenance commitment. The `selectors` field in `connectors.mjs`
+  is versioned per platform to make updates traceable.
+- **Rate limiting** — headless DOM reads must not trigger the platform's bot
+  detection. The browser bridge already strips automation signals
+  (`navigator.webdriver`), but additional care is needed per platform.
+- **Session expiry** — real browser sessions expire. The extension must detect
+  expiry and surface a "re-authenticate" prompt rather than silently failing.
+- **Not all platforms are scrapable** — some platforms use canvas/WebGL for
+  chart rendering, making DOM-based price extraction impossible. These
+  platforms must fall back to CCXT API data.
+
+---
+
+## 13. Email delivery setup (Phase L)
+
+### 13.1 Current state
+
+The email notification channel in `notifier.mjs` is fully implemented:
+- Resend HTTP API integration at `sendEmail()`
+- Channel registered as `{ name: "email", enabled: () => Boolean(RESEND_API_KEY && ALERT_EMAIL_TO), send: sendEmail }`
+- `.env` has `ALERT_EMAIL_TO` and `ALERT_EMAIL_FROM` set
+- **Missing:** `RESEND_API_KEY` — the channel shows "not configured" in the UI
+
+### 13.2 What needs doing
+
+| Step | What | Who |
+|---|---|---|
+| 1 | Sign up at [resend.com](https://resend.com) (free tier: 100/day, 3000/month) | User |
+| 2 | Create API key, paste into `.env` as `RESEND_API_KEY=re_...` | User |
+| 3 | Verify `ALERT_EMAIL_FROM` domain (or use Resend's default `onboarding@resend.dev` for testing) | User |
+| 4 | Restart server → hit "Send test" in AutopilotSuite → confirm email arrives | User |
+| 5 | Wire Resend webhook for delivery tracking (optional — bounces, complaints) | Agent (Phase L) |
+
+### 13.3 Email batching implementation
+
+The batching logic (§7.3) requires:
+
+1. **Daily digest scheduler** — a `setInterval` in `notifier.mjs` that fires at
+   the configured time (default: 16:00 UTC, market close for most sessions).
+   Collects all analysis results since last digest.
+
+2. **Confidence filter** — only trades above `confidenceThreshold` are included.
+
+3. **Template renderer** — formats the batched trades into a clean HTML table
+   for the email body. Plain-text fallback for email clients that don't render
+   HTML.
+
+4. **Rate limiter** — maximum 1 email per configurable interval. If no trades
+   qualified since last digest, send a "no trades today" summary (keeps the
+   cadence honest — the user knows the system is running).
+
+### 13.4 Testing
+
+- Mock Resend API in tests (intercept `fetch` calls to `api.resend.com`)
+- Verify email body contains all qualified trades in correct format
+- Verify rate limiter prevents duplicate sends
+- Verify "no trades today" summary when nothing qualifies
+- Verify batched email groups trades by asset class
+
+---
+
+## 14. Web-push browser subscription (Phase L)
+
+### 14.1 Current state
+
+Server-side:
+- VAPID keys configured in `.env` (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`)
+- `sendWebPush()` in `notifier.mjs` sends push via `web-push` npm package
+- `/api/notifications/subscribe-push` endpoint stores subscription objects
+- Channel shows "configured" in the UI
+
+**Missing:** No frontend code registers a service worker or calls
+`pushManager.subscribe()`. The server can send push messages, but no browser
+is subscribed to receive them.
+
+### 14.2 What needs building
+
+**Service worker** (`public/sw.js` or equivalent):
+
+```
+1. Register service worker on dashboard load
+2. Request notification permission
+3. Fetch VAPID public key from server (new endpoint needed)
+4. Call pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidPublicKey })
+5. POST subscription object to /api/notifications/subscribe-push
+6. Handle push events → show system notification
+```
+
+**New server endpoint:**
+
+```
+GET /api/notifications/vapid-public-key
+→ { publicKey: process.env.VAPID_PUBLIC_KEY }
+```
+
+This endpoint is public (no auth) — the browser needs the key before it can
+subscribe. The private key never leaves the server.
+
+### 14.3 Platform-specific considerations
+
+| Platform | Service worker support | Push API support | Notes |
+|---|---|---|---|
+| Chrome/Edge | ✅ Full | ✅ Full | Primary target |
+| Firefox | ✅ Full | ✅ Full | Works identically |
+| Safari | ✅ (16+) | ✅ (16+) | Requires macOS Ventura / iOS 16+ |
+| Mobile Chrome | ✅ | ✅ | Push works when dashboard is open in mobile browser |
+| Mobile Safari | ✅ (16+) | ✅ (16+) | Requires PWA install for background push |
+
+**Minimum viable:** Chrome/Edge desktop. Other browsers as they're tested.
+
+### 14.4 Subscription lifecycle
+
+1. **Initial subscribe** — user clicks "Enable push notifications" button in
+   AutopilotSuite → service worker registers → subscription created → stored
+   on server.
+
+2. **Re-subscribe on key rotation** — if VAPID keys change, old subscriptions
+   become invalid. Server detects push failures (web-push returns 404/410) and
+   prunes dead subscriptions. User sees "Push notifications need re-enabling"
+   in the UI.
+
+3. **Unsubscribe** — user clicks "Disable push notifications" →
+   `pushManager.unsubscribe()` → server removes subscription.
+
+4. **Persistence** — subscription stored in `notifications.json` (same file as
+   prefs and recent alerts). Survives server restarts.
+
+### 14.5 Testing
+
+- Mock `PushManager` in jsdom (or test server-side subscription storage only)
+- Verify `/api/notifications/vapid-public-key` returns the public key
+- Verify `subscribe-push` stores subscription and returns count
+- Verify dead subscription cleanup on push failure
+- Verify unsubscribe removes subscription
+
+---
+
+## 15. Test strategy
 
 | Phase | New tests | Modified tests |
 |---|---|---|
@@ -640,7 +854,7 @@ The webui catalog shows each trading platform with:
 
 ---
 
-## 13. Definition of done
+## 16. Definition of done
 
 - [ ] Zero React render crashes on `/suites` page
 - [ ] Zero EO-specific labels in default UI path (EO visible only when EO broker is configured)
@@ -656,3 +870,10 @@ The webui catalog shows each trading platform with:
 - [ ] 700+ tests passing, typecheck clean
 - [ ] `PaperLedger.tsx` deleted
 - [ ] Paper engine capabilities corrected
+- [ ] At least 1 trading platform has working headless data fetching via browser bridge
+- [ ] Extension detects active trading platform tab and relays data to server
+- [ ] Resend API key configured, email delivery verified end-to-end
+- [ ] Email batching sends daily digest with all qualified trades
+- [ ] Web-push service worker registered, subscription stored on server
+- [ ] Push notifications deliver to subscribed browser
+- [ ] `/api/notifications/vapid-public-key` endpoint exists and returns key
