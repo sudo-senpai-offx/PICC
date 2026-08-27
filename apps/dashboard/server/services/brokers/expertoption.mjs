@@ -23,13 +23,8 @@ registerBroker({
   },
 
   stats() {
-    if (!_liveEO) return { medianMs: 0, p95Ms: 0, lastMs: 0 }
-    const s = _liveEO.liveEOStats()
-    return {
-      medianMs: s.upstream?.lastAt ? Date.now() - s.upstream.lastAt : 0,
-      p95Ms: 0, // EO doesn't report percentiles — only last-frame latency
-      lastMs: s.upstream?.lastAt ? Date.now() - s.upstream.lastAt : 0
-    }
+    if (!_liveEO) return { status: "disconnected", error: null, lastSeen: 0, stale: false, upstream: {} }
+    return _liveEO.liveEOStats()
   },
 
   getCandles(assetId, opts = {}) {
@@ -41,6 +36,16 @@ registerBroker({
     const count = opts.count ?? 200
     const ohlc = asset.periods[tf] ?? asset.periods[60] ?? []
     return ohlc.slice(-count)
+  },
+
+  dataSnapshot() {
+    if (!_liveEO) return { assets: [], account: null, viewed: null, watching: [], ts: 0 }
+    return _liveEO.liveEOData()
+  },
+
+  setStaleness(flag) {
+    if (!_liveEO) return
+    _liveEO.setLiveEOStale(Boolean(flag))
   },
 
   subscribe(assetId, cb) {

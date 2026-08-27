@@ -8,6 +8,20 @@ vi.mock("../services/liveEO.mjs", async (importOriginal) => {
   return { ...actual, liveEOStats: vi.fn(() => ({ status: "idle", buffers: 0, lastSeen: 0 })) }
 })
 
+const mockBrokerStats = vi.fn(() => ({ status: "idle", buffers: 0, lastSeen: 0 }))
+vi.mock("../services/brokers/index.mjs", () => ({
+  getBrokerStats: (...args) => mockBrokerStats(...args),
+  getBrokerData: () => ({ assets: [], account: null, viewed: null, watching: [], ts: 0 }),
+  subscribeBroker: () => () => {},
+  setBrokerStale: () => {},
+  registerBroker: () => {},
+  getBroker: () => null,
+  listBrokers: () => [],
+  getActiveBrokers: () => [],
+  anyBrokerAlive: () => false,
+  unregisterBroker: () => {}
+}))
+
 vi.mock("../services/sentimentEngine.mjs", async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, sentimentLastUpdate: vi.fn(() => null) }
@@ -115,10 +129,9 @@ describe("/api/trading/health source observability", () => {
   })
 
   it("flags stale candle feed when liveEO lastSeen ages out", async () => {
-    const { liveEOStats } = await import("../services/liveEO.mjs")
-    liveEOStats.mockReturnValue({ status: "connected", buffers: 1, lastSeen: Date.now() - 90000 })
+    mockBrokerStats.mockReturnValue({ status: "connected", buffers: 1, lastSeen: Date.now() - 90000 })
     const st = collectSourceStatuses()
     expect(st.candles.status).toBe("stale")
-    liveEOStats.mockReturnValue({ status: "idle", buffers: 0, lastSeen: 0 })
+    mockBrokerStats.mockReturnValue({ status: "idle", buffers: 0, lastSeen: 0 })
   })
 })

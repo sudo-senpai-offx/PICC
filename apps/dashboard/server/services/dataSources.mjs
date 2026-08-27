@@ -1,4 +1,4 @@
-import { liveEOStats } from "./liveEO.mjs"
+import { getBrokerStats } from "./brokers/index.mjs"
 import { sentimentLastUpdate } from "./sentimentEngine.mjs"
 import { kellySnapshot } from "./kellyCriterion.mjs"
 
@@ -28,7 +28,7 @@ export function collectSourceStatuses(now = Date.now()) {
   let candles = unconfigured()
   let candleFeed = null
   try {
-    const stats = liveEOStats()
+    const stats = getBrokerStats()
     const lastSeen = Number(stats?.lastSeen) > 0 ? Number(stats.lastSeen) : null
     if (lastSeen != null) {
       candles = classifySource(lastSeen, now)

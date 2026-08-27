@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest"
-import { registerBroker, getBroker, listBrokers, getActiveBrokers, anyBrokerAlive, unregisterBroker } from "../services/brokers/index.mjs"
+import { registerBroker, getBroker, listBrokers, getActiveBrokers, anyBrokerAlive, unregisterBroker, getBrokerData, getBrokerStats, setBrokerStale, subscribeBroker } from "../services/brokers/index.mjs"
 
 // Clean up after each test so brokers don't leak
 const registered = []
@@ -86,5 +86,119 @@ describe("broker registry", () => {
 
   it("unregisterBroker is a no-op for unknown slug", () => {
     expect(() => unregisterBroker("nope")).not.toThrow()
+  })
+
+  it("fills default dataSnapshot and setStaleness for minimal adapters", () => {
+    reg({ slug: "minimal2", label: "Minimal2" })
+    const b = getBroker("minimal2")
+    expect(typeof b.dataSnapshot).toBe("function")
+    expect(typeof b.setStaleness).toBe("function")
+    const snap = b.dataSnapshot()
+    expect(snap).toHaveProperty("assets")
+    expect(snap).toHaveProperty("ts")
+    expect(b.setStaleness(true)).toBeUndefined() // no-op
+  })
+})
+
+describe("broker registry convenience functions", () => {
+  it("getBrokerData returns empty data when no brokers registered", () => {
+    const data = getBrokerData()
+    expect(data.assets).toEqual([])
+    expect(data.ts).toBe(0)
+  })
+
+  it("getBrokerData returns data from the highest-weight alive broker", () => {
+    reg({
+      slug: "low-data",
+      label: "Low",
+      weight: 10,
+      isAlive: () => true,
+      dataSnapshot: () => ({ assets: [{ id: "A" }], ts: 100 })
+    })
+    reg({
+      slug: "high-data",
+      label: "High",
+      weight: 100,
+      isAlive: () => true,
+      dataSnapshot: () => ({ assets: [{ id: "B" }], ts: 200 })
+    })
+    const data = getBrokerData()
+    expect(data.assets[0].id).toBe("B") // high weight wins
+  })
+
+  it("getBrokerData falls back to dead broker with cached data", () => {
+    reg({
+      slug: "dead-cached",
+      label: "Dead cached",
+      weight: 10,
+      isAlive: () => false,
+      dataSnapshot: () => ({ assets: [{ id: "X" }], ts: 300 })
+    })
+    const data = getBrokerData()
+    expect(data.assets[0].id).toBe("X") // only broker available
+  })
+
+  it("getBrokerStats returns disconnected default when no brokers registered", () => {
+    const stats = getBrokerStats()
+    expect(stats.status).toBe("disconnected")
+  })
+
+  it("getBrokerStats returns stats from the highest-weight alive broker", () => {
+    reg({
+      slug: "low-stats",
+      label: "Low",
+      weight: 10,
+      isAlive: () => true,
+      stats: () => ({ status: "idle", lastSeen: 100 })
+    })
+    reg({
+      slug: "high-stats",
+      label: "High",
+      weight: 100,
+      isAlive: () => true,
+      stats: () => ({ status: "connected", lastSeen: 200 })
+    })
+    const stats = getBrokerStats()
+    expect(stats.status).toBe("connected")
+    expect(stats.lastSeen).toBe(200)
+  })
+
+  it("setBrokerStale calls setStaleness on the alive broker", () => {
+    let staleFlag = false
+    reg({
+      slug: "staleable",
+      label: "Staleable",
+      weight: 50,
+      isAlive: () => true,
+      setStaleness: (v) => { staleFlag = v }
+    })
+    setBrokerStale(true)
+    expect(staleFlag).toBe(true)
+    setBrokerStale(false)
+    expect(staleFlag).toBe(false)
+  })
+
+  it("subscribeBroker calls the broker's subscribe method", () => {
+    let receivedAssetId = undefined
+    reg({
+      slug: "sub",
+      label: "Sub",
+      weight: 50,
+      isAlive: () => true,
+      subscribe: (assetId, cb) => { receivedAssetId = assetId; cb({ id: assetId }); return () => "unsub" }
+    })
+    let received = null
+    const unsub = subscribeBroker((data) => { received = data })
+    expect(typeof unsub).toBe("function")
+    // subscribeBroker passes null as assetId (wildcard subscribe)
+    expect(receivedAssetId).toBeNull()
+    // The mock subscribe immediately invokes cb, so received is populated
+    expect(received).toEqual({ id: null })
+  })
+
+  it("subscribeBroker returns no-op when no brokers registered", () => {
+    const unsub = subscribeBroker(() => {})
+    expect(typeof unsub).toBe("function")
+    expect(unsub()).toBeUndefined()
   })
 })

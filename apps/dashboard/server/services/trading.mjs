@@ -310,13 +310,13 @@ export function computeAdaptiveStops(candles, direction, opts = {}) {
  */
 async function computeAdaptiveStopsFromSymbol(symbol, timeframe = 60) {
   try {
-    const { liveEOData } = await import("./liveEO.mjs")
-    const data = liveEOData()
+    const { getBrokerData } = await import("./brokers/index.mjs")
+    const data = getBrokerData()
     const asset = data.assets?.find((a) => a.id === symbol || a.name === symbol)
     if (asset?.periods?.[timeframe]?.length >= 30) {
       return computeAdaptiveStops(asset.periods[timeframe], "up") // direction-neutral — only the magnitude matters
     }
-  } catch { /* liveEO not available */ }
+  } catch { /* broker data not available */ }
   try {
     const history = await getHistory(symbol, "1mo")
     if (history?.dates?.length >= 30) {
@@ -815,24 +815,33 @@ export async function tradingStatus() {
   let sessionLiveReason = null
   let gatewayRpm = null
   try {
-    const { liveSnapshot, fetchFreshAccount } = await import("./liveEO.mjs")
-    const snap = liveSnapshot()
-    eoConnected = snap.status === "connected"
-    if (eoConnected && fetchFreshAccount) {
-      const fresh = await fetchFreshAccount()
-      if (fresh?.balance != null) {
-        eoBalance = fresh.balance
-        eoCurrency = fresh.currency || "USD"
-        eoDemoWallet = fresh.demoWallet || null
-        eoRealWallet = fresh.realWallet || null
+    const { getBrokerStats } = await import("./brokers/index.mjs")
+    const stats = getBrokerStats()
+    eoConnected = stats?.status === "connected"
+    // Try fresh account fetch from the EO adapter (headless browser)
+    try {
+      const { fetchFreshAccount } = await import("./liveEO.mjs")
+      if (eoConnected && fetchFreshAccount) {
+        const fresh = await fetchFreshAccount()
+        if (fresh?.balance != null) {
+          eoBalance = fresh.balance
+          eoCurrency = fresh.currency || "USD"
+          eoDemoWallet = fresh.demoWallet || null
+          eoRealWallet = fresh.realWallet || null
+        }
       }
-    } else if (snap.account?.balance != null) {
-      eoBalance = snap.account.balance
-      eoCurrency = snap.account.currency || "USD"
-      eoDemoWallet = snap.account.demoWallet || null
-      eoRealWallet = snap.account.realWallet || null
+    } catch { /* fetchFreshAccount not available */ }
+    if (eoBalance == null) {
+      const { getBrokerData } = await import("./brokers/index.mjs")
+      const snap = getBrokerData()
+      if (snap.account?.balance != null) {
+        eoBalance = snap.account.balance
+        eoCurrency = snap.account.currency || "USD"
+        eoDemoWallet = snap.account.demoWallet || null
+        eoRealWallet = snap.account.realWallet || null
+      }
     }
-  } catch { /* liveEO not loaded */ }
+  } catch { /* broker data not loaded */ }
   // Phase 13/12: cached liveness verdict + gateway pacing meter.
   try {
     const { cachedSessionLive } = await import("./autopilot.mjs")

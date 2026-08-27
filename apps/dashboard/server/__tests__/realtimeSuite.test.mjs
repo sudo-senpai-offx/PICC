@@ -25,6 +25,20 @@ vi.mock("../services/liveEO.mjs", () => ({
   liveEOData: vi.fn(async () => ({ status: "idle", mode: null, account: null, viewed: null, assets: [] }))
 }))
 
+const mockBrokerStats = vi.fn(() => ({ status: "idle" }))
+vi.mock("../services/brokers/index.mjs", () => ({
+  getBrokerStats: (...args) => mockBrokerStats(...args),
+  getBrokerData: () => ({ assets: [], account: null, viewed: null, watching: [], ts: 0 }),
+  subscribeBroker: () => () => {},
+  setBrokerStale: () => {},
+  registerBroker: () => {},
+  getBroker: () => null,
+  listBrokers: () => [],
+  getActiveBrokers: () => [],
+  anyBrokerAlive: () => false,
+  unregisterBroker: () => {}
+}))
+
 const trading = await import("../services/trading.mjs")
 const ledger = await import("../services/accuracyLedger.mjs")
 const autopilot = await import("../services/autopilot.mjs")
@@ -90,8 +104,8 @@ describe("tradingSuiteSnapshot", () => {
     m.bustRealtimeSuite()
   })
 
-  it("picks up the liveEO stats after a restart", async () => {
-    vi.mocked(liveEO.liveEOStats).mockReturnValueOnce({ status: "connected" })
+  it("picks up the broker stats after a restart", async () => {
+    mockBrokerStats.mockReturnValueOnce({ status: "connected" })
     m.bustRealtimeSuite()
     const snap = await m.tradingSuiteSnapshot()
     expect(snap.live).toEqual({ status: "connected" })

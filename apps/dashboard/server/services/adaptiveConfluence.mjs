@@ -21,7 +21,7 @@
 // /api/trading/decisions endpoint.
 
 import { computeIndicatorDashboard, detectMarketPhase } from "./indicators.mjs"
-import { liveEOData, subscribeLiveEO } from "./liveEO.mjs"
+import { getBrokerData, subscribeBroker } from "./brokers/index.mjs"
 import { mergeCCXTAssets } from "./liveCCXT.mjs"
 import { recordSignal } from "./trading.mjs"
 import { recordDecision } from "./accuracyLedger.mjs"
@@ -684,9 +684,9 @@ async function computeNow() {
   // engine still produces decisions when either source is unconfigured.
   let data
   try {
-    data = mergeCCXTAssets(liveEOData())
+    data = mergeCCXTAssets(getBrokerData())
   } catch {
-    data = liveEOData()
+    data = getBrokerData()
   }
   if (!Array.isArray(data?.assets) || data.assets.length === 0) {
     cached = {
@@ -732,7 +732,7 @@ function schedule() {
 
 function startEngine() {
   if (liveOff) return
-  liveOff = subscribeLiveEO(() => {}) // keep the live layer warm
+  liveOff = subscribeBroker(() => {}) // keep the live layer warm
   void computeNow().catch(() => {})
   schedule()
 }

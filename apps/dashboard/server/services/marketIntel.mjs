@@ -26,7 +26,7 @@
 import { computeIndicatorDashboard } from "./indicators.mjs"
 import { getDecisions } from "./adaptiveConfluence.mjs"
 import { signalAccuracy } from "./trading.mjs"
-import { liveEOData } from "./liveEO.mjs"
+import { getBrokerData } from "./brokers/index.mjs"
 
 // ---------------------------------------------------------------------
 // Constants
@@ -392,7 +392,7 @@ let cachedAt = 0
 export async function getMarketIntel() {
   if (cached && Date.now() - cachedAt < CACHE_TTL_MS) return cached
   try {
-    const [dec, acc, data] = await Promise.allSettled([getDecisions(), signalAccuracy(), liveEOData()])
+    const [dec, acc, data] = await Promise.allSettled([getDecisions(), signalAccuracy(), getBrokerData()])
     const out = computeMarketIntel({
       data: dec.status === "fulfilled" ? { status: dec.value?.status, mode: dec.value?.mode, account: dec.value?.account, viewed: dec.value?.viewed, assets: data.status === "fulfilled" ? data.value?.assets ?? [] : [] } : { assets: data.status === "fulfilled" ? data.value?.assets ?? [] : [] },
       decisions: dec.status === "fulfilled" ? dec.value?.decisions ?? [] : [],

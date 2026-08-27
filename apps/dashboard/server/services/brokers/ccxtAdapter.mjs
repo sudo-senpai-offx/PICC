@@ -29,15 +29,17 @@ registerBroker({
   },
 
   stats() {
-    if (!_ccxtConn) return { medianMs: 0, p95Ms: 0, lastMs: 0 }
+    if (!_ccxtConn) return { status: "disconnected", error: null, lastSeen: 0, stale: false, upstream: {} }
     try {
       const ids = _ccxtConn.connectedExchangeIds()
       return {
-        medianMs: 0, // CCXT doesn't track median latency
-        p95Ms: 0,
-        lastMs: ids.length > 0 ? 0 : 0 // Connected = alive, but no per-request timing
+        status: ids.length > 0 ? "connected" : "idle",
+        error: null,
+        lastSeen: 0,
+        stale: false,
+        upstream: { exchanges: ids }
       }
-    } catch { return { medianMs: 0, p95Ms: 0, lastMs: 0 } }
+    } catch { return { status: "error", error: "ccxt unavailable", lastSeen: 0, stale: true, upstream: {} } }
   },
 
   getCandles(assetId, opts = {}) {

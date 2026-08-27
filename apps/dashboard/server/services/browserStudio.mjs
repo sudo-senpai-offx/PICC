@@ -3131,10 +3131,13 @@ async function refreshTabLogin(tabId) {
           const changed = r.token !== studio._lastEOCaptureToken
           studio._lastEOCaptureToken = r.token
           if (!changed) return
-          const live = await import("./liveEO.mjs").catch(() => null)
-          const stats = live?.liveEOStats?.()
+          const { getBrokerStats } = await import("./brokers/index.mjs").catch(() => ({}))
+          const stats = typeof getBrokerStats === "function" ? getBrokerStats() : null
           const broken = !stats || stats.status !== "connected" || Boolean(stats.error)
-          if (changed || broken) live?.restartLiveEO?.({ force: true })
+          if (changed || broken) {
+            const live = await import("./liveEO.mjs").catch(() => null)
+            live?.restartLiveEO?.({ force: true })
+          }
         })
         .catch(() => {
           // Never hammer a failing page — only a successful active-account

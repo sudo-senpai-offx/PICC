@@ -20,7 +20,7 @@ import { appendRow, localStore } from "./localstore.mjs"
 import { chatText, llmConfigured } from "./llm.mjs"
 import { volatilityPositionSize, realizedVolatility } from "./volatility.mjs"
 import { quickMtfCheck } from "./multiTimeframe.mjs"
-import { liveEOData } from "./liveEO.mjs"
+import { getBrokerData, getBrokerStats } from "./brokers/index.mjs"
 import { detectRegime } from "./regimeDetection.mjs"
 import { computeModelMatrix, recordModelOutcomes } from "./modelMatrix.mjs"
 import { aiGatePrompts, GATE_PROMPT_VERSION } from "./prompts.mjs"
@@ -899,8 +899,7 @@ export async function getSessionLive() {
     var studioReason = studioCheck.reason
   } catch { var studioReason = "studio browser unavailable" }
   try {
-    const { liveEOStats } = await import("./liveEO.mjs")
-    const upAt = Number(liveEOStats()?.upstream?.lastAt) || 0
+    const upAt = Number(getBrokerStats()?.upstream?.lastAt) || 0
     if (upAt && Date.now() - upAt < 60_000) {
       return { live: true, reason: "extension feed streaming from your browser", url: null, via: "extension" }
     }
@@ -1208,7 +1207,7 @@ export async function whyAutopilot({ assetId } = {}) {
   let mtf = null
   if (config.mtfGate !== false) {
     try {
-      const eoData = liveEOData()
+      const eoData = getBrokerData()
       const asset = (eoData.assets || []).find((a) => a.id === config.assetId)
       if (asset) {
         const dir = pred.direction === "down" ? -1 : pred.direction === "up" ? 1 : 0

@@ -25,7 +25,7 @@ import { yieldSnapshot } from "./yields.mjs"
 import { appendRow, listRows } from "./localstore.mjs"
 import { rateLimitStatus } from "./rateLimit.mjs"
 import { paperAnalytics, getCredentials as getTradingCredentials } from "./trading.mjs"
-import { liveEOStats, setLiveEOStale } from "./liveEO.mjs"
+import { getBrokerStats, setBrokerStale } from "./brokers/index.mjs"
 import { connect, fetchCandles, fetchTicker, toCcxtSymbol } from "./ccxtConnector.mjs"
 import { recordCandles, recordTicker, timeframeSeconds, ccxtStats } from "./liveCCXT.mjs"
 import { createLogger } from "../logger.mjs"
@@ -220,18 +220,18 @@ every(
   "eo-staleness",
   30 * 1000,
   async () => {
-    const st = liveEOStats() ?? {}
+    const st = getBrokerStats() ?? {}
     if (st.status !== "connected" || !Number(st.lastSeen)) {
       // Only clear the flag when the stream is genuinely healthy. A
       // disconnected/reconnecting session with old buffers is still stale —
       // clearing here hid the staleness from the UI during reconnect gaps.
-      if (st.status === "idle") setLiveEOStale(false)
+      if (st.status === "idle") setBrokerStale(false)
       return
     }
     const tickAgeSec = Math.round((Date.now() - Number(st.lastSeen)) / 1000)
     const wasStale = Boolean(st.stale)
     const stale = tickAgeSec > 60
-    setLiveEOStale(stale)
+    setBrokerStale(stale)
     if (stale) {
       log.warn("ExpertOption stream is connected but stale", { lastTickAgeSec: tickAgeSec, viewed: st.viewed ?? null })
       if (!wasStale) {
@@ -276,8 +276,7 @@ export function startLivenessMonitor() {
         const { getSessionLive, refreshSessionLiveCache } = await import("./autopilot.mjs")
         const verdict = await getSessionLive()
         refreshSessionLiveCache(verdict)
-        const { liveEOStats } = await import("./liveEO.mjs")
-        const st = liveEOStats() ?? {}
+        const st = getBrokerStats() ?? {}
         uptimeRing.push({ ts: Date.now(), connected: st.status === "connected", live: Boolean(verdict.live) })
         if (uptimeRing.length > UPTIME_RING_CAP) uptimeRing.splice(0, uptimeRing.length - UPTIME_RING_CAP)
         // Transition warnings — silent degradation is the enemy.

@@ -1,6 +1,25 @@
-import { describe, expect, it, beforeEach } from "vitest"
+import { describe, expect, it, beforeEach, vi } from "vitest"
 import { ingestAppFrame, liveEOData, liveEOStats, stopLiveEO } from "../services/liveEO.mjs"
 import { collectSourceStatuses } from "../services/dataSources.mjs"
+
+// Broker registry mock: getBrokerStats delegates to liveEOStats so that
+// services migrated to the broker registry still see liveEO data in tests.
+// Use importOriginal to get the real liveEO functions after they're loaded.
+vi.mock("../services/brokers/index.mjs", async () => {
+  const { liveEOStats: realStats, liveEOData: realData } = await import("../services/liveEO.mjs")
+  return {
+    getBrokerStats: () => realStats(),
+    getBrokerData: () => realData(),
+    subscribeBroker: () => () => {},
+    setBrokerStale: () => {},
+    registerBroker: () => {},
+    getBroker: () => null,
+    listBrokers: () => [],
+    getActiveBrokers: () => [],
+    anyBrokerAlive: () => false,
+    unregisterBroker: () => {}
+  }
+})
 
 /**
  * The extension bridge feeds already-parsed broker frames (captured in the

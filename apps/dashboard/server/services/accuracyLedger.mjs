@@ -14,7 +14,7 @@
 // to a cap, then are marked unresolved rather than guessed. The ledger also
 // powers the decision-history panel and the gate backtest (predicted vs
 // realized EV per expiry/win-probability bucket).
-import { liveEOData } from "./liveEO.mjs"
+import { getBrokerData } from "./brokers/index.mjs"
 
 export const LEDGER_CAP = 1000
 export const RESOLVE_INTERVAL_MS = 5000
@@ -55,7 +55,7 @@ export function recordDecision(d) {
     resolvedAt: null
   }
   // Sample the entry price from the live 60s buffer if available (best-effort).
-  const data = liveEOData()
+  const data = getBrokerData()
   const asset = (data?.assets ?? []).find((a) => a.id === d.assetId || a.name === d.asset)
   const candles = asset?.periods?.[60] ?? []
   if (candles.length) entry.entryPrice = Number(candles[candles.length - 1].close ?? null)
@@ -81,7 +81,7 @@ export function resolveResult(direction, entryPrice, exitPrice) {
 
 /** Look up the best available exit price for an asset at/after expiry. */
 export function exitPriceFor(assetId, assetName, at) {
-  const data = liveEOData()
+  const data = getBrokerData()
   const asset = (data?.assets ?? []).find((a) => a.id === assetId || a.name === assetName)
   const candles = asset?.periods?.[60] ?? []
   if (!candles.length) return null

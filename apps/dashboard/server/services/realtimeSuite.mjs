@@ -10,7 +10,7 @@
 import { paperPositions, paperHistory, recentSignals, signalAccuracy, tradingStatus } from "./trading.mjs"
 import { ledgerStats, ledgerEngineStats, ledgerHistory } from "./accuracyLedger.mjs"
 import { demoStatus, demoDeals, demoAnalytics } from "./autopilot.mjs"
-import { liveEOStats } from "./liveEO.mjs"
+import { getBrokerStats } from "./brokers/index.mjs"
 import { getMarketIntel } from "./marketIntel.mjs"
 
 const SECTIONS = {
@@ -95,5 +95,5 @@ export async function tradingSuiteSnapshot() {
   const settled = await Promise.all(
     Object.keys(SECTIONS).map(async (k) => [k, await cached(k).catch(() => null)])
   )
-  return { ts: Date.now(), live: liveEOStats(), ...Object.fromEntries(settled) }
+  return { ts: Date.now(), live: getBrokerStats(), ...Object.fromEntries(settled) }
 }

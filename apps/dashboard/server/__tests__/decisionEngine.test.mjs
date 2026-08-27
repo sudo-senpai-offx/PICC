@@ -20,6 +20,19 @@ vi.mock("../services/liveEO.mjs", () => ({
   liveEOStats: () => ({ status: "idle" })
 }))
 
+vi.mock("../services/brokers/index.mjs", () => ({
+  getBrokerData: () => mockFeed.data,
+  getBrokerStats: () => ({ status: "idle" }),
+  subscribeBroker: () => () => {},
+  setBrokerStale: () => {},
+  registerBroker: () => {},
+  getBroker: () => null,
+  listBrokers: () => [],
+  getActiveBrokers: () => [],
+  anyBrokerAlive: () => false,
+  unregisterBroker: () => {}
+}))
+
 let confluence
 let autopilot
 let kelly
