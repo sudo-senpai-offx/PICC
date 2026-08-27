@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest"
-import { statsFromHistory, downsample, clampDrift, clampVol } from "../services/yahoo.mjs"
+import { statsFromHistory, downsample, clampDrift, clampVol, normalizeYahooSymbol } from "../services/yahoo.mjs"
+
+describe("yahoo symbol normalization", () => {
+  it("resolves human/pair spellings to real Yahoo symbols via the asset catalog", () => {
+    expect(normalizeYahooSymbol("EURUSD")).toBe("EURUSD=X")
+    expect(normalizeYahooSymbol("USDJPY")).toBe("USDJPY=X")
+    expect(normalizeYahooSymbol("Bitcoin")).toBe("BTC-USD")
+    expect(normalizeYahooSymbol("Nvidia")).toBe("NVDA")
+    expect(normalizeYahooSymbol("US30")).toBe("^DJI")
+    expect(normalizeYahooSymbol("Gold")).toBe("GC=F")
+  })
+
+  it("keeps already-qualified Yahoo symbols untouched (futures + fx forms)", () => {
+    expect(normalizeYahooSymbol("GC=F")).toBe("GC=F")
+    expect(normalizeYahooSymbol("EURUSD=X")).toBe("EURUSD=X")
+    expect(normalizeYahooSymbol("^VIX")).toBe("^VIX")
+  })
+})
 
 describe("yahoo stats", () => {
   it("computes ~0 vol and constant drift for a fixed daily return series", () => {

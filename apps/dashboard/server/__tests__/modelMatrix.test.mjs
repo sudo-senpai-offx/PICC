@@ -54,6 +54,43 @@ describe("asset catalog (active-asset detection)", () => {
     expect(assetsEquivalent("BTC/USDT", "BTC-USD")).toBe(true)
   })
 
+  it("resolves forex pairs via slash, Yahoo =X and human nicknames", () => {
+    expect(canonicalAssetId("EUR/USD")).toBe("EURUSD")
+    expect(canonicalAssetId("USDJPY=X")).toBe("USDJPY")
+    expect(canonicalAssetId("Cable")).toBe("GBPUSD")
+    expect(canonicalAssetId("Aussie")).toBe("AUDUSD")
+    expect(canonicalAssetId("Loonie")).toBe("USDCAD")
+    expect(canonicalAssetId("Euro Dollar")).toBe("EURUSD")
+    expect(canonicalAssetId("Dollar Yen")).toBe("USDJPY")
+    expect(canonicalAssetId("gbpjpy")).toBe("GBPJPY")
+    expect(canonicalAssetId("USDMXN=X")).toBe("USDMXN")
+    expect(assetsEquivalent("EUR/USD", "EURUSD=X")).toBe(true)
+    expect(assetsEquivalent("Cable", "GBP/USD")).toBe(true)
+    expect(assetsEquivalent("EURUSD", "GBPUSD")).toBe(false)
+  })
+
+  it("resolves top-traded equities via ticker and human names", () => {
+    expect(canonicalAssetId("AAPL")).toBe("AAPL")
+    expect(canonicalAssetId("Apple")).toBe("AAPL")
+    expect(canonicalAssetId("Apple Inc")).toBe("AAPL")
+    expect(canonicalAssetId("TSLA")).toBe("TSLA")
+    expect(canonicalAssetId("Google")).toBe("GOOGL")
+    expect(canonicalAssetId("Alphabet")).toBe("GOOGL")
+    expect(canonicalAssetId("Microsoft")).toBe("MSFT")
+    expect(canonicalAssetId("Nvidia")).toBe("NVDA")
+    expect(canonicalAssetId("Meta Platforms")).toBe("META")
+    expect(assetsEquivalent("Apple", "AAPL")).toBe(true)
+    expect(assetsEquivalent("Tesla", "TSLA")).toBe(true)
+  })
+
+  it("drops Yahoo =X forex suffixes but never =F futures", () => {
+    // "=X" is Yahoo's forex quote form — collapses to the bare pair.
+    expect(canonicalAssetId("BTCUSD=X")).toBe("BTCUSD")
+    // "=F" is Yahoo's futures form — distinct instrument, must stay intact.
+    expect(canonicalAssetId("GC=F")).toBe("GC=F")
+    expect(yahooSymbolFor("GC=F")).toBe("GC=F")
+  })
+
   it("maps every commodity/index to a real Yahoo symbol", () => {
     expect(yahooSymbolFor("GOLD")).toBe("GC=F")
     expect(yahooSymbolFor("SILVER")).toBe("SI=F")
@@ -69,6 +106,10 @@ describe("asset catalog (active-asset detection)", () => {
     // forex + crypto conventions preserved
     expect(yahooSymbolFor("EURUSD")).toBe("EURUSD=X")
     expect(yahooSymbolFor("BTCUSD")).toBe("BTC-USD")
+    // equities pass through untouched (no Yahoo suffix magic)
+    expect(yahooSymbolFor("AAPL")).toBe("AAPL")
+    expect(yahooSymbolFor("TSLA")).toBe("TSLA")
+    expect(yahooSymbolFor("Nvidia")).toBe("NVDA")
   })
 
   it("every alias resolves to a non-empty canonical id", () => {

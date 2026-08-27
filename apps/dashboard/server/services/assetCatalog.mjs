@@ -52,7 +52,33 @@ export const ASSET_ALIASES = {
   DOGEUSD: ["DOGEUSD", "DOGECOIN", "DOGE", "DOGEUSDT", "DOGE/USDT"],
   DOTUSD: ["DOTUSD", "POLKADOT", "DOT", "DOTUSDT", "DOT/USDT"],
   LINKUSD: ["LINKUSD", "CHAINLINK", "LINK", "LINKUSDT", "LINK/USDT"],
-  AVAXUSD: ["AVAXUSD", "AVALANCHE", "AVAX", "AVAXUSDT", "AVAX/USDT"]
+  AVAXUSD: ["AVAXUSD", "AVALANCHE", "AVAX", "AVAXUSDT", "AVAX/USDT"],
+
+  // ── Forex (majors, minors, exotics) ─────────────────────────────────────
+  // Venues quote pairs slash-separated ("EUR/USD"), Yahoo as "EURUSD=X".
+  // Both spellings (plus human nicknames) resolve to the same canonical id.
+  EURUSD: ["EUR/USD", "EURUSD=X", "Euro Dollar", "EUROUSD"],
+  GBPUSD: ["GBP/USD", "GBPUSD=X", "Cable"],
+  USDJPY: ["USD/JPY", "USDJPY=X", "Dollar Yen"],
+  USDCHF: ["USD/CHF", "USDCHF=X"],
+  AUDUSD: ["AUD/USD", "AUDUSD=X", "Aussie"],
+  USDCAD: ["USD/CAD", "USDCAD=X", "Loonie"],
+  NZDUSD: ["NZD/USD", "NZDUSD=X"],
+  EURGBP: ["EUR/GBP", "EURGBP=X"],
+  EURJPY: ["EUR/JPY", "EURJPY=X"],
+  GBPJPY: ["GBP/JPY", "GBPJPY=X"],
+  USDTRY: ["USD/TRY", "USDTRY=X"],
+  USDZAR: ["USD/ZAR", "USDZAR=X"],
+  USDMXN: ["USD/MXN", "USDMXN=X"],
+
+  // ── Equities (top traded; human names included) ─────────────────────────
+  AAPL: ["AAPL", "Apple", "Apple Inc"],
+  TSLA: ["TSLA", "Tesla", "Tesla Inc"],
+  GOOGL: ["GOOGL", "Google", "Alphabet"],
+  MSFT: ["MSFT", "Microsoft"],
+  AMZN: ["AMZN", "Amazon"],
+  NVDA: ["NVDA", "Nvidia"],
+  META: ["META", "Facebook", "Meta Platforms"]
 }
 
 // alias (already separator-stripped, uppercased) → canonical id
@@ -64,12 +90,19 @@ for (const [canonical, aliases] of Object.entries(ASSET_ALIASES)) {
   }
 }
 
-/** Strip separators/OTC suffixes and resolve to the canonical PICC asset id. */
+/**
+ * Strip separators/OTC suffixes and resolve to the canonical PICC asset id.
+ * Yahoo quotes forex as "EURUSD=X" — the "=X" suffix is dropped here so any
+ * Yahoo-fx spelling collapses to the bare pair ("BTCUSD=X" → "BTCUSD").
+ * Futures ("=F", e.g. "GC=F") are deliberately left untouched: they are
+ * distinct instruments, not pairs.
+ */
 export function canonicalAssetId(raw) {
   if (!raw) return ""
   const s = String(raw)
     .replace(/\s*\(otc\)/gi, "")
     .replace(/[/\s.\-_]+/g, "")
+    .replace(/=X$/i, "")
     .toUpperCase()
   return LOOKUP.get(s) ?? s
 }
