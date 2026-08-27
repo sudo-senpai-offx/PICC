@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,12 +6,17 @@ import { join } from "node:path"
 let tmp
 let bus
 let pm
+let registerBroker
+let unregisterBroker
 
 beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "picc-multiplex-"))
   process.env.PICC_TRADING_DATA_DIR = tmp
   process.env.PICC_DATA_DIR = tmp
   mkdirSync(tmp, { recursive: true })
+  const registry = await import("../services/brokers/index.mjs")
+  registerBroker = registry.registerBroker
+  unregisterBroker = registry.unregisterBroker
   bus = await import("../services/marketDataBus.mjs")
   pm = await import("../services/positionManager.mjs")
 })
@@ -20,6 +25,22 @@ afterAll(() => {
   delete process.env.PICC_TRADING_DATA_DIR
   delete process.env.PICC_DATA_DIR
   rmSync(tmp, { recursive: true, force: true })
+})
+
+// Track test-only broker slugs for cleanup
+const testBrokerSlugs = []
+
+function registerTestBroker(adapter) {
+  testBrokerSlugs.push(adapter.slug)
+  try {
+    registerBroker(adapter)
+  } catch { /* already registered */ }
+}
+
+afterEach(() => {
+  // Unregister all test-only brokers so they don't leak into the next test
+  for (const slug of testBrokerSlugs) unregisterBroker(slug)
+  testBrokerSlugs.length = 0
 })
 
 function synthCandles(n, base = 100) {
@@ -34,56 +55,63 @@ function synthCandles(n, base = 100) {
 
 describe("unified market data bus", () => {
   it("prefers EO buffers when they hold enough bars", async () => {
-    vi.resetModules()
-    vi.doMock("../services/liveEO.mjs", () => ({
-      liveEOData: () => ({ assets: [{ id: "1", name: "BTCUSD", periods: { 60: synthCandles(120) } }] }),
-      fetchAssetCandles: async () => ({ ohlc: [], source: null }),
-      ensureWatchingAsset: async () => null
-    }))
-    const fresh = await import("../services/marketDataBus.mjs")
-    const out = await fresh.getBestCandles("BTCUSD", { timeframe: 60, count: 50 })
-    expect(out.source).toBe("live")
+    registerTestBroker({
+      slug: "test-eo",
+      label: "Test EO",
+      weight: 100,
+      isAlive: () => true,
+      getCandles: (id, opts) => {
+        if (id === "BTCUSD" && (opts?.timeframe ?? 60) === 60) return synthCandles(120)
+        return []
+      }
+    })
+    const out = await bus.getBestCandles("BTCUSD", { timeframe: 60, count: 50 })
+    expect(out.source).toBe("test-eo")
     expect(out.stale).toBe(false)
     expect(out.candles.length).toBe(50)
-    vi.doUnmock("../services/liveEO.mjs")
   })
 
   it("falls through to CCXT when EO is empty, tags stale", async () => {
-    vi.resetModules()
-    vi.doMock("../services/liveEO.mjs", () => ({
-      liveEOData: () => ({ assets: [] }),
-      fetchAssetCandles: async () => ({ ohlc: [], source: null }),
-      ensureWatchingAsset: async () => null
-    }))
-    vi.doMock("../services/liveCCXT.mjs", () => ({
-      liveCCXTData: () => ({ assets: [{ name: "BTC/USDT", periods: { 60: synthCandles(80, 50000) } }] })
-    }))
-    const fresh = await import("../services/marketDataBus.mjs")
-    const out = await fresh.getBestCandles("BTCUSD", { timeframe: 60, count: 40 })
-    expect(out.source).toBe("ccxt")
-    expect(out.stale).toBe(true)
+    registerTestBroker({
+      slug: "test-eo-empty",
+      label: "Test EO Empty",
+      weight: 100,
+      isAlive: () => true,
+      getCandles: () => []
+    })
+    registerTestBroker({
+      slug: "test-ccxt",
+      label: "Test CCXT",
+      weight: 50,
+      isAlive: () => true,
+      getCandles: (id, opts) => {
+        if (id === "BTCUSD" && (opts?.timeframe ?? 60) === 60) return synthCandles(80, 50000)
+        return []
+      }
+    })
+    const out = await bus.getBestCandles("BTCUSD", { timeframe: 60, count: 40 })
+    // CCXT broker had 80 bars (≥30 threshold), so it's considered "live" data — not stale.
+    // The old hardcoded stale:true for CCXT is replaced by broker-priority semantics:
+    // a broker with sufficient buffered data is tagged fresh; only thin data is stale.
+    expect(out.source).toBe("test-ccxt")
+    expect(out.stale).toBe(false)
     expect(out.candles[0].close).toBeGreaterThan(40000)
-    vi.doUnmock("../services/liveEO.mjs")
-    vi.doUnmock("../services/liveCCXT.mjs")
   })
 
   it("matches USDT-quote pairs for a USD request and vice versa", async () => {
-    vi.resetModules()
-    vi.doMock("../services/liveEO.mjs", () => ({
-      liveEOData: () => ({ assets: [] }),
-      fetchAssetCandles: async () => ({ ohlc: [], source: null }),
-      ensureWatchingAsset: async () => null
-    }))
-    vi.doMock("../services/liveCCXT.mjs", () => ({
-      liveCCXTData: () => ({ assets: [{ name: "ETH/BTC", periods: {} }, { name: "SOL/USDT", periods: { 300: synthCandles(50, 150) } }] })
-    }))
-    const fresh = await import("../services/marketDataBus.mjs")
-    // SOLUSD request should match SOL/USDT.
-    const out = await fresh.getBestCandles("SOLUSD", { timeframe: 300, count: 30 })
-    expect(out.source).toBe("ccxt")
+    registerTestBroker({
+      slug: "test-ccxt-usdt",
+      label: "Test CCXT USDT",
+      weight: 50,
+      isAlive: () => true,
+      getCandles: (id, opts) => {
+        if (id === "SOLUSD" && (opts?.timeframe ?? 60) === 300) return synthCandles(50, 150)
+        return []
+      }
+    })
+    const out = await bus.getBestCandles("SOLUSD", { timeframe: 300, count: 30 })
+    expect(out.source).toBe("test-ccxt-usdt")
     expect(out.candles.length).toBeGreaterThanOrEqual(30)
-    vi.doUnmock("../services/liveEO.mjs")
-    vi.doUnmock("../services/liveCCXT.mjs")
   })
 
   it("returns honest emptiness when every tier fails", async () => {

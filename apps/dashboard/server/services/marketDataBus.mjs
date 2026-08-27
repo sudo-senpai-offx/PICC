@@ -1,20 +1,35 @@
 // PICC Unified Market Data Bus — the fan-in for every candle source.
 //
-// One call, best available candles: push-websocket buffers first, REST
-// aggregates second, daily fallback last — with per-source latency tracking
-// and honest staleness tags. This replaces the inline 3-tier chains that used
-// to be copy-pasted across handler endpoints.
+// One call, best available candles: broker-priority fan-in with per-source
+// latency tracking and honest staleness tags. Brokers register via the
+// broker registry — this module never imports broker modules directly.
 //
-// Source priority:
-//   1. "live"     — ExpertOption gateway buffers (push WS, minute bars)
-//   2. "ccxt"     — multi-exchange REST aggregates (15s scheduler poll)
-//   3. "yahoo"    — public EOD fallback (delayed, DAILY resolution)
+// Source priority is determined by:
+//   1. Broker weight (user-configurable, higher = preferred)
+//   2. Liveness (alive brokers ranked above dead ones)
+//   3. Data freshness (how many candles are buffered)
 //
 // Every result is tagged with its source so the UI can label honesty
 // (live vs delayed) and the model matrix can weight accordingly.
 
 import { canonicalAssetId } from "./assetCatalog.mjs"
 
+// ── Broker registry (loaded once, lazy) ────────────────────────────────────
+let _registry = null
+async function registry() {
+  if (!_registry) _registry = await import("./brokers/index.mjs")
+  return _registry
+}
+
+/**
+ * Load all broker adapters. Call once at server startup to trigger
+ * registration of EO, CCXT, Yahoo, Paper adapters.
+ */
+export async function loadBrokers() {
+  await import("./brokers/loader.mjs")
+}
+
+// ── Latency tracking ───────────────────────────────────────────────────────
 const LATENCY_RING_CAP = 32
 const latencyRing = new Map() // source → [ms]
 
@@ -38,6 +53,15 @@ export function dataBusStats() {
       lastMs: sorted[sorted.length - 1] ?? null
     }
   }
+  // Also include broker-level stats from the registry
+  registry().then((r) => {
+    for (const b of r.getActiveBrokers()) {
+      if (!out[b.slug]) {
+        const s = b.stats()
+        out[b.slug] = { samples: 0, ...s }
+      }
+    }
+  }).catch(() => {})
   return out
 }
 
@@ -53,87 +77,65 @@ async function timed(source, fn) {
   }
 }
 
-/** CCXT buffer match by canonical base symbol (BTCUSD ↔ BTC/USDT). */
-function matchCcxtAsset(ccxtAssets, assetId) {
-  const want = String(assetId).replace(/[^A-Z]/g, "").toUpperCase()
-  return (Array.isArray(ccxtAssets) ? ccxtAssets : []).find((a) => {
-    const sym = String(a.name ?? a.symbol ?? "").toUpperCase().replace("/", "")
-    if (!sym) return false
-    if (sym === want) return true
-    // BTCUSD request matches BTCUSDT (stablecoin quote), and vice versa.
-    const base = want.slice(0, 3)
-    const alt = want.endsWith("USD") ? `${base}USDT` : want.replace(/USDT$/, "USD")
-    return sym === alt
-  })
+// ── Fallback: direct EO import for ensureWatchingAsset (Phase H bridge) ────
+// During the transition, getBestCandles still supports ensureWatch for the
+// EO-specific watch-and-fetch pattern. This will be replaced by a generic
+// broker.ensureWatch(assetId) in Phase I.
+async function eoWatchAndFetch(assetId, tf, n) {
+  try {
+    const { ensureWatchingAsset, fetchAssetCandles } = await import("./liveEO.mjs")
+    await ensureWatchingAsset(assetId).catch(() => null)
+    const result = await timed("eo-fetch", () =>
+      fetchAssetCandles(assetId, tf, n).catch(() => ({ ohlc: [], source: null })))
+    return result.ohlc ?? []
+  } catch { return [] }
 }
 
 /**
  * Fetch the best available candles for an asset.
  * @returns {candles[], source, stale, timeframe} — never throws for
  *          data-absence (returns empty + source:"none"); network errors from
- *          a tier fall through to the next tier.
+ *          a broker fall through to the next.
  */
 export async function getBestCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null } = {}) {
-  const tf = Math.min(Math.max(Number(timeframe) || 60, 5), 3600)
-  const n = Math.min(Math.max(Number(count) || 200, 20), 500)
+  const tf = Math.min(Math.max(Number(timeframe) || 60, 5), 2592000) // up to 1M
+  const n = Math.min(Math.max(Number(count) || 200, 20), 2000)
   const id = String(assetId ?? "").trim().toUpperCase() || "EURUSD"
 
-  // ── Tier 1: ExpertOption push buffers (+ live fetch when watched) ────────
-  try {
-    const { liveEOData, fetchAssetCandles, ensureWatchingAsset } = await import("./liveEO.mjs")
-    const data = await timed("eo-buffer", async () => liveEOData())
-    const asset = data.assets.find((a) => String(a.id) === id ||
-      canonicalAssetId(a.name) === canonicalAssetId(id))
-    let candles = []
-    if (asset && asset.periods[tf]?.length) {
-      candles = asset.periods[tf].slice(-n)
-    }
-    if (!candles.length && typeof ensureWatch === "function") {
-      await ensureWatchingAsset(id).catch(() => null)
-      const result = await timed("eo-fetch", () =>
-        fetchAssetCandles(id, tf, n).catch(() => ({ ohlc: [], source: null })))
-      if (result.ohlc?.length) candles = result.ohlc
-    }
-    if (candles.length >= 30) {
-      return { candles, source: "live", stale: false, timeframe: tf }
-    }
-    if (candles.length) {
-      // Some data but too thin to trust — keep as last-resort below.
-      var thinEo = candles
-    }
-  } catch { /* EO unavailable */ }
+  const { getActiveBrokers } = await registry()
+  const brokers = getActiveBrokers()
+  let thinData = null // best thin result so far (last-resort fallback)
 
-  // ── Tier 2: CCXT aggregates ──────────────────────────────────────────────
-  try {
-    const { liveCCXTData } = await import("./liveCCXT.mjs")
-    const ccxtAssets = await timed("ccxt", async () => liveCCXTData()?.assets ?? [])
-    const ccxtAsset = matchCcxtAsset(ccxtAssets, id)
-    const series = ccxtAsset?.periods?.[tf]
-    if (Array.isArray(series) && series.length >= 30) {
-      return { candles: series.slice(-n), source: "ccxt", stale: true, timeframe: tf }
-    }
-  } catch { /* CCXT not populated */ }
+  for (const broker of brokers) {
+    try {
+      const candles = await timed(broker.slug, async () => broker.getCandles(id, { timeframe: tf, count: n }))
+      if (!Array.isArray(candles) || !candles.length) continue
 
-  // ── Tier 3: Yahoo daily fallback ─────────────────────────────────────────
-  try {
-    const { getHistory } = await import("./yahoo.mjs")
-    const history = await timed("yahoo", () => getHistory(id, "6mo"))
-    const candles = history.dates.map((ts, i) => ({
-      time: Math.floor(ts / 1000),
-      open: Number(history.opens?.[i]) || 0,
-      high: Number(history.highs?.[i]) || 0,
-      low: Number(history.lows?.[i]) || 0,
-      close: Number(history.closes?.[i]) || 0,
-      timeframe: 86400
-    })).filter((c) => c.close > 0 && c.time > 0).slice(-n)
-    if (candles.length) {
-      return { candles, source: "yahoo", stale: true, timeframe: 86400 }
-    }
-  } catch { /* Yahoo failed too */ }
-
-  // Last resort: thin EO partials, else honest emptiness.
-  if (thinEo?.length) {
-    return { candles: thinEo, source: "live", stale: true, timeframe: tf }
+      const sliced = candles.slice(-n)
+      if (sliced.length >= 30) {
+        return { candles: sliced, source: broker.slug, stale: false, timeframe: tf }
+      }
+      // Thin data — keep as fallback but try next broker for better data
+      if (!thinData || sliced.length > thinData.candles.length) {
+        thinData = { candles: sliced, source: broker.slug, stale: true, timeframe: tf }
+      }
+    } catch { /* broker unavailable — fall through */ }
   }
+
+  // ── EO watch-and-fetch bridge (Phase H transitional) ─────────────────────
+  // If ensureWatch is provided and no broker had good data, try EO's
+  // on-demand fetch. This preserves existing behavior during the transition.
+  if (typeof ensureWatch === "function" && !thinData) {
+    try {
+      const eoCandles = await eoWatchAndFetch(id, tf, n)
+      if (eoCandles.length >= 30) {
+        return { candles: eoCandles, source: "live", stale: false, timeframe: tf }
+      }
+      if (eoCandles.length) thinData = { candles: eoCandles, source: "live", stale: true, timeframe: tf }
+    } catch { /* EO fetch failed */ }
+  }
+
+  // Last resort: thin data from any broker, else honest emptiness.
+  if (thinData) return thinData
   return { candles: [], source: "none", stale: true, timeframe: tf }
 }
