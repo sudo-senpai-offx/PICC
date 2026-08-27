@@ -75,7 +75,7 @@ export async function listBrokers() {
     slug: "paper",
     label: "Paper engine",
     category: "simulation",
-    capabilities: ["market-data", "spot-orders", "positions", "close-position", "account"],
+    capabilities: ["market-data", "paper-trading", "positions", "close-position", "account"],
     configured: true,
     connected: true,
     demoOnly: true,

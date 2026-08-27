@@ -649,7 +649,7 @@ export interface ProPhase {
   persistence: number
   persistenceLabel: string
   alligator: string
-  strategy: string
+  strategy: Record<string, string>
 }
 
 export interface ProHtf {

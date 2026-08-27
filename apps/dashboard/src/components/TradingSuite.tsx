@@ -1231,7 +1231,7 @@ function ProAnalysisResultView({ result }: { result: ProAnalysisResult }) {
         </div>
       ) : null}
 
-      {phase ? <p className="muted small">{phase.label} — {phase.strategy}</p> : null}
+      {phase ? <p className="muted small">{phase.label} — {phase.strategy?.[phase.phase] ?? ""}</p> : null}
       {result.htf ? (
         <p className="muted small">
           Weekly: {result.htf.biasLabel} ({result.htf.phaseLabel}, ADX {result.htf.adx ?? "n/a"}, R² {result.htf.r2 ?? "n/a"})

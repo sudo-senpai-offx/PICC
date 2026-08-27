@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { aggregateCandles } from "../services/indicators.mjs"
+import { aggregateCandles, computeIndicatorDashboard, detectMarketPhase } from "../services/indicators.mjs"
 import { evaluateAsset } from "../services/adaptiveConfluence.mjs"
 import {
   computeMarketIntel,
@@ -231,5 +231,27 @@ describe("expert strategy primitives", () => {
     expect(durationGuidance({ atrPct: 0.02 }).label).toBe("low")
     expect(durationGuidance({ atrPct: 0.02 }).suggestedSec).toBe(300)
     expect(durationGuidance(null)).toBeNull()
+  })
+
+  it("detectMarketPhase returns strategy as a Record (not a string) — React crash regression", () => {
+    // Generate enough candles for indicator computation
+    const candles = Array.from({ length: 120 }, (_, i) => ({
+      time: i * 60,
+      open: 100 + Math.sin(i * 0.1) * 2,
+      high: 102 + Math.sin(i * 0.1) * 2,
+      low: 98 + Math.sin(i * 0.1) * 2,
+      close: 100 + Math.sin(i * 0.1) * 2 + Math.random() * 0.5,
+      volume: 1000 + Math.random() * 500
+    }))
+    const dash = computeIndicatorDashboard(candles)
+    const phase = detectMarketPhase(dash)
+
+    // strategy must be a Record<string, string>, never a bare string.
+    // The frontend renders phase.strategy[phase.phase] — if strategy were
+    // a string, React would crash with "Objects are not valid as a React child".
+    expect(typeof phase.strategy).toBe("object")
+    expect(phase.strategy).not.toBeNull()
+    expect(typeof phase.strategy[phase.phase]).toBe("string")
+    expect(phase.strategy[phase.phase].length).toBeGreaterThan(0)
   })
 })

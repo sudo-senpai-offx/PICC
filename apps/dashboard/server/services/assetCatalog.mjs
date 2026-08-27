@@ -9,8 +9,9 @@
 // tables give one canonical id per instrument class:
 //   forex pairs · crypto · metals · energies · indices · equities
 //
-// Keep the ALIASES table mirrored in extensions/picc-overlay/content.js
-// (normalizeAssetId) so client and server always agree.
+// The ALIASES table is the single source of truth for asset normalization.
+// The extension relay (content.js) no longer mirrors this — it forwards raw
+// frames and the server normalizes via canonicalAssetId().
 
 export const ASSET_ALIASES = {
   // ── Metals ──────────────────────────────────────────────────────────────
