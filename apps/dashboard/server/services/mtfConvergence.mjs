@@ -44,6 +44,20 @@ export const STOCHRSI_TRIGGER_BAND = Object.freeze({ lo: 40, hi: 60 })
 export const STOCHRSI_OB_OS = Object.freeze({ over: 80, under: 20 })
 
 // ---------------------------------------------------------------------
+// Outcome-logging hook (spec 9a). converge() stays pure: a caller that OWNS
+// the decision context (asset identity, preset ladder) registers this hook and
+// passes that context via converge()'s `outcome` option. The hook only
+// observes — it can never change or break the engine's classification.
+// ---------------------------------------------------------------------
+let outcomeHook = null
+export function setConvergenceOutcomeHook(fn) {
+  outcomeHook = typeof fn === "function" ? fn : null
+}
+export function getConvergenceOutcomeHook() {
+  return outcomeHook
+}
+
+// ---------------------------------------------------------------------
 // Five-tier presets (spec §2.5). Each preset binds three timeframes to the
 // entry/confirm/bias roles and carries per-role default weights. The semantic
 // five-tier ladder (entry -> confirm -> bias -> swing -> context) is exposed
@@ -306,11 +320,13 @@ export function adxGate(adx) {
  * @param {boolean} [opts.conservative=false] - HTF veto (R8): the two highest
  *   signed planes conflicting forces NO TRADE, even with entry aligned.
  * @param {number} [opts.minBars=MIN_BARS]
+ * @param {object} [opts.outcome=null] - decision context ({ assetId, asset,
+ *   preset, ... }) forwarded to the 9a outcome hook when one is registered.
  * @returns {object} { ok, meta, composite, compositeDirection, score5, quality, confidence, planes, state, why }
  *   score5 = round(5 * aligned/active); quality 1-10; confidence %. All three are
  *   null when no plane is active ("no samples -> \u2014", R5).
  */
-export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, staleByTf = {}, conservative = false, minBars = MIN_BARS } = {}) {
+export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, staleByTf = {}, conservative = false, minBars = MIN_BARS, outcome = null } = {}) {
   const tfKeys = Object.keys(planes)
   const requested = tfKeys.length
   const available = tfKeys.filter((tf) => Array.isArray(planes[tf]) && planes[tf].length > 0).length
@@ -381,7 +397,7 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
     lowVol
   })
 
-  return {
+  const result = {
     ok: requested > 0,
     meta: {
       requested,
@@ -403,6 +419,20 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
     why,
     planes: perPlane
   }
+  // 9a outcome hook — observers (ledger/backtester) can never break the engine.
+  if (typeof outcomeHook === "function") {
+    try {
+      outcomeHook(result, outcome)
+    } catch {
+      /* an observer crash must not change the convergence read */
+    }
+  }
+  return result
+}
+
+/** true when a 9a outcome hook is registered (tests). */
+export function hasConvergenceOutcomeHook() {
+  return typeof outcomeHook === "function"
 }
 
 // ---------------------------------------------------------------------

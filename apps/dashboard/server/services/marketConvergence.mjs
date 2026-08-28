@@ -6,15 +6,33 @@
 // never fabricate a read when nothing is connected — an absent buffer reports
 // source "none" / stale / empty planes, which converge turns into NO TRADE with
 // "—" values (R10 honesty rule). The section cache TTL lives in realtimeSuite.
-import { loadConvergence, converge } from "./mtfConvergence.mjs"
+import { loadConvergence, converge, setConvergenceOutcomeHook } from "./mtfConvergence.mjs"
 import { liveEOData } from "./liveEO.mjs"
 import { updateConvergence } from "./alertEngine.mjs"
+import { recordConvergence, flushConvergence } from "./convergenceLedger.mjs"
 
 // The full ladder the convergence matrix shows: intraday buffers direct from
 // liveEO, 30m/4h derived from M1 (dailies would go through getBestCandles at
 // a call site — out of scope for the live-buffer section).
 export const CONVERGENCE_TIMEFRAMES = [60, 300, 900, 3600, 1800, 14400]
 export const CONVERGENCE_DERIVE_TFS = [1800, 14400]
+
+// 9a outcome hook: every converged read with a directional state is recorded
+// into the outcome ledger (preset "intraday" = this section's ladder). The
+// ledger's state-change guard keeps repeated ticks of the same state from
+// spamming the store; matured entries resolve against realized price on flush.
+setConvergenceOutcomeHook((result, ctx) => {
+  if (!ctx?.assetId || result.state == null) return
+  recordConvergence({
+    assetId: ctx.assetId,
+    asset: ctx.asset,
+    state: result.state,
+    preset: ctx.preset ?? "intraday",
+    score5: result.score5,
+    quality: result.quality,
+    confidence: result.confidence
+  })
+})
 
 /**
  * One convergence read for the currently-viewed asset over the live buffers.
@@ -43,7 +61,12 @@ export async function convergenceSection({ now = Date.now() } = {}) {
     m1: liveByTf[60] ?? [],
     deriveTfs: CONVERGENCE_DERIVE_TFS
   })
-  const result = converge({ planes, sourceByTf, staleByTf })
+  const result = converge({
+    planes,
+    sourceByTf,
+    staleByTf,
+    outcome: { assetId: asset?.id ?? null, asset: asset?.name ?? null, preset: "intraday" }
+  })
   // Feed the alert engine (spec 8a/8b): armed convergence_above alerts for
   // this symbol now evaluate against the freshest honest read. Absent reads
   // are null -> the condition stays silent (never triggers on no data).
@@ -53,6 +76,13 @@ export async function convergenceSection({ now = Date.now() } = {}) {
       state: result.state,
       confidence: result.confidence
     })
+  }
+  // 9a: resolve matured convergence decisions against realized price (the
+  // outcome hook above records new ones during converge()).
+  try {
+    flushConvergence()
+  } catch {
+    /* a bad resolve pass must not break the section */
   }
   return {
     ...result,

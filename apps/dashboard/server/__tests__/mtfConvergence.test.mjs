@@ -19,7 +19,9 @@ import {
   adxGate,
   fetchPlanes,
   deriveAggregatePlanes,
-  loadConvergence
+  loadConvergence,
+  setConvergenceOutcomeHook,
+  hasConvergenceOutcomeHook
 } from "../services/mtfConvergence.mjs"
 
 // ---------------------------------------------------------------------
@@ -830,5 +832,38 @@ describe("wired loader (6b)", () => {
     expect(daily.stale).toBe(true)
     expect(daily.source).toBe("yahoo")
     expect(r.planes.find((p) => p.tf === 300).stale).toBe(false)
+  })
+
+  describe("9a outcome hook", () => {
+    it("forwards the converged snapshot + caller-owned decision context", () => {
+      const seen = []
+      setConvergenceOutcomeHook((result, ctx) => seen.push({ state: result.state, score5: result.score5, ctx }))
+      try {
+        const r = converge({
+          planes: { 60: up(), 300: up(), 900: up() },
+          labels: { 60: "entry", 300: "confirm", 900: "bias" },
+          outcome: { assetId: "EURUSD", asset: "EURUSD", preset: "intraday" }
+        })
+        expect(r.ok).toBe(true)
+        expect(seen.length).toBe(1)
+        expect(seen[0].state).toBe(r.state)
+        expect(seen[0].score5).toBe(r.score5)
+        expect(seen[0].ctx).toMatchObject({ assetId: "EURUSD", asset: "EURUSD", preset: "intraday" })
+        expect(hasConvergenceOutcomeHook()).toBe(true)
+      } finally {
+        setConvergenceOutcomeHook(null) // never leak observer state across tests
+      }
+    })
+
+    it("a throwing observer never breaks the convergence read", () => {
+      setConvergenceOutcomeHook(() => { throw new Error("observer blew up") })
+      try {
+        const r = converge({ planes: { 60: up(), 300: up(), 900: up() }, outcome: { preset: "intraday" } })
+        expect(r.ok).toBe(true)
+        expect(r.state.startsWith("LONG")).toBe(true)
+      } finally {
+        setConvergenceOutcomeHook(null)
+      }
+    })
   })
 })
