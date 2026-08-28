@@ -14,7 +14,7 @@
 // StochRSI trigger band 40/60 is a documented design choice (spec §2.6), NOT a
 // sourced "zone" — the canonical overbought/oversold extremes stay 80/20.
 
-import { computeIndicatorDashboard, stochRSI, swingPoints, candleArrays } from "./indicators.mjs"
+import { computeIndicatorDashboard, stochRSI, swingPoints, candleArrays, aggregateCandles } from "./indicators.mjs"
 
 /** The six per-plane dimensions, in evaluation order (spec §2.3). */
 export const DIMENSIONS = Object.freeze([
@@ -302,6 +302,7 @@ export function adxGate(adx) {
  *   { tfSeconds: { dim: boolean } }; default all enabled.
  * @param {object} [opts.weights=null] - { tfSeconds: weight }; null => equal (pure sign-sum)
  * @param {object} [opts.labels={}] - { tfSeconds: "entry"|"confirm"|"bias"|"context" } plane labels (2a)
+ * @param {object} [opts.staleByTf={}] - { tfSeconds: boolean } per-plane stale flag (6b)
  * @param {boolean} [opts.conservative=false] - HTF veto (R8): the two highest
  *   signed planes conflicting forces NO TRADE, even with entry aligned.
  * @param {number} [opts.minBars=MIN_BARS]
@@ -309,7 +310,7 @@ export function adxGate(adx) {
  *   score5 = round(5 * aligned/active); quality 1-10; confidence %. All three are
  *   null when no plane is active ("no samples -> \u2014", R5).
  */
-export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, conservative = false, minBars = MIN_BARS } = {}) {
+export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, staleByTf = {}, conservative = false, minBars = MIN_BARS } = {}) {
   const tfKeys = Object.keys(planes)
   const requested = tfKeys.length
   const available = tfKeys.filter((tf) => Array.isArray(planes[tf]) && planes[tf].length > 0).length
@@ -328,9 +329,10 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
     const tf = tfOf(key)
     const source = sourceByTf[key] ?? "unknown"
     const label = labels[key] ?? labels[tf] ?? null
+    const stale = staleByTf[key] ?? staleByTf[tf] ?? false
     const ps = planeScore({ candles: planes[key], dropOpen, dims: dimsFor(tf), minBars })
-    if (!ps.active) return { tf, ...ps, source, label, abstain: ps.abstain }
-    return { tf, ...ps, source, label }
+    if (!ps.active) return { tf, ...ps, source, label, stale, abstain: ps.abstain }
+    return { tf, ...ps, source, label, stale }
   })
 
   const active = perPlane.filter((p) => p.active)
@@ -513,4 +515,88 @@ export async function fetchPlanes(tfs, fetcher) {
     }
   }
   return { planes, sourceByTf }
+}
+
+// ---------------------------------------------------------------------
+// Data-availability fallbacks (R10) — slice 6
+// ---------------------------------------------------------------------
+
+/**
+ * Derive higher-timeframe planes from an M1 (or any base-TF) buffer via
+ * aggregateCandles (spec R10/6a). Pure. Only whole multiples of the base are
+ * derived; the caller chooses which tfs are eligible (30m/4h for intradaily
+ * engines; daily+ goes through the fetch path instead).
+ * @param {Array} base - candles of the base timeframe (ascending, newest last)
+ * @param {number[]} tfs - derived timeframe seconds to attempt
+ * @param {object} [opts] - { baseTf = 60, source = "aggregate" }
+ * @returns {{ planes: object, sourceByTf: object }}
+ */
+export function deriveAggregatePlanes(base, tfs, { baseTf = 60, source = "aggregate" } = {}) {
+  const planes = {}
+  const sourceByTf = {}
+  if (Array.isArray(base) && base.length) {
+    for (const tf of tfs) {
+      const factor = tf / baseTf
+      if (Number.isInteger(factor) && factor >= 2) {
+        planes[tf] = aggregateCandles(base, factor)
+        sourceByTf[tf] = source
+      }
+    }
+  }
+  return { planes, sourceByTf }
+}
+
+/**
+ * Wired async loader (spec R10/6a/6b): in-buffer TFs are used directly, 30m/4h
+ * are assembled from the M1 buffer, and every remaining tf goes through a
+ * caller-supplied higher-TF fetcher (daily+ -> getBestCandles/Yahoo at the
+ * call site). Never fabricates: a tf with no data anywhere reports
+ * source "none" / stale true / empty candles, and converge excludes it from
+ * `active` (score null) — an absent read is never zero (R10).
+ * @param {object} opts
+ * @param {number[]} opts.tfs - desired timeframe seconds
+ * @param {object} [opts.liveByTf={}] - in-buffer candles, e.g. liveEO watch set
+ * @param {Array} [opts.m1=null] - base-TF (M1) candles for aggregation
+ * @param {Function} [opts.fetchHigher=null] - async (tf) => {candles,source,stale}
+ * @param {number[]} [opts.deriveTfs=[1800,14400]] - TFs assembled from base
+ * @returns {Promise<{ planes: object, sourceByTf: object, staleByTf: object }>}
+ */
+export async function loadConvergence({
+  tfs = [],
+  liveByTf = {},
+  m1 = null,
+  fetchHigher = null,
+  deriveTfs = [1800, 14400]
+} = {}) {
+  const planes = {}
+  const sourceByTf = {}
+  const staleByTf = {}
+  for (const tf of tfs) {
+    const live = liveByTf[tf]
+    if (Array.isArray(live) && live.length) {
+      planes[tf] = live
+      sourceByTf[tf] = "live"
+      staleByTf[tf] = false
+      continue
+    }
+    if (deriveTfs.includes(tf) && Array.isArray(m1) && m1.length) {
+      planes[tf] = aggregateCandles(m1, tf / 60)
+      sourceByTf[tf] = "aggregate"
+      staleByTf[tf] = false
+      continue
+    }
+    let res = null
+    if (typeof fetchHigher === "function") {
+      try {
+        res = await fetchHigher(tf)
+      } catch {
+        res = null
+      }
+    }
+    const candles = Array.isArray(res?.candles) ? res.candles : []
+    planes[tf] = candles
+    sourceByTf[tf] = res?.source ?? "none"
+    staleByTf[tf] = res?.stale ?? candles.length === 0
+  }
+  return { planes, sourceByTf, staleByTf }
 }

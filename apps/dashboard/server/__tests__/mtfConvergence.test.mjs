@@ -17,7 +17,9 @@ import {
   converge,
   classifyState,
   adxGate,
-  fetchPlanes
+  fetchPlanes,
+  deriveAggregatePlanes,
+  loadConvergence
 } from "../services/mtfConvergence.mjs"
 
 // ---------------------------------------------------------------------
@@ -717,5 +719,116 @@ describe("StochRSI trigger correction (5b)", () => {
     expect(voteMomentumTrigger({ k: [75, 85], d: [72, 82] }, 1).reason).toBe("no in-band cross")
     // cross down inside the band -> fires -1
     expect(voteMomentumTrigger({ k: [59, 59, 41], d: [54, 54, 45] }, 2).value).toBe(-1)
+  })
+})
+
+// ---------------------------------------------------------------------
+// 6a. M1 -> 30m/4h aggregation: timestamps + planes compute (R10)
+// ---------------------------------------------------------------------
+
+describe("M1 aggregation (6a)", () => {
+  it("deriveAggregatePlanes groups M1 into whole-multiple TFs with group-end timestamps", () => {
+    const m1 = synth(120, 0.5) // times 1700000000 + i*60
+    const { planes, sourceByTf } = deriveAggregatePlanes(m1, [1800, 14400])
+    expect(Object.keys(planes).map(Number).sort((a, b) => a - b)).toEqual([1800, 14400])
+    const m30 = planes[1800]
+    expect(m30).toHaveLength(4) // 120 / 30
+    expect(m30.map((c) => c.time)).toEqual([
+      1700000000 + 29 * 60,
+      1700000000 + 59 * 60,
+      1700000000 + 89 * 60,
+      1700000000 + 119 * 60
+    ])
+    expect(sourceByTf[1800]).toBe("aggregate")
+    // OHLC: open of the group's first bar, high/low across the group, close of the last
+    expect(m30[0].open).toBe(m1[0].open)
+    expect(m30[0].close).toBe(m1[29].close)
+    expect(m30[0].high).toBe(Math.max(...m1.slice(0, 30).map((c) => c.high)))
+    expect(m30[0].low).toBe(Math.min(...m1.slice(0, 30).map((c) => c.low)))
+  })
+
+  it("a long M1 feed yields ACTIVE 30m + 4h planes that compute with matching timestamps", () => {
+    const m1 = synth(8000, 0.5)
+    const { planes } = deriveAggregatePlanes(m1, [1800, 14400])
+    expect(planes[1800]).toHaveLength(267) // ceil(8000 / 30); trailing partial group is kept
+    expect(planes[14400]).toHaveLength(34) // ceil(8000 / 240)
+    const p30 = planeScore({ candles: planes[1800] })
+    expect(p30.active).toBe(true)
+    expect(p30.sign).toBe(1)
+    const p240 = planeScore({ candles: planes[14400] })
+    expect(p240.active).toBe(true)
+    expect(p240.sign).toBe(1)
+    // last aggregated bar closes at the same instant as the last M1 bar
+    expect(planes[1800][planes[1800].length - 1].time).toBe(m1[m1.length - 1].time)
+    expect(planes[14400][planes[14400].length - 1].time).toBe(m1[m1.length - 1].time)
+  })
+})
+
+// ---------------------------------------------------------------------
+// 6b. Wired loader: source/stale reporting, honest absence (R10)
+// ---------------------------------------------------------------------
+
+describe("wired loader (6b)", () => {
+  it("in-buffer TFs direct, 30m/4h from M1, daily+ via fetchHigher", async () => {
+    const m1 = synth(1000, 0.5) // 33 x 30m bars, 4 x 4h bars
+    const live300 = up(260)
+    const res = await loadConvergence({
+      tfs: [300, 900, 1800, 14400, 86400],
+      liveByTf: { 300: live300, 900: [] }, // preseeded but empty -> falls through honestly
+      m1,
+      fetchHigher: async (tf) =>
+        tf === 86400
+          ? { candles: up(260), source: "yahoo", stale: false }
+          : { candles: [], source: "none", stale: true }
+    })
+    expect(res.planes[300]).toBe(live300)
+    expect(res.sourceByTf[300]).toBe("live")
+    expect(res.planes[1800]).toHaveLength(34) // ceil(1000 / 30)
+    expect(res.sourceByTf[1800]).toBe("aggregate")
+    expect(res.planes[14400]).toHaveLength(5) // ceil(1000 / 240)
+    expect(res.sourceByTf[14400]).toBe("aggregate")
+    expect(res.planes[86400]).toHaveLength(260)
+    expect(res.sourceByTf[86400]).toBe("yahoo")
+    expect(res.staleByTf).toEqual({ 300: false, 900: true, 1800: false, 14400: false, 86400: false })
+  })
+
+  it("empty everywhere -> source none + stale, and converge excludes it (never zero)", async () => {
+    const res = await loadConvergence({
+      tfs: [86400, 604800],
+      fetchHigher: async () => ({ candles: [], source: "none", stale: true })
+    })
+    expect(res.planes).toEqual({ 86400: [], 604800: [] })
+    expect(res.sourceByTf[86400]).toBe("none")
+    expect(res.staleByTf[86400]).toBe(true)
+    const r = converge({ planes: res.planes, sourceByTf: res.sourceByTf, staleByTf: res.staleByTf })
+    expect(r.meta.active).toBe(0)
+    expect(r.score5).toBeNull()
+    expect(r.planes.every((p) => p.score === null)).toBe(true)
+    expect(r.planes.every((p) => p.stale === true)).toBe(true)
+    expect(r.state).toBe("NO TRADE")
+  })
+
+  it("a throwing higher fetcher yields absent planes, never zeros", async () => {
+    const res = await loadConvergence({
+      tfs: [86400],
+      fetchHigher: async () => { throw new Error("yahoo down") }
+    })
+    expect(res.planes[86400]).toEqual([])
+    expect(res.sourceByTf[86400]).toBe("none")
+    expect(res.staleByTf[86400]).toBe(true)
+  })
+
+  it("stale-but-present data flags the plane while staying included", async () => {
+    const res = await loadConvergence({
+      tfs: [300, 86400],
+      liveByTf: { 300: up() },
+      fetchHigher: async () => ({ candles: up(260), source: "yahoo", stale: true })
+    })
+    const r = converge({ planes: res.planes, sourceByTf: res.sourceByTf, staleByTf: res.staleByTf })
+    const daily = r.planes.find((p) => p.tf === 86400)
+    expect(daily.active).toBe(true)
+    expect(daily.stale).toBe(true)
+    expect(daily.source).toBe("yahoo")
+    expect(r.planes.find((p) => p.tf === 300).stale).toBe(false)
   })
 })

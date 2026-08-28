@@ -206,8 +206,8 @@ Files: `mtfConvergence.mjs` (extend), tests.
 
 Files: `mtfConvergence.mjs` (async loader), `marketDataBus.mjs` (reuse — minimal or no change), tests.
 
-- [ ] 6a. 30m/4h assembled from M1 via `aggregateCandles` (`indicators.mjs:156`); daily+ via `getBestCandles`→Yahoo (`yahooAdapter.mjs:36`); in-buffer TFs used directly. **Acceptance:** a test feeds M1 synthetic candles and asserts the aggregated 30m/4h planes compute correctly with matching timestamps.
-- [ ] 6b. Missing-plane abstain + per-plane `source`/`stale`. **Acceptance:** a plane whose loader returns `source:"none"`/`[]` is excluded from `active` and reports `score:null`, `stale`, never zero (`R10`, honesty rule).
+- [x] 6a. 30m/4h assembled from M1 via `aggregateCandles` (`indicators.mjs:156`); daily+ via `getBestCandles`→Yahoo (`yahooAdapter.mjs:36`); in-buffer TFs used directly. **Acceptance:** a test feeds M1 synthetic candles and asserts the aggregated 30m/4h planes compute correctly with matching timestamps. — Done: pure `deriveAggregatePlanes` (whole-multiple tfs, group-end timestamps, source `aggregate`); `loadConvergence` wired loader (live buffer first, 30m/4h from M1, remainder via caller-supplied `fetchHigher` wrapping `getBestCandles`); 8k-bar M1 test proves 30m+4h planes go ACTIVE with last-bar timestamp == last M1 bar.
+- [x] 6b. Missing-plane abstain + per-plane `source`/`stale`. **Acceptance:** a plane whose loader returns `source:"none"`/`[]` is excluded from `active` and reports `score:null`, `stale`, never zero (`R10`, honesty rule). — Done: `staleByTf` rides through `converge` per plane; loader marks `source:"none"`, `stale:true`, `[]` when nothing available (incl. thrown fetchers); converge drops such planes from `active` (score null, state NO TRADE).
 - Effort: ~3–4 h. Risk: aggregation timestamp drift / stale buffers — guarded by timestamp + stale-fetch tests.
 
 ### Slice 7 — SSE/UI surface (convergence panel + types)
