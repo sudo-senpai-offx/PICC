@@ -6,8 +6,10 @@
   "author": "PICC",
   "private": true,
   "scripts": {
-    "dev": "node ./node_modules/plasmo/bin/index.mjs dev",
+    "dev": "node scripts/check-boundary.mjs && node ./node_modules/plasmo/bin/index.mjs dev",
+    "prebuild": "node scripts/check-boundary.mjs",
     "build": "node ./node_modules/plasmo/bin/index.mjs build",
+    "prepackage": "node scripts/check-boundary.mjs",
     "package": "node ./node_modules/plasmo/bin/index.mjs package",
     "typecheck": "tsc --noEmit"
   },

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react"
 import type { PlasmoCSConfig } from "plasmo"
 import { installErrorLogging } from "./errorLog"
+import { captureExpertOptionPage } from "./capture"
+import { probeEOSession } from "./session"
 
 // Track every possible error (console + uncaught) into the root-level error
 // log on the dashboard server — gated by PICC_ERROR_LOG in apps/dashboard/.env.
@@ -494,6 +496,7 @@ function PiccTier1({ platform }: { platform: Tier1Platform }) {
   const [err, setErr] = useState("")
   const [open, setOpen] = useState(true)
   const [rows, setRows] = useState<AnalyticsRow[]>(() => categoryAnalytics(platform.category))
+  const [upstream, setUpstream] = useState("idle")
 
   const base = () => backendUrl.replace(/\/+$/, "")
 
@@ -503,6 +506,48 @@ function PiccTier1({ platform }: { platform: Tier1Platform }) {
       setBackendUrl(url)
     })
   }, [])
+
+  // Client-side data collection (Priority-1 venue): read the user's own
+  // authenticated EO page and forward broker-shaped frames to the dashboard
+  // ingest endpoint. This is the "extension as data-collection layer" path —
+  // collection only, never execution. Throttled to every 15s; identical ticks
+  // are deduped; nothing is sent when the anchors are not readable.
+  useEffect(() => {
+    if (platform.slug !== "expertoption" || !base()) return
+    let stopped = false
+    let lastPrice: number | null = null
+    const run = () => {
+      const res = captureExpertOptionPage(document, {
+        onFrame: (frame) => {
+          if (frame.action === "candles") {
+            const price = (frame.message as { candles?: { v?: unknown[] }[] } | undefined)?.candles?.[0]?.v?.[0]
+            if (typeof price === "number") {
+              if (price === lastPrice) return // dedupe — already buffered
+              lastPrice = price
+            }
+          }
+          fetch(`${base()}/api/extension/ingest`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ frames: [frame] })
+          }).catch(() => undefined)
+        }
+      })
+      if (stopped) return
+      const session = probeEOSession()
+      setUpstream(
+        res.captured > 0
+          ? `forwarding ${res.captured} frame${res.captured > 1 ? "s" : ""}${session.authenticated ? " · session local" : ""}`
+          : `paused — ${res.reason}`
+      )
+    }
+    run()
+    const i = window.setInterval(run, 15_000)
+    return () => {
+      stopped = true
+      window.clearInterval(i)
+    }
+  }, [backendUrl, platform.slug])
 
   useEffect(() => {
     if (!base()) return
@@ -578,6 +623,12 @@ function PiccTier1({ platform }: { platform: Tier1Platform }) {
       ) : (
         <p style={{ color: "#9aa0c0", fontSize: 12, margin: "0 0 8px" }}>No connector registered for this platform.</p>
       )}
+
+      {platform.slug === "expertoption" ? (
+        <p style={{ color: upstream.startsWith("forwarding") ? "#4ade80" : "#9aa0c0", fontSize: 10, margin: "6px 0 8px" }}>
+          client capture: {upstream} · every 15s
+        </p>
+      ) : null}
 
       {snapshot ? (
         <div style={{ background: "rgba(108,99,255,0.08)", borderRadius: 8, padding: 10, marginBottom: 10 }}>
