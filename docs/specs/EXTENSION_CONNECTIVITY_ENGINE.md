@@ -1,0 +1,85 @@
+# Extension↔Web-App Connectivity Engine — spec v1 (Phase 1)
+
+**Status:** Draft for execution · **Date:** 2026-08-28
+**Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (quote/candle bus row + §6 checklist item 5) · `docs/specs/NEXT_WAVE_generalization.md` (R8 division of labor)
+**Supersedes:** nothing — new work at the extension sensor layer.
+**Grounding rule:** every claim below carries a `file:line` I read this session; anything not re-read this session is marked **UNVERIFIED** and must be re-verified at execution start.
+
+Reported defect this phase fixes (verbatim, user-reported):
+`Uncaught (in promise) Error: Extension context invalidated.` on `http://localhost:5173/suites`, stack `extensions://paogifgcipmpfpekgnpmjhepjocpgeom/content.js ((anonymous function)):37:1`.
+
+## Requirements (each testable)
+
+- **REQ-1 — No unhandled invalidation errors.** After any extension reload / update / disable / re-enable cycle, the console on `http://localhost:5173/suites` and on broker tabs shows zero `Extension context invalidated` unhandled rejections. The dead content-script context tears itself down silently.
+- **REQ-2 — Sensor self-heals.** After an invalidation, a fresh sensor context is running again (new page load OR background-driven tab reload) without user action beyond reloading the extension, and queued/streaming frames resume within 15 s.
+- **REQ-3 — Hybrid feed configuration.** The web app exposes a feed-mode selector (`auto | extension | studio`), the server honors it as a *preference with fallback* (never a silent data blackout), and every status/candles response reports which upstream leg produced the data (`extension` vs `studio` vs `headless`).
+- **REQ-4 — Chart resolution honesty.** A candles response never labels bars with a resolution other than the one actually served. Whenever requested resolution ≠ served resolution, the chart shows an explicit warning naming both.
+- **REQ-5 — Capability-driven timeframe buttons.** Chart buttons for resolutions no configured broker can serve are disabled with a reason, never silently mislabeled (this removes the fake 5 s/15 s/30 s resolutions).
+- **REQ-6 — Honest empty states.** Unservable assets/resolutions render "no live feed" (not "Loading…" forever, not fabricated bars). Stock/ETF daily fallback is either real and labeled `Yahoo daily · delayed` or absent-but-honest.
+- **REQ-7 — One SSE bus per page.** N charts on `/suites` open exactly 1 connection to `/api/trading/realtime` (today each chart opens its own).
+- **REQ-8 — Zero regression on gates.** Rate-limit buckets (`handlers.mjs:4233`, `:4260`), localhost-only guards (`:4213`, `:4231`), and every demo/live gate are byte-identical after this phase. Extension stays read-only/passive (locked by the integrity test).
+
+## Design
+
+### The mechanism (why the crash happens)
+
+`checkServer()` (`apps/dashboard/extensions/picc-overlay/content.js:18-38`) is an async function kicked off at `content.js:130` and re-invoked by a 15 s interval (`:131`). Its success path calls `chrome.storage.local.set(...)` at `:29`; the offline path calls it again at `:37` — exactly the reported line. `queueFrame` (`:110-119`) additionally calls `chrome.storage.local.get` at `:111` inside the `postMessage` listener (`:122-127`).
+
+When the extension is reloaded/updated (see `docs/TRADING_RUNBOOK.md:52-53`, which instructs reloading after every pull), Chrome permanently invalidates every running content-script context. The *next* `await fetch` continuation then calls `chrome.storage.*` at `:37` and Chrome throws `Extension context invalidated.` — an unhandled promise rejection, repeated by the 15 s interval forever. The context can never be revived; only a reload can.
+
+A secondary defect: `getCandles` on the EO broker silently falls back from a missing timeframe to the 60 s buffer (`server/services/brokers/expertoption.mjs:42` — `asset.periods[tf] ?? asset.periods[60] ?? []`), while the API response labels the bars with the *requested* timeframe (`server/services/marketDataBus.mjs:107,111,123,125,131` → `handlers.mjs:1701`). Candle objects carry no `.timeframe` field (`server/services/liveEO.mjs:220`, shape `{time, open, high, low, close}`), so the frontend's resolution-mismatch guard can never fire: it only triggers on `resolvedTimeframe >= 86400` (`src/components/TradingChart.tsx:90`), and `resolvedTimeframe` always equals the requested value (`src/hooks/useCandleData.ts:89` — `data.candles[0]?.timeframe ?? timeframe`). Result: the 5 s/15 s/30 s buttons (`TradingChart.tsx:8`, `useCandleData.ts:7`) render 60 s bars labeled 5 s, tick-bucketed at 5 s (`useCandleData.ts:268-269`).
+
+Third defect: the "always available" lowest-priority fallback is a no-op — `yahooAdapter.getCandles` returns `[]` (`server/services/brokers/yahooAdapter.mjs:28`), so stock/ETF charts get `source: "none"` or nothing.
+
+### Seam to cut
+
+1. **Guarded chrome accessor + teardown (content.js).** All three `chrome.storage.*` call sites (`content.js:29,37,111`) route through one wrapper that try/catches; on `Extension context invalidated` it sets a module flag, calls `teardown()` (clear both intervals `:131-132`, remove the message listener `:122`, set `window.__PICC_SENSOR_DEAD__ = true`), and swallows. Every async continuation already has `.catch`-able paths; the wrapper guarantees no rejection escapes to the page.
+2. **Resurrection (background.js).** `chrome.runtime.onInstalled` + `onStartup` → query tabs matching `*://*.expertoption.com/*`, `*://*.expertoption.finance/*`, and `http(s)://(localhost|127.0.0.1):(5173|3000)/*` → `chrome.tabs.reload` each. Best-effort; the passive path (next navigation injects a fresh context via `manifest.json:20-31`) remains the safety net. Background also gains the missing `sensor-queue-depth` message handler that `popup.js` already sends (mismatch verified earlier this session — **popup.js/background.js line refs UNVERIFIED**, re-verify).
+3. **Hybrid feed mode (server).** `liveEO.mjs` already distinguishes legs at ingest: `processAppObject(obj, "studio")` (`:288`) vs `"extension"` (`:390`), with extension telemetry at `:300-302` and `upstreamStats` at `:379`. Add `feedMode` (default `auto`) + `setFeedMode()` gating in `processAppObject`; persist via the existing Trading-Suite prefs vault (`src/lib/trading.ts:30-32` fields; `src/components/TradingSuite.tsx:256-352` save path — endpoint name UNVERIFIED, re-verify). Surface the active leg + mode in `liveEOStats()` (**lines UNVERIFIED — re-read `liveEO.mjs:872-926` before coding**) and in `/api/extension/status` (`handlers.mjs:4211-4223`).
+4. **Resolution honesty (broker contract + bus + handler + frontend).**
+   - New optional broker method `resolveTimeframe(tf) → number|null`. EO: `[60,300,900,3600].includes(tf) ? tf : null` (no silent 60 s fallback). `brokers/index.mjs:8-44` JSDoc contract extended (default `() => null`).
+   - `getBestCandles` returns `timeframe: resolvedTf` (via the chosen broker's `resolveTimeframe`), not the requested `tf` (`marketDataBus.mjs:107,111,123,125,131`).
+   - Handler clamp relax: `handlers.mjs:1680` caps at `3600` — this hides 1D/1W/1M from any broker. Change max to `2592000` (matching `marketDataBus.mjs:92`); keep min 5 and the count clamp.
+   - Frontend: `fetchCandles` trusts the response's top-level `timeframe` field instead of `data.candles[0]?.timeframe ?? timeframe` (`useCandleData.ts:89`). `TradingChart.tsx:90` fires the warning for ANY `resolvedTimeframe !== timeframe`, naming both resolutions and the source.
+5. **Capability-driven buttons.** `GET /api/trading/brokers` (exists per `docs/TRADING_MULTIPLATFORM_ROADMAP.md:22`, live rows with capability vocabulary; exact shape UNVERIFIED — re-read `server/services/brokers.mjs` + handler) gains per-row `timeframes: number[]` from `availableTimeframes()`. TradingChart builds the button row (`:119-128`) from the union; disabled buttons show `Title` tooltip "no live feed at this resolution".
+6. **SSE coalescing.** Extend the existing suite singleton (`src/hooks/useRealtimeSuite.ts` SuiteStreamManager with refcount + retry backoff — **line refs UNVERIFIED**, structure verified earlier this session) into a shared bus that `useCandleData`'s streaming effect (`useCandleData.ts:225-328`, currently one `fetch` per hook) subscribes to by `assetId`. **Do NOT create a second singleton** — two singletons = two streams.
+
+### Testing strategy
+
+- **vm-based unit test** (new file under `apps/dashboard`, e.g. `src/__tests__/sensorContentLifecycle.test.mjs` or alongside `server/__tests__/extensionIntegrity.test.mjs`): load `content.js` source into a `vm` context with mocked `window`/`fetch`/`chrome`; the mock `chrome.storage.local.set` throws the exact Chrome error after the first call. Assert: no uncaught error event, `clearInterval` called for both intervals, listener removed, `__PICC_SENSOR_DEAD__` set, subsequent `checkServer()` calls no-op, and the file contains no direct `chrome.` calls outside the guarded accessor and no DOM mutation strings (extends the existing integrity contract test — **its line refs UNVERIFIED**, file verified earlier this session).
+- **Headless Chromium harness** (optional, `scripts/e2e-extension-lifecycle.mjs`, puppeteer-core already in deps `apps/dashboard/package.json:20`): load unpacked, open `localhost:5173`, `chrome.runtime.reload()`, assert console clean + sensor restores. Manual per runbook — NOT a CI gate.
+
+## Non-goals
+
+- No order placement, no DOM automation, no overlay/dockables reintroduction; the sensor stays read-only/passive (`content.js:1-6` contract).
+- No new venues; no CCXT execution; no real 1800/14400 chart series in Phase 1 (derived convergence series stay in the MTF panel, not the chart).
+- No credential/token capture or forwarding through the extension (vault rule `docs/specs/NEXT_WAVE_generalization.md:175`); extension remains a market-data relay.
+- No weakening of rate limits (`handlers.mjs:4233` = 240/60 s ingest, `:4260` = 30/60 s heartbeat), localhost-only guards, or demo/live gates.
+- The deprecated plasmo tree `apps/extension/` is documented in Phase 2 only, not touched here.
+
+## Tasks (ordered)
+
+- [x] **T1 — Baseline.** Re-run `npm test` (vitest, `apps/dashboard/package.json:13`) and `npm run typecheck` (`:9`). Record counts (user-reported green baseline: 85 files / 857 tests; re-verify — drift expected). **Acceptance:** green baseline recorded in the PR body. — Done: 85 files / 857 tests green, `tsc -b --noEmit` exit 0, verified 2026-08-28.
+- [x] **T2 — Guarded chrome accessor + teardown in `content.js`.** Route `:29,37,111` through the wrapper; add `teardown()`; no rejection escapes. **Acceptance:** vm test (above) passes; manual reload cycle on `localhost:5173/suites` logs zero invalidation errors. — Done: all chrome.* calls (storage set/get) route through `chromeGuard()` with three failure routes (pre-check `chrome.runtime.id`, sync throw, promise rejection) → silent `teardown()` (clears both intervals + flush timer, removes the message listener, sets `__PICC_SENSOR_DEAD__`); new `server/__tests__/sensorContentLifecycle.test.mjs` (5 tests) reproduces the exact reported scenario against the REAL content.js source in a vm sandbox — sync-throw on the offline write tears down silently (no console.error, intervals 1+2 cleared, listener removed), later rogue ticks never reach chrome again, promise-rejection and pre-check paths covered, kill-switch `get` still reads through the guard, and a static scan locks every `chrome.` token inside the accessor.
+- [ ] **T3 — Background resurrection + popup sync (`background.js`, `popup.js`).** `onInstalled`/`onStartup` tab reload for broker + dashboard matches; `sensor-queue-depth` handler added; heartbeat cadence aligned to the ~12 s claim (`docs/ARCHITECTURE.md:81`) or the claim corrected. **Acceptance:** messaging round-trip test; background has no overlay-era handlers left (diff review).
+- [ ] **T4 — Hybrid feed mode (server).** `feedMode` + `setFeedMode()` in `liveEO.mjs` with preference-with-fallback semantics; persistence via Trading-Suite prefs; status surfacing. **Acceptance:** unit tests: mode `studio` drops extension frames but keeps studio frames; mode `extension` + dead studio still serves; `auto` serves whichever leg is newest; all three never return empty when ANY leg is live.
+- [ ] **T5 — Resolution honesty chain.** `resolveTimeframe` on EO broker + contract default; `marketDataBus.mjs` returns resolved tf; `handlers.mjs:1680` clamp relaxed to 2592000; `useCandleData.ts:89` + `TradingChart.tsx:90` trust server `timeframe`. **Acceptance:** `POST /api/trading/candles {timeframe:5}` for an EO asset returns `timeframe:60` with a warning path; response 4 h request returns honest 1 h bars tagged 3600 (after clamp relax, EO returns `null` for 14400 → next broker or `source:"none"`); existing tests asserting old `timeframe: tf` echo are updated deliberately and counted.
+- [ ] **T6 — Capability-driven chart buttons.** Broker rows gain `timeframes`; `TradingChart.tsx:119-128` disables unsupported resolutions with tooltip; warning text names requested vs served + source. **Acceptance:** with only EO configured, 5 s/15 s/30 s/30 m/4 h are disabled and clicking is impossible; 1 m/5 m/15 m/1 h enabled; warning renders for any mismatch.
+- [ ] **T7 — Yahoo daily fallback (stretch).** Wire `yahooAdapter.getCandles` (`fileName:25-29`) to the existing `../yahoo.mjs` module (**its exported API UNVERIFIED — read it first**) for `[86400,604800,2592000]`, injected fetcher for tests, candle objects tagged `timeframe:86400`. **Acceptance:** stock-symbol candles request returns 86400 bars `source:"yahoo"` from fixtures (no network in CI); frontend badge `Yahoo daily · delayed` shows. If wiring proves large, ship the honesty half only (disable 1D/1W/1M with reason) and file the wiring as Phase-2 work.
+- [ ] **T8 — SSE coalescing.** Extend the suite singleton into a shared tick bus; `useCandleData.ts:225-328` subscribes by assetId. **Acceptance:** page-level network assert — 2+ charts on `/suites` open exactly one `/api/trading/realtime` fetch; unsubscribing the last chart closes it.
+- [ ] **T9 — Integrity contract lock.** Extend `extensionIntegrity.test.mjs` (EXT_DIR = `apps/dashboard/extensions/picc-overlay`): read-only/no-DOM lock, no direct `chrome.` outside guarded accessor, `__PICC_SENSOR_DEAD__` present, background handler list matches popup sends. **Acceptance:** contract suite green; a deliberate violation (adding `document.body...` or a raw `chrome.storage` call) fails the test.
+- [ ] **T10 — Docs + honesty copy.** Update `docs/TRADING_RUNBOOK.md:52-53` (reload cadence → sensor self-heals), `docs/ARCHITECTURE.md:69-85` (feed-mode + resolved-timeframe honesty), and any UI copy that implies live data when the sensor is offline (unconfigured ≠ zero-filled). **Acceptance:** docs grep shows no stale "12 s only" or mislabel claims; reviewer diff check.
+- [ ] **T11 — E2E verification checklist.** Runbook Part-B style: reload/disable/enable cycles, broker-tab drag, dashboard chart correctness at 1 m/5 m/15 m/1 h, feed-mode flip in UI. **Acceptance:** checked-off manual log lands in the PR.
+
+## Risks
+
+- **R1 (most likely to bite): Chrome invalidation timing is environment-dependent.** Whether `window.__PICC_SENSOR__` from a dead context survives into the fresh injected context varies by browser/version (isolated-world semantics), and `onInstalled` reload broadness is hard to predict. Mitigation: teardown must be purely passive-safe (never depends on the flag surviving), and bulletproof resurrection = next-navigation injection; background reload is best-effort enhancement. Mark this explicitly UNVERIFIED in the PR notes.
+- **R2: honesty chain regresses candle-response tests.** Old tests may assert `timeframe` echoes the request. Every changed assertion must be intentional and counted (T5).
+- **R3: SSE coalescing could double-stream** if a second singleton is introduced instead of extending the existing manager. The seam is the existing SuiteStreamManager — extend, don't add.
+- **R4: feed mode misconfiguration could starve buffers** (mode `extension` + no heartbeat). Preference-with-fallback semantics prevent blackouts; status always reports the leg that actually produced the last frame.
+
+## Honesty notes
+
+- Demo/live gates: untouched (REQ-8). Rate limiters: untouched; T3 may *correct* the heartbeat cadence claim, not the limit.
+- Fabricated-state risk: the `piccSensorStatus` writes at `content.js:29,37` are the only state the sensor owns; after T2 they are guarded and honest (offline = `online:false`, never "online" when dead).
+- Unverified-this-session items to re-verify at execution: `liveEO.mjs:872-926` (subscribe/stats region), `popup.js`/`background.js` exact handler lists, `/api/trading/brokers` response shape, `yahoo.mjs` exports, `useRealtimeSuite.ts` line refs, `extensionIntegrity.test.mjs` line refs.

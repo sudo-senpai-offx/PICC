@@ -8,6 +8,61 @@
   if (window.__PICC_SENSOR__) return
   window.__PICC_SENSOR__ = true
 
+  // ── Context-lifecycle guard ────────────────────────────────────────────────
+  // When the extension is reloaded, updated, or disabled, Chrome invalidates
+  // every running content-script context. Pending async continuations (an
+  // awaited fetch resolving after the reload) still execute inside the dead
+  // context, and any chrome.* call there throws "Extension context
+  // invalidated." — previously an unhandled promise rejection repeated by the
+  // 15 s interval forever (REQ-1 / T2). Every chrome.* call in this file goes
+  // through chromeGuard() so a dead context tears itself down silently.
+  const INVALIDATED = /Extension context invalidated/
+  let dead = false
+  let checkTimer = null
+  let heartbeatTimer = null
+  let flushTimer = null
+
+  function isInvalidated(err) {
+    return !!err && INVALIDATED.test(String(err?.message ?? err))
+  }
+
+  function teardown() {
+    if (dead) return
+    dead = true
+    window.__PICC_SENSOR_DEAD__ = true
+    if (checkTimer) { clearInterval(checkTimer); checkTimer = null }
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+    window.removeEventListener("message", onMessage)
+  }
+
+  // Three failure routes, one exit: the pre-check (chrome.runtime.id becomes
+  // undefined on invalidation), synchronous throws, and promise rejections.
+  // Invariant: no chrome.* rejection ever escapes to the page — a dead
+  // context is silent, and a live one rethrows genuine errors unchanged.
+  function chromeGuard(fn) {
+    try {
+      if (dead) return undefined
+      if (typeof chrome?.runtime?.id !== "string") { teardown(); return undefined }
+      const out = fn()
+      if (out && typeof out.then === "function") {
+        return out.catch((err) => {
+          if (isInvalidated(err)) { teardown(); return undefined }
+          throw err
+        })
+      }
+      return out
+    } catch (err) {
+      if (isInvalidated(err)) { teardown(); return undefined }
+      throw err
+    }
+  }
+
+  const store = {
+    set(entry) { return chromeGuard(() => chrome.storage.local.set(entry)) },
+    get(keys, cb) { return chromeGuard(() => chrome.storage.local.get(keys, cb)) }
+  }
+
   // ── Server discovery ──────────────────────────────────────────────────────
   // The web app owns analysis/notifications; the sensor only needs to find it.
   let serverPort = null
@@ -26,7 +81,7 @@
           serverPort = port
           online = true
           backoffMs = 0
-          chrome.storage.local.set({ piccSensorStatus: { online, port, at: Date.now() } })
+          store.set({ piccSensorStatus: { online, port, at: Date.now() } })
           if (wasOffline) console.info("[picc-sensor] server found on", port)
           flush() // drain anything queued while offline
           return
@@ -34,7 +89,7 @@
       } catch { /* try next port */ }
     }
     online = false
-    chrome.storage.local.set({ piccSensorStatus: { online, port: null, at: Date.now() } })
+    store.set({ piccSensorStatus: { online, port: null, at: Date.now() } })
   }
 
   // ── Upstream frame bridge ─────────────────────────────────────────────────
@@ -63,7 +118,6 @@
   }
 
   const QUEUE = []
-  let flushTimer = null
   let flushing = false
   const FLUSH_MS = 2000
   const MAX_BATCH = 120
@@ -108,7 +162,7 @@
   }
 
   function queueFrame(frame) {
-    chrome.storage.local.get(["piccRelayEnabled"], ({ piccRelayEnabled }) => {
+    store.get(["piccRelayEnabled"], ({ piccRelayEnabled }) => {
       if (piccRelayEnabled === false) return // user kill-switch, defaults ON
       const clean = sanitizeUpstreamFrame(frame)
       if (!clean) return
@@ -119,15 +173,16 @@
   }
 
   // inject.js (MAIN world) relays gateway frames here.
-  window.addEventListener("message", (ev) => {
+  function onMessage(ev) {
     if (ev.source !== window) return
     const d = ev.data
     if (!d || !d.__piccEOFrame || !d.frame) return
     queueFrame(d.frame)
-  })
+  }
+  window.addEventListener("message", onMessage)
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
+  checkTimer = setInterval(checkServer, 15_000)
+  heartbeatTimer = setInterval(() => { if (online) flush() }, 30_000)
   checkServer()
-  setInterval(checkServer, 15_000)
-  setInterval(() => { if (online) flush() }, 30_000)
 })()
