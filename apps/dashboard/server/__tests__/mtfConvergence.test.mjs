@@ -3,6 +3,7 @@ import {
   DIMENSIONS,
   MIN_BARS,
   STOCHRSI_TRIGGER_BAND,
+  STOCHRSI_OB_OS,
   TF_SECONDS,
   PRESETS,
   resolvePreset,
@@ -15,6 +16,7 @@ import {
   planeScore,
   converge,
   classifyState,
+  adxGate,
   fetchPlanes
 } from "../services/mtfConvergence.mjs"
 
@@ -575,35 +577,38 @@ describe("state machine (4a)", () => {
   })
 
   it("WAIT: few planes aligned", () => {
-    const r = converge({ planes: { 60: up(), 300: flat(), 900: flat(), 3600: flat() } })
+    // bias (highest TF) must be trend-moded or the R6 no-trend band rejects first
+    const r = converge({ planes: { 60: flat(), 300: flat(), 900: flat(), 3600: up() } })
     expect(r.state).toBe("WAIT")
-    expect(r.why).toBe("weak alignment (1 of 4 planes aligned); low volatility; ADX<20 no trend")
+    // the up ramp's bias plane reads ADX>40 -> the extreme note rides along
+    expect(r.why).toBe("weak alignment (1 of 4 planes aligned); low volatility; ADX≥40 extreme")
   })
 
   it("WATCH both directions: lean established, ladder unconfirmed", () => {
-    const longR = converge({ planes: { 60: up(), 300: up(), 900: down(), 3600: flat() } })
+    const longR = converge({ planes: { 60: up(), 300: flat(), 900: up(), 3600: down() } })
     expect(longR.meta.aligned).toBe(2)
     expect(longR.state).toBe("LONG WATCH") // 2 of 4 aligned -> 0.5
-    const shortR = converge({ planes: { 60: down(), 300: down(), 900: up(), 3600: flat() } })
+    const shortR = converge({ planes: { 60: down(), 300: flat(), 900: down(), 3600: up() } })
     expect(shortR.state).toBe("SHORT WATCH")
   })
 
   it("ONLY both directions: strong alignment, higher planes agree", () => {
-    const longR = converge({ planes: { 60: up(), 300: up(), 900: flat() } })
+    // the dissenting highest plane keeps ADX in trend-mode so the gate passes
+    const longR = converge({ planes: { 60: up(), 300: up(), 3600: down() } })
     expect(longR.state).toBe("LONG ONLY") // 2 of 3 -> 2/3
-    expect(longR.why).toBe("bull confluence (higher planes agree); ADX<20 no trend")
-    const shortR = converge({ planes: { 60: down(), 300: down(), 900: flat() } })
+    expect(longR.why).toBe("bull confluence (higher planes agree); H1/4H conflict; ADX≥40 extreme")
+    const shortR = converge({ planes: { 60: down(), 300: down(), 3600: up() } })
     expect(shortR.state).toBe("SHORT ONLY")
-    expect(shortR.why).toBe("bear confluence (higher planes agree); ADX<20 no trend")
+    expect(shortR.why).toBe("bear confluence (higher planes agree); H1/4H conflict; ADX≥40 extreme")
   })
 
   it("BIAS both directions: full confluence", () => {
     const longR = converge({ planes: { 60: up(), 300: up(), 900: up() } })
     expect(longR.state).toBe("LONG BIAS")
-    expect(longR.why).toBe("strong bull confluence")
+    expect(longR.why).toBe("strong bull confluence; ADX≥40 extreme")
     const shortR = converge({ planes: { 60: down(), 300: down(), 900: down() } })
     expect(shortR.state).toBe("SHORT BIAS")
-    expect(shortR.why).toBe("bear regime only")
+    expect(shortR.why).toBe("bear regime only; ADX≥40 extreme")
   })
 })
 
@@ -618,16 +623,16 @@ describe("why reason composer (4b)", () => {
     expect(r.why).toContain("H1/4H conflict")
   })
 
-  it("ADX<20 no trend is read from the bias/highest plane", () => {
+  it("ADX<20 no trend from a flat bias plane rejects to NO TRADE (R6)", () => {
     const r = converge({ planes: { 60: up(), 300: flat() } })
-    expect(r.state).toBe("LONG WATCH") // 1 of 2 aligned -> 0.5
-    expect(r.why).toContain("ADX<20 no trend")
+    expect(r.state).toBe("NO TRADE")
+    expect(r.why).toBe("ADX<20 no trend")
   })
 
   it("data-abstain is appended when a plane lacks samples", () => {
     const r = converge({ planes: { 60: up(), 300: up(), 900: up(10) } })
     expect(r.state).toBe("LONG BIAS")
-    expect(r.why).toBe("strong bull confluence; data: 2 of 3 planes active")
+    expect(r.why).toBe("strong bull confluence; ADX≥40 extreme; data: 2 of 3 planes active")
   })
 
   it("exact per-state strings are locked against drift", () => {
@@ -643,9 +648,74 @@ describe("why reason composer (4b)", () => {
       state: "NO TRADE",
       why: "zero active planes (data abstain)"
     })
-    expect(classifyState({ compositeDirection: 0, biasNoTrend: true, nActive: 2, aligned: 0 })).toEqual({
+    expect(classifyState({ compositeDirection: 0, adxTier: "no-trend", nActive: 2, aligned: 0 })).toEqual({
       state: "NO TRADE",
       why: "ADX<20 no trend"
     })
+    expect(classifyState({ compositeDirection: 1, adxTier: "no-trend", nActive: 3, aligned: 3 })).toEqual({
+      state: "NO TRADE",
+      why: "ADX<20 no trend"
+    })
+  })
+})
+
+// ---------------------------------------------------------------------
+// 5a. ADX graded gate (R6) — Wilder-attributed convention, direction-blind
+// ---------------------------------------------------------------------
+
+describe("ADX graded gate (5a)", () => {
+  it("adxGate tiers match the reuse vocabulary (very strong/strong/weak/none)", () => {
+    expect(adxGate(15)).toEqual({ tier: "no-trend", label: "none" })
+    expect(adxGate(20)).toEqual({ tier: "no-trend", label: "none" }) // boundary: also "no-trend band"
+    expect(adxGate(22)).toEqual({ tier: "forming", label: "weak" })
+    expect(adxGate(25)).toEqual({ tier: "forming", label: "weak" }) // gray stays gray until >25
+    expect(adxGate(26)).toEqual({ tier: "trend", label: "strong" })
+    expect(adxGate(40)).toEqual({ tier: "trend", label: "strong" })
+    expect(adxGate(41)).toEqual({ tier: "extreme", label: "very strong" })
+    expect(adxGate(null)).toEqual({ tier: "none", label: "n/a" })
+  })
+
+  it("state/why driven through every tier at the classify-state level", () => {
+    expect(classifyState({ compositeDirection: 1, adxTier: "no-trend", nActive: 3, aligned: 3 }))
+      .toEqual({ state: "NO TRADE", why: "ADX<20 no trend" })
+    expect(classifyState({ compositeDirection: 1, adxTier: "forming", nActive: 3, aligned: 3 }))
+      .toEqual({ state: "LONG ONLY", why: "bull confluence (higher planes agree); ADX 20-25 trend forming (gray)" })
+    expect(classifyState({ compositeDirection: 1, adxTier: "forming", nActive: 3, aligned: 2 }))
+      .toEqual({ state: "LONG WATCH", why: "directional lean (2 of 3 planes aligned); ADX 20-25 trend forming (gray)" })
+    expect(classifyState({ compositeDirection: 1, adxTier: "trend", nActive: 3, aligned: 3 }))
+      .toEqual({ state: "LONG BIAS", why: "strong bull confluence" })
+    expect(classifyState({ compositeDirection: 1, adxTier: "extreme", nActive: 3, aligned: 3 }))
+      .toEqual({ state: "LONG BIAS", why: "strong bull confluence; ADX≥40 extreme" })
+  })
+
+  it("converge reads the tier from the bias plane's real ADX read", () => {
+    expect(converge({ planes: { 60: up(), 300: up(), 900: up() } }).state).toBe("LONG BIAS")
+    expect(converge({ planes: { 60: up(), 300: up(), 900: down() } }).state).toBe("LONG ONLY")
+    expect(converge({ planes: { 60: up(), 300: flat() } }).state).toBe("NO TRADE")
+  })
+})
+
+// ---------------------------------------------------------------------
+// 5b. StochRSI trigger correction (R7) — cross vs OB/OS zone
+// ---------------------------------------------------------------------
+
+describe("StochRSI trigger correction (5b)", () => {
+  it("canonical OB/OS stays 80/20 and the trigger line sits strictly inside", () => {
+    expect(STOCHRSI_OB_OS).toEqual({ over: 80, under: 20 })
+    expect(STOCHRSI_TRIGGER_BAND).toEqual({ lo: 40, hi: 60 })
+    expect(STOCHRSI_TRIGGER_BAND.hi).toBeLessThan(STOCHRSI_OB_OS.over)
+    expect(STOCHRSI_TRIGGER_BAND.lo).toBeGreaterThan(STOCHRSI_OB_OS.under)
+  })
+
+  it("an in-band %K/%D cross fires; a cross leaving the band or into OB/OS does not", () => {
+    expect(voteMomentumTrigger({ k: [50, 50, 59], d: [52, 52, 55] }, 2).value).toBe(1)
+    // cross closes above the trigger line (60) -> not a trigger, approaching OB
+    expect(voteMomentumTrigger({ k: [55, 75], d: [50, 72] }, 1).value).toBe(0)
+    expect(voteMomentumTrigger({ k: [55, 75], d: [50, 72] }, 1).reason).toBe("no in-band cross")
+    // cross inside the OB zone (80+) -> still not a trigger
+    expect(voteMomentumTrigger({ k: [75, 85], d: [72, 82] }, 1).value).toBe(0)
+    expect(voteMomentumTrigger({ k: [75, 85], d: [72, 82] }, 1).reason).toBe("no in-band cross")
+    // cross down inside the band -> fires -1
+    expect(voteMomentumTrigger({ k: [59, 59, 41], d: [54, 54, 45] }, 2).value).toBe(-1)
   })
 })

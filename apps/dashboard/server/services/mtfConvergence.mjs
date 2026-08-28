@@ -35,6 +35,14 @@ export const MIN_BARS = 30
  */
 export const STOCHRSI_TRIGGER_BAND = Object.freeze({ lo: 40, hi: 60 })
 
+/**
+ * Canonical StochRSI overbought/oversold extremes (percent scale), matching
+ * indicators.mjs stochRSI semantics. Regression guard (spec R7): the trigger
+ * line is a %K/%D CROSS confined to STOCHRSI_TRIGGER_BAND — it is NOT the
+ * OB/OS zone; crossing into 60-80 or 20-40 does not fire a trigger.
+ */
+export const STOCHRSI_OB_OS = Object.freeze({ over: 80, under: 20 })
+
 // ---------------------------------------------------------------------
 // Five-tier presets (spec §2.5). Each preset binds three timeframes to the
 // entry/confirm/bias roles and carries per-role default weights. The semantic
@@ -209,9 +217,9 @@ export const VOTERS = Object.freeze({
   volatility: (ctx) => voteVolatility(ctx.dash)
 })
 
-const ABSTAIN_NO_DATA = Object.freeze({ active: false, abstain: "no data", sign: 0, amplitude: 0, observed: 0, votes: {}, score: null })
+const ABSTAIN_NO_DATA = Object.freeze({ active: false, abstain: "no data", sign: 0, amplitude: 0, observed: 0, votes: {}, adx: null, score: null })
 const ABSTAIN_LOW_BARS = (closedLen, minBars) =>
-  ({ active: false, abstain: `low bars (<${minBars})`, sign: 0, amplitude: 0, observed: 0, votes: {}, score: null })
+  ({ active: false, abstain: `low bars (<${minBars})`, sign: 0, amplitude: 0, observed: 0, votes: {}, adx: null, score: null })
 
 /**
  * Score one plane (one timeframe). Pure; no I/O.
@@ -261,8 +269,26 @@ export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN
     observed,
     enabledDims,
     votes,
+    adx: dash?.adx?.adx ?? null,
     score: amplitude > 0 ? 1 : amplitude < 0 ? -1 : 0
   }
+}
+
+/**
+ * Graded ADX gate on the bias plane (spec R6). Direction-blind trend-mode tier;
+ * thresholds follow the *convention attributed to Wilder (1978)* — labelled so,
+ * not "per Wilder". Labels reuse indicators.mjs `trendStrengthLabel` vocabulary
+ * (very strong >40 / strong >25 / weak >20 / none) so UI copy stays consistent.
+ * @returns {object} { tier, label } — tier in
+ *   "no-trend" (no-trend band), "forming" (20-25 gray), "trend" (>=25),
+ *   "extreme" (>40), "none" (ADX unavailable).
+ */
+export function adxGate(adx) {
+  if (adx == null) return { tier: "none", label: "n/a" }
+  if (adx > 40) return { tier: "extreme", label: "very strong" }
+  if (adx > 25) return { tier: "trend", label: "strong" }
+  if (adx > 20) return { tier: "forming", label: "weak" }
+  return { tier: "no-trend", label: "none" }
 }
 
 /**
@@ -340,7 +366,7 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
   const higherConflict = topTwo.length === 2 && topTwo[0].sign !== topTwo[1].sign
   const byTfDesc = active.slice().sort((a, b) => b.tf - a.tf)
   const biasPlane = byTfDesc.find((p) => p.label === "bias") ?? byTfDesc[0]
-  const biasNoTrend = biasPlane?.votes?.trend_strength?.reason === "no trend"
+  const { tier: adxTier } = adxGate(biasPlane?.adx ?? null)
   const lowVol = active.length > 0 && active.every((p) => p.votes.volatility.observed && p.votes.volatility.value === 0)
   const { state, why } = classifyState({
     compositeDirection,
@@ -349,7 +375,7 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
     available,
     conservative,
     higherConflict,
-    biasNoTrend,
+    adxTier,
     lowVol
   })
 
@@ -381,13 +407,17 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
 // State machine (R4) — deterministic bands fixed by tests
 //
 //   NO TRADE          zero active planes | conservative HTF veto | no direction
+//                     | bias-plane ADX<20 (no-trend band, R6)
 //   WAIT              directional lean with < 1/2 of active planes aligned
 //   LONG/SHORT WATCH  1/2 .. < 2/3 aligned (lean established, ladder unconfirmed)
 //   LONG/SHORT ONLY   2/3 .. < 1 aligned (strong, higher planes agree)
-//   LONG/SHORT BIAS   full confluence (all active planes aligned)
+//   LONG/SHORT BIAS   full confluence (all aligned + ADX trend-mode, R6)
 //
-// `why` accumulates deterministic reason strings; every state below is
-// reachable by the synthetic fixtures in the test file.
+// ADX gate (R6): the bias plane's graded tier (adxGate) caps the outcome —
+//   no-trend (<20) rejects to NO TRADE; forming (20-25 gray) caps at ONLY;
+//   extreme (>40) passes with an "ADX>=40" note. `why` accumulates
+//   deterministic reason strings; every state below is reachable by the
+//   synthetic fixtures in the test file.
 // ---------------------------------------------------------------------
 export function classifyState({
   compositeDirection = 0,
@@ -396,7 +426,7 @@ export function classifyState({
   available = 0,
   conservative = false,
   higherConflict = false,
-  biasNoTrend = false,
+  adxTier = "trend",
   lowVol = false
 } = {}) {
   if (nActive === 0) {
@@ -406,22 +436,39 @@ export function classifyState({
     return { state: "NO TRADE", why: "H1/4H conflict (conservative veto)" }
   }
   if (compositeDirection === 0) {
-    return { state: "NO TRADE", why: biasNoTrend ? "ADX<20 no trend" : "no directional composite" }
+    return { state: "NO TRADE", why: adxTier === "no-trend" ? "ADX<20 no trend" : "no directional composite" }
+  }
+  if (adxTier === "no-trend") {
+    return { state: "NO TRADE", why: "ADX<20 no trend" }
   }
   const dir = compositeDirection > 0 ? "LONG" : "SHORT"
   const agreement = aligned / nActive
   const extras = []
   if (higherConflict) extras.push("H1/4H conflict")
-  if (biasNoTrend) extras.push("ADX<20 no trend")
+  if (adxTier === "extreme") extras.push("ADX≥40 extreme")
   if (available > nActive) extras.push(`data: ${nActive} of ${available} planes active`)
 
   if (agreement >= 1) {
+    if (adxTier === "trend" || adxTier === "extreme") {
+      return {
+        state: `${dir} BIAS`,
+        why: [dir === "LONG" ? "strong bull confluence" : "bear regime only", ...extras].join("; ")
+      }
+    }
+    // Full confluence but the trend-mode gate is only "forming" -> capped at ONLY.
+    const capNote = adxTier === "forming" ? ["ADX 20-25 trend forming (gray)"] : []
     return {
-      state: `${dir} BIAS`,
-      why: [dir === "LONG" ? "strong bull confluence" : "bear regime only", ...extras].join("; ")
+      state: `${dir} ONLY`,
+      why: [dir === "LONG" ? "bull confluence (higher planes agree)" : "bear confluence (higher planes agree)", ...capNote, ...extras].join("; ")
     }
   }
   if (agreement >= 2 / 3) {
+    if (adxTier === "forming" || adxTier === "none") {
+      return {
+        state: `${dir} WATCH`,
+        why: [`directional lean (${aligned} of ${nActive} planes aligned)`, "ADX 20-25 trend forming (gray)", ...extras].join("; ")
+      }
+    }
     return {
       state: `${dir} ONLY`,
       why: [dir === "LONG" ? "bull confluence (higher planes agree)" : "bear confluence (higher planes agree)", ...extras].join("; ")
