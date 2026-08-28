@@ -2249,6 +2249,24 @@ async function _handleApiInner(req, res, url, reqId) {
     return true
   }
 
+  // ── Trading venues — public redirect metadata (no execution, R5) ──────
+  // Read-only: lists venues + best-effort instrument deep-links for a given
+  // asset. The suite never places orders; these URLs just open the venue.
+  if (path === "/api/trading/venues" && req.method === "GET") {
+    try {
+      const { tradingVenues, instrumentUrl } = await import("./services/browserStudio.mjs")
+      const assetId = String(parsed.searchParams.get("assetId") ?? "").trim() || null
+      const venues = tradingVenues().map((v) => {
+        const link = assetId ? instrumentUrl(v.id, assetId) : { url: v.url, mode: "venue" }
+        return { ...v, tradeUrl: link.url, linkMode: link.mode }
+      })
+      writeJson(res, 200, { ok: true, assetId, venues })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
   // ── Notifications — universal attention layer (advisory signals) ──────
   if (path.startsWith("/api/notifications")) {
     try {

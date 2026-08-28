@@ -1206,6 +1206,28 @@ export interface LatencyRow {
   lastMs: number | null
 }
 
+export interface TradingVenue {
+  id: string
+  name: string
+  url: string
+  note: string
+  platformKind: string | null
+  tradeUrl: string | null
+  linkMode: "asset" | "venue"
+}
+
+export interface TradingVenuesResult {
+  ok: boolean
+  assetId: string | null
+  venues: TradingVenue[]
+}
+
+/** Redirect-only venue metadata (never execution — opens the venue in a tab). */
+export function getTradingVenues(assetId: string | null): Promise<TradingVenuesResult> {
+  const q = assetId ? `?assetId=${encodeURIComponent(assetId)}` : ""
+  return request(`/trading/venues${q}`)
+}
+
 export interface BrokersResult {
   ok: boolean
   activeExecutor: string

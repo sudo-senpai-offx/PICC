@@ -15,7 +15,7 @@ import { WatchlistPanel } from "@/components/WatchlistPanel"
 import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { PatternPanel } from "@/components/PatternPanel"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
-import { getBrokers, type BrokersResult } from "@/lib/trading"
+import { getBrokers, getTradingVenues, type BrokersResult, type TradingVenuesResult } from "@/lib/trading"
 import { request, post } from "@/lib/api"
 import { urlBase64ToUint8Array, isPushSupported } from "@/lib/push"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
@@ -222,6 +222,7 @@ export function AutopilotSuite() {
   const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number }>({ token: "", demo: true, riskPct: 2 })
   const [credsMsg, setCredsMsg] = useState<string | null>(null)
   const [brokers, setBrokers] = useState<BrokersResult | null>(null)
+  const [venues, setVenues] = useState<TradingVenuesResult | null>(null)
   const [scopeAsset, setScopeAsset] = useState<string>("")
   const lastLoadAt = useRef(0)
   const { snapshot } = useRealtimeSuite()
@@ -264,6 +265,12 @@ export function AutopilotSuite() {
   }
 
   useEffect(() => { void load() }, [])
+
+  // Redirect targets depend on the scoped asset — refresh when it changes.
+  useEffect(() => {
+    if (!scopeAsset) return
+    void getTradingVenues(scopeAsset).then((v) => { if (v?.ok) setVenues(v) }).catch(() => null)
+  }, [scopeAsset])
 
   // Settings stay in sync with the overlay dockables: re-pull the shared
   // server config when the tab regains focus (overlay may have changed it).
@@ -482,6 +489,33 @@ export function AutopilotSuite() {
               </div>
             ))}
           </div>
+          {venues?.venues.length ? (
+            <div className="stack" style={{ borderTop: "1px solid var(--border, rgba(128,128,128,.2))", paddingTop: 8 }}>
+              <span className="field-label small">Trade on the venue</span>
+              <p className="muted small" style={{ margin: 0 }}>
+                PICC never places orders — these buttons open the venue in a new tab so you act there.
+              </p>
+              <div className="row gap" style={{ flexWrap: "wrap" }}>
+                {venues.venues.map((v) => (
+                  <a
+                    key={v.id}
+                    href={v.tradeUrl ?? v.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="badge badge-muted"
+                    style={{ textDecoration: "none", padding: "4px 10px" }}
+                    title={
+                      v.linkMode === "asset"
+                        ? `Open ${v.name} on ${scopeAsset}`
+                        : `Open ${v.name} (${v.platformKind ?? "trading"}) — pick ${scopeAsset || "your asset"} there`
+                    }
+                  >
+                    {v.name} ↗
+                  </a>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </Card>
       ) : null}
 

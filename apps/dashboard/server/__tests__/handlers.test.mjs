@@ -295,6 +295,32 @@ describe("PICC API handlers", () => {
     }
   })
 
+  it("trading/venues returns redirect metadata with asset deep-links", async () => {
+    const res = makeRes()
+    await handleApi(makeReq("GET", "/api/trading/venues?assetId=BTCUSD", undefined, {}), res, "/api/trading/venues?assetId=BTCUSD")
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(res.body.assetId).toBe("BTCUSD")
+    expect(Array.isArray(res.body.venues)).toBe(true)
+    const binance = res.body.venues.find((v) => v.id === "binance")
+    expect(binance).toBeDefined()
+    expect(binance.platformKind).toBe("spot")
+    expect(binance.tradeUrl).toBe("https://www.binance.com/en/trade/BTCUSDT")
+    expect(binance.linkMode).toBe("asset")
+    const eo = res.body.venues.find((v) => v.id === "expertoption")
+    expect(eo.platformKind).toBe("binary")
+    expect(eo.linkMode).toBe("venue") // binary venues have no deep-link — honest fallback
+    expect(eo.tradeUrl).toBe("https://app.expertoption.finance/")
+  })
+
+  it("trading/venues without an asset still returns venue roots", async () => {
+    const res = makeRes()
+    await handleApi(makeReq("GET", "/api/trading/venues", undefined, {}), res, "/api/trading/venues")
+    expect(res.status).toBe(200)
+    expect(res.body.assetId).toBeNull()
+    for (const v of res.body.venues) expect(typeof v.tradeUrl).toBe("string")
+  })
+
   it("notifications/vapid-public-key is public and honest when unset vs set", async () => {
     const dir = mkdtempSync(join(tmpdir(), "picc-vapid-test-"))
     vi.stubEnv("PICC_NOTIFICATION_DATA_DIR", dir)

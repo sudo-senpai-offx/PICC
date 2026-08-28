@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url"
 import { openBridge, browserAvailable, readPage } from "./browserBridge.mjs"
 import { getConnector, parseAmount } from "./connectors.mjs"
 import { suiteForSite } from "./suites.mjs"
+import { canonicalAssetId } from "./assetCatalog.mjs"
 
 const DATA_DIR = process.env.PICC_BROWSER_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
 const VAULT_FILE = join(DATA_DIR, "browser-credentials.json")
@@ -525,10 +526,69 @@ export function detectSite(url = "") {
   if (!host) return null
   for (const entry of SITE_INDEX) {
     if (entry.hosts.some((h) => host === h || host.endsWith("." + h))) {
-      return { ...entry, host }
+      return { ...entry, platformKind: PLATFORM_KINDS[entry.id] ?? null, host }
     }
   }
-  return { id: null, name: host, category: "other", payoutThreshold: 0, url: "", note: "No PICC profile for this site yet.", host }
+  return { id: null, name: host, category: "other", payoutThreshold: 0, url: "", note: "No PICC profile for this site yet.", platformKind: null, host }
+}
+
+// ---------------------------------------------------------------------
+// Trading venues: platform kind + redirect deep-links (Slice 5 / R5).
+// The suite NEVER executes trades — these links just open the venue in a
+// new tab where the user acts. Deep-links are only built for symbol
+// formats we can verify; everything else lands on the venue root honestly.
+// ---------------------------------------------------------------------
+const PLATFORM_KINDS = {
+  expertoption: "binary",
+  iqoption: "binary",
+  olymptrade: "binary",
+  deriv: "binary",
+  binance: "spot",
+  bybit: "derivatives",
+  kucoin: "spot",
+  okx: "spot",
+  etoro: "cfd",
+  plus500: "cfd"
+}
+
+// Explicit venue symbol map — only formats we can verify. Absent ⇒ venue root.
+const VENUE_SYMBOLS = {
+  binance: { BTCUSD: "BTCUSDT", ETHUSD: "ETHUSDT", SOLUSD: "SOLUSDT", BNBUSD: "BNBUSDT" },
+  kucoin: { BTCUSD: "BTC-USDT", ETHUSD: "ETH-USDT", SOLUSD: "SOL-USDT" },
+  okx: { BTCUSD: "BTC-USDT", ETHUSD: "ETH-USDT", SOLUSD: "SOL-USDT" }
+}
+
+const VENUE_TRADE_URL = {
+  binance: (s) => `https://www.binance.com/en/trade/${s}`,
+  kucoin: (s) => `https://www.kucoin.com/trade/${s}`,
+  okx: (s) => `https://www.okx.com/trade-spot/${s}`
+}
+
+/**
+ * Redirect target for trading on an external venue from a PICC asset id.
+ * @returns {{ url: string, mode: "asset"|"venue" }} — "asset" = direct
+ * instrument deep-link (verified symbol), "venue" = venue root (pick the
+ * asset there). mode "venue" is the honest fallback, never fabricated.
+ */
+export function instrumentUrl(siteId, assetId) {
+  const site = SITE_INDEX.find((e) => e.id === siteId)
+  if (!site || site.category !== "trading") return { url: null, mode: "none" }
+  const canonical = canonicalAssetId(assetId)
+  const symbol = VENUE_SYMBOLS[siteId]?.[canonical]
+  const build = VENUE_TRADE_URL[siteId]
+  if (symbol && build) return { url: build(symbol), mode: "asset" }
+  return { url: site.url, mode: "venue" }
+}
+
+/** Public metadata for every registered trading venue. */
+export function tradingVenues() {
+  return SITE_INDEX.filter((e) => e.category === "trading").map((e) => ({
+    id: e.id,
+    name: e.name,
+    url: e.url,
+    note: e.note,
+    platformKind: PLATFORM_KINDS[e.id] ?? null
+  }))
 }
 
 // ---------------------------------------------------------------------

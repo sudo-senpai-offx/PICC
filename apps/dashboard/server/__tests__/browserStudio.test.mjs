@@ -53,6 +53,41 @@ describe("Browser Studio â€” site detection", () => {
     expect(site.category).toBe("other")
     expect(site.id).toBeNull()
   })
+
+  it("detectSite tags trading venues with a platform kind", async () => {
+    const { detectSite } = await import("../services/browserStudio.mjs")
+    expect(detectSite("https://app.expertoption.finance/").platformKind).toBe("binary")
+    expect(detectSite("https://www.binance.com").platformKind).toBe("spot")
+    expect(detectSite("https://www.bybit.com").platformKind).toBe("derivatives")
+    expect(detectSite("https://dashboard.honeygain.com/").platformKind).toBeNull()
+  })
+})
+
+describe("Browser Studio — trading venue redirects (Slice 5 / R5)", () => {
+  it("builds verified instrument deep-links for known symbols", async () => {
+    const { instrumentUrl, tradingVenues } = await import("../services/browserStudio.mjs")
+    expect(instrumentUrl("binance", "BTCUSD").mode).toBe("asset")
+    expect(instrumentUrl("binance", "BTCUSD").url).toBe("https://www.binance.com/en/trade/BTCUSDT")
+    expect(instrumentUrl("binance", "btcusd").mode).toBe("asset") // canonicalizes inputs
+    expect(instrumentUrl("kucoin", "ETHUSD").url).toBe("https://www.kucoin.com/trade/ETH-USDT")
+    expect(instrumentUrl("okx", "SOLUSD").url).toBe("https://www.okx.com/trade-spot/SOL-USDT")
+    expect(tradingVenues().length).toBeGreaterThan(5)
+  })
+
+  it("falls back to the venue root honestly when the symbol is unverifiable", async () => {
+    const { instrumentUrl } = await import("../services/browserStudio.mjs")
+    // Unknown asset on a deep-linkable venue → venue root, not a fabricated URL.
+    const binance = instrumentUrl("binance", "USDJPY=X")
+    expect(binance.mode).toBe("venue")
+    expect(binance.url).toBe("https://www.binance.com")
+    // Venues without instruments (binary platforms) → venue root, pick asset in-app.
+    const eo = instrumentUrl("expertoption", "EURUSD")
+    expect(eo.mode).toBe("venue")
+    expect(eo.url).toBe("https://app.expertoption.finance/")
+    // Non-trading / unknown sites → no redirection at all.
+    expect(instrumentUrl("honeygain", "BTCUSD").mode).toBe("none")
+    expect(instrumentUrl("whatever", "BTCUSD").mode).toBe("none")
+  })
 })
 
 describe("Browser Studio â€” credential vault", () => {
