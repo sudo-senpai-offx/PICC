@@ -96,20 +96,20 @@ const down = (n = 260) => synth(n, -0.5)
 
 describe("dimension voters (unit)", () => {
   it("trend reads EMA alignment", () => {
-    expect(voteTrend({ ema: { read: "bullish alignment" } })).toEqual({ vote: 1, observed: true, reason: "ema bull align" })
-    expect(voteTrend({ ema: { read: "bearish alignment" } })).toEqual({ vote: -1, observed: true, reason: "ema bear align" })
-    expect(voteTrend({ ema: { read: "mixed" } })).toEqual({ vote: 0, observed: true, reason: "ema mixed" })
-    expect(voteTrend({ ema: { read: "n/a" } })).toEqual({ vote: 0, observed: false, reason: "ema n/a" })
-    expect(voteTrend({})).toEqual({ vote: 0, observed: false, reason: "ema n/a" })
+    expect(voteTrend({ ema: { read: "bullish alignment" } })).toEqual({ enabled: true, observed: true, value: 1, reason: "ema bull align" })
+    expect(voteTrend({ ema: { read: "bearish alignment" } })).toEqual({ enabled: true, observed: true, value: -1, reason: "ema bear align" })
+    expect(voteTrend({ ema: { read: "mixed" } })).toEqual({ enabled: true, observed: true, value: 0, reason: "ema mixed" })
+    expect(voteTrend({ ema: { read: "n/a" } })).toEqual({ enabled: true, observed: false, value: null, reason: "ema n/a" })
+    expect(voteTrend({})).toEqual({ enabled: true, observed: false, value: null, reason: "ema n/a" })
   })
 
   it("momentum requires RSI and MACD-hist agreement", () => {
     const bull = { rsi: { value: 55 }, macd: { hist: 1.2 } }
     const bear = { rsi: { value: 45 }, macd: { hist: -1.2 } }
-    expect(voteMomentum(bull)).toEqual({ vote: 1, observed: true, reason: "rsi+macd bull" })
-    expect(voteMomentum(bear)).toEqual({ vote: -1, observed: true, reason: "rsi+macd bear" })
-    expect(voteMomentum({ rsi: { value: 55 }, macd: { hist: -1.2 } })).toEqual({ vote: 0, observed: true, reason: "rsi/macd mixed" })
-    expect(voteMomentum({ rsi: { value: null }, macd: { hist: 1 } })).toEqual({ vote: 0, observed: false, reason: "rsi/macd n/a" })
+    expect(voteMomentum(bull)).toEqual({ enabled: true, observed: true, value: 1, reason: "rsi+macd bull" })
+    expect(voteMomentum(bear)).toEqual({ enabled: true, observed: true, value: -1, reason: "rsi+macd bear" })
+    expect(voteMomentum({ rsi: { value: 55 }, macd: { hist: -1.2 } })).toEqual({ enabled: true, observed: true, value: 0, reason: "rsi/macd mixed" })
+    expect(voteMomentum({ rsi: { value: null }, macd: { hist: 1 } })).toEqual({ enabled: true, observed: false, value: null, reason: "rsi/macd n/a" })
   })
 
   it("structure uses the two latest confirmed swings on each side", () => {
@@ -125,47 +125,47 @@ describe("dimension voters (unit)", () => {
       highs: [{ index: 10, price: 110 }, { index: 20, price: 120 }],
       lows: [{ index: 12, price: 110 }, { index: 22, price: 105 }]
     }
-    expect(voteStructure(swingsUp, 999)).toEqual({ vote: 1, observed: true, reason: "HH/HL" })
-    expect(voteStructure(swingsDown, 999)).toEqual({ vote: -1, observed: true, reason: "LH/LL" })
-    expect(voteStructure(mixed, 999)).toEqual({ vote: 0, observed: true, reason: "mixed structure" })
-    expect(voteStructure({ highs: [{ index: 1, price: 1 }], lows: [] }, 999)).toEqual({ vote: 0, observed: false, reason: "structure n/a" })
+    expect(voteStructure(swingsUp, 999)).toEqual({ enabled: true, observed: true, value: 1, reason: "HH/HL" })
+    expect(voteStructure(swingsDown, 999)).toEqual({ enabled: true, observed: true, value: -1, reason: "LH/LL" })
+    expect(voteStructure(mixed, 999)).toEqual({ enabled: true, observed: true, value: 0, reason: "mixed structure" })
+    expect(voteStructure({ highs: [{ index: 1, price: 1 }], lows: [] }, 999)).toEqual({ enabled: true, observed: false, value: null, reason: "structure n/a" })
     // swing points after the observation time are never used
-    expect(voteStructure(swingsUp, 15)).toEqual({ vote: 0, observed: false, reason: "structure n/a" })
+    expect(voteStructure(swingsUp, 15)).toEqual({ enabled: true, observed: false, value: null, reason: "structure n/a" })
   })
 
   it("trend_strength gates on ADX>=25, direction from +DI/-DI (spec 2.6)", () => {
-    expect(voteTrendStrength({ adx: { adx: 30, plusDI: 25, minusDI: 10 } })).toEqual({ vote: 1, observed: true, reason: "adx +DI" })
-    expect(voteTrendStrength({ adx: { adx: 26, plusDI: 10, minusDI: 20 } })).toEqual({ vote: -1, observed: true, reason: "adx -DI" })
-    expect(voteTrendStrength({ adx: { adx: 18, plusDI: 25, minusDI: 10 } })).toEqual({ vote: 0, observed: true, reason: "no trend" })
-    expect(voteTrendStrength({ adx: { adx: 22, plusDI: 25, minusDI: 10 } })).toEqual({ vote: 0, observed: true, reason: "trend forming" })
-    expect(voteTrendStrength({})).toEqual({ vote: 0, observed: false, reason: "adx n/a" })
+    expect(voteTrendStrength({ adx: { adx: 30, plusDI: 25, minusDI: 10 } })).toEqual({ enabled: true, observed: true, value: 1, reason: "adx +DI" })
+    expect(voteTrendStrength({ adx: { adx: 26, plusDI: 10, minusDI: 20 } })).toEqual({ enabled: true, observed: true, value: -1, reason: "adx -DI" })
+    expect(voteTrendStrength({ adx: { adx: 18, plusDI: 25, minusDI: 10 } })).toEqual({ enabled: true, observed: true, value: 0, reason: "no trend" })
+    expect(voteTrendStrength({ adx: { adx: 22, plusDI: 25, minusDI: 10 } })).toEqual({ enabled: true, observed: true, value: 0, reason: "trend forming" })
+    expect(voteTrendStrength({})).toEqual({ enabled: true, observed: false, value: null, reason: "adx n/a" })
   })
 
   it("momentum_trigger fires only for an in-band %K/%D cross (design choice)", () => {
     const crossUp = { k: [0, 0, 45], d: [0, 0, 40] }
     const crossDown = { k: [55, 55, 40], d: [50, 50, 45] }
-    expect(voteMomentumTrigger(crossUp, 2)).toEqual({ vote: 1, observed: true, reason: "stochRSI cross up" })
-    expect(voteMomentumTrigger(crossDown, 2)).toEqual({ vote: -1, observed: true, reason: "stochRSI cross down" })
+    expect(voteMomentumTrigger(crossUp, 2)).toEqual({ enabled: true, observed: true, value: 1, reason: "stochRSI cross up" })
+    expect(voteMomentumTrigger(crossDown, 2)).toEqual({ enabled: true, observed: true, value: -1, reason: "stochRSI cross down" })
     // cross outside the band: no trigger
-    expect(voteMomentumTrigger({ k: [50, 50, 75], d: [55, 55, 70] }, 2)).toEqual({ vote: 0, observed: true, reason: "no in-band cross" })
+    expect(voteMomentumTrigger({ k: [50, 50, 75], d: [55, 55, 70] }, 2)).toEqual({ enabled: true, observed: true, value: 0, reason: "no in-band cross" })
     // %K exactly on the band edges fires
-    expect(voteMomentumTrigger({ k: [40, 40, 60], d: [40, 40, 55] }, 2).vote).toBe(1)
-    expect(voteMomentumTrigger({ k: [59, 59, 40], d: [54, 54, 45] }, 2).vote).toBe(-1)
+    expect(voteMomentumTrigger({ k: [40, 40, 60], d: [40, 40, 55] }, 2).value).toBe(1)
+    expect(voteMomentumTrigger({ k: [59, 59, 40], d: [54, 54, 45] }, 2).value).toBe(-1)
     // %K just outside the band: no trigger
-    expect(voteMomentumTrigger({ k: [38, 38, 62], d: [40, 40, 55] }, 2)).toEqual({ vote: 0, observed: true, reason: "no in-band cross" })
-    expect(voteMomentumTrigger({ k: [null, null, 45], d: [null, null, 40] }, 2)).toEqual({ vote: 0, observed: false, reason: "stochRSI n/a" })
+    expect(voteMomentumTrigger({ k: [38, 38, 62], d: [40, 40, 55] }, 2)).toEqual({ enabled: true, observed: true, value: 0, reason: "no in-band cross" })
+    expect(voteMomentumTrigger({ k: [null, null, 45], d: [null, null, 40] }, 2)).toEqual({ enabled: true, observed: false, value: null, reason: "stochRSI n/a" })
     expect(STOCHRSI_TRIGGER_BAND).toEqual({ lo: 40, hi: 60 })
   })
 
   it("volatility votes on pull-from-band, not extension", () => {
     const above = { last: 101, bollinger: { mid: 100, percentB: 0.6 } }
     const below = { last: 99, bollinger: { mid: 100, percentB: 0.4 } }
-    expect(voteVolatility(above)).toEqual({ vote: 1, observed: true, reason: "bull pull" })
-    expect(voteVolatility(below)).toEqual({ vote: -1, observed: true, reason: "bear pull" })
+    expect(voteVolatility(above)).toEqual({ enabled: true, observed: true, value: 1, reason: "bull pull" })
+    expect(voteVolatility(below)).toEqual({ enabled: true, observed: true, value: -1, reason: "bear pull" })
     // overextended (pctB outside (0.2, 0.8)) is not a pull
-    expect(voteVolatility({ last: 102, bollinger: { mid: 100, percentB: 0.9 } })).toEqual({ vote: 0, observed: true, reason: "band extreme" })
-    expect(voteVolatility({ last: 98, bollinger: { mid: 100, percentB: 0.1 } })).toEqual({ vote: 0, observed: true, reason: "band extreme" })
-    expect(voteVolatility({ last: null, bollinger: { mid: 100, percentB: 0.5 } })).toEqual({ vote: 0, observed: false, reason: "boll n/a" })
+    expect(voteVolatility({ last: 102, bollinger: { mid: 100, percentB: 0.9 } })).toEqual({ enabled: true, observed: true, value: 0, reason: "band extreme" })
+    expect(voteVolatility({ last: 98, bollinger: { mid: 100, percentB: 0.1 } })).toEqual({ enabled: true, observed: true, value: 0, reason: "band extreme" })
+    expect(voteVolatility({ last: null, bollinger: { mid: 100, percentB: 0.5 } })).toEqual({ enabled: true, observed: false, value: null, reason: "boll n/a" })
   })
 })
 
@@ -177,12 +177,12 @@ describe("plane score on synthetic series", () => {
   it("monotonic up feed: trend/momentum/strength +1; no swings; no in-band cross; band-extreme", () => {
     const p = planeScore({ candles: up() })
     expect(p.active).toBe(true)
-    expect(p.votes.trend.vote).toBe(1)
-    expect(p.votes.momentum.vote).toBe(1)
-    expect(p.votes.market_structure).toEqual({ vote: 0, observed: false, reason: "structure n/a" })
-    expect(p.votes.trend_strength.vote).toBe(1)
-    expect(p.votes.momentum_trigger.vote).toBe(0)
-    expect(p.votes.volatility.vote).toBe(0)
+    expect(p.votes.trend.value).toBe(1)
+    expect(p.votes.momentum.value).toBe(1)
+    expect(p.votes.market_structure).toEqual({ enabled: true, observed: false, value: null, reason: "structure n/a" })
+    expect(p.votes.trend_strength.value).toBe(1)
+    expect(p.votes.momentum_trigger.value).toBe(0)
+    expect(p.votes.volatility.value).toBe(0)
     expect(p.observed).toBe(5) // only structure abstains on a monotonic ramp
     expect(p.amplitude).toBe(3)
     expect(p.sign).toBe(1)
@@ -190,9 +190,9 @@ describe("plane score on synthetic series", () => {
 
   it("monotonic down feed mirrors", () => {
     const p = planeScore({ candles: down() })
-    expect(p.votes.trend.vote).toBe(-1)
-    expect(p.votes.momentum.vote).toBe(-1)
-    expect(p.votes.trend_strength.vote).toBe(-1)
+    expect(p.votes.trend.value).toBe(-1)
+    expect(p.votes.momentum.value).toBe(-1)
+    expect(p.votes.trend_strength.value).toBe(-1)
     expect(p.amplitude).toBe(-3)
     expect(p.sign).toBe(-1)
   })
@@ -200,18 +200,20 @@ describe("plane score on synthetic series", () => {
   it("flat feed: every dimension abstains from voting (all-zero plane)", () => {
     const p = planeScore({ candles: flat(260) })
     expect(p.active).toBe(true)
-    for (const dim of DIMENSIONS) expect(p.votes[dim].vote).toBe(0)
+    const zeroVoted = DIMENSIONS.filter((d) => d !== "market_structure")
+    for (const dim of zeroVoted) expect(p.votes[dim].value).toBe(0)
+    expect(p.votes.market_structure.value).toBeNull() // unobserved, not a zero vote
     expect(p.amplitude).toBe(0)
     expect(p.sign).toBe(0)
   })
 
   it("zig-zag feed produces confirmed swing structure", () => {
     const upP = planeScore({ candles: zigzag(260, { up: true }) })
-    expect(upP.votes.market_structure.vote).toBe(1)
+    expect(upP.votes.market_structure.value).toBe(1)
     expect(upP.votes.market_structure.observed).toBe(true)
     expect(upP.sign).toBe(1)
     const downP = planeScore({ candles: zigzag(260, { up: false }) })
-    expect(downP.votes.market_structure.vote).toBe(-1)
+    expect(downP.votes.market_structure.value).toBe(-1)
     expect(downP.sign).toBe(-1)
   })
 
@@ -243,7 +245,7 @@ describe("closed-bar invariant (dropOpen)", () => {
     const withForming = [...base, forming]
 
     const C = planeScore({ candles: withForming, dropOpen: false })
-    expect(C.votes.momentum.vote).not.toBe(A0.votes.momentum.vote) // test is meaningful
+    expect(C.votes.momentum.value).not.toBe(A0.votes.momentum.value) // test is meaningful
 
     const B = planeScore({ candles: withForming, dropOpen: true })
     expect(B.votes).toEqual(A0.votes)
@@ -461,5 +463,80 @@ describe("thin async loader (1d)", () => {
     expect(sourceByTf[900]).toBe("error")
     const r = await converge({ planes, sourceByTf })
     expect(r.score5).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------
+// 3a. Per-timeframe dimension config: disabled dims are excluded, not zero-voted
+// ---------------------------------------------------------------------
+
+describe("per-timeframe dimension config (3a)", () => {
+  it("a flat dim map disables a dimension on every plane, excluding its vote", () => {
+    const r = converge({
+      planes: { 60: up(), 300: flat(), 900: down() },
+      dims: { trend: false }
+    })
+    for (const p of r.planes) {
+      expect(p.votes.trend).toEqual({ enabled: false, observed: false, value: null, reason: "disabled" })
+      expect(p.enabledDims).toBe(5)
+    }
+    expect(r.planes.find((p) => p.tf === 60).amplitude).toBe(2) // momentum + trend_strength only
+    expect(r.meta.enabledDims).toBe(5)
+  })
+
+  it("disabling a dimension changes the sign-sum by exactly that dimension's vote", () => {
+    const full = planeScore({ candles: up() })
+    expect(full.amplitude).toBe(3)
+    const noTrend = planeScore({ candles: up(), dims: { trend: false } })
+    expect(noTrend.amplitude).toBe(full.amplitude - full.votes.trend.value) // 3 - 1 = 2
+    // momentum_trigger contributed 0 on this feed; disabling it must not move the sum
+    const noTrigger = planeScore({ candles: up(), dims: { momentum_trigger: false } })
+    expect(noTrigger.amplitude).toBe(full.amplitude)
+    expect(noTrigger.votes.momentum_trigger.enabled).toBe(false)
+  })
+
+  it("a per-timeframe map only affects that plane's read; strength normalizes per plane", () => {
+    const r = converge({
+      planes: { 3600: up(), 14400: up() },
+      dims: { 3600: { trend_strength: false } }
+    })
+    const h1 = r.planes.find((p) => p.tf === 3600)
+    const h4 = r.planes.find((p) => p.tf === 14400)
+    expect(h1.enabledDims).toBe(5)
+    expect(h1.amplitude).toBe(2)
+    expect(h4.enabledDims).toBe(6)
+    expect(h4.amplitude).toBe(3)
+    expect(r.meta.active).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------
+// 3b. {enabled, observed, value} honesty: unobserved <> zero
+// ---------------------------------------------------------------------
+
+describe("unobserved never zero-votes (3b)", () => {
+  it("every dimension reports {enabled, observed, value}; value is null when unobserved", () => {
+    const p = planeScore({ candles: up() })
+    for (const dim of DIMENSIONS) {
+      const v = p.votes[dim]
+      expect(v.enabled).toBe(true)
+      expect(typeof v.observed).toBe("boolean")
+    }
+    // structure is configured but unobserved on this feed: null, never a 0 vote
+    expect(p.votes.market_structure).toEqual({ enabled: true, observed: false, value: null, reason: "structure n/a" })
+    expect(p.observed).toBe(5)
+    expect(p.amplitude).toBe(3) // 1+1+1, the structure non-vote never counted
+  })
+
+  it("a genuine zero (observed) is value 0 — distinguishable from null and from disabled", () => {
+    const p = planeScore({ candles: up() })
+    expect(p.votes.momentum_trigger.observed).toBe(true)
+    expect(p.votes.momentum_trigger.value).toBe(0) // observed, genuinely zero
+    expect(p.votes.market_structure.observed).toBe(false)
+    expect(p.votes.market_structure.value).toBeNull() // unobserved
+    const disabled = planeScore({ candles: up(), dims: { momentum_trigger: false } })
+    expect(disabled.votes.momentum_trigger.enabled).toBe(false)
+    expect(disabled.votes.momentum_trigger.value).toBeNull()
+    expect(disabled.votes.momentum_trigger.reason).toBe("disabled")
   })
 })

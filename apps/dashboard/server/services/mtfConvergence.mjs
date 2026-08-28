@@ -99,15 +99,16 @@ export function resolvePreset(key, { top = false } = {}) {
   return { key, tfs, labels, weights, top: topPlane }
 }
 
-const NONE = Object.freeze({ vote: 0, observed: false, reason: "n/a" })
-const vote = (v, observed, reason) => ({ vote: v, observed, reason })
+const NONE = Object.freeze({ enabled: true, observed: false, value: null, reason: "n/a" })
+const vote = (v, observed, reason) => ({ enabled: true, observed, value: observed ? v : null, reason })
 
 // ---------------------------------------------------------------------
 // Per-dimension voters (exported for unit tests). Each returns
-// { vote: +1|0|-1, observed: boolean, reason: string }.
-// "observed" = the underlying read existed and produced a determination;
-// a missing read abstains (observed:false, vote:0) — unconfigured reads
-// never vote, and never fabricate zeros.
+// { enabled, observed, value, reason }:
+//   enabled  - the dimension participated in this run (3a)
+//   observed - the underlying read existed and produced a determination
+//   value    - +1|0|-1 when observed; null when unobserved (3b). An
+//              unobserved read NEVER counts as a zero vote.
 // ---------------------------------------------------------------------
 
 /** Trend: EMA alignment read (dash.ema.read). */
@@ -236,12 +237,17 @@ export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN
   let observed = 0
   let enabledDims = 0
   for (const dim of DIMENSIONS) {
-    if (dims[dim] === false) continue
+    if (dims[dim] === false) {
+      votes[dim] = { enabled: false, observed: false, value: null, reason: "disabled" }
+      continue
+    }
     enabledDims++
     const r = VOTERS[dim](ctx)
     votes[dim] = r
-    if (r.observed) observed++
-    amplitude += r.vote
+    if (r.observed) {
+      observed++
+      amplitude += r.value
+    }
   }
   amplitude = Math.max(-enabledDims, Math.min(enabledDims, amplitude))
 
@@ -265,7 +271,9 @@ export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN
  * @param {object} opts.planes - { tfSeconds: candles[] }
  * @param {object} [opts.sourceByTf={}] - { tfSeconds: "live"|"aggregate"|"backfill"|"unknown" }
  * @param {boolean} [opts.dropOpen=false]
- * @param {object} [opts.dims={}] - dimension enable map (default all enabled)
+ * @param {object} [opts.dims={}] - dimension enable map (3a). Either flat
+ *   { dim: boolean } applied to every plane, or per-timeframe
+ *   { tfSeconds: { dim: boolean } }; default all enabled.
  * @param {object} [opts.weights=null] - { tfSeconds: weight }; null => equal (pure sign-sum)
  * @param {object} [opts.labels={}] - { tfSeconds: "entry"|"confirm"|"bias"|"context" } plane labels (2a)
  * @param {number} [opts.minBars=MIN_BARS]
@@ -283,11 +291,16 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
   const NUMERIC_KEY = /^-?\d+(\.\d+)?$/
   const tfOf = (key) => (NUMERIC_KEY.test(key) ? Number(key) : key)
 
+  // Per-timeframe dimension config (3a): flat {dim:boolean} applies to every
+  // plane; a map keyed by timeframe seconds overrides per plane.
+  const dimsIsFlat = DIMENSIONS.some((d) => dims[d] !== undefined)
+  const dimsFor = (tf) => (dimsIsFlat ? dims : (dims[String(tf)] ?? dims[tf] ?? {}))
+
   const perPlane = tfKeys.map((key) => {
     const tf = tfOf(key)
     const source = sourceByTf[key] ?? "unknown"
     const label = labels[key] ?? labels[tf] ?? null
-    const ps = planeScore({ candles: planes[key], dropOpen, dims, minBars })
+    const ps = planeScore({ candles: planes[key], dropOpen, dims: dimsFor(tf), minBars })
     if (!ps.active) return { tf, ...ps, source, label, abstain: ps.abstain }
     return { tf, ...ps, source, label }
   })
@@ -308,9 +321,10 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
 
   const aligned = nActive > 0 && compositeDirection !== 0 ? active.filter((p) => p.sign === compositeDirection).length : 0
   const agreement = nActive > 0 && compositeDirection !== 0 ? aligned / nActive : 0
-  const enabledDimsCount = DIMENSIONS.filter((d) => dims[d] !== false).length
+  // Strength is normalized per plane by THAT plane's enabled dimension count
+  // (so per-timeframe configs cannot inflate or deflate the number).
   const avgStrength = nActive > 0
-    ? active.reduce((s, p) => s + Math.abs(p.amplitude) / Math.max(enabledDimsCount, 1), 0) / nActive
+    ? active.reduce((s, p) => s + Math.abs(p.amplitude) / Math.max(p.enabledDims, 1), 0) / nActive
     : 0
 
   const score5 = nActive === 0 ? null : Math.round((5 * aligned) / nActive)
@@ -325,7 +339,7 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
       active: nActive,
       aligned,
       compositeDirection,
-      enabledDims: enabledDimsCount,
+      enabledDims: DIMENSIONS.filter((d) => dims[d] !== false).length,
       minBars,
       dropOpen
     },

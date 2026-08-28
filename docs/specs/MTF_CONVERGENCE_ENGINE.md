@@ -181,9 +181,8 @@ Files: `mtfConvergence.mjs` (extend), `mtfConvergence.test.mjs`.
 ### Slice 3 — Per-dimension configurability
 
 Files: `mtfConvergence.mjs` (extend), tests.
-
-- [ ] 3a. `config.dimensions` per timeframe (`{ trend, momentum, market_structure, trend_strength, momentum_trigger, volatility }` booleans). Disabled dimension is excluded, not zero-voted. **Acceptance:** disabling `momentum_trigger` changes the timeframe's sign-sum only by removing that vote, and `active`/`total` counts reflect only enabled ones.
-- [ ] 3b. "Configured but unobserved ≠ zero" honesty rule: every dimension reports `{enabled, observed, value}` so a disabled/unobserved dimension is distinguishable from a genuine 0. **Acceptance:** a plane with an unobserved dimension reports `value:null` and never counts it as a 0 vote.
+- [x] 3a. `config.dimensions` per timeframe (`{ trend, momentum, market_structure, trend_strength, momentum_trigger, volatility }` booleans). Disabled dimension is excluded, not zero-voted. **Acceptance:** disabling `momentum_trigger` changes the timeframe's sign-sum only by removing that vote, and `active`/`total` counts reflect only enabled ones. — Done: `dims` accepts a flat map (all planes) or per-tf map; disabled dims emit `enabled:false, value:null, reason:"disabled"` and are excluded from amplitude/enabledDims; strength normalizes per plane by its own enabled count.
+- [x] 3b. "Configured but unobserved ≠ zero" honesty rule: every dimension reports `{enabled, observed, value}` so a disabled/unobserved dimension is distinguishable from a genuine 0. **Acceptance:** a plane with an unobserved dimension reports `value:null` and never counts it as a 0 vote. — Done: all six dims always present in each plane's `votes`; `value` is `+1|0|-1` when observed, `null` when unobserved or disabled; amplitude sums observed values only.
 - Effort: ~2–3 h. Risk: config default drift — a config-resolution unit test pins defaults.
 
 ### Slice 4 — State machine + reason strings
