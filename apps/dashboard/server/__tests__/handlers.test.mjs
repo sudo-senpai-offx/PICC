@@ -279,6 +279,22 @@ describe("PICC API handlers", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  it("trading/brokers reports a latency map (per-source candle fetch stats)", async () => {
+    const res = makeRes()
+    await handleApi(makeReq("GET", "/api/trading/brokers", undefined, {}), res, "/api/trading/brokers")
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(Array.isArray(res.body.brokers)).toBe(true)
+    expect(res.body.brokers.length).toBeGreaterThan(0)
+    // Every source that has served a fetch reports samples + median/p95/last.
+    expect(res.body.latency).toBeDefined()
+    expect(typeof res.body.latency).toBe("object")
+    for (const [source, stats] of Object.entries(res.body.latency)) {
+      expect(typeof source).toBe("string")
+      expect(stats).toMatchObject({ samples: expect.any(Number), medianMs: expect.any(Number), p95Ms: expect.any(Number), lastMs: expect.any(Number) })
+    }
+  })
+
   it("portfolio analytics and cross-venue aggregate are BOTH reachable (no shadowing)", async () => {
     // Regression: two handlers used to share POST /api/trading/portfolio — the
     // analytics one won the dispatch chain and the cross-venue aggregator was

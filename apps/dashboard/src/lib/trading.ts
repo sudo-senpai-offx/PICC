@@ -1199,11 +1199,19 @@ export interface BrokerRow {
   sessionLive?: boolean | null
 }
 
+export interface LatencyRow {
+  samples: number
+  medianMs: number | null
+  p95Ms: number | null
+  lastMs: number | null
+}
+
 export interface BrokersResult {
   ok: boolean
   activeExecutor: string
   brokers: BrokerRow[]
   summary: { total: number; configured: number; connected: number }
+  latency?: Record<string, LatencyRow>
 }
 
 /** Live status of every registered trading venue/adapter. */

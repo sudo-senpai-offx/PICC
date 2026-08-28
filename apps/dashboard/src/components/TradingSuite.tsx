@@ -469,6 +469,15 @@ export function AutopilotSuite() {
                   </p>
                 ) : null}
                 {b.notes ? <p className="muted small" style={{ margin: "4px 0 0" }}>{b.notes}</p> : null}
+                {(() => {
+                  const lat = brokers.latency?.[b.slug]
+                  if (!lat || lat.samples === 0) return null
+                  return (
+                    <p className="muted small" style={{ margin: "4px 0 0" }} title={`${lat.samples} recent fetches (ring window)`}>
+                      candle latency: median <strong>{lat.medianMs ?? "—"}ms</strong> · p95 <strong>{lat.p95Ms ?? "—"}ms</strong>
+                    </p>
+                  )
+                })()}
               </div>
             ))}
           </div>

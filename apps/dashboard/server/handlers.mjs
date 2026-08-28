@@ -2286,7 +2286,12 @@ async function _handleApiInner(req, res, url, reqId) {
   if (path === "/api/trading/brokers" && req.method === "GET") {
     try {
       const { listBrokers } = await import("./services/brokers.mjs")
-      writeJson(res, 200, await listBrokers())
+      const { dataBusStats } = await import("./services/marketDataBus.mjs")
+      const result = await listBrokers()
+      // Per-source candle-fetch latency (median/p95 over the ring window).
+      // Merged by key so rows that have never served a fetch show "—" honestly.
+      result.latency = dataBusStats()
+      writeJson(res, 200, result)
     } catch (err) {
       writeJson(res, 500, { ok: false, error: err.message })
     }
