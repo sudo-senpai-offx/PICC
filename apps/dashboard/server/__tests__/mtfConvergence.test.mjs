@@ -3,6 +3,9 @@ import {
   DIMENSIONS,
   MIN_BARS,
   STOCHRSI_TRIGGER_BAND,
+  TF_SECONDS,
+  PRESETS,
+  resolvePreset,
   voteTrend,
   voteMomentum,
   voteStructure,
@@ -333,6 +336,97 @@ describe("convergence aggregation (1b)", () => {
     const r = converge({ planes: { 60: up(), 300: up(), 900: flat() } })
     expect(r.meta.aligned).toBe(2)
     expect(r.score5).toBe(Math.round(5 * (2 / 3)))
+  })
+})
+
+// ---------------------------------------------------------------------
+// 2a/2b/2c. Five-tier presets + plane labels + weights
+// ---------------------------------------------------------------------
+
+describe("five-tier presets (2a)", () => {
+  it("declares the five presets with exact TF ladders (spec 2.5)", () => {
+    expect(PRESETS.scalping).toEqual({ entry: 60, confirm: 300, bias: 900, weights: { entry: 0.3, confirm: 0.3, bias: 0.4 } })
+    expect(PRESETS.intraday).toEqual({ entry: 300, confirm: 900, bias: 3600, weights: { entry: 0.3, confirm: 0.3, bias: 0.4 } })
+    expect(PRESETS.swingIntraday).toEqual({ entry: 900, confirm: 3600, bias: 14400, weights: { entry: 0.3, confirm: 0.3, bias: 0.4 } })
+    expect(PRESETS.swing).toEqual({ entry: 3600, confirm: 14400, bias: 86400, weights: { entry: 0.25, confirm: 0.3, bias: 0.45 } })
+    expect(PRESETS.position).toEqual({ entry: 86400, confirm: 604800, bias: 2592000, weights: { entry: 0.2, confirm: 0.35, bias: 0.45 } })
+  })
+
+  it("resolves role labels + default weights per plane", () => {
+    const r = resolvePreset("swing")
+    expect(r.key).toBe("swing")
+    expect(r.tfs).toEqual([3600, 14400, 86400])
+    expect(r.labels).toEqual({ 3600: "entry", 14400: "confirm", 86400: "bias" })
+    expect(r.weights).toEqual({ 3600: 0.25, 14400: 0.3, 86400: 0.45 })
+    expect(r.top).toBeNull()
+    expect(resolvePreset("nonsense")).toBeNull()
+  })
+
+  it("optional top plane is off by default and labeled when enabled (2c)", () => {
+    const off = resolvePreset("swing")
+    expect(off.tfs).toHaveLength(3)
+    const on = resolvePreset("swing", { top: true })
+    expect(on.tfs).toEqual([3600, 14400, 86400, 604800])
+    expect(on.labels[604800]).toBe("context")
+    // position's top plane has no higher standard timeframe -> tf null
+    const pos = resolvePreset("position", { top: true })
+    expect(pos.top).toEqual({ tf: null, label: "context" })
+    expect(pos.tfs).toEqual([86400, 604800, 2592000])
+  })
+})
+
+describe("preset weights vs sign-sum (2b)", () => {
+  it("weighted composite differs from the equal-weight sign-sum", () => {
+    // entry up (0.25) vs bias down (0.45): sign-sum cancels, weighting decides
+    const planes = { 3600: up(), 14400: flat(), 86400: down() }
+    const plain = converge({ planes })
+    expect(plain.composite).toBe(0) // pure sign-sum cancels (flat abstains from direction)
+    expect(plain.compositeDirection).toBe(0)
+
+    const preset = resolvePreset("swing")
+    const weighted = converge({ planes, weights: preset.weights })
+    expect(weighted.composite).toBeCloseTo((0.25 - 0.45) / 1, 6)
+    expect(weighted.compositeDirection).toBe(-1)
+    expect(weighted.compositeDirection).not.toBe(plain.compositeDirection)
+  })
+
+  it("plane labels pass through to converge output", () => {
+    const preset = resolvePreset("swing")
+    const r = converge({
+      planes: { 3600: up(), 14400: flat(), 86400: up() },
+      labels: preset.labels
+    })
+    expect(r.planes.find((p) => p.tf === 3600).label).toBe("entry")
+    expect(r.planes.find((p) => p.tf === 14400).label).toBe("confirm")
+    expect(r.planes.find((p) => p.tf === 86400).label).toBe("bias")
+    expect(r.planes.find((p) => p.tf === 3600).source).toBe("unknown")
+  })
+})
+
+describe("optional top plane data honesty (2c)", () => {
+  it("enabling the top plane with data absent abstains; with data it participates", () => {
+    const preset = resolvePreset("swing", { top: true })
+    const planes = {
+      [preset.tfs[0]]: up(),
+      [preset.tfs[1]]: flat(),
+      [preset.tfs[2]]: up(),
+      [preset.tfs[3]]: [] // no data for the context plane
+    }
+    const r = converge({ planes, labels: preset.labels, sourceByTf: { [preset.tfs[3]]: "backfill" } })
+    const top = r.planes.find((p) => p.tf === preset.tfs[3])
+    expect(top.active).toBe(false)
+    expect(top.abstain).toBe("no data")
+    expect(top.label).toBe("context")
+    expect(top.source).toBe("backfill")
+    expect(r.score5).toBe(Math.round(5 * (2 / 3))) // absent top plane does not change the 3-plane read
+
+    const withData = converge({
+      planes: { ...planes, [preset.tfs[3]]: up() },
+      labels: preset.labels
+    })
+    expect(withData.meta.active).toBe(4)
+    expect(withData.planes.find((p) => p.tf === preset.tfs[3]).active).toBe(true)
+    expect(withData.planes.find((p) => p.tf === preset.tfs[3]).label).toBe("context")
   })
 })
 

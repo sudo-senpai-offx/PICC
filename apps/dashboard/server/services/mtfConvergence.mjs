@@ -35,6 +35,70 @@ export const MIN_BARS = 30
  */
 export const STOCHRSI_TRIGGER_BAND = Object.freeze({ lo: 40, hi: 60 })
 
+// ---------------------------------------------------------------------
+// Five-tier presets (spec §2.5). Each preset binds three timeframes to the
+// entry/confirm/bias roles and carries per-role default weights. The semantic
+// five-tier ladder (entry -> confirm -> bias -> swing -> context) is exposed
+// via plane labels; an optional TOP plane above bias exists for the two
+// highest presets and is OFF by default (2c).
+// ---------------------------------------------------------------------
+
+export const TF_SECONDS = Object.freeze({
+  M1: 60,
+  M5: 300,
+  M15: 900,
+  M30: 1800,
+  H1: 3600,
+  H4: 14400,
+  D1: 86400,
+  W1: 604800,
+  MN: 2592000 // calendar month
+})
+
+export const PRESETS = Object.freeze({
+  scalping: { entry: TF_SECONDS.M1, confirm: TF_SECONDS.M5, bias: TF_SECONDS.M15, weights: { entry: 0.3, confirm: 0.3, bias: 0.4 } },
+  intraday: { entry: TF_SECONDS.M5, confirm: TF_SECONDS.M15, bias: TF_SECONDS.H1, weights: { entry: 0.3, confirm: 0.3, bias: 0.4 } },
+  swingIntraday: { entry: TF_SECONDS.M15, confirm: TF_SECONDS.H1, bias: TF_SECONDS.H4, weights: { entry: 0.3, confirm: 0.3, bias: 0.4 } },
+  swing: { entry: TF_SECONDS.H1, confirm: TF_SECONDS.H4, bias: TF_SECONDS.D1, weights: { entry: 0.25, confirm: 0.3, bias: 0.45 } },
+  position: { entry: TF_SECONDS.D1, confirm: TF_SECONDS.W1, bias: TF_SECONDS.MN, weights: { entry: 0.2, confirm: 0.35, bias: 0.45 } }
+})
+
+/** Optional top plane (above bias) for the two highest presets; default OFF.
+ * `tf: null` means no higher standard timeframe exists (data-undefined -> the
+ * plane can never be satisfied and abstains honestly when requested, 2c). */
+export const PRESET_TOPS = Object.freeze({
+  swing: { tf: TF_SECONDS.W1, label: "context" },
+  position: { tf: null, label: "context" }
+})
+
+/**
+ * Resolve a preset into its timeframe ladder, role labels, and default weights.
+ * @param {string} key - one of PRESETS keys
+ * @param {object} [opts]
+ * @param {boolean} [opts.top=false] - include the optional top plane (2c)
+ * @returns {object|null} { key, tfs, labels, weights, top } or null for unknown keys
+ */
+export function resolvePreset(key, { top = false } = {}) {
+  const p = PRESETS[key]
+  if (!p) return null
+  const tfs = []
+  const labels = {}
+  const weights = {}
+  for (const role of ["entry", "confirm", "bias"]) {
+    const tf = p[role]
+    tfs.push(tf)
+    labels[tf] = role
+    weights[tf] = p.weights[role]
+  }
+  const topPlane = top ? (PRESET_TOPS[key] ?? null) : null
+  if (topPlane?.tf != null) {
+    tfs.push(topPlane.tf)
+    labels[topPlane.tf] = topPlane.label
+    weights[topPlane.tf] = 1 // neutral default for the optional context plane
+  }
+  return { key, tfs, labels, weights, top: topPlane }
+}
+
 const NONE = Object.freeze({ vote: 0, observed: false, reason: "n/a" })
 const vote = (v, observed, reason) => ({ vote: v, observed, reason })
 
@@ -202,13 +266,14 @@ export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN
  * @param {object} [opts.sourceByTf={}] - { tfSeconds: "live"|"aggregate"|"backfill"|"unknown" }
  * @param {boolean} [opts.dropOpen=false]
  * @param {object} [opts.dims={}] - dimension enable map (default all enabled)
- * @param {object|null} [opts.weights=null] - { tfSeconds: weight }; null => equal (pure sign-sum)
+ * @param {object} [opts.weights=null] - { tfSeconds: weight }; null => equal (pure sign-sum)
+ * @param {object} [opts.labels={}] - { tfSeconds: "entry"|"confirm"|"bias"|"context" } plane labels (2a)
  * @param {number} [opts.minBars=MIN_BARS]
  * @returns {object} { ok, meta, composite, compositeDirection, score5, quality, confidence, planes }
  *   score5 = round(5 * aligned/active); quality 1-10; confidence %. All three are
  *   null when no plane is active ("no samples -> \u2014", R5).
  */
-export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, minBars = MIN_BARS } = {}) {
+export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, minBars = MIN_BARS } = {}) {
   const tfKeys = Object.keys(planes)
   const requested = tfKeys.length
   const available = tfKeys.filter((tf) => Array.isArray(planes[tf]) && planes[tf].length > 0).length
@@ -221,9 +286,10 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
   const perPlane = tfKeys.map((key) => {
     const tf = tfOf(key)
     const source = sourceByTf[key] ?? "unknown"
+    const label = labels[key] ?? labels[tf] ?? null
     const ps = planeScore({ candles: planes[key], dropOpen, dims, minBars })
-    if (!ps.active) return { tf, ...ps, source, abstain: ps.abstain }
-    return { tf, ...ps, source }
+    if (!ps.active) return { tf, ...ps, source, label, abstain: ps.abstain }
+    return { tf, ...ps, source, label }
   })
 
   const active = perPlane.filter((p) => p.active)

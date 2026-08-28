@@ -173,9 +173,9 @@ Files: `server/services/mtfConvergence.mjs` (new), `server/__tests__/mtfConverge
 
 Files: `mtfConvergence.mjs` (extend), `mtfConvergence.test.mjs`.
 
-- [ ] 2a. Define the 5 presets (Scalping/Intraday/Swing-Intraday/Swing/Position) as `{ entry, confirm, bias, labels, weights }` matching §2.5. **Acceptance:** test asserts each preset's TF ladder + plane labels and default weights.
-- [ ] 2b. Default equal-weight sign-sum overridable by per-preset weights. **Acceptance:** a test with bias/confirm/entry weights produces the weighted composite distinct from plain sign-sum.
-- [ ] 2c. Optional top-plane (`context`/`swing`) off-by-default toggle. **Acceptance:** default run uses 3 planes; enabling the top plane requires data present else it abstains honestly.
+- [x] 2a. Define the 5 presets (Scalping/Intraday/Swing-Intraday/Swing/Position) as `{ entry, confirm, bias, labels, weights }` matching §2.5. **Acceptance:** test asserts each preset's TF ladder + plane labels and default weights. — Done: `TF_SECONDS`, `PRESETS`, `resolvePreset`; ladder/weights/labels asserted per §2.5 row.
+- [x] 2b. Default equal-weight sign-sum overridable by per-preset weights. **Acceptance:** a test with bias/confirm/entry weights produces the weighted composite distinct from plain sign-sum. — Done: swing weights flip the composite from 0 to −0.2 vs plain sign-sum.
+- [x] 2c. Optional top-plane (`context`/`swing`) off-by-default toggle. **Acceptance:** default run uses 3 planes; enabling the top plane requires data present else it abstains honestly. — Done: `top` option; `position` top is data-undefined (`tf:null`, always abstains); absent data → `no data` abstain with `context` label + source preserved.
 - Effort: ~2–3 h. Risk: preset/weight ambiguity — pinned by acceptance tests.
 
 ### Slice 3 — Per-dimension configurability
