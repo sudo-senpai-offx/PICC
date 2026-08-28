@@ -80,6 +80,15 @@ export function addPushSubscription(subscription) {
 }
 export function listPushSubscriptions() { return state.subscriptions.length }
 
+/** Remove an existing web-push subscription by endpoint (disable flow). */
+export function removePushSubscription(endpoint) {
+  if (!endpoint) return false
+  const before = state.subscriptions.length
+  state.subscriptions = state.subscriptions.filter((s) => s.endpoint !== endpoint)
+  if (state.subscriptions.length !== before) persist()
+  return before > state.subscriptions.length
+}
+
 // ── channels ────────────────────────────────────────────────────────────────
 async function sendInApp(payload) {
   const { emitEvent } = await import("./notificationCenter.mjs")

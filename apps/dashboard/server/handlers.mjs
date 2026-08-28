@@ -2261,9 +2261,21 @@ async function _handleApiInner(req, res, url, reqId) {
         writeJson(res, 200, { ok: true, prefs: n.setPrefs(body) })
         return true
       }
+      // Public by design: the browser needs the VAPID key *before* it can
+      // subscribe, so no auth header exists yet on first load.
+      if (path === "/api/notifications/vapid-public-key" && req.method === "GET") {
+        const publicKey = process.env.VAPID_PUBLIC_KEY
+        if (!publicKey) return writeJson(res, 503, { ok: false, error: "web-push not configured (VAPID_PUBLIC_KEY unset)" })
+        return writeJson(res, 200, { publicKey })
+      }
       if (path === "/api/notifications/subscribe-push" && req.method === "POST") {
         if (!body?.endpoint) return writeJson(res, 400, { ok: false, error: "subscription endpoint required" })
         writeJson(res, 200, { ok: n.addPushSubscription(body), subscriptions: n.listPushSubscriptions() })
+        return true
+      }
+      if (path === "/api/notifications/unsubscribe-push" && req.method === "POST") {
+        if (!body?.endpoint) return writeJson(res, 400, { ok: false, error: "subscription endpoint required" })
+        writeJson(res, 200, { ok: n.removePushSubscription(body.endpoint), subscriptions: n.listPushSubscriptions() })
         return true
       }
       if (path === "/api/notifications/test" && req.method === "POST") {

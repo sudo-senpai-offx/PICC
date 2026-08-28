@@ -17,6 +17,7 @@ import { PatternPanel } from "@/components/PatternPanel"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
 import { getBrokers, type BrokersResult } from "@/lib/trading"
 import { request, post } from "@/lib/api"
+import { urlBase64ToUint8Array, isPushSupported } from "@/lib/push"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
@@ -782,6 +783,8 @@ export function AutopilotSuite() {
 export function SignalNotificationsCard() {
   const [status, setStatus] = useState<{ ok: boolean; prefs: { minConfidence: number; leadMinutes: number; windowMinutes: number; channels: Record<string, boolean> }; subscriptions: number; channels: Array<{ name: string; configured: boolean; userEnabled: boolean }> } | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [pushMsg, setPushMsg] = useState<string | null>(null)
+  const [pushBusy, setPushBusy] = useState(false)
   const [draft, setDraft] = useState<{ minConfidence: number; leadMinutes: number } | null>(null)
 
   const load = useCallback(async () => {
@@ -793,6 +796,58 @@ export function SignalNotificationsCard() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  // ── Web-push enable/disable ─────────────────────────────────────────────
+  const enablePush = async () => {
+    setPushBusy(true)
+    setPushMsg(null)
+    try {
+      if (!isPushSupported()) {
+        setPushMsg("This browser does not support Web Push.")
+        return
+      }
+      const perm = await Notification.requestPermission()
+      if (perm !== "granted") {
+        setPushMsg(`Permission ${perm} — push stays off until you allow notifications for this site.`)
+        return
+      }
+      const reg = await navigator.serviceWorker.ready
+      const keyRes = await request<{ publicKey: string }>("/notifications/vapid-public-key")
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(keyRes.publicKey)
+      })
+      const res = await post<{ ok: boolean; subscriptions: number }>("/notifications/subscribe-push", sub.toJSON())
+      setPushMsg(res.ok ? `Push enabled — synced with the server (${res.subscriptions} subscription${res.subscriptions === 1 ? "" : "s"}).` : "Server did not accept the subscription.")
+      await load()
+    } catch (e) {
+      setPushMsg((e as Error).message)
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  const disablePush = async () => {
+    setPushBusy(true)
+    setPushMsg(null)
+    try {
+      const reg = await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.getSubscription()
+      if (sub) {
+        const endpoint = sub.endpoint
+        await sub.unsubscribe()
+        // Remove server-side copy even if unsubscribe is a no-op — the server
+        // may hold a stale subscription for this endpoint (dead-sub cleanup).
+        await post<{ ok: boolean; subscriptions: number }>("/notifications/unsubscribe-push", { endpoint })
+      }
+      setPushMsg("Push disabled on this browser.")
+      await load()
+    } catch (e) {
+      setPushMsg((e as Error).message)
+    } finally {
+      setPushBusy(false)
+    }
+  }
 
   const save = async () => {
     if (!draft) return
@@ -848,6 +903,39 @@ export function SignalNotificationsCard() {
               </div>
             ))}
           </div>
+          {(() => {
+            const webpush = (status.channels ?? []).find((c) => c.name === "webpush")
+            if (!webpush?.configured) return null
+            const swSupported = isPushSupported()
+            const isEnabled = status.subscriptions > 0
+            return (
+              <div className="stack" style={{ borderTop: "1px solid var(--border, rgba(128,128,128,.2))", paddingTop: 8 }}>
+                <div className="row-between" style={{ alignItems: "center" }}>
+                  <span className="field-label">Web Push (this browser)</span>
+                  <Badge tone={isEnabled ? "success" : "muted"}>{isEnabled ? `enabled · ${status.subscriptions} server-side` : "off"}</Badge>
+                </div>
+                {!swSupported ? (
+                  <p className="muted small">This browser cannot receive Web Push (no Service Worker / PushManager).</p>
+                ) : (
+                  <>
+                    {!isEnabled ? (
+                      <Button variant="primary" disabled={pushBusy} onClick={() => void enablePush()}>
+                        {pushBusy ? "Enabling…" : "Enable push notifications"}
+                      </Button>
+                    ) : (
+                      <Button variant="secondary" disabled={pushBusy} onClick={() => void disablePush()}>
+                        {pushBusy ? "Disabling…" : "Disable push"}
+                      </Button>
+                    )}
+                    {!isEnabled && Notification?.permission === "denied" && (
+                      <p className="danger-text small">Push is blocked by the browser — unblock notifications for this site, then re-enable.</p>
+                    )}
+                    {pushMsg ? <p className="muted small">{pushMsg}</p> : null}
+                  </>
+                )}
+              </div>
+            )
+          })()}
           <div className="row gap">
             <Button variant="primary" onClick={save}>Save preferences</Button>
             <Button variant="secondary" onClick={testSend}>Send test</Button>

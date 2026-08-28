@@ -295,6 +295,52 @@ describe("PICC API handlers", () => {
     }
   })
 
+  it("notifications/vapid-public-key is public and honest when unset vs set", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "picc-vapid-test-"))
+    vi.stubEnv("PICC_NOTIFICATION_DATA_DIR", dir)
+    delete process.env.VAPID_PUBLIC_KEY
+    vi.resetModules()
+    const { handleApi: hApi } = await import("../handlers.mjs?vapid-unset")
+
+    const unset = makeRes()
+    await hApi(makeReq("GET", "/api/notifications/vapid-public-key", undefined, {}), unset, "/api/notifications/vapid-public-key")
+    expect(unset.status).toBe(503)
+    expect(unset.body.ok).toBe(false)
+
+    process.env.VAPID_PUBLIC_KEY = "test-public-key"
+    vi.resetModules()
+    const { handleApi: hApi2 } = await import("../handlers.mjs?vapid-set")
+    const set = makeRes()
+    await hApi2(makeReq("GET", "/api/notifications/vapid-public-key", undefined, {}), set, "/api/notifications/vapid-public-key")
+    expect(set.status).toBe(200)
+    expect(set.body.publicKey).toBe("test-public-key")
+    delete process.env.VAPID_PUBLIC_KEY
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("notifications subscribe-push then unsubscribe-push round-trips the server subscription", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "picc-sub-test-"))
+    vi.stubEnv("PICC_NOTIFICATION_DATA_DIR", dir)
+    vi.resetModules()
+    const { handleApi: hApi } = await import("../handlers.mjs?push-sub-test")
+
+    const endpoint = `https://push.example/${randomBytes(8).toString("hex")}`
+    const add = makeRes()
+    await hApi(makeReq("POST", "/api/notifications/subscribe-push", { endpoint, keys: { p256dh: "k", auth: "a" } }, {}), add, "/api/notifications/subscribe-push")
+    expect(add.status).toBe(200)
+    expect(add.body.ok).toBe(true)
+    expect(add.body.subscriptions).toBe(1)
+
+    const remove = makeRes()
+    await hApi(makeReq("POST", "/api/notifications/unsubscribe-push", { endpoint }, {}), remove, "/api/notifications/unsubscribe-push")
+    expect(remove.status).toBe(200)
+    expect(remove.body.ok).toBe(true)
+    expect(remove.body.subscriptions).toBe(0)
+    // Let the 50ms-debounced persist() land before the tmp dir is removed.
+    await new Promise((r) => setTimeout(r, 80))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   it("portfolio analytics and cross-venue aggregate are BOTH reachable (no shadowing)", async () => {
     // Regression: two handlers used to share POST /api/trading/portfolio — the
     // analytics one won the dispatch chain and the cross-venue aggregator was

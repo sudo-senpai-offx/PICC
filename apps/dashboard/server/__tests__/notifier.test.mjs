@@ -17,7 +17,9 @@ beforeAll(async () => {
   notifier = await import("../services/notifier.mjs")
 })
 
-afterAll(() => {
+afterAll(async () => {
+  // Let the debounced persist() settle before removing the tmp data dir.
+  await new Promise((r) => setTimeout(r, 80))
   delete process.env.PICC_NOTIFICATION_DATA_DIR
   rmSync(tmp, { recursive: true, force: true })
 })
@@ -74,5 +76,23 @@ describe("generic notifier dispatcher", () => {
     expect(notifier.addPushSubscription({ endpoint: "https://push.example/abc" })).toBe(true)
     expect(notifier.addPushSubscription({ endpoint: "https://push.example/abc" })).toBe(true)
     expect(notifier.listPushSubscriptions()).toBe(1)
+  })
+
+  it("removePushSubscription deletes only the matching endpoint and persists the decrease", async () => {
+    const before = notifier.listPushSubscriptions()
+    notifier.addPushSubscription({ endpoint: "https://push.example/remove-me" })
+    expect(notifier.listPushSubscriptions()).toBe(before + 1)
+
+    // Removing an unknown endpoint is a clean no-op (false, no count change).
+    expect(notifier.removePushSubscription("https://push.example/nope")).toBe(false)
+    expect(notifier.listPushSubscriptions()).toBe(before + 1)
+
+    // Removing the live one succeeds and the count drops back.
+    expect(notifier.removePushSubscription("https://push.example/remove-me")).toBe(true)
+    expect(notifier.listPushSubscriptions()).toBe(before)
+
+    // Missing/empty endpoint is rejected without side effects.
+    expect(notifier.removePushSubscription(undefined)).toBe(false)
+    expect(notifier.removePushSubscription("")).toBe(false)
   })
 })
