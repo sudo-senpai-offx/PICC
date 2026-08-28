@@ -189,8 +189,8 @@ Files: `mtfConvergence.mjs` (extend), tests.
 
 Files: `mtfConvergence.mjs` (extend), tests.
 
-- [ ] 4a. Deterministic state bands mapping composite + plane alignment → one of `NO TRADE/WAIT/WATCH/ONLY/BIAS` (per direction). **Acceptance:** each state reachable by an explicit synthetic input in tests (`R4`).
-- [ ] 4b. `why` reason composer: `H1/4H conflict`, `ADX<20 no trend`, `low volatility`, `strong bull confluence`, `bear regime only`, plane-conflict, data-abstain. **Acceptance:** tests assert the exact reason string emitted per state.
+- [x] 4a. Deterministic state bands mapping composite + plane alignment → one of `NO TRADE/WAIT/WATCH/ONLY/BIAS` (per direction). **Acceptance:** each state reachable by an explicit synthetic input in tests (`R4`). — Done: `classifyState` bands (WAIT <½ aligned, WATCH ≥½, ONLY ≥2/3, BIAS 1.0, NO TRADE on dir-0/zero-active/conservative veto); every state covered by synthetic fixtures.
+- [x] 4b. `why` reason composer: `H1/4H conflict`, `ADX<20 no trend`, `low volatility`, `strong bull confluence`, `bear regime only`, plane-conflict, data-abstain. **Acceptance:** tests assert the exact reason string emitted per state. — Done: composer strings locked by exact-`toEqual` tests; extras (`H1/4H conflict`, `ADX<20 no trend`, `data: n of m planes active`) appended deterministically.
 - Effort: ~2–3 h. Risk: reason-string churn — locked by string-assertion tests.
 
 ### Slice 5 — ADX graded gate + StochRSI trigger correction

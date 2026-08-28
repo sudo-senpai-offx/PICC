@@ -14,6 +14,7 @@ import {
   voteVolatility,
   planeScore,
   converge,
+  classifyState,
   fetchPlanes
 } from "../services/mtfConvergence.mjs"
 
@@ -538,5 +539,113 @@ describe("unobserved never zero-votes (3b)", () => {
     expect(disabled.votes.momentum_trigger.enabled).toBe(false)
     expect(disabled.votes.momentum_trigger.value).toBeNull()
     expect(disabled.votes.momentum_trigger.reason).toBe("disabled")
+  })
+})
+
+// ---------------------------------------------------------------------
+// 4a. State machine — deterministic bands + synthetic reachability (R4)
+// ---------------------------------------------------------------------
+
+describe("state machine (4a)", () => {
+  it("NO TRADE: no directional composite (signs cancel)", () => {
+    const r = converge({ planes: { 60: up(), 300: flat(), 900: down() } })
+    expect(r.state).toBe("NO TRADE")
+    expect(r.why).toBe("no directional composite")
+  })
+
+  it("NO TRADE: zero active planes never fabricates a direction", () => {
+    const r = converge({ planes: { 60: [] } })
+    expect(r.state).toBe("NO TRADE")
+    expect(r.why).toBe("no data") // requested but nothing fetched at all
+    const abstain = converge({ planes: { 60: up(10), 300: up(10) } })
+    expect(abstain.state).toBe("NO TRADE")
+    expect(abstain.why).toBe("zero active planes (data abstain)") // requested + fetched-but-thin
+    const noData = converge({ planes: {} })
+    expect(noData.state).toBe("NO TRADE")
+    expect(noData.why).toBe("no data")
+  })
+
+  it("NO TRADE: conservative-mode HTF veto beats entry alignment (R8)", () => {
+    const planes = { 60: up(), 300: up(), 900: down() } // entry+confirm up, bias down
+    const plain = converge({ planes })
+    expect(plain.state).toBe("LONG ONLY")
+    const veto = converge({ planes, conservative: true })
+    expect(veto.state).toBe("NO TRADE")
+    expect(veto.why).toBe("H1/4H conflict (conservative veto)")
+  })
+
+  it("WAIT: few planes aligned", () => {
+    const r = converge({ planes: { 60: up(), 300: flat(), 900: flat(), 3600: flat() } })
+    expect(r.state).toBe("WAIT")
+    expect(r.why).toBe("weak alignment (1 of 4 planes aligned); low volatility; ADX<20 no trend")
+  })
+
+  it("WATCH both directions: lean established, ladder unconfirmed", () => {
+    const longR = converge({ planes: { 60: up(), 300: up(), 900: down(), 3600: flat() } })
+    expect(longR.meta.aligned).toBe(2)
+    expect(longR.state).toBe("LONG WATCH") // 2 of 4 aligned -> 0.5
+    const shortR = converge({ planes: { 60: down(), 300: down(), 900: up(), 3600: flat() } })
+    expect(shortR.state).toBe("SHORT WATCH")
+  })
+
+  it("ONLY both directions: strong alignment, higher planes agree", () => {
+    const longR = converge({ planes: { 60: up(), 300: up(), 900: flat() } })
+    expect(longR.state).toBe("LONG ONLY") // 2 of 3 -> 2/3
+    expect(longR.why).toBe("bull confluence (higher planes agree); ADX<20 no trend")
+    const shortR = converge({ planes: { 60: down(), 300: down(), 900: flat() } })
+    expect(shortR.state).toBe("SHORT ONLY")
+    expect(shortR.why).toBe("bear confluence (higher planes agree); ADX<20 no trend")
+  })
+
+  it("BIAS both directions: full confluence", () => {
+    const longR = converge({ planes: { 60: up(), 300: up(), 900: up() } })
+    expect(longR.state).toBe("LONG BIAS")
+    expect(longR.why).toBe("strong bull confluence")
+    const shortR = converge({ planes: { 60: down(), 300: down(), 900: down() } })
+    expect(shortR.state).toBe("SHORT BIAS")
+    expect(shortR.why).toBe("bear regime only")
+  })
+})
+
+// ---------------------------------------------------------------------
+// 4b. why reason composer — exact strings locked (R4)
+// ---------------------------------------------------------------------
+
+describe("why reason composer (4b)", () => {
+  it("H1/4H conflict surfaces even without conservative veto", () => {
+    const r = converge({ planes: { 60: up(), 300: up(), 900: down() } })
+    expect(r.state).toBe("LONG ONLY")
+    expect(r.why).toContain("H1/4H conflict")
+  })
+
+  it("ADX<20 no trend is read from the bias/highest plane", () => {
+    const r = converge({ planes: { 60: up(), 300: flat() } })
+    expect(r.state).toBe("LONG WATCH") // 1 of 2 aligned -> 0.5
+    expect(r.why).toContain("ADX<20 no trend")
+  })
+
+  it("data-abstain is appended when a plane lacks samples", () => {
+    const r = converge({ planes: { 60: up(), 300: up(), 900: up(10) } })
+    expect(r.state).toBe("LONG BIAS")
+    expect(r.why).toBe("strong bull confluence; data: 2 of 3 planes active")
+  })
+
+  it("exact per-state strings are locked against drift", () => {
+    expect(classifyState({ compositeDirection: 1, aligned: 2, nActive: 3 })).toEqual({
+      state: "LONG ONLY",
+      why: "bull confluence (higher planes agree)"
+    })
+    expect(classifyState({ compositeDirection: -1, aligned: 1, nActive: 4, lowVol: true })).toEqual({
+      state: "WAIT",
+      why: "weak alignment (1 of 4 planes aligned); low volatility"
+    })
+    expect(classifyState({ nActive: 0, available: 2 })).toEqual({
+      state: "NO TRADE",
+      why: "zero active planes (data abstain)"
+    })
+    expect(classifyState({ compositeDirection: 0, biasNoTrend: true, nActive: 2, aligned: 0 })).toEqual({
+      state: "NO TRADE",
+      why: "ADX<20 no trend"
+    })
   })
 })

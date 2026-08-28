@@ -276,12 +276,14 @@ export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN
  *   { tfSeconds: { dim: boolean } }; default all enabled.
  * @param {object} [opts.weights=null] - { tfSeconds: weight }; null => equal (pure sign-sum)
  * @param {object} [opts.labels={}] - { tfSeconds: "entry"|"confirm"|"bias"|"context" } plane labels (2a)
+ * @param {boolean} [opts.conservative=false] - HTF veto (R8): the two highest
+ *   signed planes conflicting forces NO TRADE, even with entry aligned.
  * @param {number} [opts.minBars=MIN_BARS]
- * @returns {object} { ok, meta, composite, compositeDirection, score5, quality, confidence, planes }
+ * @returns {object} { ok, meta, composite, compositeDirection, score5, quality, confidence, planes, state, why }
  *   score5 = round(5 * aligned/active); quality 1-10; confidence %. All three are
  *   null when no plane is active ("no samples -> \u2014", R5).
  */
-export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, minBars = MIN_BARS } = {}) {
+export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, conservative = false, minBars = MIN_BARS } = {}) {
   const tfKeys = Object.keys(planes)
   const requested = tfKeys.length
   const available = tfKeys.filter((tf) => Array.isArray(planes[tf]) && planes[tf].length > 0).length
@@ -331,6 +333,26 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
   const quality = nActive === 0 ? null : Math.round(10 * (0.5 * (nActive / Math.max(available, 1)) + 0.5 * agreement))
   const confidence = nActive === 0 ? null : Math.round(100 * (0.6 * agreement + 0.4 * avgStrength))
 
+  // State-machine observables (R4). Deterministic; derived only from what the
+  // planes actually read — never from order intent.
+  const signedDesc = active.filter((p) => p.sign !== 0).sort((a, b) => b.tf - a.tf)
+  const topTwo = signedDesc.slice(0, 2)
+  const higherConflict = topTwo.length === 2 && topTwo[0].sign !== topTwo[1].sign
+  const byTfDesc = active.slice().sort((a, b) => b.tf - a.tf)
+  const biasPlane = byTfDesc.find((p) => p.label === "bias") ?? byTfDesc[0]
+  const biasNoTrend = biasPlane?.votes?.trend_strength?.reason === "no trend"
+  const lowVol = active.length > 0 && active.every((p) => p.votes.volatility.observed && p.votes.volatility.value === 0)
+  const { state, why } = classifyState({
+    compositeDirection,
+    aligned,
+    nActive,
+    available,
+    conservative,
+    higherConflict,
+    biasNoTrend,
+    lowVol
+  })
+
   return {
     ok: requested > 0,
     meta: {
@@ -341,15 +363,79 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
       compositeDirection,
       enabledDims: DIMENSIONS.filter((d) => dims[d] !== false).length,
       minBars,
-      dropOpen
+      dropOpen,
+      conservative
     },
     composite,
     compositeDirection,
     score5,
     quality,
     confidence,
+    state,
+    why,
     planes: perPlane
   }
+}
+
+// ---------------------------------------------------------------------
+// State machine (R4) — deterministic bands fixed by tests
+//
+//   NO TRADE          zero active planes | conservative HTF veto | no direction
+//   WAIT              directional lean with < 1/2 of active planes aligned
+//   LONG/SHORT WATCH  1/2 .. < 2/3 aligned (lean established, ladder unconfirmed)
+//   LONG/SHORT ONLY   2/3 .. < 1 aligned (strong, higher planes agree)
+//   LONG/SHORT BIAS   full confluence (all active planes aligned)
+//
+// `why` accumulates deterministic reason strings; every state below is
+// reachable by the synthetic fixtures in the test file.
+// ---------------------------------------------------------------------
+export function classifyState({
+  compositeDirection = 0,
+  aligned = 0,
+  nActive = 0,
+  available = 0,
+  conservative = false,
+  higherConflict = false,
+  biasNoTrend = false,
+  lowVol = false
+} = {}) {
+  if (nActive === 0) {
+    return { state: "NO TRADE", why: available === 0 ? "no data" : "zero active planes (data abstain)" }
+  }
+  if (conservative && higherConflict) {
+    return { state: "NO TRADE", why: "H1/4H conflict (conservative veto)" }
+  }
+  if (compositeDirection === 0) {
+    return { state: "NO TRADE", why: biasNoTrend ? "ADX<20 no trend" : "no directional composite" }
+  }
+  const dir = compositeDirection > 0 ? "LONG" : "SHORT"
+  const agreement = aligned / nActive
+  const extras = []
+  if (higherConflict) extras.push("H1/4H conflict")
+  if (biasNoTrend) extras.push("ADX<20 no trend")
+  if (available > nActive) extras.push(`data: ${nActive} of ${available} planes active`)
+
+  if (agreement >= 1) {
+    return {
+      state: `${dir} BIAS`,
+      why: [dir === "LONG" ? "strong bull confluence" : "bear regime only", ...extras].join("; ")
+    }
+  }
+  if (agreement >= 2 / 3) {
+    return {
+      state: `${dir} ONLY`,
+      why: [dir === "LONG" ? "bull confluence (higher planes agree)" : "bear confluence (higher planes agree)", ...extras].join("; ")
+    }
+  }
+  if (agreement >= 0.5) {
+    return {
+      state: `${dir} WATCH`,
+      why: [`directional lean (${aligned} of ${nActive} planes aligned)`, ...extras].join("; ")
+    }
+  }
+  const weakParts = [`weak alignment (${aligned} of ${nActive} planes aligned)`]
+  if (lowVol) weakParts.push("low volatility")
+  return { state: "WAIT", why: [...weakParts, ...extras].join("; ") }
 }
 
 /**
