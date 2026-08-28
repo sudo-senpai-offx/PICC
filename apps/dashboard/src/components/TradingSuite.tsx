@@ -5,6 +5,7 @@ import { LiveMarketBoard } from "@/components/LiveMarketBoard"
 import { MarketIntelPanel } from "@/components/MarketIntelPanel"
 import { LiveDecisionsPanel } from "@/components/LiveDecisionsPanel"
 import { LedgerPanel } from "@/components/LedgerPanel"
+import { ConvergencePanel } from "@/components/ConvergencePanel"
 import { TradingChart } from "@/components/TradingChart"
 import { BacktestPanel } from "@/components/BacktestPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
@@ -174,6 +175,7 @@ export function MarketsSuite() {
           </Card>
           <ModelMatrixPanel assetId={chartAsset} />
           <MarketIntelPanel />
+          <ConvergencePanel />
           <LiveMarketBoard />
           <LiveDecisionsPanel />
           <LedgerPanel />

@@ -244,6 +244,73 @@ export interface TradingSuiteSnapshot {
   demo: BrokerDemoStatus | null
   deals: { ok: boolean; deals: DemoDeal[] } | null
   analytics: DemoAnalyticsResult | null
+  convergence: ConvergenceResult | null
+}
+
+// ── MTF convergence engine (spec MTF_CONVERGENCE_ENGINE, slices 1-7) ────────
+// The multi-timeframe read for the viewed asset: one plane per ladder
+// timeframe (in-buffer "live", M1-aggregated "aggregate", or absent "none"),
+// a deterministic state machine (NO TRADE / WAIT / WATCH / ONLY / BIAS) and a
+// 5-scale alignment score. Absent reads are null, never zero (R10 honesty).
+// ModelMatrixResult-shaped (:1170-1181 in trading.ts): plain JSON, envelope
+// fields optional, everything renderable directly.
+export type ConvergenceState =
+  | "NO TRADE"
+  | "WAIT"
+  | "LONG WATCH"
+  | "SHORT WATCH"
+  | "LONG ONLY"
+  | "SHORT ONLY"
+  | "LONG BIAS"
+  | "SHORT BIAS"
+
+export interface ConvergenceDimensionVote {
+  enabled: boolean
+  observed: boolean
+  value: number | null
+  reason: string
+}
+
+export interface ConvergencePlane {
+  tf: number
+  label: "entry" | "confirm" | "bias" | "context" | null
+  source: "live" | "aggregate" | "none" | "error" | "unknown" | string
+  stale: boolean
+  active: boolean
+  sign: 1 | 0 | -1
+  score: number | null
+  amplitude: number | null
+  adx: number | null
+  volatility: number | null
+  abstain: string | null
+  enabledDims: number
+  votes: Record<string, ConvergenceDimensionVote>
+}
+
+export interface ConvergenceResult {
+  ok: boolean
+  assetId?: string | null
+  asset?: string | null
+  source?: string
+  ts?: number
+  meta: {
+    requested: number
+    available: number
+    active: number
+    aligned: number
+    compositeDirection: 1 | 0 | -1
+    minBars: number
+    dropOpen: boolean
+    conservative: boolean
+  }
+  composite: number
+  compositeDirection: 1 | 0 | -1
+  score5: number | null
+  quality: number | null
+  confidence: number | null
+  state: ConvergenceState
+  why: string | string[]
+  planes: ConvergencePlane[]
 }
 
 /**

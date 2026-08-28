@@ -1,8 +1,9 @@
 // PICC Realtime Trading Suite — a single aggregated snapshot of every trading
 // metric the suite shows (paper status, positions, history, signals, accuracy,
-// accuracy ledger, and the ExpertOption demo/autopilot status), served over the
-// existing /api/trading/realtime SSE stream as periodic `suite` events so the
-// whole suite stays in sync without per-card polling.
+// accuracy ledger, the ExpertOption demo/autopilot status, and the MTF
+// convergence read), served over the existing /api/trading/realtime SSE stream
+// as periodic `suite` events so the whole suite stays in sync without
+// per-card polling.
 //
 // Each section is cached independently (paper ~4s, demo ~12s) so the snapshot
 // is cheap even with many connected clients, and a failing section never kills
@@ -12,6 +13,7 @@ import { ledgerStats, ledgerEngineStats, ledgerHistory } from "./accuracyLedger.
 import { demoStatus, demoDeals, demoAnalytics } from "./autopilot.mjs"
 import { getBrokerStats } from "./brokers/index.mjs"
 import { getMarketIntel } from "./marketIntel.mjs"
+import { convergenceSection } from "./marketConvergence.mjs"
 
 const SECTIONS = {
   trading: { ttl: 4000, load: () => tradingStatus() },
@@ -35,7 +37,11 @@ const SECTIONS = {
   },
   demo: { ttl: 12000, load: () => demoStatus() },
   deals: { ttl: 12000, load: () => demoDeals(30) },
-  analytics: { ttl: 12000, load: () => demoAnalytics() }
+  analytics: { ttl: 12000, load: () => demoAnalytics() },
+  // MTF convergence read for the viewed asset (slice 7b). Own TTL between the
+  // fast intraday sections and the slow demo ones — aggregation of 30m/4h from
+  // the M1 buffer is cheap, but the read should not flap every suite tick.
+  convergence: { ttl: 10000, load: () => convergenceSection() }
 }
 
 const cache = Object.fromEntries(Object.keys(SECTIONS).map((k) => [k, { at: 0, data: null }]))

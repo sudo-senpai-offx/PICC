@@ -20,6 +20,24 @@ vi.mock("../services/autopilot.mjs", () => ({
   demoDeals: vi.fn(async () => ({ ok: true, deals: [{ id: "d1" }] })),
   demoAnalytics: vi.fn(async () => ({ overview: { deals: 1 } }))
 }))
+vi.mock("../services/marketConvergence.mjs", () => ({
+  convergenceSection: vi.fn(async () => ({
+    ok: true,
+    assetId: "EURUSD",
+    asset: "EURUSD",
+    source: "liveEO-buffers",
+    ts: 1,
+    meta: { requested: 2, available: 2, active: 2, aligned: 2, compositeDirection: 1, minBars: 30, dropOpen: false, conservative: false },
+    composite: 1,
+    compositeDirection: 1,
+    score5: 5,
+    quality: 10,
+    confidence: 80,
+    state: "LONG BIAS",
+    why: ["strong bull confluence"],
+    planes: []
+  }))
+}))
 vi.mock("../services/liveEO.mjs", () => ({
   liveEOStats: vi.fn(() => ({ status: "idle" })),
   liveEOData: vi.fn(async () => ({ status: "idle", mode: null, account: null, viewed: null, assets: [] }))
@@ -43,6 +61,7 @@ const trading = await import("../services/trading.mjs")
 const ledger = await import("../services/accuracyLedger.mjs")
 const autopilot = await import("../services/autopilot.mjs")
 const liveEO = await import("../services/liveEO.mjs")
+const marketConvergence = await import("../services/marketConvergence.mjs")
 
 let m
 beforeAll(async () => {
@@ -66,6 +85,8 @@ describe("tradingSuiteSnapshot", () => {
     expect(snap.deals.deals).toHaveLength(1)
     expect(snap.analytics.overview.deals).toBe(1)
     expect(snap.intel).toMatchObject({ ok: true, best: null, ranked: [] })
+    expect(snap.convergence.state).toBe("LONG BIAS")
+    expect(snap.convergence.score5).toBe(5)
   })
 
   it("serves cached sections without re-loading within the TTL", async () => {
@@ -91,6 +112,19 @@ describe("tradingSuiteSnapshot", () => {
     expect(snap.analytics).toBeNull()
     expect(snap.demo).toBeTruthy()
     expect(snap.trading.ok).toBe(true)
+    m.bustRealtimeSuite()
+  })
+
+  it("fault-isolates a failing convergence section to null (no stream death)", async () => {
+    m.bustRealtimeSuite()
+    vi.mocked(marketConvergence.convergenceSection).mockRejectedValueOnce(new Error("buffers down"))
+    const snap = await m.tradingSuiteSnapshot()
+    expect(snap.convergence).toBeNull()
+    expect(snap.demo).toBeTruthy()
+    expect(snap.trading.ok).toBe(true)
+    // A healthy convergence section still streams on later ticks.
+    const snap2 = await m.tradingSuiteSnapshot()
+    expect(snap2.convergence.state).toBe("LONG BIAS")
     m.bustRealtimeSuite()
   })
 
