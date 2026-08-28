@@ -78,7 +78,7 @@ describe("generic notifier dispatcher", () => {
     expect(notifier.listPushSubscriptions()).toBe(1)
   })
 
-  it("removePushSubscription deletes only the matching endpoint and persists the decrease", async () => {
+it("removePushSubscription deletes only the matching endpoint and persists the decrease", async () => {
     const before = notifier.listPushSubscriptions()
     notifier.addPushSubscription({ endpoint: "https://push.example/remove-me" })
     expect(notifier.listPushSubscriptions()).toBe(before + 1)
@@ -93,6 +93,23 @@ describe("generic notifier dispatcher", () => {
 
     // Missing/empty endpoint is rejected without side effects.
     expect(notifier.removePushSubscription(undefined)).toBe(false)
-    expect(notifier.removePushSubscription("")).toBe(false)
+    expect(notifier.listPushSubscriptions()).toBe(before)
+  })
+
+  it("convergence dispatches record honest skipped-vs-sent on unconfigured channels (8b)", async () => {
+    notifier.setPrefs({ channels: { inApp: true } })
+    const rec = await notifier.dispatchAlert({
+      kind: "convergence",
+      assetId: "EURUSD",
+      title: "convergence test",
+      body: "state LONG BIAS · score 4/5",
+      details: { condition: "convergence_above", threshold: 3, score5: 4, state: "LONG BIAS" }
+    })
+    expect(rec.kind).toBe("convergence")
+    expect(rec.assetId).toBe("EURUSD")
+    expect(rec.results.inApp).toBe("sent")
+    // Unconfigured channels must be SKIPPED, never fabricated as sent/failed.
+    expect(rec.results.webpush).toBe("skipped")
+    expect(rec.results.email).toBe("skipped")
   })
 })

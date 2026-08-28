@@ -5,13 +5,18 @@ import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = join(__dirname, "..", "data")
+// PICC_ALERTS_DATA_DIR lets tests redirect the store away from the
+// developer's real alerts.json (same pattern as PICC_NOTIFICATION_DATA_DIR).
+const DATA_DIR = process.env.PICC_ALERTS_DATA_DIR || join(__dirname, "..", "data")
 const ALERTS_FILE = join(DATA_DIR, "alerts.json")
 
 let alerts = []
 let alertHistory = []
 const MAX_HISTORY = 500
 let priceCache = new Map() // symbol -> { price, prevPrice, ts }
+// symbol -> { score5, state, confidence, ts } — fed by updateConvergence (the
+// MTF convergence read), consumed by the "convergence_above" condition (8a).
+let convergenceCache = new Map()
 let listeners = new Set()
 let evalInterval = null
 
@@ -38,14 +43,19 @@ export function listAlerts(userId = null) {
   return [...alerts]
 }
 
-export function createAlert({ userId = "default", symbol, condition, value, message = "", recurring = false, expiresAt = null }) {
+export function createAlert({ userId = "default", symbol, condition, value, message = "", recurring = false, expiresAt = null, band = null }) {
   const id = `alert_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const alert = {
     id,
     userId,
     symbol: String(symbol).toUpperCase(),
-    condition, // "price_above" | "price_below" | "price_crossing_up" | "price_crossing_down" | "pct_change_up" | "pct_change_down"
+    // "price_above" | "price_below" | "price_crossing_up" | "price_crossing_down" |
+    // "pct_change_up" | "pct_change_down" | "convergence_above"
+    condition,
     value: Number(value),
+    // Optional state band for convergence_above: an array of engine states
+    // (e.g. ["LONG BIAS", "SHORT BIAS"]) that also fires the alert.
+    band: Array.isArray(band) && band.length ? band : null,
     message: String(message || ""),
     recurring: Boolean(recurring),
     expiresAt: expiresAt ? new Date(expiresAt).getTime() : null,
@@ -53,6 +63,7 @@ export function createAlert({ userId = "default", symbol, condition, value, mess
     createdAt: Date.now(),
     triggeredAt: null,
     lastPrice: null,
+    lastScore: null,
     prevPrice: null
   }
   alerts.push(alert)
@@ -99,6 +110,27 @@ export function getPrice(symbol) {
   return priceCache.get(String(symbol).toUpperCase()) ?? null
 }
 
+/**
+ * Feed the latest MTF convergence read per symbol (slice 8a). Called by the
+ * convergence evaluator (marketConvergence.convergenceSection); the armed
+ * `convergence_above` alerts then trigger on the next evaluation pass.
+ * @param {string} symbol
+ * @param {{ score5: number|null, state: string|null, confidence?: number|null }} read
+ */
+export function updateConvergence(symbol, { score5 = null, state = null, confidence = null } = {}) {
+  const key = String(symbol).toUpperCase()
+  convergenceCache.set(key, {
+    score5: score5 == null ? null : Number(score5),
+    state: state ?? null,
+    confidence: confidence == null ? null : Number(confidence),
+    ts: Date.now()
+  })
+}
+
+export function getConvergence(symbol) {
+  return convergenceCache.get(String(symbol).toUpperCase()) ?? null
+}
+
 function crosses(prev, curr, threshold) {
   if (prev == null || curr == null) return false
   return (prev < threshold && curr >= threshold) || (prev > threshold && curr <= threshold)
@@ -121,10 +153,50 @@ function evaluateAlert(alert) {
     saveAlerts()
     return null
   }
+  let triggered = false
+
+  // convergence_above: no prices involved — reads the MTF convergence cache
+  // (score5 0-5 threshold and/or a configured state band).
+  if (alert.condition === "convergence_above") {
+    const conv = convergenceCache.get(alert.symbol)
+    if (!conv || conv.score5 == null) return null // absent read never triggers
+    const bandHit = Array.isArray(alert.band) && alert.band.includes(conv.state)
+    triggered = bandHit || conv.score5 >= alert.value
+    if (triggered) {
+      alert.lastScore = conv.score5
+      alert.triggeredAt = Date.now()
+      if (alert.recurring) {
+        alert.status = "armed" // re-arm
+      } else {
+        alert.status = "triggered"
+      }
+      saveAlerts()
+      const notification = {
+        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        alertId: alert.id,
+        symbol: alert.symbol,
+        condition: alert.condition,
+        value: alert.value,
+        band: alert.band,
+        score5: conv.score5,
+        state: conv.state,
+        confidence: conv.confidence ?? null,
+        message: alert.message || `${alert.symbol} convergence ${conv.score5}/5 (${conv.state ?? "—"})`,
+        ts: Date.now()
+      }
+      for (const cb of listeners) {
+        try { cb(notification) } catch { /* ignore */ }
+      }
+      alertHistory.unshift(notification)
+      if (alertHistory.length > MAX_HISTORY) alertHistory.length = MAX_HISTORY
+      return notification
+    }
+    return null
+  }
+
   const cached = priceCache.get(alert.symbol)
   if (!cached || cached.price == null) return null
   const { price, prevPrice } = cached
-  let triggered = false
 
   switch (alert.condition) {
     case "price_above":
@@ -192,12 +264,19 @@ export function onAlert(cb) {
 }
 
 // ── Periodic evaluation ──────────────────────────────────────────────
+/** Evaluate every armed alert once. Exported so tests stay timer-free. */
+export function evaluateAlerts() {
+  for (const alert of alerts) {
+    try {
+      evaluateAlert(alert)
+    } catch { /* one bad alert never takes the loop down */ }
+  }
+}
+
 export function startAlertEngine(intervalMs = 2000) {
   if (evalInterval) return
   evalInterval = setInterval(() => {
-    for (const alert of alerts) {
-      evaluateAlert(alert)
-    }
+    evaluateAlerts()
   }, intervalMs)
   return true
 }

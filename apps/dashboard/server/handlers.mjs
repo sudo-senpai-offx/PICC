@@ -567,7 +567,7 @@ const SCHEMAS = {
   },
   alertCreate: {
     symbol: [required, isString()],
-    condition: [required, oneOf("price_above", "price_below", "percent_change", "rsi_above", "rsi_below", "volume_spike")],
+    condition: [required, oneOf("price_above", "price_below", "percent_change", "rsi_above", "rsi_below", "volume_spike", "convergence_above")],
     value: [required]
   },
   signalResolve: {
@@ -1807,9 +1807,9 @@ async function _handleApiInner(req, res, url, reqId) {
   if (path === "/api/trading/alerts" && req.method === "POST") {
     const { createAlert } = await import("./services/alertEngine.mjs")
     if (validateOr400(res, body, "alertCreate")) return true
-    const { symbol, condition, value, message, recurring, expiresAt } = body ?? {}
+    const { symbol, condition, value, message, recurring, expiresAt, band } = body ?? {}
     if (!symbol || !condition || value == null) return writeJson(res, 400, { error: "symbol, condition, and value required" })
-    const alert = createAlert({ symbol, condition, value: Number(value), message, recurring, expiresAt })
+    const alert = createAlert({ symbol, condition, value: Number(value), message, recurring, expiresAt, band })
     writeJson(res, 200, { ok: true, alert })
     return
   }

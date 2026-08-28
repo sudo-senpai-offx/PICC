@@ -957,6 +957,9 @@ export interface Alert {
   symbol: string
   condition: string
   value: number
+  // Optional state band for the convergence_above condition (slice 8): engine
+  // states (e.g. ["LONG BIAS", "SHORT BIAS"]) that also fire the alert.
+  band: string[] | null
   message: string
   recurring: boolean
   expiresAt: number | null
@@ -964,6 +967,8 @@ export interface Alert {
   createdAt: number
   triggeredAt: number | null
   lastPrice: number | null
+  // Most recent convergence score (5-scale) when a convergence alert fired.
+  lastScore: number | null
 }
 
 export interface AlertStats {
@@ -979,7 +984,7 @@ export function getAlerts(): Promise<{ ok: boolean; alerts: Alert[]; stats: Aler
   return request("/trading/alerts")
 }
 
-export function createAlert(input: { symbol: string; condition: string; value: number; message?: string; recurring?: boolean; expiresAt?: string }): Promise<{ ok: boolean; alert: Alert }> {
+export function createAlert(input: { symbol: string; condition: string; value: number; message?: string; recurring?: boolean; expiresAt?: string; band?: string[] }): Promise<{ ok: boolean; alert: Alert }> {
   return post("/trading/alerts", input)
 }
 

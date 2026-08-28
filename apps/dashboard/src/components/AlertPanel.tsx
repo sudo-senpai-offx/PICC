@@ -9,7 +9,13 @@ const CONDITIONS = [
   { value: "price_crossing_down", label: "Crossing Down" },
   { value: "pct_change_up", label: "Change Up %" },
   { value: "pct_change_down", label: "Change Down %" },
+  { value: "convergence_above", label: "Convergence ≥ (5-scale)" },
 ]
+
+// Engine states a convergence_above alert can fire on (slice 8). Treated as
+// an optional band: the alert fires when the score crosses the threshold OR
+// the asset's convergence state lands on one of these.
+const CONVERGENCE_STATES = ["LONG BIAS", "SHORT BIAS", "LONG ONLY", "SHORT ONLY", "LONG WATCH", "SHORT WATCH", "WATCH"]
 
 const QUICK_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "GOLD", "BTCUSD", "AAPL", "TSLA", "ETHUSD"]
 
@@ -22,6 +28,7 @@ export function AlertPanel() {
   const [value, setValue] = useState("")
   const [message, setMessage] = useState("")
   const [recurring, setRecurring] = useState(false)
+  const [band, setBand] = useState<string[]>([])
 
   const refresh = useCallback(async () => {
     try {
@@ -39,9 +46,10 @@ export function AlertPanel() {
     if (!symbol || !value || !Number.isFinite(Number(value))) return
     setError(null)
     try {
-      await createAlert({ symbol, condition, value: Number(value), message, recurring })
+      await createAlert({ symbol, condition, value: Number(value), message, recurring, band: band.length ? band : undefined })
       setValue("")
       setMessage("")
+      setBand([])
       refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create alert")
@@ -73,7 +81,7 @@ export function AlertPanel() {
   return (
     <Card style={{ padding: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>Price Alerts</div>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>Alerts</div>
         <div className="row gap" style={{ fontSize: 10, color: "var(--text-muted)" }}>
           {stats && (
             <>
@@ -136,6 +144,31 @@ export function AlertPanel() {
         <Button variant="primary" onClick={handleCreate} style={{ fontSize: 10, padding: "3px 10px" }}>Add</Button>
       </div>
 
+      {condition === "convergence_above" && (
+        <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginBottom: 6, alignItems: "center" }}>
+          <span style={{ fontSize: 9, color: "var(--text-muted)" }}>Fire when state is:</span>
+          {CONVERGENCE_STATES.map((s) => (
+            <label
+              key={s}
+              style={{
+                fontSize: 9, display: "flex", alignItems: "center", gap: 2, cursor: "pointer",
+                padding: "1px 5px", borderRadius: 3, border: "1px solid var(--border)",
+                background: band.includes(s) ? "var(--accent)" : "var(--bg)",
+                color: band.includes(s) ? "#fff" : "var(--text-muted)"
+              }}
+            >
+              <input
+                type="checkbox"
+                style={{ display: "none" }}
+                checked={band.includes(s)}
+                onChange={() => setBand((b) => (b.includes(s) ? b.filter((x) => x !== s) : [...b, s]))}
+              />
+              {s.replace(/_/g, " ")}
+            </label>
+          ))}
+        </div>
+      )}
+
       {error && (
         <div style={{ fontSize: 10, color: "var(--danger)", marginBottom: 6 }}>{error}</div>
       )}
@@ -150,6 +183,14 @@ export function AlertPanel() {
                 <span style={{ fontWeight: 600 }}>{a.symbol}</span>{" "}
                 <span style={{ color: "var(--text-muted)" }}>{a.condition.replace(/_/g, " ")}</span>{" "}
                 <span style={{ fontWeight: 600 }}>{a.value}</span>
+                {a.band && a.band.length > 0 && (
+                  <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>
+                    ▸ {a.band.join(", ")}
+                  </span>
+                )}
+                {a.lastScore != null && (
+                  <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>- last {a.lastScore}/5</span>
+                )}
                 {a.message && <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>- {a.message}</span>}
               </div>
               <div className="row gap" style={{ alignItems: "center" }}>

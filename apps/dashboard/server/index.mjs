@@ -154,6 +154,8 @@ if (!process.env.PICC_NO_LISTEN) {
   await loadBrokers()
   log.info("broker registry loaded")
   startSignalEngine()
+  const { startConvergenceAlerts } = await import("./services/convergenceAlerts.mjs")
+  startConvergenceAlerts()
   server.listen(PORT, "127.0.0.1", () => {
     log.info("server started", { port: PORT, host: "127.0.0.1", dist: ROOT })
     // Register the liveness/uptime monitor BEFORE the scheduler starts —

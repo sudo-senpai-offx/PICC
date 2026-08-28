@@ -8,6 +8,7 @@
 // "—" values (R10 honesty rule). The section cache TTL lives in realtimeSuite.
 import { loadConvergence, converge } from "./mtfConvergence.mjs"
 import { liveEOData } from "./liveEO.mjs"
+import { updateConvergence } from "./alertEngine.mjs"
 
 // The full ladder the convergence matrix shows: intraday buffers direct from
 // liveEO, 30m/4h derived from M1 (dailies would go through getBestCandles at
@@ -43,6 +44,16 @@ export async function convergenceSection({ now = Date.now() } = {}) {
     deriveTfs: CONVERGENCE_DERIVE_TFS
   })
   const result = converge({ planes, sourceByTf, staleByTf })
+  // Feed the alert engine (spec 8a/8b): armed convergence_above alerts for
+  // this symbol now evaluate against the freshest honest read. Absent reads
+  // are null -> the condition stays silent (never triggers on no data).
+  if (asset?.id) {
+    updateConvergence(asset.id, {
+      score5: result.score5,
+      state: result.state,
+      confidence: result.confidence
+    })
+  }
   return {
     ...result,
     assetId: asset?.id ?? null,
