@@ -12,6 +12,15 @@ vi.mock("../config.mjs", () => ({
   env: {}
 }))
 
+// Broker feed stub: trading.mjs reads candle data through dynamic imports of
+// brokers/index.mjs. The hoisted mutable array lets the calibration tests
+// feed a synthetic series that the model matrix can actually vote on.
+const brokerFeed = vi.hoisted(() => ({ assets: [] }))
+vi.mock("../services/brokers/index.mjs", () => ({
+  getBrokerData: () => ({ assets: brokerFeed.assets }),
+  getBrokerStats: () => ({})
+}))
+
 let tmp
 let mod
 
@@ -140,5 +149,59 @@ describe("status + signals", () => {
     expect(r.ok).toBe(true)
     expect(r.source).toBe("local")
     expect(r.advice).toMatch(/risk|balance/i)
+  })
+})
+
+describe("model-matrix calibration (6c)", () => {
+  /** localStore loads files asynchronously on first access — prime the cache
+   *  and let the load land before any snapshot so tests never read defaults. */
+  async function primeWeights() {
+    const matrix = await import("../services/modelMatrix.mjs")
+    matrix.getModelWeights()
+    await new Promise((r) => setTimeout(r, 40))
+    return matrix
+  }
+
+  it("records model outcomes when a paper trade carries entry votes", async () => {
+    const matrix = await primeWeights()
+    const before = matrix.getModelWeights().trend
+    const beforeSamples = before?.samples ?? 0
+    const beforeAccuracy = before?.accuracy ?? 50
+
+    // Strongly rising series → the trend model must vote "up" at entry.
+    const candles = Array.from({ length: 120 }, (_, i) => {
+      const close = 100 + i * 0.3
+      return { time: i, open: close - 0.1, high: close + 0.2, low: close - 0.3, close }
+    })
+    brokerFeed.assets = [{ id: "SYNTH", name: "SYNTH", periods: { 60: candles } }]
+
+    const pos = await mod.openPaperTrade({ symbol: "SYNTH", side: "up", entry: 135.7, amount: 100 })
+    expect(Array.isArray(pos.modelVotes)).toBe(true)
+    expect(pos.modelVotes.length).toBeGreaterThan(0)
+    const trend = pos.modelVotes.find((v) => v.short === "trend")
+    expect(trend?.direction).toBe("up")
+
+    const closed = await mod.closePaperTrade({ id: pos.id, exit: 142 })
+    expect(closed.pnl).toBeGreaterThan(0)
+
+    // The resolved win must land in the trend model's EMA win-rate exactly once.
+    const after = matrix.getModelWeights().trend
+    expect(after.samples).toBe(beforeSamples + 1)
+    expect(after.accuracy).toBeGreaterThanOrEqual(beforeAccuracy)
+
+    brokerFeed.assets = []
+  })
+
+  it("records nothing when the broker feed has no candles (honest null)", async () => {
+    brokerFeed.assets = []
+    const matrix = await primeWeights()
+    const before = matrix.getModelWeights().trend?.samples ?? 0
+
+    const pos = await mod.openPaperTrade({ symbol: "EURUSD", side: "up", entry: 1.1, amount: 100 })
+    expect(pos.modelVotes).toBeNull()
+    await mod.closePaperTrade({ id: pos.id, exit: 1.2 })
+
+    const after = matrix.getModelWeights().trend
+    expect(after.samples).toBe(before)
   })
 })

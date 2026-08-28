@@ -586,6 +586,25 @@ async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, s
   const { cash } = await paperOverview()
   if (tradeAmount > cash) throw new Error(`insufficient paper cash (available $${cash.toFixed(2)})`)
 
+  // Model-matrix calibration: snapshot each model's vote at entry so the
+  // resolved close can feed per-model realized accuracy. Best-effort — when
+  // the broker feed has no candles for this symbol, no votes are captured
+  // and no calibration happens (honest: nothing observed, nothing recorded).
+  let modelVotes = null
+  try {
+    const { getBrokerData } = await import("./brokers/index.mjs")
+    const { computeModelMatrix } = await import("./modelMatrix.mjs")
+    const data = getBrokerData()
+    const asset = (data?.assets ?? []).find((a) => a.id === symbolName || a.name === symbolName)
+    const candles = asset?.periods?.[60] ?? []
+    const m = computeModelMatrix(candles)
+    if (m.ok && Array.isArray(m.votes) && m.votes.length) {
+      modelVotes = m.votes.map((v) => ({ short: v.short, direction: v.direction }))
+    }
+  } catch {
+    /* best-effort — a broken snapshot must never block a paper trade */
+  }
+
   const position = {
     id: randomBytes(6).toString("hex"),
     correlationId: randomBytes(8).toString("hex"),
@@ -596,6 +615,7 @@ async function openPaperTradeLocked({ symbol, side, entry, amount, takeProfit, s
     amount: Math.round(tradeAmount * 100) / 100,
     takeProfit: tp == null ? null : Math.round(tp * 1e6) / 1e6,
     stopLoss: sl == null ? null : Math.round(sl * 1e6) / 1e6,
+    modelVotes,
     openedAt: new Date().toISOString(),
     status: "open"
   }
@@ -650,6 +670,18 @@ async function closePaperTradeLocked({ id, exit, reason = "manual", exitSource =
         resolvedAt: new Date().toISOString(),
         tradeId: closed.id
       }
+    }
+  }
+
+  // Model-matrix calibration on close: feed the resolved direction into each
+  // model's EMA win-rate. Best-effort — only when votes were snapshotted at
+  // entry does a closed trade teach the models anything.
+  if (Array.isArray(p.modelVotes) && p.modelVotes.length) {
+    try {
+      const { recordModelOutcomes } = await import("./modelMatrix.mjs")
+      recordModelOutcomes(p.modelVotes, exitPrice > p.entry)
+    } catch {
+      /* calibration must never break a close */
     }
   }
 

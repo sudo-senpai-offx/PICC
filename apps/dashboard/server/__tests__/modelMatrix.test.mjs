@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { computeModelMatrix, recordModelOutcomes, getModelWeights } from "../services/modelMatrix.mjs"
+import { computeModelMatrix, recordModelOutcomes, getModelWeights, isPruned } from "../services/modelMatrix.mjs"
 import { canonicalAssetId, assetsEquivalent, yahooSymbolFor, ASSET_ALIASES } from "../services/assetCatalog.mjs"
 
 /** Deterministic OHLC series generator. */
@@ -125,7 +125,8 @@ describe("model matrix (multiplexing consensus)", () => {
   it("runs the full battery and fuses a bullish consensus on an uptrend", () => {
     const out = computeModelMatrix(synth(120, 0.3))
     expect(out.ok).toBe(true)
-    expect(out.modelsRun).toBe(7)
+    expect(out.modelsRun).toBe(9)
+    expect(out.pruned).toEqual([])
     // Monte-Carlo may honestly abstain on degenerate series, but on a real
     // uptrend every model votes.
     expect(out.consensus.total).toBe(out.modelsRun)
@@ -178,5 +179,48 @@ describe("model matrix (multiplexing consensus)", () => {
       expect(w.weight).toBeGreaterThanOrEqual(0.4)
       expect(w.weight).toBeLessThanOrEqual(1.6)
     }
+  })
+
+  it("stochastic reversion votes against the extreme on one-sided series, flat mid-band", () => {
+    // Steady uptrend: price pinned to the top of its 14-bar window → %K ≥ 80 → fades down.
+    expect(computeModelMatrix(synth(120, 0.3)).votes.find((v) => v.short === "stoch").direction).toBe("down")
+    // Steady downtrend: %K ≤ 20 → fades up.
+    expect(computeModelMatrix(synth(120, -0.3)).votes.find((v) => v.short === "stoch").direction).toBe("up")
+    // Flat series: %K = 50 → neutral, no chase.
+    expect(computeModelMatrix(synth(120, 0)).votes.find((v) => v.short === "stoch").direction).toBe("flat")
+  }, 20000)
+
+  it("anchored-VWAP deviation reversion beyond the band, flat inside it", () => {
+    // Rising series trades well above its volume-weighted anchor → overextended down.
+    expect(computeModelMatrix(synth(120, 0.3)).votes.find((v) => v.short === "avwap").direction).toBe("down")
+    // Falling series: underbought up.
+    expect(computeModelMatrix(synth(120, -0.3)).votes.find((v) => v.short === "avwap").direction).toBe("up")
+    // Flat series: deviation ≈ 0 → in band, neutral.
+    expect(computeModelMatrix(synth(120, 0)).votes.find((v) => v.short === "avwap").direction).toBe("flat")
+  }, 20000)
+
+  it("prunes a model that persists at-or-below chance across 50+ resolved outcomes", () => {
+    // Drive a dedicated (non-registered) short consistently wrong 60 times.
+    for (let i = 0; i < 60; i++) recordModelOutcomes([{ short: "doomed", direction: "up" }], false)
+    expect(isPruned("doomed")).toBe(true)
+    const w = getModelWeights().doomed
+    expect(w.pruned).toBe(true)
+    expect(w.samples).toBeGreaterThanOrEqual(50)
+    expect(w.weight).toBe(0) // excluded from fusion — record kept, weighting stopped
+    expect(w.prunedReason).toContain("persistent realized accuracy")
+  })
+
+  it("decays an elevated win-rate toward chance when new evidence stops", () => {
+    // Build an accurate record for a dedicated short.
+    for (let i = 0; i < 12; i++) recordModelOutcomes([{ short: "hotstreak", direction: "up" }], true)
+    const before = getModelWeights().hotstreak.accuracy
+    expect(before).toBeGreaterThan(80)
+    // No further wins recorded — pure decay ticks must erode the elevated rate.
+    recordModelOutcomes([], true)
+    recordModelOutcomes([], true)
+    recordModelOutcomes([], true)
+    const after = getModelWeights().hotstreak.accuracy
+    expect(after).toBeLessThan(before)
+    expect(after).toBeGreaterThan(50) // eroded toward, never below, chance
   })
 })

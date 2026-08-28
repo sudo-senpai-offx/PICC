@@ -1,6 +1,6 @@
 // PICC Model Matrix — the multiplexing trading-infrastructure core.
 //
-// One candle series in, SEVEN independent model votes out, fused into a
+// One candle series in, NINE independent model votes out, fused into a
 // single weighted consensus. This is what powers the "Model Matrix" panel
 // and (optionally) a consensus entry-gate for the autopilot.
 //
@@ -12,7 +12,10 @@
 //   • Adaptive: per-model weights are an exponential recency-weighted win
 //     rate learned from resolved demo/paper outcomes (online learning —
 //     models that keep being wrong decay toward weight 0.4, accurate ones
-//     grow toward 1.6). Weights persist via localStore.
+//     grow toward 1.6). Weights persist via localStore. Every settlement
+//     tick also decays all stored win-rates toward chance, and models that
+//     persist at-or-below chance across PRUNE_MIN_SAMPLES resolved outcomes
+//     are pruned from fusion (record kept, weighting stopped).
 //
 // Keep every model PURE: candles in → vote out. No I/O inside model fns.
 
@@ -20,8 +23,10 @@ import { localStore } from "./localstore.mjs"
 
 const WEIGHTS_STORE = "modelMatrix"
 const EMA_ALPHA = 0.18 // recency factor for online win-rate updates
+const DECAY_ALPHA = 0.05 // per-tick drift of every stored weight toward chance
 const WEIGHT_FLOOR = 0.4
 const WEIGHT_CEIL = 1.6
+const PRUNE_MIN_SAMPLES = 50 // resolved outcomes before a stale model can be pruned
 
 function last(arr, n) {
   return arr.slice(Math.max(0, arr.length - n))
@@ -221,33 +226,118 @@ function modelCandlePressure(candles) {
   }
 }
 
-const MODELS = [modelTrendEma, modelMomentum, modelRsiReversion, modelBreakout, modelMacd, modelMonteCarlo, modelCandlePressure]
+/** Stochastic reversion: %K extremes fade; mid-band stays neutral (no drift chase). */
+function modelStochasticReversion(candles) {
+  if (candles.length < 20) return null
+  const window = candles.slice(-14)
+  const hi = Math.max(...window.map((c) => Number(c.high)))
+  const lo = Math.min(...window.map((c) => Number(c.low)))
+  const close = Number(candles[candles.length - 1].close)
+  const rng = hi - lo
+  if (!(rng > 0)) return null
+  const k = ((close - lo) / rng) * 100
+  if (k >= 80) {
+    return { name: "Stochastic Reversion", short: "stoch", direction: "down", confidence: Math.round(Math.min(92, 55 + (k - 80) * 0.6)), note: `%K ${k.toFixed(1)} overbought` }
+  }
+  if (k <= 20) {
+    return { name: "Stochastic Reversion", short: "stoch", direction: "up", confidence: Math.round(Math.min(92, 55 + (20 - k) * 0.6)), note: `%K ${k.toFixed(1)} oversold` }
+  }
+  return { name: "Stochastic Reversion", short: "stoch", direction: "flat", confidence: Math.round(48 + Math.abs(k - 50) * 0.4), note: `%K ${k.toFixed(1)} mid-band` }
+}
+
+/** Anchored-VWAP deviation: distance from the volume-weighted anchor (reversion beyond ±1%). */
+function modelAnchoredVwap(candles) {
+  const window = candles.slice(-50)
+  if (window.length < 30) return null
+  let pv = 0
+  let vol = 0
+  for (const c of window) {
+    const typical = (Number(c.high) + Number(c.low) + Number(c.close)) / 3
+    // Volume-less sources fall back to bar range as a size proxy — still pure.
+    const v = Number(c.volume) > 0 ? Number(c.volume) : Number(c.high) - Number(c.low)
+    pv += typical * v
+    vol += v
+  }
+  if (!(vol > 0)) return null
+  const vwap = pv / vol
+  const close = Number(candles[candles.length - 1].close)
+  if (!(vwap > 0)) return null
+  const dev = ((close - vwap) / vwap) * 100
+  if (dev >= 1) return { name: "Anchored VWAP Dev", short: "avwap", direction: "down", confidence: Math.round(Math.min(90, 55 + (dev - 1) * 12)), note: `dev +${dev.toFixed(2)}% overextended` }
+  if (dev <= -1) return { name: "Anchored VWAP Dev", short: "avwap", direction: "up", confidence: Math.round(Math.min(90, 55 + (-1 - dev) * 12)), note: `dev ${dev.toFixed(2)}% underbought` }
+  return { name: "Anchored VWAP Dev", short: "avwap", direction: "flat", confidence: Math.round(48 + Math.abs(dev) * 12), note: `dev ${dev.toFixed(2)}% in band` }
+}
+
+const MODELS = [
+  [modelTrendEma, "trend"],
+  [modelMomentum, "momentum"],
+  [modelRsiReversion, "rsi"],
+  [modelBreakout, "breakout"],
+  [modelMacd, "macd"],
+  [modelMonteCarlo, "montecarlo"],
+  [modelCandlePressure, "pressure"],
+  [modelStochasticReversion, "stoch"],
+  [modelAnchoredVwap, "avwap"]
+].map(([fn, short]) => Object.assign(fn, { __short: short }))
 
 // ── Online weight adaptation ────────────────────────────────────────────────
 
 function weightsStore() {
-  const store = localStore(WEIGHTS_STORE, { data: { wins: {}, counts: {} } })
+  const store = localStore(WEIGHTS_STORE, { data: { wins: {}, counts: {}, pruned: {} } })
   if (!store.data.wins || typeof store.data.wins !== "object") store.data.wins = {}
   if (!store.data.counts || typeof store.data.counts !== "object") store.data.counts = {}
+  if (!store.data.pruned || typeof store.data.pruned !== "object") store.data.pruned = {}
   return store
+}
+
+/** Has a model been pruned? Pruned models are kept on record but never weighted. */
+export function isPruned(short) {
+  try {
+    return Boolean(weightsStore().data.pruned?.[short])
+  } catch {
+    return false
+  }
 }
 
 /**
  * Record each model's vote outcome after a trade resolves. Called from the
  * settlement pipeline so weights track REALIZED accuracy per model.
+ *
+ * Every call also decays ALL stored win-rates toward 0.5 — an elevated weight
+ * must keep proving itself or it erodes toward equilibrium (no negative
+ * outcome needs to accumulate for a stale run of luck to fade).
+ *
+ * Models that persist at or below chance across PRUNE_MIN_SAMPLES resolved
+ * outcomes are pruned from fusion (record kept, weighting stopped).
  * @param votes Array<{short, direction}> — what each model said at entry
  * @param wentUp boolean — actual price direction at resolution
  */
 export function recordModelOutcomes(votes, wentUp) {
   try {
     const store = weightsStore()
+    // 1. Decay every stored win-rate toward chance before applying new evidence.
+    for (const key of Object.keys(store.data.wins)) {
+      const acc = store.data.wins[key]
+      store.data.wins[key] = 0.5 + (acc - 0.5) * (1 - DECAY_ALPHA)
+    }
+    // 2. Apply the new evidence (EMA of correctness — recent trades count most).
     for (const v of Array.isArray(votes) ? votes : []) {
       if (!v?.short || !v?.direction || v.direction === "flat") continue
       store.data.counts[v.short] = (store.data.counts[v.short] ?? 0) + 1
       const correct = (v.direction === "up") === Boolean(wentUp)
       const prevWins = store.data.wins[v.short] ?? 0.5
-      // EMA of correctness — recent trades matter most.
       store.data.wins[v.short] = prevWins * (1 - EMA_ALPHA) + (correct ? 1 : 0) * EMA_ALPHA
+    }
+    // 3. Prune degenerate models: at-or-below chance (≤50%) over enough samples.
+    for (const [short, acc] of Object.entries(store.data.wins)) {
+      if (store.data.pruned[short]) continue
+      const count = store.data.counts[short] ?? 0
+      if (count >= PRUNE_MIN_SAMPLES && acc <= 0.5) {
+        store.data.pruned[short] = {
+          at: Date.now(),
+          reason: `persistent realized accuracy ${Math.round(acc * 100)}% over ${count} resolved outcomes`
+        }
+      }
     }
     store.write()
   } catch {
@@ -257,6 +347,7 @@ export function recordModelOutcomes(votes, wentUp) {
 
 function modelWeight(short) {
   try {
+    if (isPruned(short)) return 0
     const { wins } = weightsStore().data
     const acc = wins[short]
     if (!Number.isFinite(acc)) return 1
@@ -268,18 +359,17 @@ function modelWeight(short) {
 
 export function getModelWeights() {
   try {
-    const { wins, counts } = weightsStore().data
+    const { wins, counts, pruned } = weightsStore().data
     const out = {}
-    for (const m of MODELS) {
-      const probe = m.__short ?? MODELS.indexOf(m)
-      void probe
-    }
     // Build directly from stored keys so persisted models survive refactors.
     for (const key of new Set([...Object.keys(wins ?? {})])) {
+      const prunedInfo = pruned?.[key]
       out[key] = {
         accuracy: Math.round((wins[key] ?? 0.5) * 1000) / 10,
         samples: counts[key] ?? 0,
-        weight: Math.round(modelWeight(key) * 100) / 100
+        weight: Math.round(modelWeight(key) * 100) / 100,
+        pruned: Boolean(prunedInfo),
+        prunedReason: prunedInfo?.reason ?? null
       }
     }
     return out
@@ -306,6 +396,8 @@ export function computeModelMatrix(candles) {
 
   const votes = []
   for (const model of MODELS) {
+    // Pruned models are excluded from fusion — their record stays, weighting stops.
+    if (isPruned(model.__short)) continue
     try {
       const v = model(rows)
       if (v && ["up", "down", "flat"].includes(v.direction)) votes.push(v)
@@ -347,11 +439,14 @@ export function computeModelMatrix(candles) {
     confidence = Math.round(46 + dominance * 44 * (0.35 + 0.65 * participation))
   }
 
+  const prunedModels = MODELS.filter((m) => isPruned(m.__short)).map((m) => m.__short)
+
   return {
     ok: true,
     spot,
     generatedAt: new Date().toISOString(),
-    modelsRun: MODELS.length,
+    modelsRun: MODELS.length - prunedModels.length,
+    pruned: prunedModels,
     consensus: { direction, confidence, agree, total: votes.length },
     votes: votes.map((v) => ({
       name: v.name,

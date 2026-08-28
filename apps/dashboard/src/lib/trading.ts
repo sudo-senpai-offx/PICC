@@ -1173,9 +1173,10 @@ export interface ModelMatrixResult {
   source?: string
   spot?: number
   modelsRun?: number
+  pruned?: string[]
   consensus?: { direction: "up" | "down" | "flat"; confidence: number; agree: number; total: number }
   votes?: ModelVote[]
-  weights?: Record<string, { accuracy: number; samples: number; weight: number }>
+  weights?: Record<string, { accuracy: number; samples: number; weight: number; pruned?: boolean; prunedReason?: string | null }>
   reason?: string
 }
 
