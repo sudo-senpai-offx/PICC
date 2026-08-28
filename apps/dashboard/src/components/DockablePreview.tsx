@@ -172,14 +172,14 @@ function DockContent({ dockId, config }: { dockId: string; config: DockableConfi
           {offline}
           {feed.account?.balance != null ? (
             <>
-              <div style={{ fontWeight: 600, fontSize: 11, color: "#6c63ff", marginBottom: 2 }}>ExpertOption</div>
+              <div style={{ fontWeight: 600, fontSize: 11, color: "#6c63ff", marginBottom: 2 }}>Live Session</div>
               {row("Balance", money(feed.account.balance))}
               {row("Today", money(feed.demo?.todayPnl), Number(feed.demo?.todayPnl) >= 0 ? "#4ade80" : "#ff6b6b")}
               {row("Trades today", String(feed.demo?.todayTrades ?? 0))}
             </>
           ) : paper?.balance != null ? (
             <>
-              <div style={{ fontWeight: 600, fontSize: 11, color: "#6c63ff", marginBottom: 2 }}>ExpertOption Demo</div>
+              <div style={{ fontWeight: 600, fontSize: 11, color: "#6c63ff", marginBottom: 2 }}>Demo Account</div>
               {row("Balance", money(paper.balance))}
               {row("Today", money(paper.todayPnl), Number(paper.todayPnl) >= 0 ? "#4ade80" : "#ff6b6b")}
               {row("Trades today", String(paper.todayTrades ?? 0))}

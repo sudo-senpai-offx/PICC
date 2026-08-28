@@ -11,7 +11,7 @@ export const SUITE_META: Record<string, SuiteMeta> = {
     id: "trading",
     label: "Trading",
     icon: "📈",
-    blurb: "Prediction, paper ledger, signals, watchlist and the read-only ExpertOption bridge + demo autopilot."
+    blurb: "Prediction, paper ledger, signals, watchlist and the read-only broker bridge + demo autopilot."
   },
   bandwidth: {
     id: "bandwidth",

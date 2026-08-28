@@ -130,8 +130,8 @@ export function LiveDecisionsPanel() {
         <Spinner label="Waiting for the decision engine…" />
       ) : decisions.length === 0 ? (
         <p className="muted small">
-          No decisions yet — the engine needs the live 1m buffers to fill (minimum 40 bars per asset) and the
-          ExpertOption session connected.
+          No decisions yet — the engine needs the live 1m buffers to fill (minimum 40 bars per asset) and a
+          broker session connected.
         </p>
       ) : (
         <>

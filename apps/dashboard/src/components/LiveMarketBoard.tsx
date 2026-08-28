@@ -55,9 +55,9 @@ function StatusChip({ status, error }: { status: string; error: string | null })
 }
 
 /**
- * Live market board: realtime ExpertOption prices streamed from the open
- * app.expertoption.com tab (via the broker's own WebSocket frames) + fresh
- * headless history for the whole watch set. Display-only.
+ * Live market board: realtime broker prices streamed from the open vendor tab
+ * (via the broker's own WebSocket frames) + fresh headless history for the
+ * whole watch set. Display-only.
  */
 export function LiveMarketBoard() {
   const [snap, setSnap] = useState<LiveSnapshot | null>(null)
@@ -144,7 +144,7 @@ export function LiveMarketBoard() {
       </div>
       {error ? <p className="danger-text">{error}</p> : null}
       {!connected && status === "connecting" ? (
-        <Spinner label="Connecting to ExpertOption…" />
+        <Spinner label="Connecting to live market…" />
       ) : (
         <div className="grid-4 live-board">
           {(snap?.watching ?? []).map((n) => {

@@ -5,7 +5,7 @@ import { ChartErrorBoundary } from "@/components/ChartErrorBoundary"
 import { useCandleData, TIMEFRAME_LABELS, type Timeframe } from "@/hooks/useCandleData"
 import { getEntryLevels, openPaperTrade, type EntryLevelsResult } from "@/lib/trading"
 
-const TIMEFRAMES: Timeframe[] = [60, 300, 900, 3600]
+const TIMEFRAMES: Timeframe[] = [5, 15, 30, 60, 300, 900, 1800, 3600, 14400, 86400, 604800, 2592000]
 
 interface TradingChartProps {
   assetId: string

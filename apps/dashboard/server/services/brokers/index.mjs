@@ -37,7 +37,7 @@ export function registerBroker(adapter) {
     setStaleness: () => {},
     getCandles: () => [],
     subscribe: () => () => {},
-    availableTimeframes: () => [60, 300, 900, 3600],
+    availableTimeframes: () => [5, 15, 30, 60, 300, 900, 1800, 3600, 14400, 86400, 604800, 2592000],
     getAccountState: () => null,
     getExpiryDurations: () => null,
     ...adapter

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { Badge, Button, Card, Input, Select } from "@/components/ui"
-import { openPaperTrade, placeDemoTrade, getExpertOptionDemoStatus, getWatchlistQuotes } from "@/lib/trading"
+import { openPaperTrade, placeDemoTrade, getBrokerDemoStatus, getWatchlistQuotes } from "@/lib/trading"
 
 interface TradeOrderFormProps {
   prefill?: {
@@ -54,9 +54,9 @@ export function TradeOrderForm({ prefill, onPlaced }: TradeOrderFormProps) {
     const exp = Number(expiry)
     try {
       if (mode === "demo") {
-        const demo = await getExpertOptionDemoStatus()
+        const demo = await getBrokerDemoStatus()
         if (!demo.configured) {
-          setResult({ ok: false, message: "ExpertOption not configured. Go to Settings → Trading." })
+          setResult({ ok: false, message: "No demo broker configured. Go to Settings → Trading." })
           return
         }
         const type = side === "up" ? "call" : "put"

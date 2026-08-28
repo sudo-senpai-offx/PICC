@@ -24,14 +24,14 @@ import { getExtensionStatus } from "@/lib/api"
 import type { ExtensionStatus } from "@/lib/api"
 import {
   addToWatchlist,
-  analyzeExpertOptionAsset,
+  analyzeAsset,
   askTradingAssistant,
   closePaperTrade,
-  EXPERTOPTION_QUICK_ASSETS,
+  QUICK_ASSETS,
   getAutopilotConfig,
   getDemoAnalytics,
   getDemoDeals,
-  getExpertOptionDemoStatus,
+  getBrokerDemoStatus,
   getMarketNews,
   getPaperAnalytics,
   getPaperHistory,
@@ -44,7 +44,7 @@ import {
   logSignal,
   openPaperTrade,
   predictSymbol,
-  proAnalyzeExpertOption,
+  proAnalyze,
   proAnalyzeSymbol,
   removeFromWatchlist,
   resolveTradingSignal,
@@ -59,7 +59,7 @@ import type {
   ClosedTrade,
   DemoAnalyticsResult,
   DemoDeal,
-  ExpertOptionDemoStatus,
+  BrokerDemoStatus,
   MarketNewsResult,
   PaperAnalyticsResult,
   PaperPosition,
@@ -214,7 +214,7 @@ export function AutopilotSuite() {
   const [cfg, setCfg] = useState<AutopilotConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [demo, setDemo] = useState<ExpertOptionDemoStatus | null>(null)
+  const [demo, setDemo] = useState<BrokerDemoStatus | null>(null)
   const [analytics, setAnalytics] = useState<DemoAnalyticsResult | null>(null)
   const [deals, setDeals] = useState<DemoDeal[]>([])
   const [extension, setExtension] = useState<ExtensionStatus | null>(null)
@@ -229,7 +229,7 @@ export function AutopilotSuite() {
     try {
       const [c, d, a, dl, ext, cr, br] = await Promise.allSettled([
         getAutopilotConfig(),
-        getExpertOptionDemoStatus(),
+        getBrokerDemoStatus(),
         getDemoAnalytics().catch(() => null),
         getDemoDeals(30).catch(() => ({ ok: false, deals: [] as DemoDeal[] })),
         getExtensionStatus(),
@@ -617,11 +617,11 @@ export function AutopilotSuite() {
         </Card>
       </div>
 
-      {/* ─── ExpertOption credentials (required to run) ─── */}
+      {/* ─── Broker credentials (required to run) ─── */}
       <Card className="pad stack">
-        <h3>ExpertOption Session</h3>
+        <h3>Broker Connection</h3>
         <p className="muted small">
-          The engine refuses to trade without a DEMO session token here. Token is stored server-side and never
+          The engine refuses to run without a DEMO broker token here. Token is stored server-side and never
           echoed back in full.
         </p>
         <div className="grid grid-3">
@@ -878,7 +878,7 @@ function StatusCards({
 }: {
   paper: PaperOverview | null
   riskPct: number
-  demo: ExpertOptionDemoStatus | null
+  demo: BrokerDemoStatus | null
   liveAccount: import("@/lib/liveTrading").LiveAccount | null
 }) {
   const stat = (label: string, value: string, sub?: string) => (
@@ -927,7 +927,7 @@ function StatusCards({
         </div>
       </Card>
       <Card className="pad">
-        <div className="stat-label muted">ExpertOption account</div>
+        <div className="stat-label muted">Broker account</div>
         {liveAccount ? (
           <div className="stat-value" style={{ fontSize: "0.95rem" }}>
             demo {fmtMoney(liveAccount.demoWallet?.balance, liveAccount.demoWallet?.currency ?? liveAccount.currency)} · real {fmtMoney(liveAccount.realWallet?.balance, liveAccount.realWallet?.currency ?? liveAccount.currency)}
@@ -962,13 +962,13 @@ function PredictionCard({ recordSignal }: { recordSignal: () => void }) {
   // a quick look doesn't silently create bookkeeping entries.
   const [autoSignal, setAutoSignal] = useState(true)
 
-  const runPredict = async (sym: string, horizon: number, viaExpertOption: boolean) => {
+  const runPredict = async (sym: string, horizon: number, viaLive: boolean) => {
     setBusy(true)
     setErr("")
     setResult(null)
     try {
-      const r = viaExpertOption
-        ? await analyzeExpertOptionAsset(sym, { timeframe: 60, count: 120, days: horizon })
+      const r = viaLive
+        ? await analyzeAsset(sym, { timeframe: 60, count: 120, days: horizon })
         : await predictSymbol(sym, horizon)
       setResult(r)
       if (r.ok && r.direction && r.direction !== "flat" && autoSignal) {
@@ -1019,8 +1019,8 @@ function PredictionCard({ recordSignal }: { recordSignal: () => void }) {
         </div>
       </div>
       <div className="row gap">
-        <span className="muted small">ExpertOption quick assets:</span>
-        {EXPERTOPTION_QUICK_ASSETS.map((a) => (
+        <span className="muted small">Quick assets (live feed):</span>
+        {QUICK_ASSETS.map((a) => (
           <Button key={a.id} variant="ghost" disabled={busy} onClick={() => runPredict(a.id, days, true)}>
             {a.name}
           </Button>
@@ -1081,7 +1081,7 @@ function PredictionResultView({ result }: { result: PredictionResult }) {
       <p className="muted small">{result.note}</p>
       {result.account?.balance != null ? (
         <p className="muted small">
-          ExpertOption {result.account.demo ? "demo" : "live"} balance: {fmtMoney(result.account.balance, result.account.currency)}
+          Broker {result.account.demo ? "demo" : "live"} balance: {fmtMoney(result.account.balance, result.account.currency)}
         </p>
       ) : null}
       {result.advisory ? <p className="muted small">{result.advisory}</p> : null}
@@ -1099,13 +1099,13 @@ function ProAnalysisCard() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState("")
 
-  const run = async (viaExpertOption: boolean, assetId?: string) => {
+  const run = async (viaLive: boolean, assetId?: string) => {
     setBusy(true)
     setErr("")
     setResult(null)
     try {
-      const r = viaExpertOption
-        ? await proAnalyzeExpertOption({ assetId: assetId ?? symbol, timeframe: 60, count: 240, days })
+      const r = viaLive
+        ? await proAnalyze({ assetId: assetId ?? symbol, timeframe: 60, count: 240, days })
         : await proAnalyzeSymbol(symbol, { interval: "1d", days })
       setResult(r)
     } catch (e) {
@@ -1142,8 +1142,8 @@ function ProAnalysisCard() {
         </div>
       </div>
       <div className="row gap">
-        <span className="muted small">ExpertOption quick assets:</span>
-        {EXPERTOPTION_QUICK_ASSETS.map((a) => (
+        <span className="muted small">Quick assets (live feed):</span>
+        {QUICK_ASSETS.map((a) => (
           <Button key={a.id} variant="ghost" disabled={busy} onClick={() => run(true, a.id)}>
             {a.name}
           </Button>

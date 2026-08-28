@@ -108,7 +108,7 @@ export function ConfluencePanel({ maxItems = 8 }: { maxItems?: number }) {
           <Badge tone="muted">{decisions.length} assets</Badge>
         </div>
         {decisions.length === 0 ? (
-          <div className="muted small" style={{ padding: 12, textAlign: "center" }}>No decisions yet. Start ExpertOption to begin evaluation.</div>
+          <div className="muted small" style={{ padding: 12, textAlign: "center" }}>No decisions yet. Start a broker session to begin evaluation.</div>
         ) : (
           decisions.map((d) => <DecisionCard key={d.assetId} d={d} />)
         )}

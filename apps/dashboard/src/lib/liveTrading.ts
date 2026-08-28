@@ -13,7 +13,7 @@ import type {
   ClosedTrade,
   DemoAnalyticsResult,
   DemoDeal,
-  ExpertOptionDemoStatus,
+  BrokerDemoStatus,
   LedgerEntry,
   PaperPosition,
   SignalAccuracy,
@@ -241,7 +241,7 @@ export interface TradingSuiteSnapshot {
   accuracy: SignalAccuracy | null
   intel: MarketIntel | null
   ledger: { stats: unknown; engine: unknown; entries: LedgerEntry[] } | null
-  demo: ExpertOptionDemoStatus | null
+  demo: BrokerDemoStatus | null
   deals: { ok: boolean; deals: DemoDeal[] } | null
   analytics: DemoAnalyticsResult | null
 }

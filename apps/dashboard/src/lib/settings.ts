@@ -12,7 +12,7 @@ export const FEATURES: Record<FeatureKey, FeatureDef> = {
   overlay: { label: "Overlay & Listing Optimizer", desc: "Browser-extension suggestions and listing analysis." },
   content: { label: "Content Studio", desc: "Blog, YouTube, affiliate, and social drafts." },
   income: { label: "Income Channels", desc: "Payment links for BTCPay and TNG eWallet." },
-  trading: { label: "Trading Suite", desc: "Multi-model prediction, read-only ExpertOption bridge, and paper trading." },
+  trading: { label: "Trading Suite", desc: "Multi-model prediction, read-only live broker bridge, and paper trading." },
   browser: { label: "Browser Studio", desc: "Integrated browser for all income sources — PICC can overlay, cast, and control it." }
 }
 

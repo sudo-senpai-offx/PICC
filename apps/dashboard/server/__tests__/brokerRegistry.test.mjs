@@ -61,6 +61,12 @@ describe("broker registry", () => {
     expect(typeof b.availableTimeframes).toBe("function")
   })
 
+  it("defaults availableTimeframes to the full 12-value range (5s–1M)", () => {
+    reg({ slug: "tf-default", label: "TF" })
+    const b = getBroker("tf-default")
+    expect(b.availableTimeframes()).toEqual([5, 15, 30, 60, 300, 900, 1800, 3600, 14400, 86400, 604800, 2592000])
+  })
+
   it("throws on duplicate slug", () => {
     reg({ slug: "dup", label: "Dup" })
     expect(() => registerBroker({ slug: "dup", label: "Dup2" })).toThrow("already registered")

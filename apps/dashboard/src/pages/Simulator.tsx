@@ -33,7 +33,7 @@ export function Simulator() {
         <p className="muted">
           Sandbox tools that simulate outcomes and generate suggestions. Nothing executes — you
           always click the final button. Markets &amp; Prediction, paper trading, and the
-          ExpertOption demo bridge all live here now.
+          demo broker bridge all live here now.
         </p>
       </header>
 

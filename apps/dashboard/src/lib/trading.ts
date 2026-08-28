@@ -135,7 +135,7 @@ export function predictSymbol(symbol: string, days = 3): Promise<PredictionResul
   return post<PredictionResult>("/trading/predict", { symbol, days })
 }
 
-export function analyzeExpertOptionAsset(
+export function analyzeAsset(
   assetId: string,
   opts: { timeframe?: number; count?: number; days?: number } = {}
 ): Promise<PredictionResult> {
@@ -372,7 +372,7 @@ export function normalizeAutopilotAssets(raw: unknown): AutopilotAssetTarget[] {
     }))
 }
 
-export interface ExpertOptionDemoStatus {
+export interface BrokerDemoStatus {
   ok: boolean
   configured: boolean
   demo: boolean
@@ -395,7 +395,7 @@ export interface ExpertOptionDemoStatus {
   }
 }
 
-export function getExpertOptionDemoStatus(): Promise<ExpertOptionDemoStatus> {
+export function getBrokerDemoStatus(): Promise<BrokerDemoStatus> {
   return request("/trading/demo")
 }
 
@@ -604,8 +604,8 @@ export function scanSymbols(input: { symbols?: string[]; days?: number } = {}): 
   return post("/trading/scan", input)
 }
 
-// Common ExpertOption asset ids for quick analysis buttons.
-export const EXPERTOPTION_QUICK_ASSETS = [
+// Common asset ids for quick analysis buttons.
+export const QUICK_ASSETS = [
   { id: "EURUSD", name: "EUR/USD" },
   { id: "GBPUSD", name: "GBP/USD" },
   { id: "BTCUSD", name: "BTC/USD" },
@@ -734,7 +734,7 @@ export function proAnalyzeSymbol(
   return post<ProAnalysisResult>("/trading/pro/analyze", { symbol, ...opts })
 }
 
-export function proAnalyzeExpertOption(
+export function proAnalyze(
   opts: { assetId?: string; timeframe?: number; count?: number; days?: number } = {}
 ): Promise<ProAnalysisResult> {
   return post<ProAnalysisResult>("/trading/pro/expertoption", opts)

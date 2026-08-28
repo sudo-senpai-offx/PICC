@@ -3,13 +3,22 @@ import type { CandleDatum, EmaDatum, VolumeDatum } from "@/components/Candlestic
 import type { LiveTick } from "@/lib/liveTrading"
 import { getToken } from "@/lib/auth"
 
-export type Timeframe = 60 | 300 | 900 | 3600
+export type Timeframe =
+  | 5 | 15 | 30 | 60 | 300 | 900 | 1800 | 3600 | 14400 | 86400 | 604800 | 2592000
 
 const TIMEFRAME_LABELS: Record<Timeframe, string> = {
+  5: "5s",
+  15: "15s",
+  30: "30s",
   60: "1m",
   300: "5m",
   900: "15m",
-  3600: "1h"
+  1800: "30m",
+  3600: "1h",
+  14400: "4h",
+  86400: "1D",
+  604800: "1W",
+  2592000: "1M"
 }
 
 export { TIMEFRAME_LABELS }

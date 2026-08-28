@@ -189,7 +189,7 @@ export function TradingHud() {
         {data == null ? (
           <p className="muted small">Engine warming up — needs the live 1m buffers (min 40 bars per asset).</p>
         ) : decisions.length === 0 ? (
-          <p className="muted small">No decisions yet — the ExpertOption session must be connected.</p>
+          <p className="muted small">No decisions yet — a broker session must be connected.</p>
         ) : (
           decisions.map((d) => <HudRow key={d.assetId} d={d} now={now} />)
         )}
