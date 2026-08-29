@@ -195,4 +195,46 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
     expect(resDefault.body.userId).toBe("default")
     expect(resDefault.body.config).toEqual({})
   })
+
+  // ── T8 — headless-status (Mechanism D: the extension worker's poll) ────────
+
+  it("GET headless-status reports every venue honestly before any run — never a claimed session", async () => {
+    const res = await call(handleApi, "GET", "/api/trading/headless-status")
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(Object.keys(res.body.venues).sort()).toEqual([
+      "binance", "bybit", "deriv", "etoro", "expertoption",
+      "iqoption", "kucoin", "okx", "olymptrade", "plus500"
+    ])
+    const eo = res.body.venues.expertoption
+    expect(eo.status).toBe("idle") // full capture venue, never run — idle, never "ok"
+    expect(eo.stale).toBe(true) // never captured = stale, honestly
+    expect(eo.lastCaptureAt).toBeNull()
+    expect(eo.tokenChangedAt).toBeNull()
+    expect(eo.lastMetricsAt).toBeNull()
+    expect(eo.name).toBe("ExpertOption")
+    expect(res.body.venues.bybit.status).toBe("not-enabled")
+    expect(res.body.venues.bybit.stale).toBe(false)
+    expect(res.body.venues.expertoption.refreshCadenceMs).toBe(30 * 60 * 1000)
+  })
+
+  it("GET headless-status merges the observed metrics timestamp per venue", async () => {
+    await accountMetrics.putAccountMetrics("default", {
+      venueId: "expertoption",
+      balance: 100,
+      observedAt: "2026-08-30T12:00:00.000Z"
+    })
+    const res = await call(handleApi, "GET", "/api/trading/headless-status")
+    expect(res.body.venues.expertoption.lastMetricsAt).toBe("2026-08-30T12:00:00.000Z")
+    expect(res.body.venues.iqoption.lastMetricsAt).toBeNull() // never observed — honest
+  })
+
+  it("headless-status is authenticated: remote caller without a session gets 401", async () => {
+    await auth.createAccount({ email: "bob@example.com", password: "correct-horse-battery", name: "Bob" })
+    const res = makeRes()
+    const remote = makeReq("GET", "/api/trading/headless-status")
+    remote.socket = { remoteAddress: "203.0.113.5" } // NOT localhost
+    await handleApi(remote, res, "/api/trading/headless-status")
+    expect(res.status).toBe(401)
+  })
 })

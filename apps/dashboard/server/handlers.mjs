@@ -116,7 +116,7 @@ import {
 } from "./services/connectors.mjs"
 import { browserAvailable, realProfileState, importRealProfile } from "./services/browserBridge.mjs"
 import { accountMetricsForUser, getAccountMetrics, staleFrom } from "./services/accountMetrics.mjs"
-import { listCaptureProfiles, metricsCadenceMs, saveCaptureConfigForUser, captureConfigForUser } from "./services/captureProfiles.mjs"
+import { listCaptureProfiles, metricsCadenceMs, saveCaptureConfigForUser, captureConfigForUser, headlessSessionStatus } from "./services/captureProfiles.mjs"
 import {
   studioStatus,
   openStudio,
@@ -1353,6 +1353,28 @@ async function _handleApiInner(req, res, url, reqId) {
       console.error("[picc] capture-config save failed:", err)
       writeJson(res, 500, { ok: false, error: err.message })
     }
+    return
+  }
+
+  // Phase 5 (spec T8 / Mechanism D) — headless-session status for the
+  // extension worker poll. Read-only + authenticated (localhost passes;
+  // remote callers need a valid session token — same gate as the sibling
+  // trading endpoints). Rows are the ENGINE's observed state — idle /
+  // needs-credentials / not-enabled are reported honestly, never a claimed
+  // session; lastMetricsAt merges the account-metrics store so the popup can
+  // show capture AND metrics freshness without a second round-trip.
+  if (path === "/api/trading/headless-status" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    const metrics = accountMetricsForUser(userId)
+    const rows = {}
+    for (const [vid, row] of Object.entries(headlessSessionStatus())) {
+      rows[vid] = {
+        ...row,
+        lastMetricsAt: metrics[vid]?.observedAt ?? null
+      }
+    }
+    writeJson(res, 200, { ok: true, userId, at: new Date().toISOString(), venues: rows })
     return
   }
 

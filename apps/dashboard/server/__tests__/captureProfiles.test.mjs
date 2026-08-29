@@ -149,6 +149,21 @@ describe("refresh policy + cadence (T4 gate)", () => {
     setHeadlessSessionPolicy({ expertoption: { enabled: false } })
     expect(isVenueEnabled("expertoption")).toBe(false)
   })
+
+  it("T8 status surface is honest before any run: idle+stale for capture-capable, not-enabled for the rest", () => {
+    const rows = headlessSessionStatus()
+    expect(rows.expertoption.status).toBe("idle") // full venue, never captured — idle, NOT ok
+    expect(rows.expertoption.stale).toBe(true) // never captured = the stalest possible state
+    expect(rows.expertoption.lastCaptureAt).toBeNull()
+    expect(rows.expertoption.tokenChangedAt).toBeNull()
+    expect(rows.bybit.status).toBe("not-enabled") // catalog-only — honest, and NOT stale
+    expect(rows.bybit.stale).toBe(false)
+    expect(rows.iqoption.status).toBe("not-enabled")
+    // capture-capable venues all surface the same never-run truth.
+    for (const id of ["iqoption", "binance", "kucoin", "okx", "bybit", "etoro", "plus500", "olymptrade", "deriv"]) {
+      expect(["not-enabled", "idle"]).toContain(rows[id].status)
+    }
+  })
 })
 
 describe("captureVenue states (T3)", () => {
@@ -226,6 +241,15 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
     // Status surfacing reflects the run.
     expect(headlessSessionStatus().expertoption.status).toBe("ok")
     expect(headlessSessionStatus().expertoption.lastCaptureAt).toBeTruthy()
+    // T8: the surface says WHEN the token changed — never the value.
+    expect(headlessSessionStatus().expertoption.tokenChangedAt).toBe(report.at)
+  })
+
+  it("same token re-captured → tokenChangedAt stays null (nothing changed)", async () => {
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
+    await headlessSessionRefresh()
+    expect(headlessSessionStatus().expertoption.tokenChangedAt).toBeNull()
   })
 
   it("same token re-captured → no restart (flap guard)", async () => {

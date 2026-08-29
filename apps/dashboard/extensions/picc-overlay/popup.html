@@ -11,6 +11,7 @@
   .lbl { color: #ddd; }
   .st { font-weight: 600; }
   .ok { color: #4ade80; } .bad { color: #ff6b6b; } .warn { color: #fbbf24; }
+  .dim { color: #666; }
   input { width: 100%; box-sizing: border-box; background: #16162c; border: 1px solid #2a2a4a;
           color: #eef0ff; border-radius: 6px; padding: 7px; font-size: 12px; }
   button { width: 100%; margin-top: 10px; padding: 9px; background: #6c63ff; border: none;
@@ -33,6 +34,9 @@
   <div class="row"><span class="lbl">Relay (broker tab)</span><span id="relay-st" class="st warn">idle (no broker tab)</span></div>
   <div class="row"><span class="lbl">Frames queued</span><span id="queued" class="st">0</span></div>
   <div class="row"><span class="lbl">Relay enabled</span><button id="relay" class="switch"><span class="knob"></span></button></div>
+
+  <div class="sub" style="margin-top:12px">Headless sessions</div>
+  <div id="headless"></div>
 
   <label class="lbl" style="display:block;margin:10px 0 4px;font-size:11px;">Dashboard URL</label>
   <input id="backend" placeholder="http://localhost:5173" />

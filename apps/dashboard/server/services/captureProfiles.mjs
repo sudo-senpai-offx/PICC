@@ -185,6 +185,7 @@ export function enabledCaptureVenues() {
 const policyOverrides = new Map() // venueId -> { enabled?: bool, refreshCadenceMs?: number, metricsCadenceMs?: number }
 const lastAutoRun = new Map() // venueId -> ts
 const lastReports = new Map() // venueId -> report (latest per-venue capture report)
+const lastTokenChange = new Map() // venueId -> iso timestamp of the LAST observed token change
 
 const CADENCE_MIN_MS = 60_000
 const CADENCE_MAX_MS = 24 * 60 * 60 * 1000
@@ -336,20 +337,27 @@ function loadCaptureConfigAtBoot() {
   if (uid) applyUserConfigToPolicy(uid)
 }
 
-/** Per-venue refresh state for status surfacing (T8 foundation). */
+/** Per-venue refresh state for status surfacing (T8 status endpoint + popup). */
 export function headlessSessionStatus() {
   const rows = {}
   for (const p of CAPTURE_PROFILES) {
     const last = lastReports.get(p.id)
+    // stale is honest: a venue that CAN capture but never HAS is the stalest
+    // possible state; a not-enabled venue is not stale, it's just not enabled.
+    const stale = last
+      ? Date.now() - Date.parse(last.at) > refreshCadenceMs(p.id) * 3
+      : Boolean(p.capture?.via)
     rows[p.id] = {
       venueId: p.id,
+      name: p.name,
       status: last?.state ?? (p.capture?.via ? "idle" : "not-enabled"),
       reason: last?.state === "error" || last?.state === "not-enabled" ? (last?.reason ?? null) : null,
       lastCaptureAt: last?.at ?? null,
       lastStateAt: last?.at ?? null,
+      tokenChangedAt: lastTokenChange.get(p.id) ?? null,
       enabled: isVenueEnabled(p.id),
       refreshCadenceMs: refreshCadenceMs(p.id),
-      stale: last ? Date.now() - Date.parse(last.at) > refreshCadenceMs(p.id) * 3 : false
+      stale
     }
   }
   return rows
@@ -421,6 +429,7 @@ export async function captureVenue(venueId, { page } = {}) {
     const after = await readTradingCredentials()
     const nextToken = after?.expertoptionToken ?? ""
     const tokenChanged = Boolean(nextToken) && nextToken !== (before?.expertoptionToken ?? "")
+    if (tokenChanged) lastTokenChange.set(venue, at) // T8: status surface exposes WHEN (never the value)
     let reconnectTriggered = false
     if (tokenChanged) {
       try {
@@ -477,5 +486,6 @@ export async function headlessSessionRefresh() {
 export function _resetHeadlessSessionState() {
   lastAutoRun.clear()
   lastReports.clear()
+  lastTokenChange.clear()
   policyOverrides.clear()
 }

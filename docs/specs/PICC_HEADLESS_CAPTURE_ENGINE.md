@@ -407,14 +407,33 @@ real fixture/replay research exists.
   round-trip, real-session per-user bucket vs the unauth `default` bucket. Full suite after T5–T7:
   **96 files / 970 tests green**, `tsc -b --noEmit` exit 0 (pre-slice 94/932).
 
-- [ ] **T8 — Headless-status endpoint + popup framing (REQ-D) (P2 · M).** New read-only `GET /api/trading/
+- [x] **T8 — Headless-status endpoint + popup framing (REQ-D) (P2 · M).** New read-only `GET /api/trading/
   headless-status` (localhost-gated + `requireAuth`): per-venue `{ status, lastCaptureAt, tokenChangedAt,
   lastMetricsAt, stale }`, honest `needs-credentials`/`not-enabled` states. Background worker polls it and
   writes `piccHeadlessStatus` to `chrome.storage.local`; popup reads it and renders per-platform rows
   (badge + last capture + stale tone). NO new message action; zero-DOM and read-only locks intact.
   **Acceptance:** `extensionIntegrity.test.mjs` stays green with no edits to its pinned action vocabulary
   (`:169`) or DOM-free checks (`:82-96`); popup renders `needs-credentials` honestly (never "connected");
-  no `autopilot`/`buyOption`/`/api/trading/demo/place` tokens in the popup (`:77-78`).
+  no `autopilot`/`buyOption`/`/api/trading/demo/place` tokens in the popup (`:77-78`). - Done:
+  `captureProfiles.headlessSessionStatus()` gained `tokenChangedAt` (recorded inside `captureVenue` only
+  when the captured token string actually changed — the value itself never leaves the engine) + honest
+  never-run staleness (a capture-capable venue that never captured reads `idle` + `stale:true`; a
+  not-enabled venue is not stale, it's just not enabled). Endpoint heredoc: `handlers.mjs` GET (requireAuth
+  — localhost passes, remote needs a session token, same gate as the sibling trading endpoints; `userId =
+  verifyUser ?? "default"`; `lastMetricsAt` merged per venue from the account-metrics store so the popup
+  gets capture AND metrics freshness in one round-trip; rows carry `name` for the popup label). Worker:
+  `background.js` `refreshHeadlessStatus()` polls on the heartbeat alarm + startup and mirrors
+  `piccHeadlessStatus` to `storage.local`; ANY fetch failure stores `{ ok:false, venues:null }` — the
+  popup renders "unavailable" instead of re-claiming a stale read as fresh (honesty contract). Popup:
+  `popup.js` is a pure `storage.local` reader (no new message action — vocabulary pinned at `:169`); 6-way
+  honest map sidesteps `ok/needs-credentials/not-enabled/guest/error/idle` with `stale` forcing the warn
+  tone and a hover detail line (capture/metrics/token times, `never` not a fabricated 0). Tests: 2 new in
+  `captureProfiles.test.mjs` (tokenChangedAt set on changed-token run / null on same-token; honest
+  pre-run surface) + 3 new in `accountMetricsApi.test.mjs` (all-10-venues honest pre-run incl. idle+stale
+  for expertoption, lastMetricsAt merge, remote-no-session → 401). `extensionIntegrity.test.mjs` UNEDITED
+  and green 9/9 (pinned actions, zero-DOM, popup tokens all hold). Full suite after T5–T8: **96 files /
+  975 tests green**, `tsc -b --noEmit` exit 0. UNVERIFIED: popup/woker rendering in a real Chrome profile
+  (browser-only, no DOM harness — same category as content.js; `node --check` green both files).
 
 - [ ] **T9 — First-login human-approval gate (REQ-E) (P1 · M).** Drive first login through the workflow DSL so
   WRITE_STEPS (`interventions.mjs:39`) become approval proposals (`:235-239`); demo-first default;

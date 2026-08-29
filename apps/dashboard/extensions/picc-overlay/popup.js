@@ -35,15 +35,82 @@ function renderRelay(st) {
   el.className = "st bad"
 }
 
+// ── Headless sessions (Phase 5, spec T8) ────────────────────────────────────
+// Pure storage reader: the background worker polls the authenticated
+// headless-status endpoint and mirrors it to chrome.storage.local. Rows are
+// the ENGINE's observed state — needs-credentials / not-enabled / idle are
+// shown honestly, never dressed up as a connected session. No trading
+// controls live here.
+const HEADLESS_TEXT = {
+  ok: "session synced",
+  idle: "idle · never captured",
+  guest: "guest session",
+  "needs-credentials": "login needed",
+  "not-enabled": "not enabled",
+  error: "capture error"
+}
+const HEADLESS_TONE = {
+  ok: "ok",
+  idle: "warn",
+  guest: "warn",
+  "needs-credentials": "warn",
+  "not-enabled": "dim",
+  error: "bad"
+}
+
+function fmtTime(iso) {
+  if (!iso) return "never"
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? "never" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+}
+
+function renderHeadless(st) {
+  const box = $("headless")
+  box.textContent = ""
+  const addRow = (label, text, tone, title) => {
+    const row = document.createElement("div")
+    row.className = "row"
+    if (title) row.title = title
+    const l = document.createElement("span")
+    l.className = "lbl"
+    l.textContent = label
+    const v = document.createElement("span")
+    v.className = `st ${tone}`
+    v.textContent = text
+    row.append(l, v)
+    box.append(row)
+  }
+  if (!st || st.ok !== true) {
+    addRow("Headless sessions", "unavailable", "warn", "No fresh headless-session read from the server yet.")
+    return
+  }
+  const venues = Object.values(st.venues ?? {})
+  if (!venues.length) {
+    addRow("Headless sessions", "no venues reported", "dim")
+    return
+  }
+  for (const v of venues.sort((a, b) => a.venueId.localeCompare(b.venueId))) {
+    const base = HEADLESS_TEXT[v.status] !== undefined
+      ? { text: HEADLESS_TEXT[v.status], tone: HEADLESS_TONE[v.status] }
+      : { text: v.status, tone: "warn" }
+    const stale = v.stale === true && v.status !== "not-enabled"
+    const tone = stale ? "warn" : base.tone
+    const text = stale ? `${base.text} · stale` : base.text
+    const detail = `capture ${fmtTime(v.lastCaptureAt)} · metrics ${fmtTime(v.lastMetricsAt)} · token ${fmtTime(v.tokenChangedAt)}`
+    addRow(v.name ?? v.venueId, text, tone, detail)
+  }
+}
+
 async function refresh() {
-  const { piccSensorStatus, piccRelayEnabled, piccServerOnline, piccServerPort } = await chrome.storage.local.get([
-    "piccSensorStatus", "piccRelayEnabled", "piccServerOnline", "piccServerPort"
+  const { piccSensorStatus, piccRelayEnabled, piccServerOnline, piccServerPort, piccHeadlessStatus } = await chrome.storage.local.get([
+    "piccSensorStatus", "piccRelayEnabled", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"
   ])
   // Fresh probe beats the heartbeat's cached state; fall back to the cache if
   // the worker is unreachable (should never happen — same extension).
   const srv = await chrome.runtime.sendMessage({ action: "server-status" }).catch(() => null)
   renderServer(srv ?? { online: piccServerOnline, port: piccServerPort, checkedAt: Date.now() })
   renderRelay(piccSensorStatus)
+  renderHeadless(piccHeadlessStatus)
   // Queue depth comes from the ACTIVE tab's sensor; no observable sensor => n/a,
   // never a fabricated 0.
   const q = await chrome.runtime.sendMessage({ action: "sensor-queue-depth" }).catch(() => null)

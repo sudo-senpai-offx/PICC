@@ -179,6 +179,31 @@ async function sendHeartbeat() {
   })
 }
 
+// ── Headless-session status poll (Phase 5, spec T8) ─────────────────────────
+// Read-only surface for the popup: poll the authenticated headless-status
+// endpoint and mirror it to chrome.storage.local under piccHeadlessStatus.
+// The popup is a pure storage reader (no new message action — the action
+// vocabulary stays pinned at extensionIntegrity.test.mjs:169). No automation
+// is added here or anywhere else in the extension.
+const HEADLESS_STATUS_KEY = "piccHeadlessStatus"
+
+async function refreshHeadlessStatus() {
+  const at = Date.now()
+  // On ANY failure the stored view is { ok:false, venues:null } — the popup
+  // renders the honest "unavailable" tone instead of re-claiming the last
+  // good read as fresh. serverFetch does its own port detection, so the
+  // cached serverOnline flag is deliberately not consulted.
+  const fallback = { ok: false, at, venues: null }
+  const r = await serverFetch("/api/trading/headless-status")
+  if (!r.ok) {
+    await chrome.storage.local.set({ [HEADLESS_STATUS_KEY]: fallback }).catch(() => {})
+    return
+  }
+  await chrome.storage.local.set({
+    [HEADLESS_STATUS_KEY]: { ok: true, at, venues: r.data?.venues ?? null }
+  }).catch(() => {})
+}
+
 // ── Tab-change telemetry ─────────────────────────────────────────────────────
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   if (!serverOnline) return
@@ -203,7 +228,10 @@ async function ensureAlarms() {
 void ensureAlarms()
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "picc-heartbeat") sendHeartbeat()
+  if (alarm.name === "picc-heartbeat") {
+    sendHeartbeat()
+    refreshHeadlessStatus() // T8: mirror headless-session state for the popup
+  }
 })
 
 // ── Message handler ──────────────────────────────────────────────────────────
@@ -260,4 +288,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 ;(async () => {
   await detectServerPort()
   await sendHeartbeat()
+  await refreshHeadlessStatus() // T8: first mirror lands before the first alarm
 })()
