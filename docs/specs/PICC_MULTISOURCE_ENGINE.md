@@ -1,0 +1,121 @@
+# Multi-Source Market Data Engine + Resilience — spec v1 (Phase 4)
+
+**Status:** Draft for execution · **Date:** 2026-08-29
+**Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` §5.1 unified feed fan-in (landed as `marketDataBus.mjs`, see §7 correction `:239-241`) + §7 "still queued" row (latency surfaced next to broker rows, `:251`) · `docs/specs/EXTENSION_CONNECTIVITY_ENGINE.md` (T4 feed-mode gate, T6 capability buttons, T8 SSE singleton, T9 integrity locks are the seams this phase extends)
+**Supersedes:** nothing — new work at the fan-in/selection layer plus resilience-honesty completion.
+**Grounding rule:** every claim below carries a `file:line` I read this session; anything not re-read this session is marked **UNVERIFIED** and must be re-verified at execution start.
+
+## Landed while executing (2026-08-29, before this spec entered the queue)
+
+Turns out T7 and T8 shipped first, in the session that produced this spec. The task list below marks them done; the two deviations from the mechanisms are deliberate and recorded here so execution doesn't "re-fix" them:
+
+- **T7 landed, with one deviation from Mechanism F.** `background.js` gained a `server-status` handler that performs a LIVE health probe (`checkServer()`/`detectServerPort`) on demand; `popup.js` sends `server-status` on open, caches the reply privately, renders three states — `online :port`, `offline`, and `standby` (backend online, sensor idle = no broker tab). Vehicle: `apps/dashboard/extensions/picc-overlay/{background.js,popup.js,popup.html}` + `server/__tests__/backgroundServerStatus.test.mjs` (3 tests, first background.js coverage). **Deviation:** Mechanism F said "storage.local reads only, no new sendMessage action" — a fresh probe beats a 30 s-old heartbeat cache, so an action WAS added, on BOTH ends of the contract simultaneously; the T9-derived message-contract test (`extensionIntegrity.test.mjs`) still passes because the sent set and the handled set grew together. Do not revert to storage-only without re-adding the honesty of a live probe.
+- **T8 landed, with a narrower-than-Mechanism-G trigger.** `handlers.mjs` `/api/trading/credentials` POST now reads creds _before_ the save, computes `tokenChanged` (`nextToken !== before.expertoptionToken`), and calls `restartLiveEO({ force: true })` only when the token actually changed; echoes `reconnectTriggered`. Same-token re-save and settings-only saves are proven no-ops (flap guard). Vehicle: `handlers.mjs` + `credentials.test.mjs` (extended). **Deviation:** the "degraded session + unchanged token → soft reconnect" branch of Mechanism G is NOT implemented — it needs a session-health signal from liveEO that isn't read this session. Left as follow-up; the heavy agent-visible machinery (token change revives without restart) is done.
+- **Partial T4 / T6, landed opportunistically.** `feedProvenance()` in `liveEO.mjs` (direct `lastConsumedAt` comparison of extension vs studio legs — the 1500 ms window in `dataSources.mjs:39-40` is NOT touched), candles responses echo `feed: "extension"|"studio"`, `useCandleData.ts` types it, `TradingChart.tsx` shows a leg badge and an honest empty state ("No live feed for {asset} at {tf}") instead of a blank canvas. Vehicle: `liveEO.mjs`, `handlers.mjs`, `useCandleData.ts`, `TradingChart.tsx`, `e2eExtensionFeedChain.test.mjs` (feed pinned on both legs). **Not landed:** the `headless` leg, the `stale`-driven badge tone (bus still stamps `stale:false` unconditionally for ≥30 bar results — Mechanism D), yahoo/ccxt `feed` tags.
+
+## Requirements (each testable)
+
+- **REQ-1 — Ideal-source selection, auto by quality + forced override.** `POST /api/trading/candles` resolves the source by an explainable quality order — liveness > resolution-exactness > freshness > configured weight > latency — instead of the current weight-only iteration (`marketDataBus.mjs:108-127` over `getActiveBrokers()` weight-sort, `brokers/index.mjs:88-90`; the header comment at `marketDataBus.mjs:7-11` already *claims* liveness/freshness priority the code never applies). A user can force a source; the forced source is tried first and, when it serves nothing, the engine falls through the quality order — never a blackout, mirroring the T4 `gateAccepts` semantics (`liveEO.mjs:454-464`). Every response names the winner and why (`source`, `sourceMode`, per-candidate `sources[]` with rank + reasons).
+- **REQ-2 — Persisted per-user preference.** The forced/auto choice persists per logged-in user (`userId` from `verifyUser`, `auth.mjs:188`; `"default"` when `hasUsers()` is false), survives restarts, and is honored by every chart on `/suites`; the chart header surfaces the active source with a "why" line and a control that changes the preference. Applies across all asset classes — forex/commodities/crypto/indices/pairs — with no per-class special-casing (coverage is per-asset; `WATCH_DEFAULT` already spans classes, `liveEO.mjs:41-47`).
+- **REQ-3 — Honest per-leg provenance.** Every candle response and the Data Sources status report the producing *leg* among {extension, studio, headless, yahoo, ccxt}, not just the broker slug. The existing extension-vs-studio bucket (`dataSources.mjs:39-40`, 1500 ms heuristic on `legs.extension.lastConsumedAt`) is completed: `headless` (history-seeded buffers, `liveEO.mjs:548-567,577-625,1059-1084`) is tracked as its own leg, and `feed` rides the candles response beside `source`.
+- **REQ-4 — Staleness never labels "live".** A response is tagged `stale` whenever the chosen broker is not alive or its own stale flag is set — today any ≥30-bar result is stamped `stale:false` unconditionally (`marketDataBus.mjs:119-120`). The chart renders stale sources with a warn badge, never the success "EO live" badge, and an empty, error-free response renders an honest empty state ("no live feed for X at Y"), never a blank canvas (`TradingChart.tsx:174-202` has no empty branch).
+- **REQ-5 — No-extension viability.** With the extension closed (no broker tab open), charts stay viable via headless EO + on-demand fetch + Yahoo, and the gap in the chain is closed: CCXT is registered but serves no candles (`ccxtAdapter.mjs:48-53` returns `[]`) — this phase wires it to the liveCCXT poll buffers (`liveCCXT.mjs:175-232`).
+- **REQ-6 — No-webapp viability + popup honesty.** With the web app down, the sensor keeps sniffing and queueing frames with exponential backoff (queue cap 400, `content.js:135-175`), and the popup reports backend reachability from the background worker's own heartbeat probe (`background.js:148-158` writes `piccServerOnline/piccServerPort/piccLastCheck`) — currently the popup reads ONLY `piccSensorStatus` (`popup.js:17-27`), which the content sensor writes only on broker pages (`content.js:97,105`), so the popup shows "server offline" even when the backend is healthy.
+- **REQ-7 — Token refresh revives without restart.** Saving a new ExpertOption token via `POST /api/trading/credentials` (`handlers.mjs:1273-1290`) revives a dead/rejected EO session — setContext rejection sets `authFailed=true` permanently in the transport (`expertoption.mjs:839-857`, no reconnect ever fires again, `:739,:752`), and today revival fires ONLY on browser token capture (`browserStudio.mjs:3185-3200` calling `restartLiveEO({force:true})`), never on a credentials save (`trading.mjs:134-141` writes the file and stops). A healthy session + unchanged token must NOT restart (no flap).
+
+## Design
+
+### Mechanism A — quality-ordered fan-in (REQ-1, the main seam)
+
+`getBestCandles` (`marketDataBus.mjs:99-145`) becomes two-phase: (1) drop brokers whose `resolveTimeframe(tf)` is null (`:113-114` stays the decline path), (2) sort survivors by the quality key, fetch in that order, first ≥30-bar result wins (`:119-120` semantics unchanged), thin-data last-resort unchanged (`:123-125`).
+
+```
+quality sort key (descending):
+  1. broker.isAlive()               — dead brokers sink (still try-able for buffered data)
+  2. servedTf === requestedTf       — exact resolution beats an honest relabel
+  3. broker.stats().lastSeen        — freshest data wins
+  4. broker.weight                  — user-configured affinity (brokers/index.mjs:12)
+  5. dataBusStats()[slug].medianMs  — faster source breaks the final tie
+```
+
+Response gains `sourceMode` (`"auto"` | `"forced"` | `"fallback"` — fallback when a forced source was tried and empty) and `sources[]` (`{slug, alive, exact, lastSeen, medianMs, rank}`) with reason strings for the chart header "why" line; `source`/`stale`/`timeframe`/`resolved` keep their existing shapes (`handlers.mjs:1718-1735`). The EO watch-and-fetch bridge (`marketDataBus.mjs:79-89,132-139`) keeps its `ensureWatch` guard — it stays a last-resort after broker fetches, now also consulting liveness for `stale` (Mechanism D).
+
+### Mechanism B — forced source + per-user persistence (REQ-2)
+
+New `server/services/chartPrefs.mjs`, mirroring the feed-mode pattern exactly (`liveEO.mjs:76-116`: boot read-once from a `PICC_DATA_DIR`-resolved JSON file, tmp+rename write, reads/writes suppressed under `VITEST` for parallel-test isolation): `getSourcePref(userId)` / `setSourcePref(userId, "auto" | slug)`. New handler `GET/POST /api/trading/source-preference` following the `requireAuth` pattern (`handlers.mjs:4332-4334`) and keying by `verifyUser(req.headers.authorization)` (`auth.mjs:188`); pre-auth single-user mode keys `"default"`. `getBestCandles` gains a `preferredSource` option: try that slug first, then the quality order. Semantics = T4 preference-with-fallback (`liveEO.mjs:454-464`): the forced source always *gets its chance*; when it yields nothing the engine falls back and says so (`sourceMode:"fallback"`).
+
+### Mechanism C — per-leg provenance completion (REQ-3)
+
+`legStats` (`liveEO.mjs:435-452`) gains a `headless` leg. `noteLegArrival`/consumption marking (`:442-452`) is completed with `noteLegConsumed("headless")` at the seeding paths that today set `lastSeen` without leg identity: `seedAll` success (`:556`), `refreshHeadless` (`:566`), and `fetchAssetCandles` `source:"live"` (`:1078`). New `liveEOStats().legs` entry plus `mostRecentLeg()` (max `lastConsumedAt`; the 1500 ms extension window in `dataSources.mjs:40` becomes one of several leg-window constants, not a hardcoded heuristic). `dataSources.mjs:39-40` switches to explicit leg accounting. Candles responses gain `feed`: `"extension" | "studio" | "headless"` for the `expertoption` source, and `"yahoo" | "ccxt"` otherwise (leg == source there). The Data Sources dockable consumes `collectSourceStatuses` (`dataSources.mjs:52-59`) — per-leg rows flow through unchanged.
+
+### Mechanism D — staleness + empty-state honesty (REQ-4)
+
+`marketDataBus.mjs:119-120` returns `stale: !broker.isAlive() || Boolean(broker.stats().stale)`. This matters specifically because `stopLiveEO`/transport give-up preserve buffers (`liveEO.mjs:920-950`, `onGiveUp` at `:736-747`) — stale-but-present data must render as stale, not "EO live". The EO bridge (`:134-138`) consults `liveEOStats()` liveness the same way. `useCandleData.ts:60-71` gains `stale` in `CandleResponse` and surfaces it (currently dropped). `TradingChart.tsx:91` badge map extends to broker slugs (`expertoption`/`ccxt`/`yahoo`/`none`) with tone driven by `stale`; `:174-202` gains an honest empty branch *before* the chart render.
+
+### Mechanism E — CCXT wiring (REQ-5)
+
+`ccxtAdapter.getCandles` (`ccxtAdapter.mjs:48-53`, TODO in code) maps the requested chart assetId to liveCCXT pair buffers: exact `name` match first, then `assetsEquivalent` (`assetCatalog.mjs:111`); returns bars sliced to `count` with the served-tf tag, `[]` when absent → bus falls through. `stats()` gains a real `lastSeen` (max `updatedAt` across the pair's buffers, `liveCCXT.mjs:211`) so the quality order sees freshness. Capability curve unchanged (`ccxtAdapter.mjs:61-63`).
+
+### Mechanism F — popup + no-webapp honesty (REQ-6)
+
+`popup.js:17-27` reads `piccServerOnline` / `piccServerPort` / `piccLastCheck` (background heartbeat state, `background.js:152-156`) plus `piccSensorStatus`, and renders three honest states: **online** (`:port`), **offline** (both probes false), and **standby — backend online, no broker tab open** (backend probe true, sensor status absent/false — the case that currently lies "server offline"). No new `sendMessage` action — the T9 popup↔background message contract pins that set — storage.local reads only. Sensor offline buffering already exists (`content.js:138-170`) and is locked by tests.
+
+### Mechanism G — token-refresh revive (REQ-7)
+
+In the `handlers.mjs:1273-1290` POST branch: read creds before/after `saveTradingCredentials` (`trading.mjs:134-141`); when the token string changed OR the EO session reports degraded/broken, call a new `reviveLiveEOIfNeeded({ tokenChanged })` in `liveEO.mjs` — `restartLiveEO({force:true})` (`:1009-1022`) when the token changed, `softReconnectLiveEO()` (`:963-984`, buffers preserved, no process restart) when degraded/broken, and a no-op when healthy + unchanged. Token values never enter logs or responses (masking at `handlers.mjs:1279,1285` stays untouched). The capture path (`browserStudio.mjs:3185-3200`) is left as-is — both routes converge on the same revive.
+
+## Non-goals
+
+- No new venues/executors (MetaApi/OANDA/Alpaca stay roadmap Wave 2; CCXT stays read-only by contract — order methods remain amputated, `ccxtAdapter.mjs` + roadmap §4).
+- No overlay revival: Phase 1 stripped it and locked the extension DOM-free (zero-DOM lock in `extensionIntegrity.test.mjs`; `popup.html:30` "no overlay"). "No-webapp mode" = sensor buffering + popup honesty, not dockable reintroduction.
+- No SSE/tick-bus changes — the T8 singleton stays the only transport (`useRealtimeSuite.ts`).
+- No weakening of rate limits (`handlers.mjs:4265` 240/60 s ingest), localhost-only guards (`:4245`, `:4263`), auth gates, or demo/live placement checks (REQ-8 of Phase 1 carries).
+- No per-asset source pinning — the preference is per-user default + optional per-chart session override; asset-level pinning is future work.
+- No Chapter-2-style history rewrite: candle shape `{time,open,high,low,close}` stays (`liveEO.mjs:220` era; yahoo candles carry `timeframe` tags, `yahooAdapter.mjs:50`).
+
+## Priority & effort (honest)
+
+P1 = must ship · P2 = should ship · P3 = if time · S < 1 session · M ≈ 1 session · L > 1 session.
+
+| Task | Priority | Effort | Dependency |
+|---|---|---|---|
+| T1 Baseline | P1 | S | — |
+| T2 Quality-ordered fan-in + forced source (bus) | P1 | M | T1 |
+| T3 Per-user source preference (prefs + endpoint + header UI) | P1 | M | T2 |
+| T4 Provenance completion (headless leg + feed tag) | P1 | M | T1 |
+| T5 CCXT candle wiring | P2 | M | T4 (leg window constants) |
+| T6 Staleness + badges + honest empty state | P1 | M | T2, T4 |
+| T7 Popup honesty | P2 | S (landed) | T1 |
+| T8 Token-refresh revive | P1 | S (landed) | T1 |
+| T9 Contract locks (additive response shape + prefs + popup key list) | P2 | S | T2–T8 |
+| T10 Docs + runbook honesty copy | P3 | S | T2–T8 |
+
+Suggested execution: one agent session for T1–T5 + T8 (server core), a second for T6–T7 (UI + extension), T9–T10 last. T5 is the only L-risk item (symbol mapping unknown until fixtures are inspected — see R2).
+
+## Tasks (ordered)
+
+- [ ] **T1 — Baseline (P1 · S).** Re-run `npm test` + `npm run typecheck` (`apps/dashboard/package.json:9,13`). Record counts. **Acceptance:** green baseline recorded in the PR body. Phase-1 close was 90 files / 898 tests (**UNVERIFIED this session — re-verify**); drift expected.
+- [ ] **T2 — Quality-ordered fan-in + forced source in `marketDataBus.mjs` (P1 · M).** Implement Mechanism A + `preferredSource` option. **Acceptance:** unit tests on a registry with ≥2 alive brokers — a dead broker sinks below an alive one but still serves buffered data when higher-ranked ones are empty; an exact-resolution broker beats a relabel broker for the same request; fresher beats older at equal weight; latency breaks the tie; forced slug is tried first and wins when it serves ≥30 bars; forced-dead falls through with `sourceMode:"fallback"`; `source/stale/timeframe/resolved` shapes byte-identical. Re-verify `multiplex.test.mjs:68-123` and `resolutionChain.test.mjs` deliberately — the sort change can flip which source wins in fixtures with multiple alive brokers; every changed assertion must be intentional and counted.
+- [ ] **T3 — Per-user source preference (P1 · M).** `server/services/chartPrefs.mjs` + `GET/POST /api/trading/source-preference` + header control in `TradingChart.tsx` (next to the badge row `:117-131`, and the source "why" line alongside the resolution warning `:168-172`). **Acceptance:** pref round-trips per `userId` (`"default"` pre-auth); file survives restart (boot read, tmp+rename write, `VITEST` suppression — same shape as `liveEO.mjs:85-111`); a forced source set as user A does not affect user B; the header dropdown lists Auto + the candle-capable providers from `useBrokerCapabilities` (`useBrokerCapabilities.ts:53-70`); candles honor the pref with fallback; the "why" line names the winner and its rank reasons (e.g. "Auto · EO — alive, 5m exact, 24 ms").
+- [ ] **T4 — Provenance completion (P1 · M).** `headless` leg in `liveEO.mjs` (`:435-452` + marking at `:556,:566,:1078`), `mostRecentLeg()`, `feed` on candles responses, `dataSources.mjs:39-40` off the hardcoded heuristic. **Partial landing 2026-08-29:** `feedProvenance()` extension-vs-studio + `feed` on candles + chart badge/empty state are DONE (see "Landed while executing"). **Remaining:** `headless` leg, yahoo/ccxt `feed` tags, `dataSources.mjs` explicit leg accounting. **Acceptance (remaining portion):** fake-timer tests — headless-only seeding reports `feed:"headless"`; studio frames + headless seeds report `feed:"studio"` while studio frames arrive; extension frames win within the extension window; yahoo/ccxt sources report their slug as `feed`; legacy `stats.upstream.*` alias (`liveEO.mjs:440`) still green; `collectSourceStatuses` output renders per-leg rows.
+- [ ] **T5 — CCXT candle wiring (P2 · M).** `ccxtAdapter.mjs:48-53` → liveCCXT buffers (`liveCCXT.mjs:175-182,189-232`); real `stats().lastSeen`. **Acceptance:** with seeded `liveCCXT` fixtures (no network): chart assetId resolves by exact name then `assetsEquivalent` (**UNVERIFIED assumption: liveCCXT pair id `"binance:BTCUSDT"` vs chart `"BTCUSD"` — check the fixture data before coding**), bars served with served-tf tags and sliced to count, `[]` falls through to the next broker, and `getBestCandles` picks CCXT over Yahoo when CCXT is fresh and EO is dead; `brokers.test.mjs` curve assertions still green.
+- [ ] **T6 — Staleness + badges + honest empty state (P1 · M).** Mechanism D end-to-end. **Acceptance:** `getBestCandles` tags `stale` from `!isAlive() || stats().stale` on every return path incl. the EO bridge; a dead-but-buffered EO renders stale, never "EO live"; `useCandleData` surfaces `stale`; `SOURCE_BADGES` (`TradingChart.tsx:23-28`) covers `expertoption`/`ccxt`/`yahoo`/`none` with `stale`-driven tone; empty + no error + not loading renders the honest empty-state block ("No live feed for {asset} at {tf} — no configured source serves it"), which the `source:"none"` path (`handlers.mjs:1724`) already produces; existing chart tests green.
+- [x] **T7 — Popup honesty (P2 · S).** Landed 2026-08-29 (see "Landed while executing": live probe via `server-status`, three-state popup, vm test 3/3 — one deliberate deviation from Mechanism F). **Acceptance (subset done):** backend-online + no sensor renders the standby state, not "server offline" ✓; backend-offline renders offline ✓; both-online renders `online :port` ✓; the T9 message-contract test is unchanged and green ✓ (set grew on both ends); manual: popup on a non-broker tab with the server up shows standby — **UNVERIFIED-HUMAN**.
+- [x] **T8 — Token-refresh revive (P1 · S).** Landed 2026-08-29 (see "Landed while executing": token-changed gate in `handlers.mjs`, flap-guard test). **Acceptance (subset done):** changed token revives via `restartLiveEO({force:true})` ✓; healthy session + unchanged token → no call ✓ (spy asserts); response masking unchanged ✓; no token in logs/responses ✓ (masking untouched). **Not done:** degraded session + unchanged token → soft reconnect (needs a liveEO session-health signal); grep-the-write-path guard test for tokens.
+- [ ] **T9 — Contract locks (P2 · S).** New pins: candles response `sourceMode/feed/sources[]` are present and the pre-existing fields are byte-identical in shape; `chartPrefs` file schema + `VITEST` suppression; popup storage-key read list; `feed`/`stale` flow from bus → handler → hook → chart. **Acceptance:** the suite green; a deliberate violation (removing a field, reading a new storage key without updating the pinned list, dropping `VITEST` suppression) fails its test — then reverted to a byte-identical tree and re-run green.
+- [ ] **T10 — Docs + honesty copy (P3 · S).** Update `docs/TRADING_MULTIPLATFORM_ROADMAP.md` §5.1/§7 (CCXT candles wired, `sourceMode`, provenance legs), `docs/ARCHITECTURE.md` data-flow (feed/provenance + stale rules), `docs/TRADING_RUNBOOK.md` Part-B (token-refresh + source-forcing human checks). **Acceptance:** grep shows no remaining "blank chart", "always EO", or "weight-only priority" claims; reviewer diff check.
+
+## Risks
+
+- **R1 (most likely to bite): the fan-in sort flips source winners in existing tests.** `multiplex.test.mjs` and `resolutionChain.test.mjs` fixtures register multiple alive brokers; a quality-sorted order can change the `source` assertion even though every shape stays identical. Mitigation: T2 makes changed assertions intentional and counted; T9 pins the response shape so regressions fail loudly, not silently.
+- **R2: CCXT symbol mapping is the only genuinely underspecified wiring.** liveCCXT buffers are keyed `"${exchange}:${SYMBOL}"` (`liveCCXT.mjs:37`) while the chart asks for `"BTCUSD"`. If `assetsEquivalent` (`assetCatalog.mjs:111`) can't bridge a pair, CCXT stays a no-op silently. Mitigation: T5 mandates fixture inspection first (the UNVERIFIED note), then exact-name + alias fallback, with `[]` semantics tested; if the mapping proves large, ship the stat-honesty half only and file the wiring as Phase-5 work.
+- **R3: popup honesty touches the T9 message contract.** Adding a `sendMessage` action instead of reading storage would break the pinned contract test. Mitigation: storage.local reads only, per Mechanism F; T7 asserts the contract test stays green.
+- **R4: two preference gates interact (feed-mode + forced-source).** A forced source that is itself extension-fed while feed-mode prefers studio could surprise. Mitigation: both are preference-with-fallback by construction; T2+T4 cover the 2×2 combinations in unit tests, and `sourceMode:"fallback"` names the fallback honestly.
+- **R5: token-refresh revive flaps a healthy session.** `restartLiveEO({force:true})` reconnects unconditionally (`liveEO.mjs:1009-1022`). Mitigation: T8 only forces on a real token *change*; unchanged-token + healthy is a proven no-op.
+
+## Honesty notes
+
+- Demo/live gates, rate limiters, localhost-only guards, auth checks: untouched (REQ-8 carries from Phase 1).
+- Fabricated-state risk addressed: the reverse of the usual — the popup currently *under*-reports (claims "server offline" while the backend is healthy). T7 fixes it with a three-state render; no state is ever claimed without a real probe (`background.js:148-158`, `content.js:86-106`).
+- Credential handling: token values never appear in this spec; T8 keeps the existing masking and adds a log-grep guard test.
+- Marked UNVERIFIED this session, re-verify at execution: current test counts (T1), liveCCXT fixture id/name mapping (T5), `useRealtimeSuite.ts` line refs, `PICC_T11_E2E_MANUAL_LOG.md` drift (not read).

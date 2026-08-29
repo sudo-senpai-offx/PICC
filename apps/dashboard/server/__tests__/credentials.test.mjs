@@ -3,6 +3,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 
+// The credentials handler revives the headless EO session on token saves via
+// a dynamic import of liveEO.mjs; mock it here so the assertion is about the
+// WIRING (save → restartLiveEO({force:true})), not a real socket session.
+vi.mock("../services/liveEO.mjs", () => ({
+  restartLiveEO: vi.fn(async () => true),
+  feedProvenance: vi.fn(() => "studio"),
+  liveEOStats: vi.fn(() => ({ legs: { extension: {}, studio: {} }, lastSeen: 0 }))
+}))
+
 let tmp
 let handleApi
 let createAccount
@@ -93,6 +102,33 @@ describe("credentials endpoints", () => {
     expect(res.status).toBe(200)
     expect(res.body.expertoptionToken).not.toBe("eo-tok")
     expect(res.body.riskPerTradePct).toBe(5)
+  })
+
+  it("revives the headless EO session when a NEW token is saved, never on the same token", async () => {
+    const acct = await createAccount({ email: "eo@x.com", password: "password123", name: "EO" })
+    const auth = { authorization: `Bearer ${acct.token}` }
+    const { restartLiveEO } = await import("../services/liveEO.mjs")
+    restartLiveEO.mockClear()
+
+    // Token (re)capture → force revive (soft reconnect, buffers preserved).
+    const withToken = await call("POST", "/api/trading/credentials", { expertoptionToken: "fresh-eo-token" }, auth)
+    expect(withToken.status).toBe(200)
+    expect(withToken.body.reconnectTriggered).toBe(true)
+    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
+
+    // Re-saving the SAME token must NOT force-restart a healthy session (no flap).
+    restartLiveEO.mockClear()
+    const sameToken = await call("POST", "/api/trading/credentials", { expertoptionToken: "fresh-eo-token" }, auth)
+    expect(sameToken.status).toBe(200)
+    expect(sameToken.body.reconnectTriggered).toBe(false)
+    expect(restartLiveEO).not.toHaveBeenCalled()
+
+    // A settings-only save must not force-reconnect either.
+    restartLiveEO.mockClear()
+    const settingsOnly = await call("POST", "/api/trading/credentials", { riskPerTradePct: 3 }, auth)
+    expect(settingsOnly.status).toBe(200)
+    expect(settingsOnly.body.reconnectTriggered).toBe(false)
+    expect(restartLiveEO).not.toHaveBeenCalled()
   })
 
   it("requires auth on credentials once an account exists", async () => {

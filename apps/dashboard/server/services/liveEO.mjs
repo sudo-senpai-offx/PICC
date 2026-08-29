@@ -1021,6 +1021,21 @@ export async function restartLiveEO({ force = false } = {}) {
   return true
 }
 
+/**
+ * Which live leg's frames most recently fed the SERVED candle series
+ * ("extension" | "studio"), or null when neither leg has been consumed yet.
+ * Picks the leg with the most recent CONSUMED frame (not the 1.5 s freshness
+ * window dataSources uses for the dockable label — the chart must attribute
+ * the exact serving leg). Arrival alone says nothing: the feed-mode
+ * preference gate (T4) may drop one leg while its frames keep arriving.
+ */
+export function feedProvenance() {
+  const ext = Number(legStats.extension.lastConsumedAt) || 0
+  const studio = Number(legStats.studio.lastConsumedAt) || 0
+  if (!ext && !studio) return null // nothing served yet — honest, never a guess
+  return ext >= studio ? "extension" : "studio"
+}
+
 export function liveEOStats() {
   return {
     status: currentStatus(),

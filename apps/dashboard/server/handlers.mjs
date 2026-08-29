@@ -1281,8 +1281,26 @@ async function _handleApiInner(req, res, url, reqId) {
       return
     }
     try {
+      const before = await getTradingCredentials()
       const creds = await saveTradingCredentials(body)
-      writeJson(res, 200, { ok: true, ...creds, expertoptionToken: creds.expertoptionToken ? "••••••" : "" })
+      // A token (re)capture must revive a dead headless EO session WITHOUT a
+      // server restart (T11 live finding: authFailed is permanent until the
+      // process restarts). Gated on an actual token CHANGE: re-saving the same
+      // token never force-restarts a healthy session (no flap), and a
+      // settings-only save (risk %, schedule) never forces either.
+      // restartLiveEO soft-reconnects, preserving candle buffers.
+      const nextToken = typeof body?.expertoptionToken === "string" ? body.expertoptionToken.trim() : ""
+      const tokenChanged = Boolean(nextToken) && nextToken !== (before?.expertoptionToken ?? "")
+      let reconnectTriggered = false
+      if (tokenChanged) {
+        try {
+          const { restartLiveEO } = await import("./services/liveEO.mjs")
+          reconnectTriggered = await restartLiveEO({ force: true })
+        } catch (err) {
+          console.warn("[picc] EO session refresh on token save failed:", err?.message)
+        }
+      }
+      writeJson(res, 200, { ok: true, reconnectTriggered, ...creds, expertoptionToken: creds.expertoptionToken ? "••••••" : "" })
     } catch (err) {
       console.error("[picc] trading credentials failed:", err)
       writeJson(res, 500, { ok: false, error: err.message })
@@ -1714,18 +1732,22 @@ async function _handleApiInner(req, res, url, reqId) {
       // Unified fan-in: EO push buffers → live EO fetch → CCXT aggregates →
       // Yahoo daily fallback. Source + staleness tagged for honest labeling.
       const { getBestCandles } = await import("./services/marketDataBus.mjs")
-      const { ensureWatchingAsset } = await import("./services/liveEO.mjs")
+      const { ensureWatchingAsset, feedProvenance } = await import("./services/liveEO.mjs")
       const out = await getBestCandles(assetId, {
         timeframe,
         count,
         ensureWatch: ensureWatchingAsset
       })
+      // Leg-level provenance when the live EO leg served: extension frames vs
+      // headless studio frames (mirrors dataSources.collectSourceStatuses).
+      const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : null
       if (!out.candles.length) {
-        return writeJson(res, 200, { ok: true, source: "none", assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [] })
+        return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [] })
       }
       writeJson(res, 200, {
         ok: true,
         source: out.source,
+        feed,
         stale: out.stale,
         assetId,
         requestedTimeframe: timeframe,

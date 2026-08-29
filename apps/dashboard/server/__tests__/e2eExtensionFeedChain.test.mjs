@@ -109,6 +109,7 @@ describe("T11 machine-verified chain: ingest → EO adapter → candles endpoint
       expect(res.status).toBe(200)
       expect(res.body.ok).toBe(true)
       expect(res.body.source).toBe("expertoption") // real adapter, not a stub
+      expect(res.body.feed).toBe("extension") // the consumed leg is tagged, not guessed
       expect(res.body.requestedTimeframe).toBe(tf)
       expect(res.body.timeframe).toBe(tf) // exact match — no resolution rounding
       expect(res.body.resolved).toBe(false) // honest tag: served == requested
@@ -157,6 +158,7 @@ describe("T11 machine-verified chain: ingest → EO adapter → candles endpoint
     expect(ingestStudioFrame(pushFrame(asset, 1300, vFor(1)))).toBe(true)
     candles = await call("POST", "/api/trading/candles", { assetId: asset, timeframe: 60, count: 20 })
     expect(candles.body.candles.at(-1).close).toBe(vFor(1)[3])
+    expect(candles.body.feed).toBe("studio") // headless studio leg served it
 
     // 3. Extension frame while studio is preferred+alive → seen, NOT consumed.
     const dropped = await call("POST", "/api/extension/ingest", { frames: [pushFrame(asset, 1600, vFor(2))] })

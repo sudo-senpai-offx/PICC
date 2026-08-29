@@ -30,7 +30,7 @@ const SOURCE_BADGES: Record<string, { text: string; tone: "success" | "warn" | "
 export function TradingChart({ assetId, label, height = 380, onCrosshair }: TradingChartProps) {
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
-    loading, error, streamError, lastPrice, timeframe, setTimeframe, source, resolvedTimeframe, resolved
+    loading, error, streamError, lastPrice, timeframe, setTimeframe, source, feed, resolvedTimeframe, resolved
   } = useCandleData({ assetId, timeframe: 300 })
   const { servableTimeframes, sourceTimeframes } = useBrokerCapabilities()
   const [hover, setHover] = useState<{ open: number; high: number; low: number; close: number } | null>(null)
@@ -94,11 +94,12 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   const servedSource = source === "live" || source === "buffer" ? "expertoption" : source
   const sourceCurve = servedSource ? sourceTimeframes.get(servedSource) : undefined
   const servable = new Set<number>(sourceCurve?.length ? sourceCurve : [...servableTimeframes])
-  const sourceLabel = source === "yahoo" || source === "yahoo-daily"
-    ? "Yahoo"
-    : servedSource === "expertoption" ? "ExpertOption"
-      : servedSource === "ccxt" ? "CCXT"
-        : servedSource && servedSource !== "none" ? servedSource : "no visible source"
+  const sourceLabel = feed === "extension" ? "Extension feed"
+    : feed === "studio" ? "ExpertOption headless"
+      : source === "yahoo" || source === "yahoo-daily" ? "Yahoo"
+        : servedSource === "expertoption" ? "ExpertOption"
+          : servedSource === "ccxt" ? "CCXT"
+            : servedSource && servedSource !== "none" ? servedSource : "no visible source"
   // Honest resolution label: the SERVER decides the bar size (broker
   // resolveTimeframe), never the client's echo of the request. Any mismatch
   // between what the user picked and what the server served triggers the
@@ -127,7 +128,9 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
               {isUp ? "+" : ""}{change.toFixed(4)} ({isUp ? "+" : ""}{changePct.toFixed(2)}%)
             </Badge>
           ) : null}
-          {sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
+          {feed === "extension" ? <Badge tone="success">Extension live</Badge>
+            : feed === "studio" ? <Badge tone="success">EO headless live</Badge>
+              : sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
           {streamError ? <Badge tone="warn">stream offline — retrying</Badge> : null}
         </div>
         <div className="row gap" style={{ alignItems: "center" }}>
@@ -179,7 +182,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
         <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center" }} className="danger-text">
           {error}
         </div>
-      ) : (
+      ) : candles.length ? (
         <ChartErrorBoundary>
           <CandlestickChart
             candles={candles}
@@ -199,6 +202,21 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
             autoScroll
           />
         </ChartErrorBoundary>
+      ) : (
+        // Honest empty state (T11 live finding 2026-08-29): a dead extension
+        // feed plus no fallback covering this asset/resolution returned NO
+        // candles, and the old code rendered a blank canvas. Say WHY instead.
+        <div
+          style={{ height, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}
+          className="muted"
+        >
+          <span>No data for {label ?? assetId} at {TIMEFRAME_LABELS[timeframe]}</span>
+          <span className="small" style={{ maxWidth: 420, textAlign: "center" }}>
+            No configured source is serving it — live-feed legs are offline and the fallbacks
+            ({sourceLabel}) have no candles at this resolution{streamError ? "; the realtime stream is offline and retrying" : ""}.
+            Check the feed legs in Data Sources.
+          </span>
+        </div>
       )}
 
       {showLevels && levels?.ok ? (
