@@ -19,7 +19,10 @@ async function refresh() {
     "piccSensorStatus", "piccRelayEnabled"
   ])
   renderStatus(piccSensorStatus)
-  $("queued").textContent = String(await chrome.runtime.sendMessage({ action: "sensor-queue-depth" }).catch(() => 0) ?? 0)
+  // Queue depth comes from the ACTIVE tab's sensor; no observable sensor => n/a,
+  // never a fabricated 0.
+  const q = await chrome.runtime.sendMessage({ action: "sensor-queue-depth" }).catch(() => null)
+  $("queued").textContent = q?.observed === true ? String(q.depth) : "n/a"
   $("relay").classList.toggle("on", piccRelayEnabled !== false)
 }
 

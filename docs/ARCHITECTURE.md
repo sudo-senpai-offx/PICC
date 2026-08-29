@@ -78,8 +78,11 @@ unpacked — no Plasmo, no build step:
    first, Yahoo fallback), kelly sizing, regime, expiry optimization, sentiment and orderflow.
 2. Autopilot is armed/disarmed through `/api/trading/autopilot/start|stop` (authenticated); state
    changes are logged server-side. PICC never sends trade orders to the broker.
-3. The service worker heartbeats `/api/extension/heartbeat` (~12 s cadence), reports navigations
-   via `/api/extension/tab-changed`, and probes `/api/health` for dashboard reachability.
+3. The sensor content script re-probes `/api/health` on `127.0.0.1:5173`/`3000` every 15 s for server
+   discovery (it relays frames directly to `/api/extension/ingest`; no proxy). The service worker
+   heartbeats `/api/extension/heartbeat` on a 30 s alarm (`HEARTBEAT_MS`; Chrome clamps alarm periods
+   below 30 s — the old ~12 s claim was never real), reports active-tab changes via
+   `/api/extension/tab-changed`, and probes `/api/health` for server reachability.
 4. Settings persist in `chrome.storage.local` with MV3-safe debounced saves. The legacy suggestion
    contract (`/api/extension/suggest` + `/api/extension/confirm`) remains server-side for the
    deprecated Plasmo skeleton (`apps/extension/`) only.

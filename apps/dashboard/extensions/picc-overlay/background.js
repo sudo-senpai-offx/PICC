@@ -1,16 +1,17 @@
-// PICC Overlay — background service worker (central hub)
-// ALL server communication, state management, tab management, heartbeat.
-// Content scripts NEVER fetch — they talk to this worker only.
+// PICC Sensor — background service worker (MV3).
+//
+// Division of labor: the sensor content scripts relay broker frames DIRECTLY to
+// the server's ingest endpoint (/api/extension/ingest). This worker owns the
+// extension's own telemetry and lifecycle: server-port discovery for the
+// heartbeat, the heartbeat itself, tab-change telemetry, the popup's
+// sensor-queue-depth round-trip, and sensor resurrection after reload/update.
+// No overlay, no automation, no cookies/downloads/proxying — read-only.
 
 const PICC_PORTS = [5173, 3000, 5174, 3001]
-// Chrome enforces minimum 30s alarm period; 12s is silently clamped.
+// Chrome enforces a minimum 30 s alarm period; anything below is clamped.
 const HEARTBEAT_MS = 30_000
-const METRICS_MS = 30_000
 
 // ── State ────────────────────────────────────────────────────────────────────
-// MV3 service workers die after ~30s idle; module state resets on every cold
-// start. detectedPort is mirrored to chrome.storage.session so the first
-// request after a restart doesn't re-scan all four ports.
 let serverOnline = false
 let lastServerCheck = 0
 let detectedPort = null
@@ -23,45 +24,50 @@ try {
 } catch { /* storage.session unavailable (old Edge) */ }
 let serverFetchRetries = 0
 const MAX_RETRIES = 1
-let extensionState = { installed: true, installTime: null, activeTabId: null }
-
-// ── Side Panel ────────────────────────────────────────────────────────────────
-if (chrome.sidePanel) {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {})
-}
 
 // ── Sender validation ────────────────────────────────────────────────────────
 // Only accept messages from our own extension's content scripts and popup.
 function isTrustedSender(sender) {
-  // Background-to-background messages (alarms, etc.)
-  if (!sender.url) return true
-  // Our own extension pages
+  if (!sender.url) return true // background-to-background (alarms, etc.)
   if (sender.url.startsWith("chrome-extension://") && sender.url.includes(chrome.runtime.id)) return true
-  // Content scripts injected by us match our extension ID
-  if (sender.id === chrome.runtime.id) return true
+  if (sender.id === chrome.runtime.id) return true // our content scripts
   return false
 }
 
-// ── Installation ─────────────────────────────────────────────────────────────
+// ── Sensor resurrection (T3) ─────────────────────────────────────────────────
+// A reload/update invalidates every running content-script context; only a new
+// navigation injects a fresh one. Best-effort: reload open broker + dashboard
+// tabs so the sensor comes back without user action. Next-navigation injection
+// is the safety net if this is too aggressive in some Chrome version (R1).
+function resurrectSensorTabs() {
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (!tab.id || !tab.url) continue
+      try {
+        const u = new URL(tab.url)
+        const onBroker = /expertoption\.(com|finance)$/.test(u.hostname)
+        const onDashboard = (u.hostname === "localhost" || u.hostname === "127.0.0.1") && [5173, 3000].includes(Number(u.port))
+        if (onBroker || onDashboard) chrome.tabs.reload(tab.id).catch(() => {})
+      } catch { /* about:blank, chrome://, etc. */ }
+    }
+  })
+}
+
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install" || details.reason === "update") {
-    if (details.reason === "install") {
-      extensionState.installTime = Date.now()
-      chrome.storage.local.set({
-        piccInstalled: true,
-        piccInstallTime: Date.now(),
-        piccVersion: chrome.runtime.getManifest().version
-      })
-    }
-    // Ensure context menu exists (re-create on update if removed)
-    try {
-      chrome.contextMenus.create({
-        id: "picc-overlay",
-        title: "PICC: Toggle Overlay",
-        contexts: ["page", "action"]
-      })
-    } catch {}
+    chrome.storage.local.set({
+      piccInstalled: true,
+      piccInstallTime: details.reason === "install" ? Date.now() : undefined,
+      piccVersion: chrome.runtime.getManifest().version
+    }).catch(() => {})
+    resurrectSensorTabs()
   }
+})
+
+// Browser restart: content scripts re-inject on next navigation by themselves,
+// but resurrect immediately so the sensor does not sit dead until then.
+chrome.runtime.onStartup.addListener(() => {
+  resurrectSensorTabs()
 })
 
 // ── Port detection ───────────────────────────────────────────────────────────
@@ -101,7 +107,6 @@ async function serverFetch(path, opts = {}) {
 
   try {
     const headers = opts.body ? { "Content-Type": "application/json" } : {}
-    // Attach auth token if stored
     try {
       const stored = await chrome.storage.local.get("piccAuthToken")
       if (stored.piccAuthToken) headers["Authorization"] = `Bearer ${stored.piccAuthToken}`
@@ -139,10 +144,9 @@ async function serverFetch(path, opts = {}) {
   }
 }
 
-// ── Server health check ──────────────────────────────────────────────────────
+// ── Heartbeat ────────────────────────────────────────────────────────────────
 async function checkServer() {
   const result = await detectServerPort()
-  const wasOnline = serverOnline
   serverOnline = result.ok
   lastServerCheck = Date.now()
   await chrome.storage.local.set({
@@ -150,31 +154,9 @@ async function checkServer() {
     piccLastCheck: lastServerCheck,
     piccServerPort: detectedPort
   })
-
-  // Only broadcast on actual status change (fixed: removed || true)
-  if (wasOnline !== serverOnline) {
-    broadcastStatus()
-  }
-
   return serverOnline
 }
 
-// Broadcast status to all tabs with content scripts
-function broadcastStatus() {
-  chrome.tabs.query({}, (tabs) => {
-    for (const tab of tabs) {
-      if (tab.id) {
-        chrome.tabs.sendMessage(tab.id, {
-          action: "server-status",
-          online: serverOnline,
-          port: detectedPort
-        }).catch(() => {})
-      }
-    }
-  })
-}
-
-// ── Heartbeat ────────────────────────────────────────────────────────────────
 async function sendHeartbeat() {
   const online = await checkServer()
   if (!online) return
@@ -182,28 +164,14 @@ async function sendHeartbeat() {
   let tabInfo = null
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    if (tab) {
-      tabInfo = { id: tab.id, url: tab.url, title: tab.title }
-      extensionState.activeTabId = tab.id
-    }
-  } catch {}
-
-  let cookieCount = 0
-  try {
-    if (tabInfo?.url) {
-      const url = new URL(tabInfo.url)
-      const cookies = await chrome.cookies?.getAll({ domain: url.hostname }) || []
-      cookieCount = cookies.length
-    }
+    if (tab) tabInfo = { id: tab.id, url: tab.url, title: tab.title }
   } catch {}
 
   await serverFetch("/api/extension/heartbeat", {
     method: "POST",
     body: {
       extensionVersion: chrome.runtime.getManifest().version,
-      installTime: extensionState.installTime,
       activeTab: tabInfo,
-      cookieCount,
       serverOnline: true,
       port: detectedPort,
       timestamp: Date.now()
@@ -211,25 +179,8 @@ async function sendHeartbeat() {
   })
 }
 
-// ── Metrics relay ────────────────────────────────────────────────────────────
-async function relayMetrics() {
-  if (!serverOnline) return
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    if (!tab?.id) return
-    const response = await chrome.tabs.sendMessage(tab.id, { action: "get-metrics" }).catch(() => null)
-    if (response) {
-      await serverFetch("/api/browser/metrics", {
-        method: "POST",
-        body: { tabId: tab.id, ...response }
-      })
-    }
-  } catch {}
-}
-
-// ── Tab tracking ─────────────────────────────────────────────────────────────
+// ── Tab-change telemetry ─────────────────────────────────────────────────────
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  extensionState.activeTabId = activeInfo.tabId
   if (!serverOnline) return
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId)
@@ -242,217 +193,41 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   } catch {}
 })
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === "complete") {
-    chrome.tabs.sendMessage(tabId, {
-      action: "server-status",
-      online: serverOnline,
-      port: detectedPort
-    }).catch(() => {})
-  }
-})
-
 // ── Alarms (MV3 service worker lifecycle safe) ───────────────────────────────
-// Create only when missing — re-creating on every SW evaluation resets the
-// countdown, making heartbeats unpredictable.
 async function ensureAlarms() {
   try {
     const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name))
     if (!existing.has("picc-heartbeat")) chrome.alarms.create("picc-heartbeat", { periodInMinutes: HEARTBEAT_MS / 60000 })
-    if (!existing.has("picc-metrics")) chrome.alarms.create("picc-metrics", { periodInMinutes: METRICS_MS / 60000 })
   } catch { /* alarms unavailable */ }
 }
 void ensureAlarms()
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "picc-heartbeat") sendHeartbeat()
-  if (alarm.name === "picc-metrics") relayMetrics()
 })
-
-// ── Cookie access ────────────────────────────────────────────────────────────
-async function getCookiesForUrl(url) {
-  try {
-    const u = new URL(url)
-    return await chrome.cookies?.getAll({ domain: u.hostname }) || []
-  } catch {
-    return []
-  }
-}
-
-// ── URL validation for downloads ─────────────────────────────────────────────
-function isSafeDownloadUrl(url) {
-  try {
-    const u = new URL(url)
-    // Only allow http/https — no file://, no ftp://, no data:
-    if (u.protocol !== "http:" && u.protocol !== "https:") return false
-    // Block internal network ranges
-    const host = u.hostname
-    if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false
-    if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) return false
-    return true
-  } catch {
-    return false
-  }
-}
 
 // ── Message handler ──────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // ── Sender validation: only trust our own extension pages ──
   if (!isTrustedSender(sender)) {
     sendResponse({ error: "untrusted sender" })
     return false
   }
 
-  // Open side panel on action click (when no popup is set)
-  if (msg.action === "open-sidepanel" && sender.tab?.id) {
-    chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => {})
-    return
-  }
-
-  // Server proxy (content scripts → background → PICC server)
-  if (msg.type === "picc-server-fetch" || msg.action === "server-request") {
-    serverFetch(msg.path, { method: msg.method, body: msg.body, timeout: msg.timeout })
-      .then((result) => sendResponse(result))
-      .catch((err) => sendResponse({ ok: false, data: null, error: err.message }))
-    return true
-  }
-
-  // Server status
-  if (msg.action === "get-status") {
-    sendResponse({ online: serverOnline, port: detectedPort, lastCheck: lastServerCheck })
-    return false
-  }
-
-  // Extension state
-  if (msg.action === "get-extension-state") {
-    chrome.storage.local.get(["piccInstalled", "piccInstallTime", "piccVersion", "piccServerOnline", "piccServerPort"], (data) => {
-      sendResponse({ ...data, online: serverOnline, port: detectedPort })
-    })
-    return true
-  }
-
-  // Toggle overlay — inject content.js if needed
-  if (msg.action === "toggle-overlay") {
-    const tabId = msg.tabId || sender.tab?.id
-    if (tabId) {
-      chrome.tabs.sendMessage(tabId, { action: "toggle-overlay" }).catch(() => {
-        chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] })
-          .then(() => chrome.tabs.sendMessage(tabId, { action: "toggle-overlay" }).catch(() => {}))
-          .catch(() => {})
-      })
-    }
-    sendResponse({ ok: true })
-    return false
-  }
-
-  // Cookie access (restricted to active tab's origin)
-  if (msg.action === "get-cookies") {
-    getCookiesForUrl(msg.url || "").then((cookies) => sendResponse({ cookies }))
-    return true
-  }
-
-  // Execute script in tab — ONLY our own content.js file, no arbitrary functions
-  if (msg.action === "execute-script") {
-    // SECURITY: Only allow executing our own content.js, not arbitrary functions
-    if (msg.func || (msg.files && msg.files.some((f) => f !== "content.js"))) {
-      sendResponse({ ok: false, error: "only content.js execution is permitted" })
-      return false
-    }
-    chrome.scripting.executeScript({
-      target: { tabId: msg.tabId, allFrames: false },
-      files: msg.files || ["content.js"]
-    }).then((results) => sendResponse({ ok: true, results }))
-      .catch((err) => sendResponse({ ok: false, error: err.message }))
-    return true
-  }
-
-  // Inject CSS — ONLY from our own extension resources
-  if (msg.action === "inject-css") {
-    // SECURITY: Only allow injecting CSS from our own files
-    if (msg.css) {
-      sendResponse({ ok: false, error: "inline CSS injection not permitted — use file-based CSS" })
-      return false
-    }
-    chrome.scripting.insertCSS({ target: { tabId: msg.tabId }, files: msg.files || [] })
-      .then(() => sendResponse({ ok: true }))
-      .catch((err) => sendResponse({ ok: false, error: err.message }))
-    return true
-  }
-
-  // Tab info
-  if (msg.action === "get-tab-info") {
+  // Popup telemetry: queue depth of the ACTIVE tab's sensor. The depth lives in
+  // the content-script context; only a live sensor can observe it. When there
+  // is no observable sensor we say so (observed:false) instead of zero-filling.
+  if (msg.action === "sensor-queue-depth") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0]
-      sendResponse({ tab: tab ? { id: tab.id, url: tab.url, title: tab.title, favIconUrl: tab.favIconUrl } : null })
+      if (!tab?.id) return sendResponse({ action: "sensor-queue-depth", depth: null, observed: false })
+      chrome.tabs.sendMessage(tab.id, { action: "sensor-queue-depth" })
+        .then((r) => sendResponse({ action: "sensor-queue-depth", depth: Number(r?.depth) || 0, observed: r?.observed === true }))
+        .catch(() => sendResponse({ action: "sensor-queue-depth", depth: null, observed: false }))
     })
     return true
   }
 
-  // Notification — use extension icon
-  if (msg.action === "notify") {
-    chrome.notifications?.create({
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: msg.title || "PICC",
-      message: msg.message || ""
-    }).catch(() => {})
-    sendResponse({ ok: true })
-    return false
-  }
-
-  // Download — validate URL safety
-  if (msg.action === "download") {
-    if (!isSafeDownloadUrl(msg.url)) {
-      sendResponse({ ok: false, error: "unsafe download URL" })
-      return false
-    }
-    // Basename only — a hostile filename must not write into subdirectories.
-    const safeName = String(msg.filename || "").split(/[\\/]/).pop().replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 120)
-    try { chrome.downloads?.download({ url: msg.url, filename: safeName || undefined }) } catch {}
-    sendResponse({ ok: true })
-    return false
-  }
-
-  // Server re-check
-  if (msg.action === "check-server") {
-    checkServer().then((online) => sendResponse({ online, port: detectedPort }))
-    return true
-  }
-
-  if (msg.action === "capture-screenshot") {
-    try {
-      chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
-        if (chrome.runtime.lastError) sendResponse({ error: chrome.runtime.lastError.message })
-        else sendResponse({ ok: true, image: dataUrl })
-      })
-    } catch (err) { sendResponse({ error: err.message }) }
-    return true
-  }
-
-  if (msg.action === "relay-cookies") {
-    const url = msg.url
-    if (!url) { sendResponse({ ok: false }); return false }
-    ;(async () => {
-      try {
-        const u = new URL(url)
-        const cookies = await chrome.cookies?.getAll({ domain: u.hostname }) || []
-        await serverFetch("/api/browser/cookies", { method: "POST", body: { url, cookies: cookies.map(c => ({ name: c.name, value: c.value, domain: c.domain, path: c.path, expires: c.expires })) } })
-        sendResponse({ ok: true, count: cookies.length })
-      } catch (err) { sendResponse({ ok: false, error: err.message }) }
-    })()
-    return true
-  }
-})
-
-// ── Context menu ─────────────────────────────────────────────────────────────
-chrome.contextMenus?.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "picc-overlay" && tab?.id) {
-    chrome.tabs.sendMessage(tab.id, { action: "toggle-overlay" }).catch(() => {
-      chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] })
-        .then(() => chrome.tabs.sendMessage(tab.id, { action: "toggle-overlay" }).catch(() => {}))
-        .catch(() => {})
-    })
-  }
+  return false
 })
 
 // ── Startup: detect server and send initial heartbeat ────────────────────────

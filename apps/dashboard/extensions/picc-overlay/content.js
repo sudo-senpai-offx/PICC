@@ -181,6 +181,18 @@
   }
   window.addEventListener("message", onMessage)
 
+  // ── Popup telemetry reply ─────────────────────────────────────────────────
+  // The popup asks the background for "frames queued"; the background asks the
+  // active tab's sensor context. Passive read-only answer (T3 round-trip).
+  // Registered through the guard so a dead context never registers.
+  chromeGuard(() => chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+    if (msg && msg.action === "sensor-queue-depth") {
+      respond({ action: "sensor-queue-depth", depth: QUEUE.length, observed: true })
+      return false // synchronous reply: close the port, nothing async pending
+    }
+    return false
+  }))
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   checkTimer = setInterval(checkServer, 15_000)
   heartbeatTimer = setInterval(() => { if (online) flush() }, 30_000)

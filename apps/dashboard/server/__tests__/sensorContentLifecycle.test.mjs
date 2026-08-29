@@ -32,7 +32,10 @@ function makeHarness() {
     removeEventListener(type) { listeners.delete(type) }
   }
   const chrome = {
-    runtime: { id: "picc-test-id" },
+    runtime: {
+      id: "picc-test-id",
+      onMessage: { addListener: (fn) => { state.onMessageListener = fn } }
+    },
     storage: {
       local: {
         set: (entry) => { state.storageSetCalls += 1; return state.setImpl(entry) },
@@ -159,5 +162,32 @@ describe("sensor content.js context lifecycle (T2)", () => {
     // the only chrome.* call sites are the two accessor lines
     const storageCalls = SOURCE.match(/chrome\.storage\.local\.(set|get)/g) ?? []
     expect(storageCalls).toEqual(["chrome.storage.local.set", "chrome.storage.local.get"])
+  })
+
+  it("round-trip: sensor-queue-depth answers observed:true with the live queue length", async () => {
+    const h = makeHarness()
+    await h.settleFetches({ ok: true })
+
+    let response = null
+    const listener = h.state.onMessageListener
+    expect(typeof listener).toBe("function")
+    const handedBack = listener({ action: "sensor-queue-depth" }, {}, (r) => { response = r })
+    expect(handedBack).toBe(false) // synchronous reply: port closed
+    expect(response).toEqual({ action: "sensor-queue-depth", depth: 0, observed: true })
+
+    // push one real broker-shaped frame, then re-read: the observed depth is 1
+    h.state.getImpl = (keys, cb) => cb({ piccRelayEnabled: true })
+    h.dispatchBrokerFrame({ action: "candle", message: { assetId: "BTC", candles: [{ t: 1, tf: 60, v: [1, 2, 3] }] } })
+    response = null
+    listener({ action: "sensor-queue-depth" }, {}, (r) => { response = r })
+    expect(response.depth).toBe(1)
+  })
+
+  it("non-queue-depth messages are not answered by the sensor (silent)", async () => {
+    const h = makeHarness()
+    let responded = false
+    const ret = h.state.onMessageListener({ action: "server-status" }, {}, () => { responded = true })
+    expect(ret).toBe(false)
+    expect(responded).toBe(false)
   })
 })
