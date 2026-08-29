@@ -9,22 +9,27 @@ import { fileURLToPath } from "node:url"
 //
 // ── What this file is ─────────────────────────────────────────────────────────
 //   • CAPTURE_PROFILES is a DATA TABLE, not engine code. "Promote iqoption to
-//     full" is a row flip (after the T10 research task lands selectors/storage
-//     surfaces), never an engine change — captureVenue and the scheduler read
+//     full" is a row flip (T11 landed the storageScan hook the row points at),
+//     never an engine change — captureVenue and the scheduler read
 //     status/capture/via through the accessors on every call.
-//   • captureVenue(venueId) is the headless login runner seam. v1 wires the
-//     ONE built capture hook — ExpertOption, the reference implementation
-//     (browserStudio.captureExpertOptionSession, browserStudio.mjs:3579-3655).
-//     For EO the browser is already the integrated studio browser: the runner
-//     reads the ACTIVE EO tab, it does not re-drive open→fill→submit (the
-//     generic login loop is in scope for T10/T11, driven by researched
-//     selectors). Non-EO rows report honestly instead of fabricating a login.
+//   • captureVenue(venueId) is the headless login runner seam. It wires the
+//     built capture hooks: ExpertOption — the reference implementation
+//     (browserStudio.captureExpertOptionSession, browserStudio.mjs:3579-3655),
+//     and IQ Option via the generic fixture-driven storage-scan hook
+//     (browserStudio.captureViaStorageScan, browserStudio.mjs:3657+). For EO
+//     the browser is already the integrated studio browser: the runner reads
+//     the ACTIVE EO tab, it does not re-drive open→fill→submit. Other rows
+//     report honestly instead of fabricating a login.
 //
-// ── Coverage matrix (v1, spec Mechanism C) ───────────────────────────────────
-//   full          = login + token capture + metrics ... expertoption (reference)
+// ── Coverage matrix (v2, spec Mechanism C) ───────────────────────────────────
+//   full          = login + token capture + metrics ... expertoption (reference,
+//                   liveEO) / iqoption (storageScan). v2: iqoption slots in
+//                   with the generic hook; a metrics extractor still needs
+//                   building (extractVia:[] — absent balance stays null).
 //   capture-only  = declared capability; capture hook NOT built yet. Until the
-//                   profile research task (T10) lands, the runner reports
-//                   { state:"not-enabled" } — never a claimed session.
+//                   row names capture.storageScan keys (live fixture required),
+//                   the runner reports { state:"not-enabled" } — never a
+//                   claimed session.
 //   catalog-only  = SITE_INDEX presence only (tradingVenues() row exists);
 //                   the runner reports { state:"not-enabled" }.
 //
@@ -69,9 +74,21 @@ export const CAPTURE_PROFILES = [
     id: "iqoption",
     name: "IQ Option",
     kind: "binary",
-    status: "capture-only",
+    status: "full",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (iqoption.com/en/login, captcha + social). Session storage UNKNOWN — live fixture gates any capture hook; no promotion." },
+    capture: {
+      via: "storageScan",
+      ref: "browserStudio.captureViaStorageScan (browserStudio.mjs:3657+)",
+      // T11 generic storage-scan hook: reads ONLY these exact keys on the
+      // venue's tab — nothing invented. `verified:false` = research-log
+      // candidate (ssid cookie from reverse-engineered libs, NON-PRIMARY
+      // source, docs/headless-capture-venue-research.md); the runtime
+      // self-validates: ok only when the cookie truly exists at capture time.
+      storageScan: [{ type: "cookie", key: "ssid", verified: false }],
+      hostRe: "iqoption\\.com",
+      loginPage: "https://iqoption.com/en/login",
+      note: "T11: promoted to full via the generic storageScan hook (fixture-driven, exact keys only). Token saved under trading.venueTokens in its OWN file (separate from creds — see trading.mjs) with NO live leg yet: reconnectTriggered stays false. Same T9 first-login gate as EO. HttpOnly keys cannot be read by document.cookie — CDP cookie API needed if ssid proves HttpOnly."
+    },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -81,7 +98,7 @@ export const CAPTURE_PROFILES = [
     kind: "spot",
     status: "capture-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (accounts.binance.com/en/login; 2FA/passkeys). API-key balance API documented (metrics-ready); browser session storage UNKNOWN — live fixture gates capture. ToS bans bots/VPN circumvention." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (accounts.binance.com/en/login; 2FA/passkeys). API-key balance API documented (metrics-ready). T11 storageScan mechanism READY (captureViaStorageScan) but ZERO documented browser session keys — wire capture.storageScan only after a live fixture names a real key. ToS bans bots/VPN circumvention." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -91,7 +108,7 @@ export const CAPTURE_PROFILES = [
     kind: "spot",
     status: "capture-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (kucoin.com/login; QR/passkey/2FA). API-key balance API documented (metrics-ready); browser session storage UNKNOWN — live fixture gates capture. Restricted-location list documented." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (kucoin.com/login; QR/passkey/2FA). API-key balance API documented (metrics-ready). T11 storageScan mechanism READY (captureViaStorageScan) but ZERO documented browser session keys — wire capture.storageScan only after a live fixture names a real key. Restricted-location list documented." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -101,7 +118,7 @@ export const CAPTURE_PROFILES = [
     kind: "spot",
     status: "capture-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (okx.com/account/login; reCAPTCHA, mandatory 2FA, passkeys). API-key balance API documented (metrics-ready); browser session storage UNKNOWN — live fixture gates capture. US users barred from global product." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (okx.com/account/login; reCAPTCHA, mandatory 2FA, passkeys). API-key balance API documented (metrics-ready). T11 storageScan mechanism READY (captureViaStorageScan) but ZERO documented browser session keys — wire capture.storageScan only after a live fixture names a real key. US users barred from global product." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -169,7 +186,7 @@ export function getCaptureProfile(venueId) {
   return byId.get(String(venueId || "").toLowerCase()) ?? null
 }
 
-/** Venues the refresh job considers "enabled": a capture hook exists (v1: EO). */
+/** Venues the refresh job considers "enabled": a capture hook exists (v2: EO + iqoption). */
 export function enabledCaptureVenues() {
   return CAPTURE_PROFILES.filter((p) => p.capture?.via)
     .map((p) => p.id)
@@ -496,6 +513,46 @@ export async function captureVenue(venueId, { page } = {}) {
       source: captured?.source ?? null,
       tokenChanged,
       reconnectTriggered,
+      loginApproved: true, // T9: the human approved this venue's first login
+      account: captured?.account ?? null
+    }
+  }
+
+  if (profile.capture.via === "storageScan") {
+    // T11 — generic fixture-driven capture: browserStudio.captureViaStorageScan
+    // reads ONLY the exact keys the row lists in capture.storageScan; a tab
+    // without them errors honestly (nothing invented). Tokens land in the
+    // dedicated venueTokens store (trading.saveVenueToken) — never in an API
+    // response. There is NO live leg for storage-scan venues yet (no WS
+    // extractor / bridge built): reconnectTriggered stays false and the report
+    // says so explicitly instead of pretending a restart happened.
+    const { getVenueToken } = await import("./trading.mjs")
+    const before = await getVenueToken(venue)
+    const { captureViaStorageScan } = await import("./browserStudio.mjs")
+    let captured
+    try {
+      captured = await captureViaStorageScan(page, { ...profile.capture, venueId: venue, name: profile.name })
+    } catch (err) {
+      return { state: "error", venue, at, reason: String(err?.message ?? err) }
+    }
+    if (captured?.guest) {
+      // Logged-out session: the hook already refused to save it. Report
+      // honestly; the existing good token (if any) stays.
+      return { state: "guest", venue, at, account: captured.account ?? null }
+    }
+    const after = await getVenueToken(venue)
+    const nextToken = after ?? ""
+    const tokenChanged = Boolean(nextToken) && nextToken !== (before ?? "")
+    if (tokenChanged) lastTokenChange.set(venue, at) // T8: status surface exposes WHEN (never the value)
+    return {
+      state: "ok",
+      venue,
+      at,
+      saved: true,
+      source: captured?.source ?? null,
+      tokenChanged,
+      reconnectTriggered: false,
+      liveLeg: false, // honest: no live bridge consumes this token yet
       loginApproved: true, // T9: the human approved this venue's first login
       account: captured?.account ?? null
     }

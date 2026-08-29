@@ -129,6 +129,33 @@ describe("credentials", () => {
   })
 })
 
+describe("venue tokens (T11 storage-scan captures)", () => {
+  it("round-trips a per-venue token in ITS OWN file — never inside getCredentials()", async () => {
+    expect(await mod.getVenueToken("iqoption")).toBeNull()
+    expect(await mod.saveVenueToken("iqoption", "ssid-tok-1")).toBe("ssid-tok-1")
+    expect(await mod.getVenueToken("iqoption")).toBe("ssid-tok-1")
+    // The creds object (spread into API responses by handlers.mjs) must NOT
+    // carry venue tokens — that path would leak raw tokens to the UI.
+    const creds = await mod.getCredentials()
+    expect(creds.venueTokens).toBeUndefined()
+    // The tokens file stays a separate, clearly-named artifact.
+  })
+
+  it("venue ids are lowercased and blank tokens never overwrite a saved one", async () => {
+    await mod.saveVenueToken("IQOPTION", "ssid-tok-2")
+    expect(await mod.getVenueToken("iqoption")).toBe("ssid-tok-2")
+    await mod.saveVenueToken("iqoption", "   ")
+    expect(await mod.getVenueToken("iqoption")).toBe("ssid-tok-2")
+  })
+
+  it("saving a new venue never clobbers another venue's token", async () => {
+    await mod.saveVenueToken("iqoption", "ssid-tok-iq")
+    await mod.saveVenueToken("binance", "ses-tok-bn")
+    expect(await mod.getVenueToken("iqoption")).toBe("ssid-tok-iq")
+    expect(await mod.getVenueToken("binance")).toBe("ses-tok-bn")
+  })
+})
+
 describe("status + signals", () => {
   it("reports paper mode and expertoption configuration", async () => {
     const status = await mod.tradingStatus()

@@ -3654,6 +3654,95 @@ export async function captureExpertOptionSession(page) {
   return { ok: true, token: best.value, source: `${best.source}:${best.key}`, guest: false, saved: true, account }
 }
 
+/**
+ * Generic fixture-driven session capture for a storage-scan venue (T11).
+ *
+ * Unlike captureExpertOptionSession this hook does NOT know a venue's storage
+ * layout out of the box: it reads ONLY the exact keys the profile row lists in
+ * `capture.storageScan` ([{ type: "cookie"|"localStorage"|"sessionStorage",
+ * key, verified }]). A tab without those keys reports an honest error instead
+ * of guessing — nothing is invented. `verified:false` keys (e.g. the IQ Option
+ * `ssid` cookie candidate, from reverse-engineered libs, T10 research log) are
+ * honoured the same way: the runtime self-validates, ok only when the key
+ * really holds a value at capture time. HttpOnly cookies are INVISIBLE to
+ * document.cookie (research log fixture checklist), so keys that are only ever
+ * HttpOnly cannot be captured by this hook (they need the CDP cookie API).
+ *
+ * Tokens are saved per-venue via trading.saveVenueToken (a dedicated file —
+ * never the creds object, which handlers spread into API responses). Guest
+ * sessions are reported and never saved, exactly like the EO reference path.
+ */
+export async function captureViaStorageScan(page, cfg = {}) {
+  const keys = Array.isArray(cfg.storageScan) ? cfg.storageScan : []
+  ensureOpen()
+  const target = page && livePage(page) ? page : activePage()
+  const hostRe = typeof cfg.hostRe === "string" ? new RegExp(cfg.hostRe, "i") : cfg.hostRe ?? null
+  if (!hostRe || !hostRe.test(target.url())) {
+    throw new Error(`open the ${cfg.name ?? "venue"} tab first`)
+  }
+  const hits = await target.evaluate((wanted) => {
+    const found = []
+    const push = (source, key, value) => {
+      const v = String(value ?? "")
+      if (!v) return
+      // score = position in the row's configured list: the FIRST configured key
+      // wins when several are present, cookies over web-storage mirrors.
+      found.push({ source, key, value: v, score: wanted.findIndex((w) => w.type === source && w.key === key) })
+    }
+    for (const want of wanted) {
+      if (want.type === "cookie") {
+        document.cookie.split(";").forEach((c) => {
+          const i = c.indexOf("=")
+          if (i > 0 && c.slice(0, i).trim() === want.key) push("cookie", want.key, decodeURIComponent(c.slice(i + 1)))
+        })
+      } else if (want.type === "localStorage") {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i)
+          if (k === want.key) push("localStorage", k, localStorage.getItem(k))
+        }
+      } else if (want.type === "sessionStorage") {
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i)
+          if (k === want.key) push("sessionStorage", k, sessionStorage.getItem(k))
+        }
+      }
+    }
+    found.sort((a, b) => a.score - b.score)
+    return found
+  }, keys)
+  if (!hits.length) {
+    throw new Error(`no configured session token found on this page — log in first (${cfg.name ?? "venue"})`)
+  }
+  const best = hits[0]
+  // Guest (not signed-in) sessions: read the account model from the window's
+  // own login state (same signals as the EO path). A guest token is never
+  // saved over a good active-account one.
+  let guest = false
+  let account = null
+  try {
+    const dom = await target.evaluate(domLoginSignals)
+    guest = Boolean(dom && dom.guest && !dom.active)
+    if (guest || dom?.active) {
+      account = {
+        type: guest ? "guest" : "active",
+        guest,
+        email: dom.email ?? null,
+        name: dom.name ?? null,
+        wallet: dom.wallet ?? null,
+        balance: dom.balance ?? null
+      }
+    }
+  } catch {
+    guest = false
+  }
+  if (guest) {
+    return { ok: true, token: best.value, source: `${best.source}:${best.key}`, guest: true, saved: false, account }
+  }
+  const { saveVenueToken } = await import("./trading.mjs")
+  await saveVenueToken(cfg.venueId, best.value)
+  return { ok: true, token: best.value, source: `${best.source}:${best.key}`, guest: false, saved: true, account }
+}
+
 /** Mask a token for display in the UI (never masks short/empty strings). */
 export function maskToken(token) {
   if (!token || token.length < 8) return token ?? ""

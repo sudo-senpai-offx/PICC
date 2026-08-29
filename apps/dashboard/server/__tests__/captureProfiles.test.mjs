@@ -23,13 +23,14 @@ import {
   _resetHeadlessSessionState,
   _approveFirstLogin
 } from "../services/captureProfiles.mjs"
-import { captureExpertOptionSession, getSiteCredentials } from "../services/browserStudio.mjs"
-import { getCredentials, saveCredentials } from "../services/trading.mjs"
+import { captureExpertOptionSession, captureViaStorageScan, getSiteCredentials } from "../services/browserStudio.mjs"
+import { getCredentials, saveCredentials, getVenueToken, saveVenueToken } from "../services/trading.mjs"
 import { restartLiveEO } from "../services/liveEO.mjs"
 
 vi.mock("../services/browserStudio.mjs", () => ({
   getSiteCredentials: vi.fn(),
   captureExpertOptionSession: vi.fn(),
+  captureViaStorageScan: vi.fn(), // T11 generic storage-scan hook
   maskToken: vi.fn((t) => t ?? ""),
   // The REAL interventions module loads in this file (the T9 gate uses it) —
   // give it the broadcast/lookup surface it statically imports.
@@ -40,7 +41,9 @@ vi.mock("../services/browserStudio.mjs", () => ({
 }))
 vi.mock("../services/trading.mjs", () => ({
   getCredentials: vi.fn(),
-  saveCredentials: vi.fn()
+  saveCredentials: vi.fn(),
+  getVenueToken: vi.fn(), // T11 venue-tokens seam
+  saveVenueToken: vi.fn()
 }))
 vi.mock("../services/liveEO.mjs", () => ({
   restartLiveEO: vi.fn(async () => true),
@@ -70,6 +73,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   await _resetHeadlessSessionState()
   getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
+  getVenueToken.mockResolvedValue(TOK_A)
   captureExpertOptionSession.mockResolvedValue({
     ok: true,
     token: TOK_A,
@@ -77,6 +81,14 @@ beforeEach(async () => {
     guest: false,
     saved: true,
     account: { type: "active", guest: false, email: "trader@example.com" }
+  })
+  captureViaStorageScan.mockResolvedValue({
+    ok: true,
+    token: TOK_A,
+    source: "cookie:ssid",
+    guest: false,
+    saved: true,
+    account: { type: "active", guest: false, email: "iq@example.com" }
   })
   setHeadlessSessionPolicy({})
 })
@@ -97,35 +109,43 @@ describe("coverage matrix (T2)", () => {
     }
   })
 
-  it("ExpertOption is the full reference profile; the rest are honest v1 states", () => {
+  it("ExpertOption + IQ Option are the full profiles; the rest are honest v1 states", () => {
     const byId = Object.fromEntries(listCaptureProfiles().map((p) => [p.id, p]))
     expect(byId.expertoption.status).toBe("full")
     expect(byId.expertoption.capture.via).toBe("liveEO")
     expect(byId.expertoption.demoReal).toBe("demo-first")
-    for (const id of ["iqoption", "binance", "kucoin", "okx"]) {
+    // T11 promotion: iqoption is a DATA flip onto the generic storageScan hook
+    // (browserStudio.captureViaStorageScan). The row names the exact keys the
+    // hook may read — nothing invented.
+    expect(byId.iqoption.status).toBe("full")
+    expect(byId.iqoption.capture.via).toBe("storageScan")
+    expect(byId.iqoption.capture.storageScan).toEqual([{ type: "cookie", key: "ssid", verified: false }])
+    expect(byId.iqoption.capture.hostRe).toBeTruthy()
+    expect(byId.iqoption.demoReal).toBe("demo-first")
+    for (const id of ["binance", "kucoin", "okx"]) {
       expect(byId[id].status).toBe("capture-only")
-      expect(byId[id].capture.via).toBeNull() // hook not built — research (T10) gates it
+      expect(byId[id].capture.via).toBeNull() // mechanism ready, ZERO documented keys — live fixture gates them
     }
     for (const id of ["bybit", "etoro", "plus500", "olymptrade", "deriv"]) {
       expect(byId[id].status).toBe("catalog-only")
     }
   })
 
-  it("enabled venues for the refresh job are exactly the rows with a capture hook (v1: EO)", () => {
-    expect(enabledCaptureVenues()).toEqual(["expertoption"])
+  it("enabled venues for the refresh job are exactly the rows with a capture hook (v2: EO + iqoption)", () => {
+    expect(enabledCaptureVenues()).toEqual(["expertoption", "iqoption"])
   })
 
-  it("a row can be flipped without touching the engine (promote iqoption = data edit)", () => {
-    const row = CAPTURE_PROFILES.find((p) => p.id === "iqoption")
+  it("a row can be flipped without touching the engine (promote bybit = data edit)", () => {
+    const row = CAPTURE_PROFILES.find((p) => p.id === "bybit")
     const original = row.capture.via
     try {
-      row.capture.via = "liveEO" // the T10/T11 promotion, as a data change
-      expect(enabledCaptureVenues()).toEqual(["expertoption", "iqoption"])
-      expect(getCaptureProfile("iqoption").status).toBe("capture-only")
+      row.capture.via = "storageScan" // a future promotion, as a data change
+      expect(enabledCaptureVenues()).toEqual(["bybit", "expertoption", "iqoption"])
+      expect(getCaptureProfile("bybit").status).toBe("catalog-only") // row data untouched
     } finally {
       row.capture.via = original
     }
-    expect(enabledCaptureVenues()).toEqual(["expertoption"])
+    expect(enabledCaptureVenues()).toEqual(["expertoption", "iqoption"])
   })
 
   it("listCaptureProfiles returns copies — callers cannot corrupt the table", () => {
@@ -165,7 +185,10 @@ describe("refresh policy + cadence (T4 gate)", () => {
     expect(rows.expertoption.tokenChangedAt).toBeNull()
     expect(rows.bybit.status).toBe("not-enabled") // catalog-only — honest, and NOT stale
     expect(rows.bybit.stale).toBe(false)
-    expect(rows.iqoption.status).toBe("not-enabled")
+    expect(rows.iqoption.status).toBe("idle") // T11: storageScan hook exists → capture-capable
+    expect(rows.iqoption.stale).toBe(true) // never captured = the stalest possible state
+    expect(rows.iqoption.enabled).toBe(true)
+    expect(rows.iqoption.lastCaptureAt).toBeNull()
     // capture-capable venues all surface the same never-run truth.
     for (const id of ["iqoption", "binance", "kucoin", "okx", "bybit", "etoro", "plus500", "olymptrade", "deriv"]) {
       expect(["not-enabled", "idle"]).toContain(rows[id].status)
@@ -191,7 +214,7 @@ describe("captureVenue states (T3)", () => {
   })
 
   it("capture-only venues without a built hook report not-enabled, not a claim", async () => {
-    for (const id of ["iqoption", "binance", "kucoin", "okx"]) {
+    for (const id of ["binance", "kucoin", "okx"]) {
       const r = await captureVenue(id)
       expect(r.state).toBe("not-enabled")
     }
@@ -232,11 +255,88 @@ describe("captureVenue states (T3)", () => {
     expect(r.state).toBe("error")
     expect(r.reason).toMatch(/app\.expertoption\.(com|finance)/)
   })
+
+  it("storageScan venues run the SAME first-login gate (iqoption)", async () => {
+    getSiteCredentials.mockResolvedValue({ site: "iqoption", username: "u", password: "p" })
+    const r = await captureVenue("iqoption")
+    expect(r).toMatchObject({ state: "pending-approval", venue: "iqoption" })
+    expect(captureViaStorageScan).not.toHaveBeenCalled() // browser UNTOUCHED
+    expect(restartLiveEO).not.toHaveBeenCalled()
+  })
+
+  it("storageScan ok capture → saved + tokenChanged, NO live-leg restart (honest)", async () => {
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
+    getSiteCredentials.mockResolvedValue({ site: "iqoption", username: "u", password: "p" })
+    getVenueToken.mockResolvedValueOnce(null).mockResolvedValueOnce(TOK_B)
+    captureViaStorageScan.mockResolvedValue({
+      ok: true,
+      token: TOK_B,
+      source: "cookie:ssid",
+      guest: false,
+      saved: true,
+      account: { type: "active", guest: false, email: "iq@example.com" }
+    })
+    const r = await captureVenue("iqoption")
+    expect(r).toMatchObject({
+      state: "ok",
+      venue: "iqoption",
+      saved: true,
+      source: "cookie:ssid",
+      tokenChanged: true,
+      reconnectTriggered: false,
+      liveLeg: false, // honest: no live bridge consumes this token yet
+      loginApproved: true
+    })
+    expect(captureViaStorageScan).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ via: "storageScan", hostRe: "iqoption\\.com", venueId: "iqoption" })
+    )
+    // The SAVE itself runs inside the hook (trading.saveVenueToken) — this
+    // layer only proves the before/after compare + the honest report. The real
+    // save-on-disk is asserted in captureVenue.test.mjs (real hook) and in
+    // trading.test.mjs (venue-tokens seam).
+    expect(restartLiveEO).not.toHaveBeenCalled() // storage-scan venues have no live leg
+    // Token never reaches a report or the status surface.
+    const blob = JSON.stringify(r) + JSON.stringify(headlessSessionStatus())
+    expect(blob).not.toContain(TOK_B)
+    // tokenChangedAt surfaces WHEN, never the value (status "ok" is asserted
+    // through the refresh pass in the participation test).
+    expect(headlessSessionStatus().iqoption.tokenChangedAt).toBe(r.at)
+  })
+
+  it("storageScan guest → reported guest, token never saved", async () => {
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
+    getSiteCredentials.mockResolvedValue({ site: "iqoption", username: "u", password: "p" })
+    captureViaStorageScan.mockResolvedValue({
+      ok: true,
+      token: TOK_B,
+      source: "cookie:ssid",
+      guest: true,
+      saved: false,
+      account: { type: "guest", guest: true }
+    })
+    const r = await captureVenue("iqoption")
+    expect(r.state).toBe("guest")
+    expect(r.account).toMatchObject({ type: "guest" })
+    expect(saveVenueToken).not.toHaveBeenCalled()
+    expect(restartLiveEO).not.toHaveBeenCalled()
+  })
+
+  it("storageScan capture throwing (host lock, no key) maps to an honest error", async () => {
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
+    getSiteCredentials.mockResolvedValue({ site: "iqoption", username: "u", password: "p" })
+    captureViaStorageScan.mockRejectedValue(new Error("no configured session token found on this page — log in first (IQ Option)"))
+    const r = await captureVenue("iqoption")
+    expect(r.state).toBe("error")
+    expect(r.reason).toMatch(/no configured session token/)
+    expect(saveVenueToken).not.toHaveBeenCalled()
+  })
 })
 
 describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
   it("token changed → restartLiveEO({force:true}) and the report/status carry no token", async () => {
     await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+    setHeadlessSessionPolicy({ iqoption: { enabled: false } }) // T11: keep this EO-focused test single-venue
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     getCredentials.mockResolvedValueOnce({ expertoptionToken: TOK_A }).mockResolvedValueOnce({ expertoptionToken: TOK_B })
     const reports = await headlessSessionRefresh()
@@ -292,6 +392,7 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+      setHeadlessSessionPolicy({ iqoption: { enabled: false } }) // T11: keep this cadence test single-venue
       getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
       getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
 
@@ -313,11 +414,27 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
     }
   })
 
-  it("a venue disabled by policy is skipped entirely", async () => {
-    setHeadlessSessionPolicy({ expertoption: { enabled: false } })
+  it("venues disabled by policy are skipped entirely", async () => {
+    setHeadlessSessionPolicy({ expertoption: { enabled: false }, iqoption: { enabled: false } })
     const reports = await headlessSessionRefresh()
     expect(reports).toHaveLength(0)
     expect(getSiteCredentials).not.toHaveBeenCalled()
+  })
+
+  it("iqoption participates in the refresh pass once it has a hook (storageScan, same gate)", async () => {
+    await _approveFirstLogin("expertoption")
+    await _approveFirstLogin("iqoption")
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
+    getVenueToken.mockResolvedValue(TOK_A)
+    const reports = await headlessSessionRefresh()
+    expect(reports).toHaveLength(2) // both full-profile venues run in one pass
+    const iq = reports.find((r) => r.venue === "iqoption")
+    expect(iq).toMatchObject({ state: "ok", venue: "iqoption", loginApproved: true })
+    expect(iq.reconnectTriggered).toBe(false)
+    expect(iq.liveLeg).toBe(false)
+    expect(headlessSessionStatus().iqoption.status).toBe("ok")
+    expect(headlessSessionStatus().iqoption.enabled).toBe(true)
   })
 })
 
@@ -408,6 +525,7 @@ describe("first-login approval gate (T9 / REQ-E)", () => {
   })
 
   it("pending-approval does not count against the refresh cadence — the job retries next pass", async () => {
+    setHeadlessSessionPolicy({ iqoption: { enabled: false } }) // T11: keep this gate test single-venue
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     const first = await headlessSessionRefresh()
     expect(first).toHaveLength(1)

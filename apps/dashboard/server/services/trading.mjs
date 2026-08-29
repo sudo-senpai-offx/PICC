@@ -27,6 +27,12 @@ import { atr as computeAtr, adx as computeAdx } from "./indicators.mjs"
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
 const CREDS_FILE = join(DATA_DIR, "trading-credentials.json")
+// T11 — headless-captured tokens for non-EO venues (storage-scan capture).
+// Deliberately a SEPARATE file from trading-credentials.json: handlers spread
+// the entire getCredentials() object into API responses (handlers.mjs:1305),
+// so a venueTokens map riding on the creds file would leak raw tokens to the
+// UI. This file is read only by the capture runner's before/after compare.
+const VENUE_TOKENS_FILE = join(DATA_DIR, "trading-venue-tokens.json")
 const LEDGER_FILE = join(DATA_DIR, "trading-ledger.json")
 const WATCHLIST_FILE = join(DATA_DIR, "trading-watchlist.json")
 
@@ -169,6 +175,29 @@ function sanitizePatch(patch) {
       : []
   }
   return out
+}
+
+// ---------------------------------------------------------------------
+// Per-venue headless tokens (T11 storage-scan capture)
+// ---------------------------------------------------------------------
+// Saved by browserStudio.captureViaStorageScan into VENUE_TOKENS_FILE (NOT the
+// creds file — see the file split note above). Before/after comparison happens
+// here: captureVenue reads getVenueToken before and after the hook, so a
+// token that did not change never triggers a reconnect.
+export async function getVenueToken(venueId) {
+  const saved = await readJSON(VENUE_TOKENS_FILE, {})
+  const map = saved?.venueTokens ?? {}
+  const t = map[String(venueId || "").toLowerCase()]
+  return typeof t === "string" && t ? t : null
+}
+
+export async function saveVenueToken(venueId, token) {
+  const t = String(token ?? "").trim()
+  if (!t) return null // a blank token never overwrites a saved one
+  const saved = await readJSON(VENUE_TOKENS_FILE, {})
+  const venueTokens = { ...(saved.venueTokens ?? {}), [String(venueId).toLowerCase()]: t }
+  await writeJSON(VENUE_TOKENS_FILE, { ...saved, venueTokens })
+  return getVenueToken(venueId)
 }
 
 // ---------------------------------------------------------------------
@@ -825,11 +854,12 @@ export async function signalAccuracy() {
   }
 }
 
-/** Test hook — wipe ledger, credentials and watchlist back to defaults. */
+/** Test hook — wipe ledger, credentials, venue tokens and watchlist back to defaults. */
 export async function _resetTradingData() {
   await writeJSON(CREDS_FILE, { ...DEFAULT_CREDS })
   await writeJSON(LEDGER_FILE, { ...DEFAULT_LEDGER })
   await writeJSON(WATCHLIST_FILE, [])
+  await writeJSON(VENUE_TOKENS_FILE, {})
 }
 
 // ---------------------------------------------------------------------

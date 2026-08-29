@@ -502,19 +502,38 @@ real fixture/replay research exists.
   **96 files / 990 tests green** (matrix tests untouched — rows' capture.via/status unchanged),
   `tsc -b --noEmit` exit 0.
 
-- [ ] **T11 — Enable iqoption full + spot capture-only from T10 (P2 · M).** Flip the matrix rows the research
-  supports: `iqoption` → `full`; `binance`/`kucoin`/`okx` → `capture-only` (token capture; metrics stay P3).
-  **Acceptance:** capture-only venues capture + save a token and report `state:"ok"`; metrics endpoint
-  still returns `null` (not fabricated) until their extractor lands; EO suite green. - **BLOCKED by T10
-  outcome** (recorded 2026-08-30): the T10 research found NO venue with a documented browser session-token
-  storage key, so "the rows the research supports" is the empty set. Promoting any row now would violate
-  T10's own acceptance (no promotion without a fixture-backed profile) and the honesty contract (a
-  capture hook cannot report `state:"ok"` on fabricated selectors). Unblocking requires a LIVE fixture
-  capture per venue (real logged-in account → record storage keys + login signal + credential shape — see
-  the fixture checklist at the end of `docs/headless-capture-venue-research.md`), plus a generic
-  fixture-driven capture hook (the open→scan→save loop deferred from T3/T9). Neither can be produced
-  from inside a test suite; both need a real session the operator must supply. Until then the four
-  `capture-only` rows keep reporting `not-enabled` honestly.
+- [x] **T11 — Enable iqoption full + generic fixture-driven capture (P2 · M).** Original acceptance
+  ("flip the rows the research supports") was **BLOCKED by T10's outcome** (recorded 2026-08-30 — no venue
+  has a documented browser session-token key; see below), then the operator directed: *proceed with T11*.
+  Delivery of the unblocking work named in the block note:
+  - **Generic storage-scan hook** `browserStudio.captureViaStorageScan(page, cfg)` (browserStudio.mjs:3657+):
+    reads ONLY the exact keys a profile row lists in `capture.storageScan`
+    (`[{ type: "cookie"|"localStorage"|"sessionStorage", key, verified }]`) — nothing invented. A tab
+    without the configured keys errors honestly ("no configured session token found — log in first").
+    `verified:false` keys self-validate at capture time: ok only when the key truly holds a value.
+    Guest sessions never save (same contract as the EO reference path).
+  - **Row flip (data edit):** `iqoption` → `full`, `capture.via: "storageScan"`, `storageScan: [{type:"cookie",
+    key:"ssid", verified:false}]` — the `ssid` cookie is a NON-PRIMARY research-log candidate
+    (reverse-engineered libs, flagged in `docs/headless-capture-venue-research.md`); the row's `verified:
+    false` records that. `binance`/`kucoin`/`okx` stay `capture-only`/`via:null` — mechanism READY but ZERO
+    documented keys: wiring fake keys would violate the honesty contract. Notes updated to say so.
+  - **Venue-tokens store** `trading.getVenueToken`/`saveVenueToken`: dedicated file
+    (`trading-venue-tokens.json`) — DELIBERATELY NOT the creds file, because handlers spread
+    `getCredentials()` into API responses (handlers.mjs:1305) and a shared map would leak raw tokens.
+    `_resetTradingData()` wipes it too.
+  - **captureVenue storageScan branch:** before/after compare, `tokenChanged` → `lastTokenChange` (status
+    surface shows WHEN, never the value), NO live-leg restart and explicit `liveLeg:false` in the report
+    (no WS bridge exists for these tokens yet), same T9 first-login gate as EO.
+  - **Acceptance met:** iqoption captures + saves a token and reports `state:"ok"` (real-harness: fake page
+    with a synthetic `ssid` cookie, real vault + real trading store on a tmp dir — disk observable);
+    metrics endpoint still returns `null` (never fabricated) until an extractor lands; EO suite green.
+    Full suite: **96 files / 1003 tests green** (+13: 3 venue-tokens, 4 storageScan engine branch, 1
+    two-venue refresh participation, 5 real-harness storageScan), `tsc -b --noEmit` exit 0. Unchanged:
+    `extensionIntegrity.test.mjs` untouched and green; EO reference behavior untouched.
+  - **Unverifiable by tests (honest):** whether IQ Option's login REALLY sets a readable `ssid` cookie
+    (HttpOnly would make it invisible to `document.cookie` — needs the CDP cookie API), and what value
+    it carries. The engine reports honestly either way; the live fixture checklist in the research log
+    remains the operator-side verification. Binance/KuCoin/OKX promotion still needs live fixtures.
 
 - [ ] **T12 — Contract locks + docs (P2 · S).** Add pins: capture-config file schema + `VITEST` suppression;
   account-metrics record shape (no fabricated zeros); headless-status row shape; popup storage-key read

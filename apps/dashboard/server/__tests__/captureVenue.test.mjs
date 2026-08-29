@@ -320,3 +320,118 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
     expect(file?.expertoptionToken ?? "").not.toBe(TOKEN_B)
   })
 })
+
+describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
+  const VENUE_TOKENS_FILE = () => join(tmp, "trading-venue-tokens.json")
+
+  function iqPage() {
+    const p = h.bridges.at(-1).context.pages()[0]
+    p.setUrl("https://iqoption.com/en/login")
+    return p
+  }
+
+  /** Storage-scan hits for the iqoption row's ONE configured key (ssid), with domLoginSignals shape attached (the harness trick). */
+  function iqHits(token, { guest = false, active = true } = {}) {
+    const hits = [{ source: "cookie", key: "ssid", value: token, score: 0 }]
+    hits.guest = guest
+    hits.active = active
+    hits.email = "iq@example.com"
+    hits.name = "IQ Trader"
+    hits.wallet = "demo"
+    hits.balance = "$987.00"
+    return hits
+  }
+
+  beforeEach(async () => {
+    restartLiveEO.mockClear()
+    await _resetHeadlessSessionState()
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
+    // Vault needs IQ credentials for the vault gate, EO creds for the other describes.
+    await writeFile(
+      VAULT_FILE(),
+      JSON.stringify({
+        expertoption: { username: "trader@example.com", password: "pw" },
+        iqoption: { username: "iq@example.com", password: "pw" }
+      })
+    )
+    await rmSync(VENUE_TOKENS_FILE(), { force: true }) // clean slate for save assertions
+  })
+
+  it("configured ssid cookie present → token saved under venueTokens.iqoption, NO live-leg restart", async () => {
+    const p = iqPage()
+    p.setEval(iqHits(TOKEN_B))
+    const r = await captureVenue("iqoption", { page: p })
+    expect(r).toMatchObject({
+      state: "ok",
+      venue: "iqoption",
+      saved: true,
+      source: "cookie:ssid",
+      tokenChanged: true,
+      reconnectTriggered: false,
+      liveLeg: false, // honest: no live bridge consumes this token yet
+      loginApproved: true
+    })
+    expect(restartLiveEO).not.toHaveBeenCalled() // storage-scan venues have no live leg
+    // The hook's save is observable on disk — in the DEDICATED venue-tokens
+    // file, never inside trading-credentials.json (handlers spread that).
+    const saved = JSON.parse(readFileSync(VENUE_TOKENS_FILE(), "utf8"))
+    expect(saved.venueTokens?.iqoption).toBe(TOKEN_B)
+    // Token never in the report or the status surface.
+    expect(JSON.stringify(r)).not.toContain(TOKEN_B)
+    expect(JSON.stringify(headlessSessionStatus())).not.toContain(TOKEN_B)
+  })
+
+  it("configured key absent on the page → honest error, nothing saved", async () => {
+    const p = iqPage()
+    p.setEval([]) // an IQ tab with NO ssid cookie anywhere
+    const r = await captureVenue("iqoption", { page: p })
+    expect(r.state).toBe("error")
+    expect(r.reason).toMatch(/no configured session token/)
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    let file = null
+    try {
+      file = JSON.parse(readFileSync(VENUE_TOKENS_FILE(), "utf8"))
+    } catch {
+      /* no file written — also fine */
+    }
+    expect(file?.venueTokens?.iqoption ?? "").not.toBe(TOKEN_B)
+  })
+
+  it("guest IQ page → reported guest, captured token never saved", async () => {
+    const p = iqPage()
+    p.setEval(iqHits(TOKEN_B, { guest: true, active: false }))
+    const r = await captureVenue("iqoption", { page: p })
+    expect(r.state).toBe("guest")
+    expect(r.account).toMatchObject({ type: "guest", guest: true })
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    let file = null
+    try {
+      file = JSON.parse(readFileSync(VENUE_TOKENS_FILE(), "utf8"))
+    } catch {
+      /* no file written — also fine */
+    }
+    expect(file?.venueTokens?.iqoption ?? "").not.toBe(TOKEN_B)
+  })
+
+  it("wrong host (an EO tab) → honest host error for iqoption", async () => {
+    const p = h.bridges.at(-1).context.pages()[0]
+    p.setUrl("https://app.expertoption.com/") // the EO studio — not an IQ tab
+    const r = await captureVenue("iqoption", { page: p })
+    expect(r.state).toBe("error")
+    expect(r.reason).toMatch(/IQ Option/i) // the venue is named in the honest host error
+    expect(restartLiveEO).not.toHaveBeenCalled()
+  })
+
+  it("same ssid re-captured → ok, tokenChanged false (flap-guard analog)", async () => {
+    await writeFile(VENUE_TOKENS_FILE(), JSON.stringify({ venueTokens: { iqoption: TOKEN_A } }))
+    const p = iqPage()
+    p.setEval(iqHits(TOKEN_A))
+    const r = await captureVenue("iqoption", { page: p })
+    expect(r.state).toBe("ok")
+    expect(r.saved).toBe(true)
+    expect(r.tokenChanged).toBe(false)
+    expect(r.reconnectTriggered).toBe(false)
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    expect(JSON.stringify(r)).not.toContain(TOKEN_A)
+  })
+})
