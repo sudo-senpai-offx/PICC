@@ -1,13 +1,13 @@
 # Passive Income Command Center (PICC)
 
-An AI-assisted **planning** platform for exploring and optimizing passive income streams. PICC combines a **sandbox emulator** (financial what-if simulations) with a **browser overlay** (contextual AI suggestions on the platforms you already use) — it never executes transactions on your behalf. Every AI suggestion is gated behind a mandatory human-review step.
+An AI-assisted **planning** platform for exploring and optimizing passive income streams. PICC combines a **sandbox emulator** (financial what-if simulations) with a **passive browser sensor** (a DOM-free MV3 extension that relays the live market feed from broker pages you already have open) and a **studio browser** with a built-in read-only metrics overlay — it never executes transactions on your behalf. Every AI suggestion is gated behind a mandatory human-review step.
 
 ## What's inside
 
 | Directory | What it is | Stack |
 | :-- | :-- | :-- |
 | `apps/dashboard` | Web dashboard (auth, simulators, trading suite, agents, overlay settings) | React + TypeScript + Vite + Supabase |
-| `apps/dashboard/extensions/picc-overlay` | Browser extension — trading dockables, AI signals, autopilot overlay, live data feed | MV3 vanilla JS (no bundler, load unpacked) |
+| `apps/dashboard/extensions/picc-overlay` | Browser extension — passive sensor: relays broker feed frames to the local backend (DOM-free, no trading actions) | MV3 vanilla JS (no bundler, load unpacked) |
 | `apps/extension` | **Deprecated** — Plasmo skeleton, no trading features, superseded by picc-overlay | Plasmo (unused) |
 | `agents/picc_agents` | Multi-agent research / content / listing / trading / investment crews | CrewAI (Python) |
 | `infra/supabase` | Database schema with Row Level Security | SQL |
@@ -85,7 +85,7 @@ See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for Malaysia PDPA (effective 30 Apr
 | Supabase schema + RLS (incl. trading_signals, defi_holdings, depin_holdings) | ✅ |
 | v2 schema — income-classification model (financial_accounts, income_streams, nft_holdings, depin_nodes, agent_configs/earnings/bounties, predictions, human_review_logs) | ✅ |
 | Trading Suite — multi-model signals, paper ledger, ExpertOption read-only bridge | ✅ |
-| MV3 extension — trading dockables, AI signals, autopilot, live data, shadow DOM | ✅ |
+| MV3 extension — passive sensor relay (broker frames → `/api/extension/ingest`) | ✅ |
 | Stream catalog — bandwidth/DePIN/storage/GPU/crypto/DeFi/NFT/P2P/AI-agent channels | ✅ |
 | Income classification (Category A passive · B semi-passive · C active) + Interest/Dividend/Rental/Content catalog tabs | ✅ |
 | Node backend (same-origin `/api/*`) | ✅ |

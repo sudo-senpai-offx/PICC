@@ -3,7 +3,7 @@
 A Raspberry Pi 4/5 (or any always-on Linux box, ARM or x86) that runs every
 containerizable bandwidth-sharing app at once. PICC's Automator panel then
 monitors each platform's balance, payout progress and daily quests, and the
-extension overlay shows them while you browse.
+dashboard + extension popup surface them while you browse.
 
 ## Quick start
 
@@ -45,7 +45,7 @@ an hour — enable it if you want zero-maintenance image refreshes.
 - **PacketStream** — desktop app only; note the 3% cashout fee.
 - **Grass / Nodepay / Gradient** — official clients are desktop/browser based.
 - **Silencio / COIN (XYO)** — mobile-only, location-based. PICC tracks their
-  daily quests and reminds you via the dashboard and extension overlay.
+  daily quests and reminds you via the dashboard.
 
 ## Notes
 
