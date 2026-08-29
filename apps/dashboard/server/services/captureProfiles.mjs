@@ -71,7 +71,7 @@ export const CAPTURE_PROFILES = [
     kind: "binary",
     status: "capture-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "Login/storage UNVERIFIED — T10 research gates enablement." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (iqoption.com/en/login, captcha + social). Session storage UNKNOWN — live fixture gates any capture hook; no promotion." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -81,7 +81,7 @@ export const CAPTURE_PROFILES = [
     kind: "spot",
     status: "capture-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "Spot token capture only (metrics P3). Selectors/storage UNVERIFIED — T10 first." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (accounts.binance.com/en/login; 2FA/passkeys). API-key balance API documented (metrics-ready); browser session storage UNKNOWN — live fixture gates capture. ToS bans bots/VPN circumvention." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -91,7 +91,7 @@ export const CAPTURE_PROFILES = [
     kind: "spot",
     status: "capture-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "Spot token capture only (metrics P3). Selectors/storage UNVERIFIED — T10 first." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (kucoin.com/login; QR/passkey/2FA). API-key balance API documented (metrics-ready); browser session storage UNKNOWN — live fixture gates capture. Restricted-location list documented." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -101,7 +101,7 @@ export const CAPTURE_PROFILES = [
     kind: "spot",
     status: "capture-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "Spot token capture only (metrics P3). Selectors/storage UNVERIFIED — T10 first." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (okx.com/account/login; reCAPTCHA, mandatory 2FA, passkeys). API-key balance API documented (metrics-ready); browser session storage UNKNOWN — live fixture gates capture. US users barred from global product." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -111,7 +111,7 @@ export const CAPTURE_PROFILES = [
     kind: "derivatives",
     status: "catalog-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (bybit.com/en/login; Google/Apple social; 2FA). API-key balance API documented (metrics-ready); browser session storage UNKNOWN — live fixture gates promotion. KYC mandatory." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -121,7 +121,7 @@ export const CAPTURE_PROFILES = [
     kind: "cfd",
     status: "catalog-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "CFD/social UX unverified; may reuse studioLogin's Google path (browserStudio.mjs:3486-3530) once researched." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (etoro.com/login; social sign-in + 2FA via official help; 'Keep me logged in 30 days' = persistent session, key undocumented). x-api-key/x-user-key metrics API documented; browser session storage UNKNOWN — live fixture gates promotion. KYC required for API." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -131,7 +131,7 @@ export const CAPTURE_PROFILES = [
     kind: "cfd",
     status: "catalog-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login URL verified (app.plus500.com, JS-only shell — no static form); email/pass + 2FA documented. MOST documentation-silent venue: no retail API, no documented session key, no login signal. Session/metrics require live fixture + client reverse-engineering." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -141,7 +141,7 @@ export const CAPTURE_PROFILES = [
     kind: "binary",
     status: "catalog-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): login/auth VERIFIED (olymptrade.com/login; 2FA via Google Auth/FB Messenger; demo account; reCAPTCHA). No documented session keys/metrics — storage requires live fixture; no promotion." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   },
@@ -151,7 +151,7 @@ export const CAPTURE_PROFILES = [
     kind: "binary",
     status: "catalog-only",
     demoReal: "demo-first",
-    capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
+    capture: { via: null, ref: null, note: "T10 research done (docs/headless-capture-venue-research.md): MOST VERIFIED venue — OAuth2+PKCE login + documented metrics API (balance WS, wallet REST); OAuth helper keys pkce_code_verifier/oauth_state documented in sessionStorage; definitive session-token key UNKNOWN — live fixture gates promotion. Officially sanctioned automation, API usage limits." },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
   }

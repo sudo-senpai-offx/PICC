@@ -473,13 +473,34 @@ real fixture/replay research exists.
   `tsc -b --noEmit` exit 0. UNVERIFIED: the popup's two new labels in a real Chrome profile (browser-only,
   no DOM harness; `node --check` green).
 
-- [ ] **T10 — Non-EO profile research: fixtures/replay (P2 · L).** For the nine non-EO venues: capture real
+- [x] **T10 — Non-EO profile research: fixtures/replay (P2 · L).** For the nine non-EO venues: capture real
   login-page/DOM/WS fixtures (or documented replay) to pin `loginPage`, `storageScan` keys, `loginSignal`,
   and `metrics` extractVia. Record findings in the profile rows + a research log section in
   `docs/` (**UNVERIFIED** selectors/storage surfaces live here — the riskiest task). **Acceptance:** each
   non-EO venue row carries a source-fixed fixture or an explicit "not yet researched → catalog-only"
   marker; NO venue is promoted to `full`/`capture-only` without a fixture-backed profile; the engine stays
-  honest (`not-enabled`) for unresearched venues.
+  honest (`not-enabled`) for unresearched venues. - Done (documented replay, primary sources only):
+  `docs/headless-capture-venue-research.md` covers all nine venues with per-field VERIFIED/NOT-VERIFIED
+  verdicts + cited sources, and every `capture.note` rows itself carries the verdict + log link.
+  Findings: (1) login pages + auth flows are VERIFIED for all nine from official sources (login URLs,
+  social/2FA/passkey methods, geo-gates, CAPTCHA gates); (2) **no venue's browser session-token storage
+  key is documented anywhere** — each official docs set describes only the external API-key/HMAC model
+  (Binance `X-MBX-APIKEY`, KuCoin `KC-API-*`, OKX `OK-ACCESS-*`, Bybit `X-BAPI-*`, eToro `x-api-key` +
+  `x-user-key`); the ONE partial exception is Deriv, whose OAuth2+PKCE docs name the helper keys
+  `pkce_code_verifier`/`oauth_state` in sessionStorage but NOT the definitive session-token key;
+  (3) metrics: 6 of 9 venues (Deriv, Binance, KuCoin, OKX, Bybit, eToro) have documented signed
+  balance/portfolio APIs; IQ Option, Olymp Trade, Plus500 (retail) have none (reverse-engineering only);
+  (4) compliance: Binance ToS explicitly bans bots/crawlers/automated access + VPN circumvention; OKX
+  and the binary venues gate login behind (re)CAPTCHA; KuCoin/eToro gate by region/KYC — captured as
+  product/legal risks, not code gates. **No promotions made**: all five catalog-only rows and all four
+  capture-only rows keep their honest `not-enabled` reporting because `storageScan`/`loginSignal` for
+  every non-EO venue requires a LIVE logged-in fixture (real session, then inspect
+  localStorage/sessionStorage/cookies — HttpOnly cookies would need the CDP cookie API, not
+  page.evaluate) — the log ends with the per-venue fixture-capture checklist that gates T11.
+  UNVERIFIED and unresolvable by docs: storage keys + login signals for all nine venues; metrics for
+  IQ Option/Olymp Trade/Plus500; everything region/login-method-specific. Full suite after T5–T10:
+  **96 files / 990 tests green** (matrix tests untouched — rows' capture.via/status unchanged),
+  `tsc -b --noEmit` exit 0.
 
 - [ ] **T11 — Enable iqoption full + spot capture-only from T10 (P2 · M).** Flip the matrix rows the research
   supports: `iqoption` → `full`; `binance`/`kucoin`/`okx` → `capture-only` (token capture; metrics stay P3).
