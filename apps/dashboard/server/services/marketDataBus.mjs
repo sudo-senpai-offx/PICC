@@ -13,6 +13,7 @@
 // (live vs delayed) and the model matrix can weight accordingly.
 
 import { canonicalAssetId } from "./assetCatalog.mjs"
+import { resolveTimeframeFor } from "./brokers/index.mjs"
 
 // ── Broker registry (loaded once, lazy) ────────────────────────────────────
 let _registry = null
@@ -71,22 +72,29 @@ async function timed(source, fn) {
 // ── Fallback: direct EO import for ensureWatchingAsset (Phase H bridge) ────
 // During the transition, getBestCandles still supports ensureWatch for the
 // EO-specific watch-and-fetch pattern. This will be replaced by a generic
-// broker.ensureWatch(assetId) in Phase I.
+// broker.ensureWatch(assetId) in Phase I. The bridge honors EO's own
+// capability curve: a 5s request fetches real 1m bars tagged 60, and an
+// above-1h request is skipped entirely (declined — never relabeled).
+const EO_BRIDGE_TIMEFRAMES = [60, 300, 900, 3600]
 async function eoWatchAndFetch(assetId, tf, n) {
+  const servedTf = resolveTimeframeFor(tf, EO_BRIDGE_TIMEFRAMES)
+  if (servedTf === null) return { ohlc: [], servedTf: null }
   try {
     const { ensureWatchingAsset, fetchAssetCandles } = await import("./liveEO.mjs")
     await ensureWatchingAsset(assetId).catch(() => null)
     const result = await timed("eo-fetch", () =>
-      fetchAssetCandles(assetId, tf, n).catch(() => ({ ohlc: [], source: null })))
-    return result.ohlc ?? []
-  } catch { return [] }
+      fetchAssetCandles(assetId, servedTf, n).catch(() => ({ ohlc: [], source: null })))
+    return { ohlc: result.ohlc ?? [], servedTf }
+  } catch { return { ohlc: [], servedTf: null } }
 }
 
 /**
  * Fetch the best available candles for an asset.
- * @returns {candles[], source, stale, timeframe} — never throws for
+ * @returns {candles[], source, stale, timeframe, resolved} — never throws for
  *          data-absence (returns empty + source:"none"); network errors from
- *          a broker fall through to the next.
+ *          a broker fall through to the next. `timeframe` is the SERVED
+ *          resolution (post broker.resolveTimeframe), `resolved` is true when
+ *          it differs from the request — the honest tag the UI must display.
  */
 export async function getBestCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null } = {}) {
   const tf = Math.min(Math.max(Number(timeframe) || 60, 5), 2592000) // up to 1M
@@ -99,16 +107,21 @@ export async function getBestCandles(assetId, { timeframe = 60, count = 200, ens
 
   for (const broker of brokers) {
     try {
-      const candles = await timed(broker.slug, async () => broker.getCandles(id, { timeframe: tf, count: n }))
+      // Resolution FIRST: ask what this broker will actually serve. A null
+      // resolution means the broker declines entirely (e.g. a 4h request on a
+      // 1h-cap source) — skip it instead of silently relabeling its bars.
+      const servedTf = broker.resolveTimeframe(tf)
+      if (servedTf === null || servedTf === undefined) continue
+      const candles = await timed(broker.slug, async () => broker.getCandles(id, { timeframe: servedTf, count: n }))
       if (!Array.isArray(candles) || !candles.length) continue
 
       const sliced = candles.slice(-n)
       if (sliced.length >= 30) {
-        return { candles: sliced, source: broker.slug, stale: false, timeframe: tf }
+        return { candles: sliced, source: broker.slug, stale: false, timeframe: servedTf, resolved: servedTf !== tf }
       }
       // Thin data — keep as fallback but try next broker for better data
       if (!thinData || sliced.length > thinData.candles.length) {
-        thinData = { candles: sliced, source: broker.slug, stale: true, timeframe: tf }
+        thinData = { candles: sliced, source: broker.slug, stale: true, timeframe: servedTf, resolved: servedTf !== tf }
       }
     } catch { /* broker unavailable — fall through */ }
   }
@@ -118,15 +131,15 @@ export async function getBestCandles(assetId, { timeframe = 60, count = 200, ens
   // on-demand fetch. This preserves existing behavior during the transition.
   if (typeof ensureWatch === "function" && !thinData) {
     try {
-      const eoCandles = await eoWatchAndFetch(id, tf, n)
-      if (eoCandles.length >= 30) {
-        return { candles: eoCandles, source: "live", stale: false, timeframe: tf }
+      const { ohlc: eoCandles, servedTf } = await eoWatchAndFetch(id, tf, n)
+      if (servedTf !== null && eoCandles.length >= 30) {
+        return { candles: eoCandles, source: "live", stale: false, timeframe: servedTf, resolved: servedTf !== tf }
       }
-      if (eoCandles.length) thinData = { candles: eoCandles, source: "live", stale: true, timeframe: tf }
+      if (servedTf !== null && eoCandles.length) thinData = { candles: eoCandles, source: "live", stale: true, timeframe: servedTf, resolved: servedTf !== tf }
     } catch { /* EO fetch failed */ }
   }
 
   // Last resort: thin data from any broker, else honest emptiness.
   if (thinData) return thinData
-  return { candles: [], source: "none", stale: true, timeframe: tf }
+  return { candles: [], source: "none", stale: true, timeframe: tf, resolved: false }
 }

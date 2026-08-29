@@ -1704,7 +1704,10 @@ async function _handleApiInner(req, res, url, reqId) {
   // -------------------------------------------------------------------
   if (path === "/api/trading/candles" && req.method === "POST") {
     const assetId = String(body?.assetId ?? "").trim().toUpperCase()
-    const timeframe = Math.min(Math.max(Number(body?.timeframe) || 60, 5), 3600)
+    // Clamp relaxed to 1M (T5): brokers now resolve the request to what they
+    // can SERVE and tag it — a 4h request may come back as honest 1h/1D bars
+    // (timeframe 3600/86400) or source:"none", never as silent 4h mislabels.
+    const timeframe = Math.min(Math.max(Number(body?.timeframe) || 60, 5), 2592000)
     const count = Math.min(Math.max(Number(body?.count) || 200, 20), 500)
     if (!assetId) return writeJson(res, 400, { error: "assetId required" })
     try {
@@ -1718,14 +1721,16 @@ async function _handleApiInner(req, res, url, reqId) {
         ensureWatch: ensureWatchingAsset
       })
       if (!out.candles.length) {
-        return writeJson(res, 200, { ok: true, source: "none", assetId, timeframe, candles: [] })
+        return writeJson(res, 200, { ok: true, source: "none", assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [] })
       }
       writeJson(res, 200, {
         ok: true,
         source: out.source,
         stale: out.stale,
         assetId,
+        requestedTimeframe: timeframe,
         timeframe: out.timeframe,
+        resolved: out.resolved ?? false,
         candles: out.candles
       })
     } catch (err) {

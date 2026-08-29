@@ -3,13 +3,18 @@
 // dual wallet, binary options expiry. This adapter preserves all of that while
 // presenting the same interface as every other broker.
 
-import { registerBroker } from "./index.mjs"
+import { registerBroker, resolveTimeframeFor } from "./index.mjs"
 
 let _liveEO = null
 async function getLiveEO() {
   if (!_liveEO) _liveEO = await import("../liveEO.mjs")
   return _liveEO
 }
+
+// EO's live push builds these bar buffers only — a 5s chart request is honored
+// with the nearest available BUFFER (1m), and anything above the 1h cap is
+// DECLINED outright rather than silently relabeled against the request (T5).
+const EO_TIMEFRAMES = [60, 300, 900, 3600]
 
 // Eagerly import liveEO at registration time so the adapter is ready
 // when the registry is queried. Without this, _liveEO stays null and
@@ -33,14 +38,20 @@ registerBroker({
   },
 
   getCandles(assetId, opts = {}) {
-    if (!_liveEO) return []
+    if (!_liveEO) return null
     const data = _liveEO.liveEOData()
     const asset = data.assets.find((a) => a.id === assetId || a.name === assetId)
-    if (!asset) return []
-    const tf = opts.timeframe ?? 60
-    const count = opts.count ?? 200
-    const ohlc = asset.periods[tf] ?? asset.periods[60] ?? []
-    return ohlc.slice(-count)
+    if (!asset) return null
+    const tf = this.resolveTimeframe(opts.timeframe ?? 60)
+    if (tf === null) return null // above our cap — decline, do NOT relabel
+    const ohlc = asset.periods[tf] ?? []
+    return ohlc.slice(-(opts.count ?? 200))
+  },
+
+  resolveTimeframe(requestedTf) {
+    // Explicit override: identical semantics to the contract default, written
+    // out so the adapter's capability curve is self-documenting. 5s→1m, 4h→null.
+    return resolveTimeframeFor(requestedTf, EO_TIMEFRAMES)
   },
 
   dataSnapshot() {

@@ -29,7 +29,7 @@ const SOURCE_BADGES: Record<string, { text: string; tone: "success" | "warn" | "
 export function TradingChart({ assetId, label, height = 380, onCrosshair }: TradingChartProps) {
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
-    loading, error, streamError, lastPrice, timeframe, setTimeframe, source, resolvedTimeframe
+    loading, error, streamError, lastPrice, timeframe, setTimeframe, source, resolvedTimeframe, resolved
   } = useCandleData({ assetId, timeframe: 300 })
   const [hover, setHover] = useState<{ open: number; high: number; low: number; close: number } | null>(null)
   const [showIchimoku, setShowIchimoku] = useState(false)
@@ -87,7 +87,15 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   const changePct = display && display.open ? (change / display.open) * 100 : 0
   const isUp = change >= 0
   const sourceBadge = SOURCE_BADGES[source ?? ""] ?? null
-  const resolutionMismatch = resolvedTimeframe != null && resolvedTimeframe >= 86400 && timeframe < 86400
+  // Honest resolution label: the SERVER decides the bar size (broker
+  // resolveTimeframe), never the client's echo of the request. Any mismatch
+  // between what the user picked and what the server served triggers the
+  // warning — a 5s request that comes back as 1m bars must say so.
+  const resolutionMismatch = resolved || (resolvedTimeframe != null && resolvedTimeframe !== timeframe)
+  const servedTfLabel = () => {
+    if (resolvedTimeframe == null) return null
+    return (TIMEFRAME_LABELS as Record<number, string | undefined>)[resolvedTimeframe] ?? `${resolvedTimeframe}s`
+  }
 
   const nearestBuy = levels?.buyZone ? levels.levels?.find((l) => l.price === levels.buyZone?.anchor) ?? null : null
   const nearestSell = levels?.sellZone ? levels.levels?.find((l) => l.price === levels.sellZone?.anchor) ?? null : null
@@ -131,7 +139,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
 
       {resolutionMismatch ? (
         <p className="muted small" style={{ margin: 0 }}>
-          ⚠️ No live {TIMEFRAME_LABELS[timeframe]} feed for {assetId} — showing Yahoo DAILY bars instead. Levels below are computed from that daily resolution.
+          ⚠️ No live {TIMEFRAME_LABELS[timeframe]} feed for {assetId} — showing {source === "yahoo" || source === "yahoo-daily" ? "Yahoo DAILY" : `${servedTfLabel() ?? "coarser"} `}bars instead. Levels below are computed from the served resolution.
         </p>
       ) : null}
 

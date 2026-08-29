@@ -51,6 +51,8 @@ interface UseCandleDataResult {
   source: string | null
   /** Actual bar resolution of the returned series (86400 = Yahoo daily). */
   resolvedTimeframe: number | null
+  /** True when the SERVER served a different resolution than requested. */
+  resolved: boolean
 }
 
 const BASE = "/api"
@@ -60,9 +62,15 @@ interface CandleResponse {
   candles: Array<{ time: number; open: number; high: number; low: number; close: number; timeframe?: number }>
   source?: string
   error?: string
+  /** SERVED bar resolution (post broker.resolveTimeframe) — the honest tag. */
+  timeframe?: number
+  /** Requested resolution, kept for the mismatch warning. */
+  requestedTimeframe?: number
+  /** True when the served resolution differs from the requested one. */
+  resolved?: boolean
 }
 
-async function fetchCandles(assetId: string, timeframe: Timeframe, count: number): Promise<{ rows: CandleDatum[]; source: string | null; resolvedTimeframe: number | null }> {
+async function fetchCandles(assetId: string, timeframe: Timeframe, count: number): Promise<{ rows: CandleDatum[]; source: string | null; resolvedTimeframe: number | null; resolved: boolean }> {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -86,7 +94,13 @@ async function fetchCandles(assetId: string, timeframe: Timeframe, count: number
       low: c.low,
       close: c.close
     }))
-  return { rows, source: data.source ?? null, resolvedTimeframe: data.candles[0]?.timeframe ?? timeframe }
+  // Trust the SERVER's served-resolution tag (data.timeframe) — that is the
+  // broker-resolved, honest bar size the UI must display. Falls back to the
+  // request only when the server omits a tag entirely.
+  const served = typeof data.timeframe === "number" && data.timeframe > 0
+    ? data.timeframe
+    : (data.candles[0]?.timeframe ?? timeframe)
+  return { rows, source: data.source ?? null, resolvedTimeframe: served, resolved: data.resolved === true || served !== timeframe }
 }
 
 function computeEma(candles: CandleDatum[], period: number): EmaDatum[] {
@@ -193,6 +207,7 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
   const [timeframe, setTimeframe] = useState<Timeframe>(initialTf)
   const [source, setSource] = useState<string | null>(null)
   const [resolvedTimeframe, setResolvedTimeframe] = useState<number | null>(null)
+  const [resolved, setResolved] = useState(false)
   const candlesRef = useRef<CandleDatum[]>([])
 
   // Fetch initial candle data
@@ -201,12 +216,13 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     setLoading(true)
     setError(null)
     fetchCandles(assetId, timeframe, count)
-      .then(({ rows, source: src, resolvedTimeframe: rtf }) => {
+      .then(({ rows, source: src, resolvedTimeframe: rtf, resolved: isResolved }) => {
         if (!alive) return
         candlesRef.current = rows
         setCandles(rows)
         setSource(src)
         setResolvedTimeframe(rtf)
+        setResolved(isResolved)
         if (rows.length > 0) setLastPrice(rows[rows.length - 1].close)
         setLoading(false)
       })
@@ -337,5 +353,5 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     setTimeframe(tf)
   }, [])
 
-  return { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source, resolvedTimeframe }
+  return { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source, resolvedTimeframe, resolved }
 }
