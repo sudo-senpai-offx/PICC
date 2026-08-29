@@ -20,7 +20,7 @@ reference below was verified). Nothing here is speculative about the codebase's 
 | Decision engine | `prediction.mjs`, `proanalysis.mjs`, `adaptiveConfluence.mjs`, `modelMatrix.mjs` | ✅ Ensemble + pro confluence + MTF + sentiment + 7-model multiplexing consensus with online weights |
 | Autopilot | `services/autopilot.mjs` | ✅ Multi-asset ticks, per-asset overrides/cooldowns, stacked gates (confidence→cooldown→caps→AI→MTF→pro→sentiment→consensus→loss-breaker→regime-breaker→liveness), decision log + dry-run `/why` |
 | Venue registry | `services/brokers.mjs` → `GET /api/trading/brokers` | ✅ Live-status rows for expertoption / ccxt / paper with capability vocabulary |
-| Instrument canonicalization | `services/assetCatalog.mjs` | ✅ One alias table shared overlay↔server↔Yahoo; `canonicalAssetId / assetsEquivalent / yahooSymbolFor` |
+| Instrument canonicalization | `services/assetCatalog.mjs` | ✅ One alias table shared sensor↔server↔Yahoo; `canonicalAssetId / assetsEquivalent / yahooSymbolFor` |
 
 **The one structural gap:** order execution is welded to ExpertOption's session singleton inside
 `autopilot.mjs` (`state.session = connectTradingSession(...)`, `.buy({assetId,type:"call"|"put",...})`).

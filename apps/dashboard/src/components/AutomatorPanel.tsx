@@ -664,7 +664,7 @@ export function AutomatorPanel() {
         )}
         <p className="muted small">
           Silencio and COIN are mobile/location apps — PICC can't touch them from a browser, so these are reminders with
-          deep links. Web-dashboard quests (e.g. Honeygain Lucky Pot) can be auto-spun from the extension overlay (opt-in).
+          deep links. Web-dashboard quests (e.g. Honeygain Lucky Pot) can be auto-spun (opt-in).
         </p>
       </div>
     </div>

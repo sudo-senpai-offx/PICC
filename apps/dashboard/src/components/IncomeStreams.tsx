@@ -41,7 +41,7 @@ function StreamsTab() {
 
   const summary = useMemo(() => streamSummary(streams, earnings), [streams, earnings])
 
-  // Push stream data to the server snapshot so the extension overlay can show
+  // Push stream data to the server snapshot so the studio overlay can show
   // balances on platforms without a public earner API. Debounced + best-effort.
   useEffect(() => {
     const t = window.setTimeout(() => {

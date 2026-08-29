@@ -1,5 +1,5 @@
 // Canonical PICC asset catalog — single source of truth for normalizing
-// instrument names across the extension overlay, the server pipeline and the
+// instrument names across the sensor relay, the server pipeline and the
 // Yahoo fallback feed.
 //
 // Brokers surface instruments under wildly different labels ("XAU/USD",

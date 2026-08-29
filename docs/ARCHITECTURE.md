@@ -50,7 +50,7 @@ the user always performs the final action on the external platform.
    nft_royalty_earnings, depin_nodes, agent_configs, agent_earnings,
    agent_bounties, predictions, human_review_logs (infra/supabase/v2.sql)
 
-   Browser Extension (MV3) ◀── dockable overlay + live trading data (/api/extension/trading-data)
+   Browser Extension (MV3) ◀── passive sensor relay (broker WS frames → /api/extension/ingest)
    External platforms (Amazon, YouTube, brokerages) — user clicks, PICC never does
 ```
 
@@ -69,20 +69,29 @@ the user always performs the final action on the external platform.
 ## Data flow (extension)
 
 The canonical extension (`apps/dashboard/extensions/picc-overlay/`) is MV3 vanilla JS loaded
-unpacked — no Plasmo, no build step:
+unpacked — no Plasmo, no build step. It is a **passive, DOM-free sensor** (v2.x contract): it never
+injects UI, mutates the page, or sends trade commands. The broker-page overlay was removed by
+design (Phase 1); all decision/display surfaces live in the web dashboard now.
 
-1. The content script injects a closed-shadow-DOM overlay on any site: the PICC pill expands into
-   trading dockables that POST `/api/extension/trading-data` every 5 s. That consolidated endpoint
-   returns everything the dockables need in one response — trading status (incl. live ExpertOption
-   balance when configured), decision-engine output, demo-account state, candles (live EO frames
-   first, Yahoo fallback), kelly sizing, regime, expiry optimization, sentiment and orderflow.
-2. Autopilot is armed/disarmed through `/api/trading/autopilot/start|stop` (authenticated); state
-   changes are logged server-side. PICC never sends trade orders to the broker.
-3. The sensor content script re-probes `/api/health` on `127.0.0.1:5173`/`3000` every 15 s for server
-   discovery (it relays frames directly to `/api/extension/ingest`; no proxy). The service worker
-   heartbeats `/api/extension/heartbeat` on a 30 s alarm (`HEARTBEAT_MS`; Chrome clamps alarm periods
-   below 30 s — the old ~12 s claim was never real), reports active-tab changes via
-   `/api/extension/tab-changed`, and probes `/api/health` for server reachability.
+1. `inject.js` (MAIN world, `document_start`, broker domains only) sniffs the broker page's own
+   WebSocket gateway frames and `postMessage`s them to the ISOLATED-world `content.js`. That script
+   shape-validates every frame (`sanitizeUpstreamFrame`: action/asset/name caps, candle cap, size
+   cap ≤ 4096) before queueing. Every `chrome.*` call goes through `chromeGuard()`, which tears the
+   sensor down silently on context invalidation (reload/update) instead of throwing "Extension
+   context invalidated." into the page. Server discovery re-probes `/api/health` on
+   `127.0.0.1:5173`/`3000` every 15 s; while online, frames flush in batches (≤120) to the ingest
+   buffer every 2 s; while offline they queue (cap 400) and flush on reconnection.
+2. The ingest endpoint feeds the same market-data bus as the studio browser, so the dashboard's live
+   candles work under the feed-mode gate (`auto → extension → studio` preference). The candles
+   endpoint resolves the requested timeframe to the nearest bar the serving provider actually has
+   and reports `requestedTimeframe`/`timeframe`/`resolved` — a 1 m request that can only be served
+   as daily closes says so instead of mislabeling the bars.
+3. The service worker owns only telemetry and lifecycle: heartbeat `/api/extension/heartbeat` on a
+   30 s alarm (`HEARTBEAT_MS`; Chrome clamps alarm periods below 30 s — the old ~12 s claim was
+   never real), active-tab changes via `/api/extension/tab-changed`, server-port discovery, the
+   popup's `sensor-queue-depth` round-trip (observed depth only — "n/a", never a fabricated 0), and
+   resurrection: after a reload/update invalidates live contexts, open broker + dashboard tabs are
+   reloaded so the sensor comes back without user action (next navigation is the safety net).
 4. Settings persist in `chrome.storage.local` with MV3-safe debounced saves. The legacy suggestion
    contract (`/api/extension/suggest` + `/api/extension/confirm`) remains server-side for the
    deprecated Plasmo skeleton (`apps/extension/`) only.
@@ -130,7 +139,8 @@ Connector registry (slug: expertoption | honeygain | earnapp | pawns | repocket 
    user-data-dir per source (`server/data/browser-profiles/<slug>`), strips the automation signals we
    control (`navigator.webdriver`), and exposes `{ goto, read, addOverlay, onFrame, close, reset }`.
    Because the target site literally talks to a real browser there is no fingerprint to detect. The
-   bridge is **read-only by contract** — the injected overlay only displays metrics.
+   bridge is **read-only by contract** — it reads the dashboard DOM and the page's own WebSocket
+   frames; it never clicks, submits, or trades.
 2. `POST /api/connectors/:slug/collect` runs the connector's best transport, polls the DOM until a
    selector yields a value (500 ms cadence, `waitMs` cap) and returns a normalized snapshot:
    `{ provider, platform, balance, today, lifetime, payoutThreshold, estimatedDaily, currency,
@@ -161,7 +171,7 @@ Connector registry (slug: expertoption | honeygain | earnapp | pawns | repocket 
    tokens are decoded by `jwtInfo()` and their expiry is surfaced (and scheduled alerts fired when
    a token is ≤ 3 days from expiring or already expired).
 2. `GET /api/automator/status` returns the provider matrix (balance, today, lifetime, payout
-   threshold, ETA, token expiry) used by the dashboard's Automator panel and the browser overlay.
+   threshold, ETA, token expiry) used by the dashboard's Automator panel.
 3. `GET /api/automator/health` runs a rule engine over that status + node graph and returns
    `{ ok, issues, alerts, totals }` — flagged payout-ready balances, collector errors, token
    expiry, and node/providers mismatches.
@@ -227,13 +237,13 @@ config and the full endpoint list live in `server/handlers.mjs`.
 ### Extension → backend
 
 The canonical extension (`apps/dashboard/extensions/picc-overlay/`) is MV3 vanilla JS loaded
-unpacked (no Plasmo, no build step). Its content script polls the consolidated
-`POST /api/extension/trading-data` aggregate every 5 s for all trading dockables; the service
-worker heartbeats `/api/extension/heartbeat`, forwards navigations via `/api/extension/tab-changed`,
-and probes `/api/health` for dashboard reachability. Settings persist in `chrome.storage.local`
-with MV3-safe debounced saves. The legacy `{ suggestions: [{ id, title, body, confidence }], source }`
-contract (`/api/extension/suggest|confirm`) remains available server-side for the deprecated Plasmo
-skeleton (`apps/extension/`) only.
+unpacked (no Plasmo, no build step). It relays the broker's own WebSocket frames to the server's
+ingest buffer (`POST /api/extension/ingest`) — no overlay, no page mutation, no trading actions.
+The service worker heartbeats `/api/extension/heartbeat`, forwards navigations via
+`/api/extension/tab-changed`, and probes `/api/health` for dashboard reachability. Settings persist
+in `chrome.storage.local` with MV3-safe debounced saves. The legacy
+`{ suggestions: [{ id, title, body, confidence }], source }` contract (`/api/extension/suggest|confirm`)
+remains available server-side for the deprecated Plasmo skeleton (`apps/extension/`) only.
 
 ### Agents → backend
 

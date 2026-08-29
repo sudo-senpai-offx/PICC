@@ -1,7 +1,7 @@
 // PICC Automator — Tier 0 income operations service.
 //
 // Combines three data paths into one coherent "stream status" for the
-// dashboard and the browser-extension overlay:
+// dashboard and the studio overlay:
 //
 //   1. Live provider collectors  (Honeygain, Pawns, Traffmonetizer, Repocket,
 //      EarnApp) using credentials the user owns. Polled politely with a TTL cache (min 5 min
@@ -75,7 +75,7 @@ async function writeJSON(file, value) {
 }
 
 // ---------------------------------------------------------------------
-// Credentials (stored server-side so the extension overlay can read status)
+// Credentials (stored server-side so the dashboard/studio can read status)
 // ---------------------------------------------------------------------
 const DEFAULT_CREDS = {
   honeygainToken: "",
@@ -304,7 +304,7 @@ export async function automatorStatus() {
 }
 
 // ---------------------------------------------------------------------
-// Dashboard stream snapshot (extension overlay data path for no-API platforms)
+// Dashboard stream snapshot (shared data path for no-API platforms)
 // ---------------------------------------------------------------------
 export async function getSnapshot() {
   const saved = await readJSON(SNAPSHOT_FILE, {})

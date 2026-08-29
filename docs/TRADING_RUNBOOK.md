@@ -9,7 +9,7 @@ document and reality disagree, fix reality or fix this file — never neither.
 ## 1. What PICC is (and is not)
 
 - **Is:** a local decision-support + DEMO-trading system. ExpertOption demo
-  autopilot, live candle feeds (your own browser via the extension bridge,
+  autopilot, live candle feeds (your own browser via the extension sensor,
   and/or the embedded studio browser), honest calibration/accuracy reporting.
 - **Is not:** a live-money trading bot. There is **no code path that places
   an order on a real account**, on any platform. `connectTradingSession()`
@@ -50,16 +50,22 @@ so you argue with evidence, not vibes.
 3. `npm run build` (dashboard SPA) then `npm start` (Vite dev) **and**
    `npm run serve` (API server on 127.0.0.1:3000).
 4. Load the extension: Edge → `edge://extensions` → Developer mode → Load
-   unpacked → `apps/dashboard/extensions/picc-overlay`. Reload it after every
-   `git pull`.
+   unpacked → `apps/dashboard/extensions/picc-overlay`. Only re-open/reload it
+   after the extension's own files change — reloading mid-session invalidates
+   live content-script contexts, which the background worker now resurrects
+   automatically (and next navigation re-attaches the sensor anyway).
 5. Capture your ExpertOption **demo** token:
    - Easiest: open app.expertoption.finance in YOUR browser logged into the
      demo wallet; keep the tab open. The extension bridge feeds candles and
      captures session context automatically.
    - Or: `node scripts/capture-eo-session.mjs` (uses the embedded studio
      browser), or paste a token via Trading Suite settings.
-6. Verify: extension data-sources dockable should show `FEED: EXTENSION`
-   (or STUDIO) with candles LIVE within ~5s of opening a chart.
+6. Verify: the dashboard chart shows the **LIVE** feed badge (`EXTENSION` /
+   `STUDIO` source, or `Yahoo daily · delayed` for a labeled fallback) with
+   candles LIVE within ~5s of opening a chart; the Data Sources dockable lists
+   each feed's honesty status (live/local/stale/unconfigured). The extension
+   popup shows the sensor's connection and observed queue depth ("n/a" when
+   unreachable — never a fabricated 0).
 
 ## 4. Verification ladder (run top→bottom after every pull)
 
@@ -76,7 +82,7 @@ so you argue with evidence, not vibes.
 
 Machine-only items CI cannot prove (Part-B): real token capture against the
 live site, ≥60s of live ticks on a real chart, one full demo trade cycle,
-network-drop recovery while watching the dockables.
+network-drop recovery while watching the dashboard chart live.
 
 ## 5. Operating posture (demo)
 
@@ -84,9 +90,9 @@ network-drop recovery while watching the dockables.
   "why didn't it trade?" directly (Last decision row + Why? dry-run +
   decision log with skip-reason tally).
 - Watch `uptime24h.livePct` for a few days before trusting anything.
-- Kill switch: overlay button and dashboard both POST stop immediately;
+- Kill switch: the dashboard's autopilot stop POSTs immediately;
   in-flight ticks are reentrancy-guarded.
-- Manual close of an open position: ✕ button in the Positions dockable.
+- Manual close of an open position: ✕ button in the Positions table.
 
 ## 6. Behavioral-camouflage boundary (project policy)
 
@@ -107,5 +113,5 @@ well-behaved, not disguised.
 | Live buffers (studio + extension legs) | `apps/dashboard/server/services/liveEO.mjs` |
 | Liveness check | `apps/dashboard/server/services/browserStudio.mjs` (`checkExpertOptionSessionLive`) |
 | Scheduler jobs (staleness, liveness, uptime ring) | `apps/dashboard/server/services/scheduler.mjs` |
-| Extension overlay | `apps/dashboard/extensions/picc-overlay/content.js` (+ `inject.js` upstream sniffer) |
+| Extension sensor relay | `apps/dashboard/extensions/picc-overlay/content.js` (+ `inject.js` upstream sniffer) |
 | Read-only CCXT market data | `apps/dashboard/server/services/ccxtConnector.mjs` (mutating methods replaced by throwing stubs) |

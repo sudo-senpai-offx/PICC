@@ -123,11 +123,12 @@ No `npm install` or build step needed — load it directly:
 3. Click **Load unpacked**
 4. Select the folder: `apps/dashboard/extensions/picc-overlay/`
 
-The extension will appear in your toolbar. Navigate to a supported trading site
-(ExpertOption, Binance, Coinbase, etc.) and click the PICC pill (bottom-left) to open
-the overlay with trading dockables.
+The extension is a **passive sensor**: it relays the live market feed from broker pages you
+already have open (ExpertOption) into the local backend's ingest buffer, so the dashboard shows
+real live candles. It injects no UI on the page and never trades. The toolbar popup shows the
+sensor's server connection and its observed queue depth ("n/a" when no sensor is reachable —
+never a fabricated 0).
 
-> The extension communicates with the local dashboard backend via the background service worker.
 > Make sure `npm run dev` is running on port 5173 (or 3000) before loading the extension.
 
 ## 6. Payments — no bank, no business needed
@@ -221,8 +222,9 @@ npm run typecheck   # tsc --noEmit
    (e.g. `GEMINI_API_KEY`) to see live research sources. Open Trading → Predict to see a live
    multi-model signal.
 - Extension: with `npm run dev` running, load `apps/dashboard/extensions/picc-overlay/` unpacked,
-  open any trading site, click the PICC pill and confirm the dockables populate from
-  `/api/extension/trading-data` within ~5 s.
+  open an ExpertOption demo tab, and watch the dashboard chart go live — the sensor's frames flow
+  via `/api/extension/ingest` into the same data bus as the studio browser. The popup confirms the
+  sensor's connection and observed queue depth.
 - Agents: with the microservice running, Agents → Run research crew produces a CrewAI report; Trading
   Suite → Ask AI returns trading-crew commentary.
 - n8n (optional): after importing the templates in `infra/n8n/workflows/`, POST to `/webhook/trading-signal`
@@ -265,7 +267,7 @@ Production checklist:
   VPS instance (expose it on HTTPS).
 - Extension: the extension is zero-build MV3 — load unpacked from `apps/dashboard/extensions/picc-overlay/`.
   Before going to production, add your real dashboard origin to `host_permissions` in
-  `apps/dashboard/extensions/picc-overlay/manifest.json` and set it as the popup's dashboard URL.
+  `apps/dashboard/extensions/picc-overlay/manifest.json` and set the backend URL in the popup.
 - Domain: register via Cloudflare/Namecheap and point at the frontend host.
 - Amazon SP-API (optional): without keys the Listing Optimizer uses live Serper Google Shopping
   results (free). For SP-API buy-box data, fill the five `SP_AMAZON_*` vars in `apps/dashboard/.env`

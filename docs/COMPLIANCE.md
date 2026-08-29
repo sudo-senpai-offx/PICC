@@ -38,7 +38,7 @@ The national AI Governance Bill is expected to be finalized over 2026. Anticipat
 
 ## Mandatory human-review feature
 
-Implemented across every surface (dashboard copy buttons, extension overlay):
+Implemented across every surface (dashboard copy buttons, studio-browser overlay):
 
 1. **5-second countdown** before a copy/apply button unlocks.
 2. **Explicit confirmation toggle:** "I confirm I am a human making this final decision. The AI is only providing data."
@@ -51,7 +51,7 @@ Implemented across every surface (dashboard copy buttons, extension overlay):
 - ❌ "Fully automated" business registration — legally impossible; the human registers.
 - ❌ Bypassing KYC/AML — Stripe and payment processors require identity verification; never automate around it.
 - ❌ AI making final decisions without human oversight.
-- ❌ Hidden bots/agents — disclose AI interaction in-app (already done in the extension popup and dashboard).
+- ❌ Hidden bots/agents — disclose AI interaction in-app (already done in the dashboard).
 - ❌ Storing user data without protection — enforce RLS, HTTPS, and least-privilege keys.
 
 ## Data protection checklist (before launch)

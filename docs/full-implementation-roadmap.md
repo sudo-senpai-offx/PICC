@@ -11,39 +11,15 @@
 
 ---
 
-## Phase 5: Extension Dockable Panels (CRITICAL)
-**Why:** The overlay looks finished but ALL panel content is placeholder text.
-**Effort:** 3-4 days
+## Phase 5: Extension Dockable Panels — SUPERSEDED (removed by design)
 
-### 5.1 Real-Time Price Panel
-- Wire content.js dockable panels to background.js SSE forwarding
-- Display live EO prices with sparklines (canvas-based, zero deps)
-- Show price, change, changePct per asset
-- Color-coded up/down indicators
-
-### 5.2 Portfolio Panel
-- Open positions from autopilot
-- P&L per position
-- Balance and equity display
-- Win/loss streak indicator
-
-### 5.3 AI Signals Panel
-- Current confluence verdicts (TRADE/OBSERVE/NEUTRAL)
-- Confidence %, direction, score
-- 5-gate status (checkmarks/crosses)
-- Last 5 decisions with timestamps
-
-### 5.4 Risk Manager Panel
-- Daily loss limit gauge
-- Max concurrent positions indicator
-- Cooldown timer
-- Kelly criterion suggestion
-
-### 5.5 Autopilot Control Panel
-- Start/Stop/Kill Switch buttons
-- Current strategy display
-- Today's PnL and trade count
-- Active asset and next decision ETA
+> **Struck during Phase 1 (T3/T9/T10).** The in-page broker overlay was removed and the
+> extension became a passive, DOM-free sensor by v2.x contract (`content.js`,
+> `extensionIntegrity.test.mjs` locks): it relays the broker's own WebSocket frames to
+> `/api/extension/ingest` and never injects UI or automates. Everything this phase planned
+> (live prices, portfolio, signals, risk, autopilot controls) lives in the web dashboard's
+> Trading Suite, which is where those decisions belong; the sensor's observed queue depth is
+> surfaced through the extension popup.
 
 ---
 

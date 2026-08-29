@@ -507,7 +507,7 @@ registerConnector({
   }
 })
 
-// DeFi lending / markets referenced by the extension overlay but missing from
+// DeFi lending / markets referenced by the studio overlay but missing from
 // the registry — registered so the browser transport can read them directly.
 registerConnector({
   slug: "compound",
