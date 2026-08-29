@@ -71,4 +71,88 @@ describe("sensor extension integrity", () => {
       expect(popup.toLowerCase().includes(gone.toLowerCase()), `popup must not contain ${gone}`).toBe(false)
     }
   })
+
+  it("sensor is read-only by construction — zero DOM surface (T9 lock)", () => {
+    const src = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    for (const forbidden of [
+      "document.",
+      "MutationObserver",
+      "createElement",
+      "insertAdjacentHTML",
+      ".innerHTML",
+      "appendChild"
+    ]) {
+      expect(src.includes(forbidden), `content.js must not touch the page DOM via ${forbidden}`).toBe(false)
+    }
+    // The ONLY page-global writes are the idempotent load guard and the dead marker.
+    expect(src.includes("window.__PICC_SENSOR__ = true")).toBe(true)
+  })
+
+  it("__PICC_SENSOR_DEAD__ marker exists (forbidden-access contract, T9 lock)", () => {
+    const src = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    // A dead content-script context must announce itself this way — anything
+    // that drops or renames the marker breaks the popup's "n/a" honesty path.
+    expect(src.includes("window.__PICC_SENSOR_DEAD__ = true")).toBe(true)
+    // ...and it is set inside teardown() before the timers are cleared.
+    const teardown = src.slice(src.indexOf("function teardown") || 0, src.indexOf("const store"))
+    expect(teardown.includes("window.__PICC_SENSOR_DEAD__ = true")).toBe(true)
+  })
+
+  it("every chrome.* call in the sensor goes through chromeGuard (T9 lock)", () => {
+    const src = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    const lines = src.split("\n").map((l) => l.trim())
+
+    // chrome.storage may exist ONLY inside the `store` helper — which wraps
+    // each call in chromeGuard. A raw chrome.storage call anywhere else in the
+    // sensor fails this (T9 acceptance: deliberate violation must not pass).
+    const storageHits = lines.filter((l) => l.includes("chrome.storage"))
+    expect(storageHits).toHaveLength(2)
+    for (const hit of storageHits) {
+      expect(/^(set|get)\(/.test(hit), `chrome.storage only via store helper: ${hit}`).toBe(true)
+    }
+
+    // Every chrome.runtime line must be the guard-wrapped register or the
+    // guard's own pre-check. Un-guarded chrome.runtime use fails this.
+    // (Line-comments are stripped first — prose may name the API.)
+    const codeLines = lines.filter((l) => !l.startsWith("//") && !l.startsWith("*"))
+    const runtimeLines = codeLines.filter((l) => l.includes("chrome.runtime"))
+    expect(runtimeLines.length).toBeGreaterThan(0)
+    for (const line of runtimeLines) {
+      const guarded = line.includes("chromeGuard(") || line.includes("chrome?.runtime?.id")
+      expect(guarded, `raw chrome.runtime outside the guard: ${line}`).toBe(true)
+    }
+
+    // No other chrome.* surface may appear in the page-context sensor.
+    for (const api of ["chrome.tabs", "chrome.alarms", "chrome.windows", "chrome.action", "chrome.scripting"]) {
+      expect(src.includes(api), `content.js must not use ${api}`).toBe(false)
+    }
+  })
+
+  it("background handler actions exactly match popup sends (T9 lock)", () => {
+    const popup = readFileSync(join(EXT_DIR, "popup.js"), "utf8")
+    const background = readFileSync(join(EXT_DIR, "background.js"), "utf8")
+    const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+
+    const sends = new Set(
+      [...popup.matchAll(/chrome\.runtime\.sendMessage\(\s*\{\s*action:\s*"([^"]+)"/g)].map((m) => m[1])
+    )
+    const bgHandlers = new Set(
+      [...background.matchAll(/msg\.action\s*===\s*"([^"]+)"/g)].map((m) => m[1])
+    )
+    const contentHandlers = new Set(
+      [...content.matchAll(/msg\.action\s*===\s*"([^"]+)"/g)].map((m) => m[1])
+    )
+    // Background forwards popup actions to the tab; content answers them.
+    // Union = what can actually be answered. Contract: symmetric with popup.
+    const allHandlers = new Set([...bgHandlers, ...contentHandlers])
+
+    expect(sends.size).toBeGreaterThan(0)
+    expect(sends.size, "no orphan popup sends (every send has a handler)").toBe(allHandlers.size)
+    for (const action of sends) {
+      expect(allHandlers.has(action), `popup sends ${action} but nobody handles it`).toBe(true)
+    }
+    for (const action of allHandlers) {
+      expect(sends.has(action), `handler ${action} is unreachable from the popup`).toBe(true)
+    }
+  })
 })
