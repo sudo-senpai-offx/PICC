@@ -16,6 +16,15 @@
 //                                 normalized candles in the shared liveCCXT state
 //                                 and lets adaptiveConfluence fold them into the
 //                                 existing indicator/decision pipeline. Read-only.
+//   headless-session-refresh  every 60 sec  iterates the enabled venues of the
+//                                 headless-session capture engine (captureProfiles)
+//                                 whose token-refresh cadence is due, re-capturing
+//                                 the broker session token through the studio
+//                                 browser and reviving a dead EO session when the
+//                                 token actually changed. No enabled venue / no
+//                                 cadence due ⇒ exits in one loop over the profile
+//                                 table. Read-only vs the broker (session reads);
+//                                 token strings never reach logs or responses.
 //
 // Jobs are concurrency-guarded (a slow run is skipped, not queued) and all
 // outbound work funnels through the shared polite rate limiter. startScheduler
@@ -28,6 +37,7 @@ import { paperAnalytics, getCredentials as getTradingCredentials } from "./tradi
 import { getBrokerStats, setBrokerStale } from "./brokers/index.mjs"
 import { connect, fetchCandles, fetchTicker, toCcxtSymbol } from "./ccxtConnector.mjs"
 import { recordCandles, recordTicker, timeframeSeconds, ccxtStats } from "./liveCCXT.mjs"
+import { headlessSessionRefresh } from "./captureProfiles.mjs"
 import { createLogger } from "../logger.mjs"
 
 const log = createLogger("picc-scheduler")
@@ -342,3 +352,24 @@ every(
 export function ccxtSchedulerStatus() {
   return { ok: true, stats: ccxtStats() }
 }
+
+// ── Phase 5 (spec PICC_HEADLESS_CAPTURE_ENGINE.md, T4) ──────────────────────
+// Headless session refresh: every 60 s iterate the venues whose token-refresh
+// cadence is due (captureProfiles owns the cadence gate + per-venue policy;
+// T7 swaps the policy seam for per-user config without touching this job).
+// captureVenue handles the vault gate → capture → save → token-change revive
+// (restartLiveEO({force:true}) ONLY when the EO token string actually changed,
+// the exact flap guard of handlers.mjs:1292-1302). Failures surface through
+// the runner's honest per-venue report; token values never arrive here.
+every(
+  "headless-session-refresh",
+  60 * 1000,
+  async () => {
+    const reports = await headlessSessionRefresh()
+    if (reports.length === 0) return
+    for (const r of reports) {
+      log.info("headless capture pass", { venue: r.venue, state: r.state, tokenChanged: r.state === "ok" ? r.tokenChanged : undefined })
+    }
+  },
+  { staggerMs: 45_000 }
+)

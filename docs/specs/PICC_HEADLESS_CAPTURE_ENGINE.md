@@ -265,12 +265,26 @@ real fixture/replay research exists.
 
 ## Tasks (ordered)
 
-- [ ] **T1 — Baseline + re-verify ground truth (P1 · S).** Run `npm test` + `npm run typecheck`
+- [x] **T1 — Baseline + re-verify ground truth (P1 · S).** Run `npm test` + `npm run typecheck`
   (`apps/dashboard/package.json:9,13`). Re-verify every claim marked **UNVERIFIED** in this spec against
   the actual files (list in Risks R2) and reconcile line drift. **Acceptance:** green baseline recorded;
-  each UNVERIFIED claim re-checked and corrected in-place or marked confirmed.
+  each UNVERIFIED claim re-checked and corrected in-place or marked confirmed. — Done: baseline re-run
+  2026-08-29 = **94 files / 932 tests green**, `tsc -b --noEmit` exit 0 (pre-slice: 92/907). Every R2
+  ref re-checked against the live files: `SITE_INDEX` trading rows `browserStudio.mjs:504-513` ✓,
+  `PLATFORM_KINDS` `:541-552` ✓, vault `getSiteCredentials` `:126-131` ✓, `studioGoto` `:1856` ✓,
+  `studioOpenSite` `:1885` ✓, `fillLoginFields` `:2728` ✓, `studioAutofill` `:2771` ✓, `domLoginSignals`
+  `:2903` ✓ (spec printed the `:2859` region start — function head confirmed at 2903), studioLogin EO
+  bolt-on `:3520-3528` ✓, `captureExpertOptionSession` `:3579-3655` ✓ (guest-not-saved `:3649-3651` ✓),
+  `maskToken` `:3657-3661` ✓; `trading.mjs` `getCredentials` `:129` / `saveCredentials` `:134` +
+  sanitizePatch blank-token guard `:143-150` ✓; `liveEO.mjs` feed-mode/VITEST prefs `:76-116` ✓,
+  `restartLiveEO` `:1009-1022` ✓ (soft-reconnect-buffers comment confirmed); `scheduler.mjs` `every()`
+  `:41-43` ✓, `ccxt-market-data` `:304-339` ✓, no import side effects ✓; `handlers.mjs` credentials gate
+  `:1273-1309` (tokenChanged semantics `:1292-1302`) ✓; `auth.mjs` `verifyUser` `:188` ✓;
+  `interventions.mjs` WRITE_STEPS `:39` / READ_STEPS `:42` / execStep `:140` / approval pause `:235-239`
+  / runWorkflow `:354` ✓; `brokers.mjs` ccxt market-data row `:59-66` read-only ✓; EO host pin
+  `browserStudio.login.test.mjs:297` ✓. No line drift required a code fix.
 
-- [ ] **T2 — Capture-profile registry + EO reference profile (P1 · M).** New
+- [x] **T2 — Capture-profile registry + EO reference profile (P1 · M).** New
   `apps/dashboard/server/services/captureProfiles.mjs` with the full 10-venue table and the kind→strategy
   defaults; `expertoption` = `full` referencing `captureExpertOptionSession`
   (`browserStudio.mjs:3579-3655`), its `storageScan` (cookie/localStorage/sessionStorage + 32-hex rank
@@ -278,8 +292,17 @@ real fixture/replay research exists.
   or `capture-only` per Mechanism C. **Acceptance:** unit tests — `listCaptureProfiles()` returns all ten
   ids; kind mapping matches `PLATFORM_KINDS` (`browserStudio.mjs:541-552`); EO's `status:"full"`;
   `bybit/etoro/plus500/olymptrade/deriv` = `catalog-only`; a row can be flipped without changing the engine.
+  — Done: `captureProfiles.mjs` ships the 10-row DATA TABLE (kinds mirror PLATFORM_KINDS exactly, pinned
+  by a test-side literal); EO = `full` with `capture.via:"liveEO"` referencing the reference capture
+  (its storageScan/loginSignal are documented on the row rather than duplicated — the engine delegates,
+  so the reference stays the single source of truth); iqoption/binance/kucoin/okx = `capture-only`
+  (`capture.via:null` — the hook is the T10/T11 deliverable); bybit/etoro/plus500/olymptrade/deriv =
+  `catalog-only`; all rows `demoReal:"demo-first"` + default cadences (token 30 min / metrics 5–15 min).
+  `captureProfiles.test.mjs` (20 tests) covers: ten ids + kinds, EO full, the 4+5 v1 honest states,
+  `enabledCaptureVenues()` = hooks present (v1: EO), flip-without-engine-change (iqoption promoted by a
+  data edit), copy-safe list, cadence clamp `[60s,24h]`, policy overrides.
 
-- [ ] **T3 — Headless login runner (vault → login → capture → save) (P1 · M).** New orchestrator
+- [x] **T3 — Headless login runner (vault → login → capture → save) (P1 · M).** New orchestrator
   `captureVenue(venueId)` in `captureProfiles.mjs`: resolve vault creds (`getSiteCredentials`,
   `browserStudio.mjs:126-131`); missing → honest `{ state:"needs-credentials" }` (never fabricate); open the
   venue via `studioOpenSite` (`:1885-1904`)/`studioGoto` (`:1856-1878`); fill via `fillLoginFields`/Google
@@ -289,14 +312,38 @@ real fixture/replay research exists.
   EO capture): missing vault creds → `needs-credentials` and NO `saveCredentials` call; guest token not
   saved (`browserStudio.mjs:3649-3651`); token value never in the returned object (mask via
   `maskToken`, `:3657+`) and never logged; EO host check still throws on non-EO URL
-  (`:3582-3584`, pinned in `browserStudio.login.test.mjs:297`).
+  (`:3582-3584`, pinned in `browserStudio.login.test.mjs:297`). — Done: `captureVenue(venueId, {page})` in
+  `captureProfiles.mjs` (vault gate → dispatch → revive). **Deviation (documented):** v1 wires ONLY the EO
+  reference — the generic open→fill→submit→wait loop is deferred to T10/T11 where per-venue selectors
+  exist; EO reuses Mechanism-A verbatim (`captureExpertOptionSession` on the ACTIVE studio tab), which
+  already performs saveCredentials internally. Runner: missing vault creds → `needs-credentials` with NO
+  capture/save (hard constraint); host-lock / no-token thrown by the reference maps to honest
+  `{state:"error", reason}` (never rethrows into the scheduler); guest sessions → `{state:"guest"}`, never
+  saved; ok path compares before/after trading creds and returns `tokenChanged` + `reconnectTriggered`,
+  with token values absent from the report (masking keeps them out of every return path). Tests:
+  `captureProfiles.test.mjs` (mocked seams: needs-credentials no-save, guest no-save/no-revive, error
+  mapping) + `captureVenue.test.mjs` (5, REAL reference implementation via the login.test.mjs fake-page
+  harness, browserBridge mocked, tmp data dirs): missing-creds short-circuit incl. no token write,
+  non-EO host → reason matches `/app\.expertoption\.(com|finance)/`, guest never saved, same-token flap
+  guard, changed token → saved on disk + `restartLiveEO({force:true})` + no token in report/status
+  (`JSON.stringify` asserted).
 
-- [ ] **T4 — Session-refresh scheduler + token-change revive (P1 · M).** New `"headless-session-refresh"` job
+- [x] **T4 — Session-refresh scheduler + token-change revive (P1 · M).** New `"headless-session-refresh"` job
   (pattern of `scheduler.mjs:304-315`) iterating enabled venues at their cadence; on capture, when EO token
   CHANGED, call `restartLiveEO({force:true})` (`liveEO.mjs:1009-1022` — soft reconnect preserves buffers);
   unchanged → no-op (flap guard, per `handlers.mjs:1292-1302`). **Acceptance:** fake-timer test — token
   changed → `restartLiveEO({force:true})` called; same token / settings-only → no call (mirror
   `credentials.test.mjs:114-128` semantics); `restartLiveEO` soft-reconnect path asserted; no token in logs.
+  — Done: scheduler.mjs registers `headless-session-refresh` (60 s tick, stagger 45 s, ccxt pattern)
+  calling `headlessSessionRefresh()` → per-venue cadence gate (default 30 min token, clamped `[60s,24h]`,
+  `setHeadlessSessionPolicy()` override seam that T7's per-user config will feed), enabled set = profile
+  rows with a capture hook; error/needs-credentials runs do NOT count against the cadence (the next pass
+  retries rather than waiting a full cadence for a capture that never ran). Token-change revive lives
+  inside `captureVenue` exactly matching `handlers.mjs:1292-1302` semantics. Tests (captureProfiles.test.mjs):
+  token changed → `restartLiveEO({force:true})` + report/status carry no token; same-token → no call;
+  settings-only (risk% changed, token identical) → no call (mirrors credentials.test.mjs:114-128);
+  fake-timer cadence gate (due → within-cadence skip → due again across the 30 min boundary); policy-enabled
+  skip. Scheduler log lines carry only venue/state/tokenChanged — never token values.
 
 - [ ] **T5 — Account-metrics vocabulary + WS extractor (EO) (P1 · M).** New `accountMetrics.mjs`; vocabulary
   normalized from `accountFrom` (`expertoption.mjs:183-227`) and the `profile` frame path (`liveEO.mjs:420-426`).
