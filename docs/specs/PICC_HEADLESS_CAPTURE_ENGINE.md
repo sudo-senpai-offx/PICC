@@ -345,25 +345,67 @@ real fixture/replay research exists.
   fake-timer cadence gate (due → within-cadence skip → due again across the 30 min boundary); policy-enabled
   skip. Scheduler log lines carry only venue/state/tokenChanged — never token values.
 
-- [ ] **T5 — Account-metrics vocabulary + WS extractor (EO) (P1 · M).** New `accountMetrics.mjs`; vocabulary
+- [x] **T5 — Account-metrics vocabulary + WS extractor (EO) (P1 · M).** New `accountMetrics.mjs`; vocabulary
   normalized from `accountFrom` (`expertoption.mjs:183-227`) and the `profile` frame path (`liveEO.mjs:420-426`).
   EO `extractVia:["ws"]` consumes accumulated frames (source leg `liveEO.mjs:435-452`) on the cadence.
   **Acceptance:** unit test — a `profile` frame produces a record with correct `demoWallet/realWallet/
   active/currency`, `sourceLeg:"ws"`, `observedAt` set; a frame with `balance:null` yields `balance:null`
-  (NOT `0`); positions/exposure absent → `null`, not `[]`/`0`.
+  (NOT `0`); positions/exposure absent → `null`, not `[]`/`0`; a frame with balance `0` keeps `0`.
+  — Done: `accountMetrics.mjs` ships the strict vocabulary parser (`parseAccountFrame`) + extractor
+  (`extractAccountState`) + cadence collector (`accountMetricsRefresh`); `captureProfiles.mjs` rows gained a
+  `metrics.extractVia` column (`expertoption:["ws"]`, others honest-empty) and ALL metric cadences were
+  aligned to the spec's 5-min default (previously 15 min on the spot/cfd rows). **Deviation (documented):**
+  the ws extractor consumes liveEO's NEW per-leg RAW profile cache (`lastRawProfile`, exposed via
+  `liveEOAccountRaw()`, filled in the profile branch at `liveEO.mjs:420-426` BEFORE accountFrom flattens
+  it) stamped with arrival time + source leg — NOT the flattened `account`, whose `num(...) ?? 0`
+  collapses an absent balance into a fabricated 0 (exactly what this layer must never do). Parser truth
+  table mirrors accountFrom's branches without any `?? 0` fallback: `balance:null` → `null`, genuine `0`
+  stays `0`, legacy single-balance with no flag → `active:null` + that number on `balance` (wallet NOT
+  guessed), ambient `balance` absent → both wallets `null`. `openPositions`/`exposurePct` stay `null` (no
+  ws position handler yet — never `[]`/`0`). Collector runs on the SAME `headless-session-refresh` job as
+  the session pass with its OWN per-venue metrics-cadence gate; a null observation stores nothing and
+  leaves the gate open (retry, never a fabricated record). Tests: `accountMetrics.test.mjs` (28) — parser
+  null-vs-zero truth table incl. the EO demo/real frames and raw app-object unwrapping; candle frames
+  rejected; extractor most-recent-wins + sourceLeg/observedAt stamps; unknown venue / no-extractor → null;
+  collector cadence gate + null-observation retry; policy seam feeds effective metrics cadence.
 
-- [ ] **T6 — Metrics store + read endpoint (P1 · M).** `server/data/account-metrics.json` store
+- [x] **T6 — Metrics store + read endpoint (P1 · M).** `server/data/account-metrics.json` store
   (tmp+rename + `VITEST` suppression, per `liveEO.mjs:76-116`), keyed by `userId`; `getAccountMetrics`/
   `putAccountMetrics`; `GET /api/trading/account-metrics` (`requireAuth`, `verifyUser` per `auth.mjs:188`).
   **Acceptance:** round-trip per user; no cross-user bleed; restart survives boot read; `stale` flag derived
   from `observedAt` vs cadence (older → `stale:true`); endpoint echoes `stale` + `sourceLeg`, never a
   fabricated `0`.
+  — Done: store in `accountMetrics.mjs` (`server/data/account-metrics.json`, shape
+  `{ [userId]: { [venueId]: record } }`, latest-record-wins, tmp+rename; disk rule = `!VITEST || env
+  PICC_ACCOUNT_METRICS_DATA_DIR` — a vitest run only touches the file a test pointed at its own tmp dir).
+  Endpoint `GET /api/trading/account-metrics` (+ `?venue=` filter): requires auth (localhost pass-through
+  per the chart-prefs pattern), `userId = verifyUser(auth) ?? "default"`, per-venue record decorated with
+  `stale` derived LIVE from `observedAt` vs the venue's effective metrics cadence (T7 prefs included); a
+  venue with no observation is simply ABSENT from `venues` — never a zeroed/fabricated row. Tests:
+  `accountMetrics.test.mjs` (store round-trip, cross-user isolation, absent venue → null, null-balance
+  persisted, defensive copy, module-restart boot read via resetModules + tmp dir) +
+  `accountMetricsApi.test.mjs` (10: empty-then-observed, live stale, `?venue`, absent venue absent, and
+  per-user keying proven end-to-end with a REAL session token from `auth.createAccount`/`loginAccount`).
 
-- [ ] **T7 — Capture-config endpoints + per-user/venue cadence (P1 · M).** `GET/POST /api/trading/capture-config`
+- [x] **T7 — Capture-config endpoints + per-user/venue cadence (P1 · M).** `GET/POST /api/trading/capture-config`
   persisting `{ venueId: { enabled, refreshCadenceMs, metricsCadenceMs } }` per user (prefs file pattern,
   `liveEO.mjs:83-116`); defaults 30 min token / 5 min metrics. **Acceptance:** cadence config round-trips
   per user; scheduler honors it; invalid cadence clamped to sane range; `VITEST` suppression keeps parallel
   tests isolated.
+  — Done: endpoints in `handlers.mjs` + `saveCaptureConfigForUser`/`captureConfigForUser` in
+  `captureProfiles.mjs` (`server/data/capture-config.json`, keyed per user, same env/VITEST disk rule via
+  `PICC_CAPTURE_CONFIG_DATA_DIR`). Unknown venue rows dropped; cadences clamped `[60s,24h]`; POST applies
+  the user's block to the RUNTIME policy seam immediately (`setHeadlessSessionPolicy` — scheduler honors
+  it live, no scheduler code touched), and the boot read applies the `default` user's block (or the only
+  block present) so prefs survive restarts. **Deviation (documented):** the runtime policy is
+  process-global while the file is per-user — v1 assigns boot to `default` and live writes to whichever
+  user POSTs last (single-real-user dashboard); multi-user keys are preserved on disk untouched. Removing
+  a venue row replaces the runtime policy wholesale, so a deleted row re-enables profile defaults instead
+  of leaving a stale override. Tests: `accountMetricsApi.test.mjs` — sanitize/clamp, live policy feed
+  (`refreshCadenceMs` reported through `captureProfiles` right after POST), restart persistence
+  (`headlessSessionStatus().enabled` + cadence after resetModules re-import), row-removal re-enables, GET
+  round-trip, real-session per-user bucket vs the unauth `default` bucket. Full suite after T5–T7:
+  **96 files / 970 tests green**, `tsc -b --noEmit` exit 0 (pre-slice 94/932).
 
 - [ ] **T8 — Headless-status endpoint + popup framing (REQ-D) (P2 · M).** New read-only `GET /api/trading/
   headless-status` (localhost-gated + `requireAuth`): per-venue `{ status, lastCaptureAt, tokenChangedAt,

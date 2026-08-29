@@ -66,6 +66,12 @@ let lastSeen = 0 // last time any frame was consumed
 let degraded = null // { kind: "expired"|"unconfigured", reason, at } — sticky until a session connects again
 let staleFlag = false // "connected but no ticks for >60s" (set by the scheduler staleness job)
 
+// Latest RAW WS profile frame that passed the gate, per ACCEPTED leg. The
+// flattened `account` above collapses absent balances into 0 (accountFrom's
+// `num(...) ?? 0`); accountMetrics.mjs re-parses THIS so an honest null can
+// stay null. Keyed per leg so the metrics collector can tag its sourceLeg.
+const lastRawProfile = new Map() // source -> { at, payload }
+
 const subscribers = new Set()
 const buffers = new Map() // `${assetId}:${period}` -> { ohlc, prevClose, tickedAt }
 const lastTick = new Map() // `${assetId}:${period}` -> { price, change, changePct, ts }
@@ -418,6 +424,9 @@ function processAppObject(obj, source = "studio") {
     return
   }
   if (obj.action === "profile") {
+    // Keep the raw frame BEFORE flattening: accountFrom turns an absent
+    // balance into 0, which would fabricate a balance to the metrics layer.
+    lastRawProfile.set(source, { at: Date.now(), payload: obj.message?.profile ?? obj.message })
     const acc = accountFrom({ profile: obj.message?.profile ?? obj.message })
     if (acc && acc.balance != null) {
       account = acc
@@ -827,6 +836,19 @@ export function liveSnapshot() {
     legs: { extension: legAlive("extension"), studio: legAlive("studio") },
     ts: Date.now()
   }
+}
+
+/**
+ * Most recent raw WS profile frame per leg, exactly as observed — before
+ * accountFrom flattened it (absent balances are collapsed to 0 there, which
+ * would fabricate a balance to the metrics layer). Stamped with the arrival
+ * time so the metrics collector can tag observedAt + sourceLeg (spec T5).
+ * @returns {{ [source: string]: { at: number, payload: object } } | null}
+ */
+export function liveEOAccountRaw() {
+  const out = {}
+  for (const [source, entry] of lastRawProfile) out[source] = { ...entry }
+  return Object.keys(out).length ? out : null
 }
 
 /**

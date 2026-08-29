@@ -115,6 +115,8 @@ import {
   liveSubscriberCount
 } from "./services/connectors.mjs"
 import { browserAvailable, realProfileState, importRealProfile } from "./services/browserBridge.mjs"
+import { accountMetricsForUser, getAccountMetrics, staleFrom } from "./services/accountMetrics.mjs"
+import { listCaptureProfiles, metricsCadenceMs, saveCaptureConfigForUser, captureConfigForUser } from "./services/captureProfiles.mjs"
 import {
   studioStatus,
   openStudio,
@@ -1303,6 +1305,52 @@ async function _handleApiInner(req, res, url, reqId) {
       writeJson(res, 200, { ok: true, reconnectTriggered, ...creds, expertoptionToken: creds.expertoptionToken ? "••••••" : "" })
     } catch (err) {
       console.error("[picc] trading credentials failed:", err)
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // Phase 5 (spec T6) — account-metrics read. Every value is an OBSERVED one:
+  // an absent balance is null, never a fabricated 0; a venue with no stored
+  // observation is simply absent from `venues`. `stale` is derived live from
+  // observedAt vs the venue's current metrics cadence (T7 prefs included).
+  if (path === "/api/trading/account-metrics" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    const venue = String(parsed.searchParams.get("venue") ?? "")
+    const source = venue
+      ? { [venue.toLowerCase()]: getAccountMetrics(userId, venue) }
+      : accountMetricsForUser(userId)
+    const venues = {}
+    for (const [vid, rec] of Object.entries(source)) {
+      if (!rec || typeof rec !== "object") continue
+      venues[vid] = {
+        ...rec,
+        stale: staleFrom({ record: rec, cadenceMs: metricsCadenceMs(vid) ?? 5 * 60 * 1000 })
+      }
+    }
+    writeJson(res, 200, { ok: true, userId, venues })
+    return
+  }
+
+  // Phase 5 (spec T7) — per-user capture-config (session + metrics cadence for
+  // the headless engine). Read: current user's persisted rows (venue-driven
+  // defaults live in the profile table, so this ONLY reports what the user
+  // changed). Write: sanitized + clamped per venue, persisted per user, and
+  // applied to the RUNTIME policy seam so the scheduler honors it live.
+  if (path === "/api/trading/capture-config" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    if (req.method === "GET") {
+      writeJson(res, 200, { ok: true, userId, config: captureConfigForUser(userId) })
+      return
+    }
+    const rows = body && typeof body === "object" && !Array.isArray(body) ? body : {}
+    try {
+      const config = await saveCaptureConfigForUser(userId, rows)
+      writeJson(res, 200, { ok: true, userId, config })
+    } catch (err) {
+      console.error("[picc] capture-config save failed:", err)
       writeJson(res, 500, { ok: false, error: err.message })
     }
     return

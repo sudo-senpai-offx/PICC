@@ -1,6 +1,11 @@
 // PICC headless-session capture engine — coverage matrix + capture runner.
 //
 // Spec: docs/specs/PICC_HEADLESS_CAPTURE_ENGINE.md (Mechanism A/C + T2/T3/T4).
+
+import { readFileSync } from "node:fs"
+import { rename, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 //
 // ── What this file is ─────────────────────────────────────────────────────────
 //   • CAPTURE_PROFILES is a DATA TABLE, not engine code. "Promote iqoption to
@@ -53,7 +58,12 @@ export const CAPTURE_PROFILES = [
       ref: "browserStudio.captureExpertOptionSession (browserStudio.mjs:3579-3655)",
       note: "Reference implementation, shipped and tested. Reads the active EO studio tab's session token (cookie/localStorage/sessionStorage scan + 32-hex rank), saves non-guest tokens via trading.saveCredentials, reports guest honestly."
     },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    // T5: which heads consume this venue's metrics. ["ws"] = liveEO's
+    // accumulated WS profile frames (accountMetrics.mjs parses them strictly —
+    // absent balance stays null, never a fabricated 0). Other venues have no
+    // extractor built, so the collector honestly skips them.
+    metrics: { extractVia: ["ws"] }
   },
   {
     id: "iqoption",
@@ -62,7 +72,8 @@ export const CAPTURE_PROFILES = [
     status: "capture-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "Login/storage UNVERIFIED — T10 research gates enablement." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "binance",
@@ -71,7 +82,8 @@ export const CAPTURE_PROFILES = [
     status: "capture-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "Spot token capture only (metrics P3). Selectors/storage UNVERIFIED — T10 first." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 15 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "kucoin",
@@ -80,7 +92,8 @@ export const CAPTURE_PROFILES = [
     status: "capture-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "Spot token capture only (metrics P3). Selectors/storage UNVERIFIED — T10 first." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 15 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "okx",
@@ -89,7 +102,8 @@ export const CAPTURE_PROFILES = [
     status: "capture-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "Spot token capture only (metrics P3). Selectors/storage UNVERIFIED — T10 first." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 15 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "bybit",
@@ -98,7 +112,8 @@ export const CAPTURE_PROFILES = [
     status: "catalog-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 15 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "etoro",
@@ -107,7 +122,8 @@ export const CAPTURE_PROFILES = [
     status: "catalog-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "CFD/social UX unverified; may reuse studioLogin's Google path (browserStudio.mjs:3486-3530) once researched." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 15 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "plus500",
@@ -116,7 +132,8 @@ export const CAPTURE_PROFILES = [
     status: "catalog-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 15 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "olymptrade",
@@ -125,7 +142,8 @@ export const CAPTURE_PROFILES = [
     status: "catalog-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   },
   {
     id: "deriv",
@@ -134,7 +152,8 @@ export const CAPTURE_PROFILES = [
     status: "catalog-only",
     demoReal: "demo-first",
     capture: { via: null, ref: null, note: "No verified selectors/storage this session — catalog presence only." },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 }
+    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
+    metrics: { extractVia: [] }
   }
 ]
 
@@ -163,7 +182,7 @@ export function enabledCaptureVenues() {
 // the per-user prefs file. The job consults this seam, so cadence changes
 // never touch scheduler.mjs.
 // ---------------------------------------------------------------------
-const policyOverrides = new Map() // venueId -> { enabled?: bool, refreshCadenceMs?: number }
+const policyOverrides = new Map() // venueId -> { enabled?: bool, refreshCadenceMs?: number, metricsCadenceMs?: number }
 const lastAutoRun = new Map() // venueId -> ts
 const lastReports = new Map() // venueId -> report (latest per-venue capture report)
 
@@ -178,8 +197,10 @@ export function clampCadence(ms, fallbackMs) {
 }
 
 /**
- * Override per-venue refresh behaviour (T7 will feed per-user prefs through
- * here). Shape: { [venueId]: { enabled?: boolean, refreshCadenceMs?: number } }.
+ * Override per-venue refresh behaviour. Shape:
+ * { [venueId]: { enabled?: boolean, refreshCadenceMs?: number, metricsCadenceMs?: number } }.
+ * The metrics collector (accountMetrics.mjs) consults this for its cadence
+ * gate; T7's per-user prefs file is applied through here at boot + on POST.
  */
 export function setHeadlessSessionPolicy(policy = {}) {
   for (const [venueId, cfg] of Object.entries(policy ?? {})) {
@@ -187,17 +208,26 @@ export function setHeadlessSessionPolicy(policy = {}) {
     const entry = {}
     if (typeof cfg?.enabled === "boolean") entry.enabled = cfg.enabled
     if (cfg?.refreshCadenceMs !== undefined) entry.refreshCadenceMs = clampCadence(cfg.refreshCadenceMs, byId.get(venueId).cadence.tokenMs)
+    if (cfg?.metricsCadenceMs !== undefined) entry.metricsCadenceMs = clampCadence(cfg.metricsCadenceMs, byId.get(venueId).cadence.metricsMs)
     if (Object.keys(entry).length) policyOverrides.set(venueId, entry)
     else policyOverrides.delete(venueId)
   }
 }
 
-/** The effective refresh cadence for a venue (override > profile default). */
+/** Effective refresh cadence for the session job (override > profile default). */
 export function refreshCadenceMs(venueId) {
   const profile = byId.get(venueId)
   if (!profile) return null
   const ov = policyOverrides.get(venueId)
   return ov?.refreshCadenceMs ?? profile.cadence.tokenMs
+}
+
+/** Effective metrics cadence for the collector (override > profile default). */
+export function metricsCadenceMs(venueId) {
+  const profile = byId.get(venueId)
+  if (!profile) return null
+  const ov = policyOverrides.get(venueId)
+  return ov?.metricsCadenceMs ?? profile.cadence.metricsMs
 }
 
 /** Enabled per policy — default true for every profile with a capture hook. */
@@ -206,6 +236,104 @@ export function isVenueEnabled(venueId) {
   if (!profile) return false
   if (!profile.capture?.via) return false
   return policyOverrides.get(venueId)?.enabled ?? true
+}
+
+/**
+ * T7 — per-user capture config (persisted prefs). The runtime policy seam
+ * above is process-global, so v1 stores per-user rows in the file but applies
+ * one user's config to the live policy: the "default" user's block at boot,
+ * then whichever user POSTs last while the server is running (single-real-user
+ * dashboard — documented in the spec). Multi-user keys are preserved on disk.
+ */
+const CAPTURE_CONFIG_FILE = join(
+  process.env.PICC_CAPTURE_CONFIG_DATA_DIR ?? fileURLToPath(new URL("../data", import.meta.url)),
+  "capture-config.json"
+)
+const canTouchCaptureConfigDisk = () => !isVitestMode() || Boolean(process.env.PICC_CAPTURE_CONFIG_DATA_DIR)
+
+/** Latest user config blocks as loaded off disk at startup (or written live). */
+let captureConfigCache = {}
+
+function isVitestMode() {
+  return process.env.VITEST === "true"
+}
+
+/** The persisted config for one user: { [venueId]: { enabled, refreshCadenceMs, metricsCadenceMs } }. */
+export function captureConfigForUser(userId) {
+  const uid = String(userId ?? "default")
+  return structuredClone(captureConfigCache[uid] ?? {})
+}
+
+/**
+ * Apply one user's saved config to the live policy seam. The user's persisted
+ * block REPLACES the runtime venue policy wholesale — a row the user deleted
+ * must stop overriding (e.g. disable → remove row → back to profile default).
+ */
+function applyUserConfigToPolicy(userId) {
+  policyOverrides.clear()
+  const cfg = captureConfigForUser(userId)
+  const policy = {}
+  for (const [venueId, row] of Object.entries(cfg)) {
+    if (!row || typeof row !== "object") continue
+    const entry = {}
+    if (typeof row.enabled === "boolean") entry.enabled = row.enabled
+    if (row.refreshCadenceMs !== undefined) entry.refreshCadenceMs = clampCadence(row.refreshCadenceMs, byId.get(venueId)?.cadence.tokenMs ?? CADENCE_MIN_MS)
+    if (row.metricsCadenceMs !== undefined) entry.metricsCadenceMs = clampCadence(row.metricsCadenceMs, byId.get(venueId)?.cadence.metricsMs ?? CADENCE_MIN_MS)
+    policy[venueId] = entry
+  }
+  setHeadlessSessionPolicy(policy)
+}
+
+/**
+ * Replace one user's persisted config and apply it live.
+ * @param {string} userId
+ * @param {{ [venueId]: { enabled?, refreshCadenceMs?, metricsCadenceMs? } }} rows
+ * @returns the sanitized config now persisted for that user.
+ */
+export async function saveCaptureConfigForUser(userId, rows = {}) {
+  const uid = String(userId ?? "default")
+  const next = {}
+  for (const [venueId, row] of Object.entries(rows ?? {})) {
+    if (typeof row !== "object" || row === null) continue
+    if (!byId.has(String(venueId || "").toLowerCase())) continue
+    const id = String(venueId).toLowerCase()
+    const entry = {}
+    if (typeof row.enabled === "boolean") entry.enabled = row.enabled
+    if (row.refreshCadenceMs !== undefined) entry.refreshCadenceMs = clampCadence(row.refreshCadenceMs, byId.get(id).cadence.tokenMs)
+    if (row.metricsCadenceMs !== undefined) entry.metricsCadenceMs = clampCadence(row.metricsCadenceMs, byId.get(id).cadence.metricsMs)
+    if (Object.keys(entry).length === 0) continue // nothing but noise — drop the row
+    next[id] = entry
+  }
+  captureConfigCache = { ...captureConfigCache, [uid]: next }
+  if (canTouchCaptureConfigDisk()) {
+    const tmp = `${CAPTURE_CONFIG_FILE}.${process.pid}.tmp`
+    await writeFile(tmp, JSON.stringify(captureConfigCache, null, 2))
+    await rename(tmp, CAPTURE_CONFIG_FILE)
+  }
+  applyUserConfigToPolicy(uid)
+  return structuredClone(next)
+}
+
+/**
+ * Boot-time load of persisted per-user capture config. Guarded by the same
+ * env/VITEST rule as feed-mode prefs (liveEO.mjs:76-116): under vitest the file
+ * is only read when a test pointed PICC_CAPTURE_CONFIG_DATA_DIR at its own tmp
+ * dir — a test run can never mutate the real server's schedule. The "default"
+ * user's block (or the only block present) is applied to the live policy right
+ * away so the scheduler honors persisted prefs across restarts.
+ */
+loadCaptureConfigAtBoot()
+
+function loadCaptureConfigAtBoot() {
+  if (!canTouchCaptureConfigDisk()) return
+  try {
+    const parsed = JSON.parse(readFileSync(CAPTURE_CONFIG_FILE, "utf8"))
+    if (parsed && typeof parsed === "object") captureConfigCache = parsed
+  } catch {
+    captureConfigCache = {} // absent or unreadable → pristine profile defaults
+  }
+  const uid = captureConfigCache["default"] ? "default" : Object.keys(captureConfigCache)[0]
+  if (uid) applyUserConfigToPolicy(uid)
 }
 
 /** Per-venue refresh state for status surfacing (T8 foundation). */
