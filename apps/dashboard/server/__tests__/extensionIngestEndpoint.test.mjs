@@ -96,3 +96,36 @@ describe("POST /api/extension/ingest", () => {
     }
   })
 })
+
+describe("GET/POST /api/trading/feed-mode (T4)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no network in tests"))))
+  })
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    await stopLiveEO()
+    const { setFeedMode } = await import("../services/liveEO.mjs")
+    setFeedMode("auto")
+  })
+
+  it("GET reports the live preference and both legs", async () => {
+    const res = await call("GET", "/api/trading/feed-mode")
+    expect(res.status).toBe(200)
+    expect(["auto", "extension", "studio"]).toContain(res.body.feedMode)
+    expect(res.body.legs.extension).toHaveProperty("alive")
+    expect(res.body.legs.studio).toHaveProperty("alive")
+  })
+
+  it("POST sets the preference and GET reflects it", async () => {
+    const set = await call("POST", "/api/trading/feed-mode", { feedMode: "studio" })
+    expect(set.status).toBe(200)
+    expect(set.body.feedMode).toBe("studio")
+    const get = await call("GET", "/api/trading/feed-mode")
+    expect(get.body.feedMode).toBe("studio")
+  })
+
+  it("rejects unknown modes at the HTTP surface", async () => {
+    const res = await call("POST", "/api/trading/feed-mode", { feedMode: "moon" })
+    expect(res.status).toBe(400)
+  })
+})

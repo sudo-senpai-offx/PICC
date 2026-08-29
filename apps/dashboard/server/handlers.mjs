@@ -1101,6 +1101,33 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // Feed preference (T4): GET reads the mode + live legs; POST sets the mode.
+  // Preference-with-fallback — the other leg takes over when the preferred one
+  // dies, so a live feed is never dropped (the extension can be closed and the
+  // studio leg still serves, and vice versa).
+  if (path === "/api/trading/feed-mode" && (req.method === "GET" || req.method === "POST")) {
+    const { getFeedMode, setFeedMode, liveEOStats } = await import("./services/liveEO.mjs")
+    if (req.method === "POST") {
+      const want = body?.feedMode
+      if (typeof want !== "string" || !["auto", "extension", "studio"].includes(want)) {
+        writeJson(res, 400, { ok: false, error: "feedMode must be auto | extension | studio" })
+        return
+      }
+      setFeedMode(want)
+    }
+    const stats = liveEOStats()
+    writeJson(res, 200, {
+      ok: true,
+      feedMode: getFeedMode(),
+      preference: getFeedMode(),
+      legs: {
+        extension: { alive: stats.legs.extension.lastAt > 0 && Date.now() - stats.legs.extension.lastAt < 60_000, lastAt: stats.legs.extension.lastAt },
+        studio: { alive: stats.legs.studio.lastAt > 0 && Date.now() - stats.legs.studio.lastAt < 60_000, lastAt: stats.legs.studio.lastAt }
+      }
+    })
+    return
+  }
+
   if (path === "/api/trading/realtime" && req.method === "GET") {
     // Cross-origin EventSource snooping guard (any website can open this from
     // a visitor's machine — reject browser-supplied foreign origins).

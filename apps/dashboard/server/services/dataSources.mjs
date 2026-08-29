@@ -32,9 +32,12 @@ export function collectSourceStatuses(now = Date.now()) {
     const lastSeen = Number(stats?.lastSeen) > 0 ? Number(stats.lastSeen) : null
     if (lastSeen != null) {
       candles = classifySource(lastSeen, now)
-      // Provenance: which live leg fed the frames most recently.
-      const upAt = Number(stats?.upstream?.lastAt) || 0
-      candleFeed = upAt && lastSeen && upAt >= lastSeen - 1500 ? "extension" : "studio"
+      // Provenance: which live leg's frames were CONSUMED most recently.
+      // Arrival alone says nothing about use — the feed-mode preference gate
+      // (T4) may drop one leg while its frames keep arriving, and the served
+      // data would then be the OTHER leg's.
+      const extConsumed = Number(stats?.legs?.extension?.lastConsumedAt) || 0
+      candleFeed = lastSeen && extConsumed && extConsumed >= lastSeen - 1500 ? "extension" : "studio"
     }
   } catch {}
   let sentiment = unconfigured()

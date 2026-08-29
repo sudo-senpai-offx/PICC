@@ -26,6 +26,9 @@ import { getCredentials } from "./trading.mjs"
 import { STATIC_ASSETS } from "./expertoption.mjs"
 import { createLogger } from "../logger.mjs"
 import { assetsEquivalent } from "./assetCatalog.mjs"
+import { readFileSync, renameSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 
 const log = createLogger("picc-live")
 const AUTH_FAIL_RE = /(unauthorized|auth_failed|authfail|token_expired|tokenexpire|forbidden|rejected the session token|session token rejected)/i
@@ -69,6 +72,48 @@ const lastTick = new Map() // `${assetId}:${period}` -> { price, change, changeP
 const assetTicks = new Map() // assetId -> { count, up, down, lastPrice, perBar: Map<barTs,{up,down}> }
 const byId = new Map() // assetId -> asset
 const watching = [] // { id, name, type }
+
+// ── Feed mode (T4) ───────────────────────────────────────────────────────────
+// A PREFERENCE with fallback, never a blackout switch: the preferred leg is
+// consumed while it is alive; when it dies the other leg takes over, so a live
+// feed is never dropped. Persisted through the trading-suite prefs file
+// (server/data/feed-mode.json). The write/read is skipped under the test
+// runner (VITEST) so one test file can never contaminate a sibling file's feed
+// through the shared data dir — unit tests drive setFeedMode in-memory.
+const FEED_MODES = ["auto", "extension", "studio"]
+const isVitest = () => process.env.VITEST === "true"
+const FEED_PREFS_FILE = process.env.PICC_DATA_DIR
+  ? join(process.env.PICC_DATA_DIR, "feed-mode.json")
+  : fileURLToPath(new URL("../data/feed-mode.json", import.meta.url))
+
+let feedMode = "auto"
+if (!isVitest()) {
+  try {
+    const parsed = JSON.parse(readFileSync(FEED_PREFS_FILE, "utf8"))
+    if (FEED_MODES.includes(parsed?.mode)) feedMode = parsed.mode
+  } catch { /* no prefs on disk yet — default */ }
+}
+
+/** Set the feed preference. Returns the active mode (invalid input → "auto"). */
+export function setFeedMode(mode) {
+  const m = FEED_MODES.includes(mode) ? mode : "auto"
+  feedMode = m
+  if (!isVitest()) {
+    try {
+      const tmp = `${FEED_PREFS_FILE}.${process.pid}.tmp`
+      writeFileSync(tmp, JSON.stringify({ mode: m }, null, 2))
+      renameSync(tmp, FEED_PREFS_FILE)
+    } catch (err) {
+      console.warn("[picc-live] feed-mode prefs write failed:", err.message)
+    }
+  }
+  return feedMode
+}
+
+/** Current feed preference ("auto" | "extension" | "studio"). */
+export function getFeedMode() {
+  return feedMode
+}
 
 function emit(type, payload) {
   const msg = { type, ts: Date.now(), ...payload }
@@ -292,14 +337,19 @@ function handleAppFrame(f) {
  * Core frame processor — shared by the studio bridge (WS frames relayed from
  * the PICC-managed browser) and the extension bridge (frames sniffed in the
  * user's own browser via inject.js). Both feed identical candle buffers, so
- * whichever is live becomes the realtime source.
+ * whichever is live becomes the realtime source. Returns true when the frame
+ * was CONSUMED (false when the feed-mode gate drops it).
  */
 function processAppObject(obj, source = "studio") {
+  // Arrival tracking happens for every frame of a leg — INCLUDING frames the
+  // preference gate drops — because arrival is the evidence a leg is alive,
+  // and the gate's fallback needs to see the true liveness of the other leg.
+  noteLegArrival(source)
+  if (!gateAccepts(source)) return false // preferred leg alive → drop this leg
   lastSeen = Date.now()
-  if (source === "extension") {
-    upstreamStats.framesSeen += 1
-    upstreamStats.lastAt = Date.now()
-  }
+  legStats[source].lastConsumedAt = Date.now()
+  if (source === "extension") legStats.extension.accepted += 1
+  else if (source === "studio") legStats.studio.accepted += 1
   if (obj.action === "error") {
     // Error frames relayed through the extension reflect the USER'S BROWSER
     // session, not our headless session — closing the headless feed because
@@ -376,20 +426,72 @@ function processAppObject(obj, source = "studio") {
   }
 }
 
-const upstreamStats = { framesSeen: 0, accepted: 0, lastAt: 0 }
+// ── Per-leg stream accounting (T4) ───────────────────────────────────────────
+// A leg is "alive" while its frames keep arriving (seen/lastAt); frames are
+// "accepted"/"lastConsumedAt" only when the feed-mode gate let them into the
+// buffers. Dropped frames stay "seen" — that is the aliveness signal the
+// preference gate's fallback depends on.
+const LEG_ALIVE_MS = 60_000 // same liveness window the status uses for upstream frames
+const legStats = {
+  extension: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0 },
+  studio: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0 }
+}
+// Back-compat alias: consumers reading `stats.upstream.*` keep working.
+const upstreamStats = legStats.extension
+
+function noteLegArrival(source) {
+  const leg = legStats[source]
+  if (!leg) return
+  leg.framesSeen += 1
+  leg.lastAt = Date.now()
+}
+
+function legAlive(source, now = Date.now()) {
+  const leg = legStats[source]
+  return Boolean(leg) && leg.lastAt > 0 && now - leg.lastAt < LEG_ALIVE_MS
+}
+
+/**
+ * Feed-preference gate (T4). Returns true when a frame from `source` should be
+ * consumed: the preferred leg always passes; the other leg passes only while
+ * the preferred one is dead (fallback — never a blackout). In "auto" mode both
+ * legs pass and the newest frame wins by construction (they share buffers).
+ */
+function gateAccepts(source) {
+  if (feedMode === "auto") return true
+  if (feedMode === source) return true
+  return !legAlive(feedMode)
+}
 
 /**
  * Ingest a broker frame captured by the browser extension in the user's own
  * session. Accepts an already-parsed frame object (the JSON the gateway sent).
- * Returns true when the frame was recognized and processed.
+ * Returns true when the frame was recognized AND consumed (false when the
+ * feed-mode gate dropped it — the frame's arrival is still recorded, but it
+ * never enters the candle buffers).
  */
 export function ingestAppFrame(obj) {
   try {
     if (!obj || typeof obj !== "object" || typeof obj.action !== "string" || !obj.action) return false
     if (obj.message != null && typeof obj.message !== "object") return false
-    processAppObject(obj, "extension")
-    upstreamStats.accepted += 1
-    return true
+    // processAppObject returns false only when the feed-mode gate drops the
+    // frame; every other outcome means it was recognized + consumed.
+    return processAppObject(obj, "extension") !== false
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Studio-bridge ingest, symmetric to ingestAppFrame: a frame captured in the
+ * PICC-managed browser session (app.expertoption.com). Exported so the studio
+ * leg routes through the same feed-mode gate as the extension leg.
+ */
+export function ingestStudioFrame(obj) {
+  try {
+    if (!obj || typeof obj !== "object" || typeof obj.action !== "string" || !obj.action) return false
+    if (obj.message != null && typeof obj.message !== "object") return false
+    return processAppObject(obj, "studio") !== false
   } catch {
     return false
   }
@@ -721,6 +823,8 @@ export function liveSnapshot() {
     error: lastError,
     viewed: viewedAssetId,
     account,
+    feedMode,
+    legs: { extension: legAlive("extension"), studio: legAlive("studio") },
     ts: Date.now()
   }
 }
@@ -826,6 +930,16 @@ export async function stopLiveEO() {
   // keep candle buffers intact — they are being fed right now and wiping
   // them would flash every dockable to "no data".
   const upstreamActive = upstreamStats.lastAt && Date.now() - upstreamStats.lastAt < 60_000
+  // Reset per-leg accounting on a real stop so stale liveness/frame figures
+  // don't leak into the next start (tests reset by calling stopLiveEO).
+  // Buffers are preserved below while the extension is live, but the aliveness
+  // record should never carry across a stop/start boundary.
+  for (const leg of Object.values(legStats)) {
+    leg.framesSeen = 0
+    leg.accepted = 0
+    leg.lastAt = 0
+    leg.lastConsumedAt = 0
+  }
   if (!upstreamActive) {
     buffers.clear()
     lastTick.clear()
@@ -920,6 +1034,11 @@ export function liveEOStats() {
     lastSeen,
     stale: staleFlag,
     degraded: degraded ? { kind: degraded.kind, reason: degraded.reason, at: degraded.at } : null,
+    feedMode,
+    legs: {
+      extension: { ...legStats.extension },
+      studio: { ...legStats.studio }
+    },
     upstream: {
       framesSeen: upstreamStats.framesSeen,
       accepted: upstreamStats.accepted,
