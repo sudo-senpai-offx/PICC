@@ -107,7 +107,10 @@ import { restartLiveEO } from "../services/liveEO.mjs"
 let tmp
 let captureVenue
 let headlessSessionStatus
+let _approveFirstLogin
+let _resetHeadlessSessionState
 let bs
+let respondIntervention
 
 const TOKEN_A = "11111111111111111111111111111111" // already saved (before)
 const TOKEN_B = "22222222222222222222222222222222" // what the page now carries
@@ -148,6 +151,9 @@ beforeAll(async () => {
   const mod = await import("../services/captureProfiles.mjs")
   captureVenue = mod.captureVenue
   headlessSessionStatus = mod.headlessSessionStatus
+  _approveFirstLogin = mod._approveFirstLogin
+  _resetHeadlessSessionState = mod._resetHeadlessSessionState
+  respondIntervention = (await import("../services/interventions.mjs")).respondIntervention
   bs = await import("../services/browserStudio.mjs")
   await bs.openStudio({ headless: true, homepage: "" })
   await seedVault()
@@ -180,6 +186,7 @@ describe("captureVenue — real EO reference path", () => {
   })
 
   it("non-EO page → honest error with the pinned host message", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     const p = eoPage()
     p.setUrl("https://example.com/")
     const r = await captureVenue("expertoption", { page: p })
@@ -189,6 +196,7 @@ describe("captureVenue — real EO reference path", () => {
   })
 
   it("guest session → reported guest, token never saved, no revive", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     await rmSync(CREDS_FILE(), { force: true }) // no good token on disk
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B, { guest: true, active: false }))
@@ -208,6 +216,7 @@ describe("captureVenue — real EO reference path", () => {
   })
 
   it("same token re-captured → ok, tokenChanged false, NO restart (flap guard)", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     await seedTradingToken(TOKEN_A)
     const p = eoPage()
     p.setEval(scanHits(TOKEN_A))
@@ -223,6 +232,7 @@ describe("captureVenue — real EO reference path", () => {
   })
 
   it("changed token → saved, tokenChanged true, restartLiveEO({force:true}), no token in report", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     await seedTradingToken(TOKEN_A)
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B))
@@ -238,5 +248,75 @@ describe("captureVenue — real EO reference path", () => {
     expect(JSON.stringify(r)).not.toContain(TOKEN_A)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
     expect(JSON.stringify(headlessSessionStatus())).not.toContain(TOKEN_B)
+  })
+})
+
+describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
+  beforeEach(async () => {
+    restartLiveEO.mockClear()
+    await _resetHeadlessSessionState() // fresh gate state per test
+    await rmSync(CREDS_FILE(), { force: true }) // clean slate for save assertions
+  })
+
+  it("the first capture emits a real capture proposal; the browser is NEVER touched", async () => {
+    const p = eoPage()
+    p.setEval(scanHits(TOKEN_B)) // a logged-in session is RIGHT there — still gated
+    const r = await captureVenue("expertoption", { page: p })
+    expect(r).toMatchObject({ state: "pending-approval", venue: "expertoption" })
+    expect(r.proposalId).toBeTruthy()
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    // No save happened — the token file is absent or carries no expertoptionToken.
+    let file = null
+    try {
+      file = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+    } catch {
+      /* no file written — also fine */
+    }
+    expect(file?.expertoptionToken ?? "").not.toBe(TOKEN_B)
+    // The proposal sits in the REAL interventions queue, source "capture".
+    const { listInterventions } = await import("../services/interventions.mjs")
+    const q = listInterventions().proposals.find((x) => x.id === r.proposalId)
+    expect(q).toMatchObject({ source: "capture", action: "login", status: "pending" })
+  })
+
+  it("approve through the real endpoint → the real capture runs and saves", async () => {
+    const first = await captureVenue("expertoption", { page: eoPage() })
+    expect(first.state).toBe("pending-approval")
+    const { respondIntervention: respond } = await import("../services/interventions.mjs")
+    await respond({ id: first.proposalId, decision: "approve" })
+
+    await seedTradingToken(TOKEN_A)
+    const p = eoPage()
+    p.setEval(scanHits(TOKEN_B))
+    const r = await captureVenue("expertoption", { page: p })
+    expect(r.state).toBe("ok")
+    expect(r.loginApproved).toBe(true) // approval echoed honestly in the report
+    expect(r.tokenChanged).toBe(true)
+    expect(r.saved).toBe(true)
+    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
+    const saved = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+    expect(saved.expertoptionToken).toBe(TOKEN_B)
+    expect(JSON.stringify(r)).not.toContain(TOKEN_B)
+    expect(JSON.stringify(headlessSessionStatus())).not.toContain(TOKEN_B)
+  })
+
+  it("reject → state rejected and the engine ignores a waiting logged-in page", async () => {
+    const first = await captureVenue("expertoption", { page: eoPage() })
+    const { respondIntervention: respond } = await import("../services/interventions.mjs")
+    await respond({ id: first.proposalId, decision: "reject" })
+
+    const p = eoPage()
+    p.setEval(scanHits(TOKEN_B)) // live session observed — still not captured
+    const r = await captureVenue("expertoption", { page: p })
+    expect(r).toMatchObject({ state: "rejected", venue: "expertoption" })
+    expect(r.reason).toMatch(/not approved/)
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    let file = null
+    try {
+      file = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+    } catch {
+      /* no file written — also fine */
+    }
+    expect(file?.expertoptionToken ?? "").not.toBe(TOKEN_B)
   })
 })

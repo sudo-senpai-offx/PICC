@@ -187,6 +187,12 @@ const lastAutoRun = new Map() // venueId -> ts
 const lastReports = new Map() // venueId -> report (latest per-venue capture report)
 const lastTokenChange = new Map() // venueId -> iso timestamp of the LAST observed token change
 
+// T9 / REQ-E — first-login approval gate. Process-local on purpose: a fresh
+// server process asks the human again (the interventions queue is right there).
+const firstLoginApproved = new Set() // venueIds the human has approved this process
+const loginRejectedAt = new Map() // venueId -> ts of the gate's last rejection
+const REJECT_COOLDOWN_MS = 30 * 60 * 1000 // after a rejection: report rejected, re-ask later
+
 const CADENCE_MIN_MS = 60_000
 const CADENCE_MAX_MS = 24 * 60 * 60 * 1000
 
@@ -343,9 +349,15 @@ export function headlessSessionStatus() {
   for (const p of CAPTURE_PROFILES) {
     const last = lastReports.get(p.id)
     // stale is honest: a venue that CAN capture but never HAS is the stalest
-    // possible state; a not-enabled venue is not stale, it's just not enabled.
+    // possible state; a not-enabled venue is not stale, it's just not enabled;
+    // and a run that is faithfully WAITING on the human (pending-approval /
+    // rejected) is not stale either — the engine is doing exactly what it
+    // should, no capture is due.
+    const gateHeld = last && (last.state === "pending-approval" || last.state === "rejected")
     const stale = last
-      ? Date.now() - Date.parse(last.at) > refreshCadenceMs(p.id) * 3
+      ? gateHeld
+        ? false
+        : Date.now() - Date.parse(last.at) > refreshCadenceMs(p.id) * 3
       : Boolean(p.capture?.via)
     rows[p.id] = {
       venueId: p.id,
@@ -411,6 +423,43 @@ export async function captureVenue(venueId, { page } = {}) {
     return { state: "needs-credentials", venue, at }
   }
 
+  // T9 / REQ-E — first-login approval gate. The FIRST capture of a venue is a
+  // human-approval proposal in the interventions queue (source "capture",
+  // resolved through the existing respondIntervention endpoint). Until the
+  // human approves, the browser is never touched: the runner reports
+  // { state: "pending-approval" } (or { state: "rejected" } right after a
+  // rejection, with a cooldown before the gate re-asks — the queue is not
+  // spammed every refresh pass). Expiry of nothing → the approved state is
+  // process-local: a restart re-proposes once. Demo-first + "real wallet
+  // observed, never selected" are structural (demoReal:"demo-first" rows and
+  // no order/wallet-selection code anywhere in the engine).
+  if (!firstLoginApproved.has(venue)) {
+    const { proposeCaptureLogin, captureLoginApproval } = await import("./interventions.mjs")
+    const rejectedAt = loginRejectedAt.get(venue) ?? null
+    const cooldownActive = rejectedAt !== null && Date.now() - rejectedAt < REJECT_COOLDOWN_MS
+    const gate = captureLoginApproval(venue)
+    if (gate?.status === "approved") {
+      firstLoginApproved.add(venue)
+      loginRejectedAt.delete(venue)
+    } else if (cooldownActive) {
+      return { state: "rejected", venue, at, reason: `first login for ${venue} was not approved (rejected)` }
+    } else if (gate === null || (gate.status !== "rejected" && gate.status !== "interrupted")) {
+      const proposed = proposeCaptureLogin({ venueId: venue, venueName: profile.name })
+      return { state: "pending-approval", venue, at, proposalId: proposed.id }
+    } else {
+      // Gate decided NO. First run after the decision starts the cooldown and
+      // reports it; once the cooldown passes, propose() re-arms the gate and
+      // the engine asks again.
+      if (rejectedAt === null) loginRejectedAt.set(venue, Date.now())
+      if (Date.now() - loginRejectedAt.get(venue) < REJECT_COOLDOWN_MS) {
+        return { state: "rejected", venue, at, reason: `first login for ${venue} was not approved (${gate.status})` }
+      }
+      loginRejectedAt.delete(venue)
+      const proposed = proposeCaptureLogin({ venueId: venue, venueName: profile.name })
+      return { state: "pending-approval", venue, at, proposalId: proposed.id }
+    }
+  }
+
   if (profile.capture.via === "liveEO") {
     const { getCredentials: readTradingCredentials } = await import("./trading.mjs")
     const before = await readTradingCredentials()
@@ -447,6 +496,7 @@ export async function captureVenue(venueId, { page } = {}) {
       source: captured?.source ?? null,
       tokenChanged,
       reconnectTriggered,
+      loginApproved: true, // T9: the human approved this venue's first login
       account: captured?.account ?? null
     }
   }
@@ -483,9 +533,33 @@ export async function headlessSessionRefresh() {
  * Test seam — clears refresh memory so a fresh describe starts at "never run".
  * Not used by the runtime; exported for the engine's unit tests only.
  */
-export function _resetHeadlessSessionState() {
+export async function _resetHeadlessSessionState() {
   lastAutoRun.clear()
   lastReports.clear()
   lastTokenChange.clear()
   policyOverrides.clear()
+  firstLoginApproved.clear()
+  loginRejectedAt.clear()
+  try {
+    const { _resetCaptureGate } = await import("./interventions.mjs")
+    _resetCaptureGate()
+  } catch {
+    /* interventions unavailable — gate state is test-local anyway */
+  }
+}
+
+/**
+ * Test seam — approve a venue's first login by driving the REAL interventions
+ * gate (propose → respondIntervention "approve"), the same path the dashboard
+ * uses. Not used by the runtime; exported for the engine's unit tests only
+ * (same rule as _resetHeadlessSessionState).
+ */
+export async function _approveFirstLogin(venueId = "expertoption") {
+  const venue = String(venueId || "expertoption").toLowerCase()
+  if (firstLoginApproved.has(venue)) return
+  const { proposeCaptureLogin, respondIntervention } = await import("./interventions.mjs")
+  const gate = proposeCaptureLogin({ venueId: venue, venueName: byId.get(venue)?.name ?? venue })
+  await respondIntervention({ id: gate.id, decision: "approve" })
+  firstLoginApproved.add(venue)
+  loginRejectedAt.delete(venue)
 }

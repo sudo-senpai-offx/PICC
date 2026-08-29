@@ -76,6 +76,15 @@ let proposals = []
 let running = null
 let runAbort = false
 
+// Capture-login approval gate (Phase 5, spec T9 / REQ-E). The FIRST automated
+// login for a headless-capture venue must be approved by a human: the engine
+// proposes through this gate (a real proposal in the SAME queue, resolvable
+// through the SAME respondIntervention endpoint as workflow write steps) and
+// reports { state: "pending-approval" } until a decision lands. The browser is
+// never touched before approval. A decided gate re-arms lazily: propose() on a
+// decided gate creates a fresh proposal (used after a rejection cooldown).
+let captureGate = null // { venueId, proposalId, status: "pending"|"approved"|"rejected"|"interrupted" }
+
 function currentState() {
   return {
     ok: true,
@@ -272,9 +281,71 @@ export function listInterventions() {
   return currentState()
 }
 
+/**
+ * T9 — propose the FIRST automated login for a headless-capture venue. The
+ * proposal is a normal queue entry (source "capture") the human resolves with
+ * respondIntervention. Idempotent while a proposal is still pending; a decided
+ * gate re-arms with a fresh proposal on the next call (post-cooldown re-ask).
+ */
+export function proposeCaptureLogin({ venueId, venueName = venueId, tabId = null } = {}) {
+  const vid = String(venueId || "").toLowerCase()
+  if (captureGate && captureGate.venueId === vid && captureGate.status === "pending") {
+    return { id: captureGate.proposalId, venueId: vid, status: "pending" }
+  }
+  const p = newProposal({
+    workflow: { id: `capture-${vid}`, name: `${venueName} headless capture` },
+    tabId,
+    step: {
+      type: "login",
+      label: `First login — ${venueName}`,
+      risk: "high",
+      message: `Automated first login for ${venueName}. Credentials come from your vault; nothing is bought, sold or executed.`
+    },
+    stepIndex: 0
+  })
+  p.source = "capture" // distinct from workflow proposals in the queue UI
+  captureGate = { venueId: vid, proposalId: p.id, status: "pending", createdAt: Date.now() }
+  emit()
+  return { id: p.id, venueId: vid, status: "pending" }
+}
+
+/** Latest gate status for a venue: { venueId, status } or { venueId, status: null } when never asked. */
+export function captureLoginApproval(venueId) {
+  const vid = String(venueId || "").toLowerCase()
+  const status = captureGate && captureGate.venueId === vid ? captureGate.status : null
+  return { venueId: vid, status }
+}
+
+/** Test seam (also used by the engine's reset) — drops the gate + its proposals. */
+export function _resetCaptureGate() {
+  captureGate = null
+  proposals = proposals.filter((x) => x.source !== "capture")
+}
+
 export async function respondIntervention({ id, decision } = {}) {
   const p = proposals.find((x) => x.id === id && x.status === "pending")
   if (!p) throw new Error("no pending intervention with that id")
+
+  // T9 — capture-login gate proposal: no workflow is running for it, so the
+  // decision resolves the gate instead of driving a run.
+  if (captureGate && captureGate.proposalId === id) {
+    if (!["approve", "execute", "reject", "interrupt"].includes(decision)) {
+      throw new Error(`unknown decision: ${decision}`)
+    }
+    if (decision === "approve" || decision === "execute") {
+      setProposalStatus(id, decision === "approve" ? "approved" : "executed")
+      captureGate.status = "approved"
+    } else if (decision === "reject") {
+      setProposalStatus(id, "rejected")
+      captureGate.status = "rejected"
+    } else {
+      setProposalStatus(id, "interrupted")
+      captureGate.status = "interrupted"
+    }
+    emit()
+    return currentState()
+  }
+
   if (running && running.pendingId !== id) throw new Error("intervention is not for the running workflow")
 
   switch (decision) {

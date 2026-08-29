@@ -125,6 +125,55 @@ describe("interventions — review queue (human in the loop)", () => {
   })
 })
 
+describe("interventions — capture-login gate (Phase 5 T9)", () => {
+  it("proposeCaptureLogin raises a pending queue proposal and approve resolves the gate", async () => {
+    const g = m.proposeCaptureLogin({ venueId: "expertoption", venueName: "ExpertOption" })
+    expect(g.status).toBe("pending")
+    const s = m.listInterventions()
+    expect(s.proposals).toHaveLength(1)
+    expect(s.proposals[0].source).toBe("capture")
+    expect(s.proposals[0].action).toBe("login")
+    expect(s.proposals[0].status).toBe("pending")
+    expect(m.captureLoginApproval("expertoption").status).toBe("pending")
+
+    await m.respondIntervention({ id: g.id, decision: "approve" })
+    expect(m.captureLoginApproval("expertoption").status).toBe("approved")
+    expect(m.listInterventions().proposals[0].status).toBe("approved")
+  })
+
+  it("re-proposing while pending is idempotent (one queue entry, same id)", () => {
+    const a = m.proposeCaptureLogin({ venueId: "expertoption", venueName: "ExpertOption" })
+    const b = m.proposeCaptureLogin({ venueId: "expertoption", venueName: "ExpertOption" })
+    expect(b.id).toBe(a.id)
+    expect(m.listInterventions().proposals).toHaveLength(1)
+  })
+
+  it("reject resolves the gate to rejected; a later propose re-arms with a FRESH proposal", async () => {
+    const g = m.proposeCaptureLogin({ venueId: "iqoption", venueName: "IQ Option" })
+    await m.respondIntervention({ id: g.id, decision: "reject" })
+    expect(m.captureLoginApproval("iqoption").status).toBe("rejected")
+    // Decided gate → the next propose is a new pending proposal (the engine's
+    // post-cooldown re-ask path), never a replay of the decided one.
+    const again = m.proposeCaptureLogin({ venueId: "iqoption", venueName: "IQ Option" })
+    expect(again.id).not.toBe(g.id)
+    expect(again.status).toBe("pending")
+    expect(m.captureLoginApproval("iqoption").status).toBe("pending")
+  })
+
+  it("interrupt resolves the gate to interrupted; unknown decisions throw", async () => {
+    const g = m.proposeCaptureLogin({ venueId: "binance", venueName: "Binance" })
+    await expect(m.respondIntervention({ id: g.id, decision: "maybe" })).rejects.toThrow(/unknown decision/)
+    await m.respondIntervention({ id: g.id, decision: "interrupt" })
+    expect(m.captureLoginApproval("binance").status).toBe("interrupted")
+  })
+
+  it("responding to a decided capture proposal throws (already decided)", async () => {
+    const g = m.proposeCaptureLogin({ venueId: "kucoin", venueName: "KuCoin" })
+    await m.respondIntervention({ id: g.id, decision: "approve" })
+    await expect(m.respondIntervention({ id: g.id, decision: "approve" })).rejects.toThrow(/no pending intervention/)
+  })
+})
+
 describe("interventions — execution engine", () => {
   it("auto-approval runs mutating steps without pausing", async () => {
     m.saveWorkflow({ id: "wf-auto", name: "Auto flow", approval: "auto", steps: [{ type: "fill", selector: "input", value: "hello" }, { type: "notify", message: "done" }] })

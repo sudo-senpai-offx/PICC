@@ -20,7 +20,8 @@ import {
   refreshCadenceMs,
   setHeadlessSessionPolicy,
   captureVenue,
-  _resetHeadlessSessionState
+  _resetHeadlessSessionState,
+  _approveFirstLogin
 } from "../services/captureProfiles.mjs"
 import { captureExpertOptionSession, getSiteCredentials } from "../services/browserStudio.mjs"
 import { getCredentials, saveCredentials } from "../services/trading.mjs"
@@ -29,7 +30,13 @@ import { restartLiveEO } from "../services/liveEO.mjs"
 vi.mock("../services/browserStudio.mjs", () => ({
   getSiteCredentials: vi.fn(),
   captureExpertOptionSession: vi.fn(),
-  maskToken: vi.fn((t) => t ?? "")
+  maskToken: vi.fn((t) => t ?? ""),
+  // The REAL interventions module loads in this file (the T9 gate uses it) —
+  // give it the broadcast/lookup surface it statically imports.
+  studioBroadcast: vi.fn(),
+  studioIsOpen: vi.fn(() => true),
+  studioPageFor: vi.fn(() => null),
+  studioTypeText: vi.fn(async () => {})
 }))
 vi.mock("../services/trading.mjs", () => ({
   getCredentials: vi.fn(),
@@ -59,9 +66,9 @@ const PLATFORM_KINDS = {
 const TOK_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const TOK_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
-  _resetHeadlessSessionState()
+  await _resetHeadlessSessionState()
   getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
   captureExpertOptionSession.mockResolvedValue({
     ok: true,
@@ -200,6 +207,7 @@ describe("captureVenue states (T3)", () => {
   })
 
   it("guest session is reported guest — token never saved, no revive", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     captureExpertOptionSession.mockResolvedValue({
       ok: true,
@@ -217,6 +225,7 @@ describe("captureVenue states (T3)", () => {
   })
 
   it("capture throwing (host lock, no token) maps to an honest error state", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     captureExpertOptionSession.mockRejectedValue(new Error("open an app.expertoption.finance tab first"))
     const r = await captureVenue("expertoption")
@@ -227,6 +236,7 @@ describe("captureVenue states (T3)", () => {
 
 describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
   it("token changed → restartLiveEO({force:true}) and the report/status carry no token", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     getCredentials.mockResolvedValueOnce({ expertoptionToken: TOK_A }).mockResolvedValueOnce({ expertoptionToken: TOK_B })
     const reports = await headlessSessionRefresh()
@@ -246,6 +256,7 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
   })
 
   it("same token re-captured → tokenChangedAt stays null (nothing changed)", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
     await headlessSessionRefresh()
@@ -253,6 +264,7 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
   })
 
   it("same token re-captured → no restart (flap guard)", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     // before === after (capture saved what was already saved)
     getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
@@ -264,6 +276,7 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
   })
 
   it("settings-only save (no token change) → no restart — mirrors credentials.test.mjs semantics", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     let reads = 0
     getCredentials.mockImplementation(async () => {
@@ -275,25 +288,26 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
     expect(restartLiveEO).not.toHaveBeenCalled()
   })
 
-  it("cadence gate: a second pass within the cadence is skipped, after it runs again", () => {
+  it("cadence gate: a second pass within the cadence is skipped, after it runs again", async () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
       getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
       getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
 
-      // kickstart → due immediately (no prior run)
-      return headlessSessionRefresh().then(async (first) => {
-        expect(first).toHaveLength(1)
-        // 5 minutes later → still inside the 30 min cadence → skipped
-        vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"))
-        const second = await headlessSessionRefresh()
-        expect(second).toHaveLength(0)
-        // 31 minutes later → due again
-        vi.setSystemTime(new Date("2026-01-01T00:31:00.000Z"))
-        const third = await headlessSessionRefresh()
-        expect(third).toHaveLength(1)
-      })
+      // kickstart → due immediately (no prior run). The gate must be approved
+      // or this run would report pending-approval and never count as fresh.
+      await _approveFirstLogin("expertoption")
+      const first = await headlessSessionRefresh()
+      expect(first).toHaveLength(1)
+      // 5 minutes later → still inside the 30 min cadence → skipped
+      vi.setSystemTime(new Date("2026-01-01T00:05:00.000Z"))
+      const second = await headlessSessionRefresh()
+      expect(second).toHaveLength(0)
+      // 31 minutes later → due again
+      vi.setSystemTime(new Date("2026-01-01T00:31:00.000Z"))
+      const third = await headlessSessionRefresh()
+      expect(third).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }
@@ -304,5 +318,123 @@ describe("headlessSessionRefresh — scheduler wiring (T4)", () => {
     const reports = await headlessSessionRefresh()
     expect(reports).toHaveLength(0)
     expect(getSiteCredentials).not.toHaveBeenCalled()
+  })
+})
+
+describe("first-login approval gate (T9 / REQ-E)", () => {
+  it("the first capture yields a proposal + pending-approval, browser UNTOUCHED", async () => {
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    const r = await captureVenue("expertoption")
+    expect(r).toMatchObject({ state: "pending-approval", venue: "expertoption" })
+    expect(r.proposalId).toBeTruthy()
+    // The reference capture was never invoked — no login happened.
+    expect(captureExpertOptionSession).not.toHaveBeenCalled()
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    // The proposal is visible in the interventions queue, source "capture".
+    const { listInterventions } = await import("../services/interventions.mjs")
+    const q = listInterventions().proposals.find((p) => p.id === r.proposalId)
+    expect(q).toBeTruthy()
+    expect(q.source).toBe("capture")
+    expect(q.action).toBe("login")
+    expect(q.status).toBe("pending")
+  })
+
+  it("approve (real respondIntervention path) → the next capture runs and reports ok + masked", async () => {
+    const { listInterventions, respondIntervention } = await import("../services/interventions.mjs")
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    getCredentials.mockResolvedValueOnce({ expertoptionToken: TOK_A }).mockResolvedValueOnce({ expertoptionToken: TOK_B })
+    const first = await captureVenue("expertoption")
+    expect(first.state).toBe("pending-approval")
+    expect(captureExpertOptionSession).not.toHaveBeenCalled()
+
+    // The human approves through the SAME endpoint the dashboard uses.
+    await respondIntervention({ id: first.proposalId, decision: "approve" })
+
+    const r = await captureVenue("expertoption")
+    expect(r.state).toBe("ok")
+    expect(r.tokenChanged).toBe(true)
+    expect(r.loginApproved).toBe(true) // approval echoed in the report
+    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
+    expect(JSON.stringify(r)).not.toContain(TOK_A)
+    expect(JSON.stringify(r)).not.toContain(TOK_B)
+  })
+
+  it("reject → no token saved, state rejected; the cooldown suppresses re-asking", async () => {
+    const { listInterventions, respondIntervention } = await import("../services/interventions.mjs")
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    const first = await captureVenue("expertoption")
+    expect(first.state).toBe("pending-approval")
+    await respondIntervention({ id: first.proposalId, decision: "reject" })
+
+    const r = await captureVenue("expertoption")
+    expect(r).toMatchObject({ state: "rejected", venue: "expertoption" })
+    expect(captureExpertOptionSession).not.toHaveBeenCalled()
+    expect(restartLiveEO).not.toHaveBeenCalled()
+
+    // Within the cooldown, subsequent passes report rejected WITHOUT spamming
+    // the queue with a fresh proposal.
+    const again = await captureVenue("expertoption")
+    expect(again.state).toBe("rejected")
+    const captureProposals = listInterventions().proposals.filter((p) => p.source === "capture")
+    expect(captureProposals.filter((p) => p.status === "pending")).toHaveLength(0)
+  })
+
+  it("after the rejection cooldown the gate re-arms and asks again (fake timers)", async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
+      const { respondIntervention } = await import("../services/interventions.mjs")
+      getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+      const first = await captureVenue("expertoption")
+      await respondIntervention({ id: first.proposalId, decision: "reject" })
+      let r = await captureVenue("expertoption")
+      expect(r.state).toBe("rejected")
+
+      vi.setSystemTime(new Date("2026-01-01T00:31:00.000Z")) // 31 minutes later
+      r = await captureVenue("expertoption")
+      expect(r.state).toBe("pending-approval") // re-asked, honestly
+      expect(r.proposalId).not.toBe(first.proposalId) // a FRESH proposal
+
+      // And the fresh proposal can be approved to completion.
+      vi.setSystemTime(new Date("2026-01-01T00:32:00.000Z"))
+      await respondIntervention({ id: r.proposalId, decision: "approve" })
+      getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
+      const ok = await captureVenue("expertoption")
+      expect(ok.state).toBe("ok")
+      expect(ok.loginApproved).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("pending-approval does not count against the refresh cadence — the job retries next pass", async () => {
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    const first = await headlessSessionRefresh()
+    expect(first).toHaveLength(1)
+    expect(first[0].state).toBe("pending-approval")
+    // lastAutoRun is untouched (only ok/guest count) → the very next pass runs again.
+    const second = await headlessSessionRefresh()
+    expect(second).toHaveLength(1)
+    expect(second[0].state).toBe("pending-approval")
+  })
+
+  it("headlessSessionStatus reports a gate-held run as NOT stale (engine is faithfully waiting)", async () => {
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    const reports = await headlessSessionRefresh() // records lastReports, unlike a bare captureVenue
+    expect(reports[0].state).toBe("pending-approval")
+    const row = headlessSessionStatus().expertoption
+    expect(row.status).toBe("pending-approval")
+    expect(row.stale).toBe(false)
+    expect(row.lastCaptureAt).toBeTruthy() // the At of the honest pending report
+  })
+
+  it("demo-first is the structural default: server rows never touch a real wallet for trading", () => {
+    const byId = Object.fromEntries(listCaptureProfiles().map((p) => [p.id, p]))
+    for (const id of Object.keys(PLATFORM_KINDS)) {
+      expect(byId[id].demoReal).toBe("demo-first")
+    }
+    // REQ-E: no order/wallet-selection code exists anywhere in the engine —
+    // nothing in the capture path can select a real wallet for trading.
+    expect(getCaptureProfile("expertoption").kind).toBe("binary")
   })
 })

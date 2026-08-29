@@ -47,6 +47,8 @@ const HEADLESS_TEXT = {
   guest: "guest session",
   "needs-credentials": "login needed",
   "not-enabled": "not enabled",
+  "pending-approval": "awaiting approval", // T9: first-login gate — human must approve in the dashboard
+  rejected: "login rejected", // T9: cooldown before the gate re-asks
   error: "capture error"
 }
 const HEADLESS_TONE = {
@@ -55,6 +57,8 @@ const HEADLESS_TONE = {
   guest: "warn",
   "needs-credentials": "warn",
   "not-enabled": "dim",
+  "pending-approval": "warn",
+  rejected: "bad",
   error: "bad"
 }
 

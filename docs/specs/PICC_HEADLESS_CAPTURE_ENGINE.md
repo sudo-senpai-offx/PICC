@@ -435,12 +435,43 @@ real fixture/replay research exists.
   975 tests green**, `tsc -b --noEmit` exit 0. UNVERIFIED: popup/woker rendering in a real Chrome profile
   (browser-only, no DOM harness — same category as content.js; `node --check` green both files).
 
-- [ ] **T9 — First-login human-approval gate (REQ-E) (P1 · M).** Drive first login through the workflow DSL so
+- [x] **T9 — First-login human-approval gate (REQ-E) (P1 · M).** Drive first login through the workflow DSL so
   WRITE_STEPS (`interventions.mjs:39`) become approval proposals (`:235-239`); demo-first default;
   real-wallet observed, never selected-for-trading. Approval echoed in the capture report; rejected proposal
   aborts capture honestly. **Acceptance:** first capture of a venue yields a `proposal` rather than an
   auto-executed login; approve → login proceeds + token captured + masked; reject → no token saved, state
-  `rejected`; READ_STEPS (`:42`) still auto-run; existing `interventions` tests stay green.
+  `rejected`; READ_STEPS (`:42`) still auto-run; existing `interventions` tests stay green. - Done (with a
+  documented deviation): the gate lives in the interventions queue as a `source:"capture"` LOGIN proposal
+  resolved through the EXISTING `respondIntervention` endpoint — decided per VENUE at capture time (opening
+  the venue's first capture), not per write-step of a generic workflow-DSL login; the generic DSL login loop
+  stays deferred to T10/T11 while the reference venue gate is fully wired. `interventions.mjs`:
+  `proposeCaptureLogin({venueId,venueName,tabId})` emits the proposal (idempotent while one is pending; a
+  decision de-gates so the next propose re-arms), `captureLoginApproval(venueId)` reads the gate state,
+  `respondIntervention`'s capture branch maps approve/execute/reject/interrupt (anything else throws
+  `/unknown decision/`), `_resetCaptureGate()` for test isolation. `captureProfiles.mjs`: `captureVenue`
+  gates AFTER the vault gate (needs-credentials wins first) and BEFORE the liveEO hook; report surface adds
+  `pending-approval {venue,at,proposalId}` (browser UNTOUCHED — no page consulted, no save, no restart),
+  `rejected {reason}` with `REJECT_COOLDOWN_MS = 30min` before the gate re-asks (queue not spammed — no new
+  proposal while one is decided), and `ok` runs echo `loginApproved:true`. Approval is process-local: a
+  restart re-proposes once. Demo-first is structural (`demoReal:"demo-first"` rows + zero
+  order/wallet-selection code in the engine) and REAL-wallet is observed via the capture report only — there
+  is no code path that selects a wallet for trading. `headlessSessionStatus` treats gate-held runs as NOT
+  stale (status `pending-approval`/`rejected`, `stale:false`, `lastCaptureAt` = the honest held report's
+  At) — T4 cadence: held runs do NOT set `lastAutoRun`, so the refresh job retries next pass instead of
+  hiding the gate. New test seam `_approveFirstLogin(venueId)` drives the REAL propose→approve path for
+  suites that must cross the gate. Popup: `pending-approval → "awaiting approval"` (warn),
+  `rejected → "login rejected"` (bad). Tests: 5 new gate tests in `interventions.test.mjs` (17/17),
+  +7 in `captureProfiles.test.mjs` (fresh proposal + proposal visible in queue with `source:"capture"`;
+  approve via real `respondIntervention` → next run ok + masked + `loginApproved`; reject → no save + no
+  queue spam; cooldown expiry → FRESH proposal re-asks then completes; held pass doesn't count against
+  cadence; status not-stale while held; demo-first structural assertions), +3 real-harness in
+  `captureVenue.test.mjs` (first capture pending-approval with a logged-in page RIGHT there — browser never
+  touched + no token file; approve → real reference capture saves + restarts; reject → engine ignores the
+  waiting logged-in page). Existing gate-crossing suites pre-approved via the seam (4 tests in
+  `captureProfiles.test.mjs` incl. the cadence test, 4 in `captureVenue.test.mjs` — needs-credentials is
+  vault-gated and untouched). Full suite after T5–T9: **96 files / 990 tests green**,
+  `tsc -b --noEmit` exit 0. UNVERIFIED: the popup's two new labels in a real Chrome profile (browser-only,
+  no DOM harness; `node --check` green).
 
 - [ ] **T10 — Non-EO profile research: fixtures/replay (P2 · L).** For the nine non-EO venues: capture real
   login-page/DOM/WS fixtures (or documented replay) to pin `loginPage`, `storageScan` keys, `loginSignal`,
