@@ -505,7 +505,16 @@ real fixture/replay research exists.
 - [ ] **T11 — Enable iqoption full + spot capture-only from T10 (P2 · M).** Flip the matrix rows the research
   supports: `iqoption` → `full`; `binance`/`kucoin`/`okx` → `capture-only` (token capture; metrics stay P3).
   **Acceptance:** capture-only venues capture + save a token and report `state:"ok"`; metrics endpoint
-  still returns `null` (not fabricated) until their extractor lands; EO suite green.
+  still returns `null` (not fabricated) until their extractor lands; EO suite green. - **BLOCKED by T10
+  outcome** (recorded 2026-08-30): the T10 research found NO venue with a documented browser session-token
+  storage key, so "the rows the research supports" is the empty set. Promoting any row now would violate
+  T10's own acceptance (no promotion without a fixture-backed profile) and the honesty contract (a
+  capture hook cannot report `state:"ok"` on fabricated selectors). Unblocking requires a LIVE fixture
+  capture per venue (real logged-in account → record storage keys + login signal + credential shape — see
+  the fixture checklist at the end of `docs/headless-capture-venue-research.md`), plus a generic
+  fixture-driven capture hook (the open→scan→save loop deferred from T3/T9). Neither can be produced
+  from inside a test suite; both need a real session the operator must supply. Until then the four
+  `capture-only` rows keep reporting `not-enabled` honestly.
 
 - [ ] **T12 — Contract locks + docs (P2 · S).** Add pins: capture-config file schema + `VITEST` suppression;
   account-metrics record shape (no fabricated zeros); headless-status row shape; popup storage-key read
