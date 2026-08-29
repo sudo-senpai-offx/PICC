@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import type { CandleDatum, EmaDatum, VolumeDatum } from "@/components/CandlestickChart"
-import type { LiveTick } from "@/lib/liveTrading"
 import { getToken } from "@/lib/auth"
+import { subscribeTicks, useRealtimeSuite } from "./useRealtimeSuite"
 
 export type Timeframe =
   | 5 | 15 | 30 | 60 | 300 | 900 | 1800 | 3600 | 14400 | 86400 | 604800 | 2592000
@@ -234,113 +234,64 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     return () => { alive = false }
   }, [assetId, timeframe, count])
 
-  // Subscribe to SSE live ticks for real-time updates. Reconnects with capped
-  // exponential backoff — a dropped stream used to freeze the chart silently.
-  // `timeframe` is a dependency on purpose: tick bucketing must track it or the
-  // current candle gets built for a stale timeframe after a switch.
+  // Subscribe to the SHARED realtime tick bus (T8): every chart rides the one
+  // /api/trading/realtime connection the suite already opens, refcounted by
+  // assetId — the connection closes only when the last consumer leaves.
+  // `useRealtimeSuite` also reports transport health: a dropped stream flips
+  // streamError on for every chart and heals it on reconnect.
+  const { error: streamStatusError } = useRealtimeSuite()
+  useEffect(() => { setStreamError(streamStatusError) }, [streamStatusError])
+
   useEffect(() => {
-    const ctrl = new AbortController()
-    let retryTimer: ReturnType<typeof setTimeout> | null = null
-    let attempt = 0
-
-    const connect = () => {
-      const headers: Record<string, string> = {}
-      const token = getToken()
-      if (token) headers.Authorization = `Bearer ${token}`
-
-      fetch(`${BASE}/trading/realtime`, { headers, signal: ctrl.signal })
-        .then(async (res) => {
-          if (!res.ok || !res.body) throw new Error(`realtime stream failed (${res.status})`)
-          attempt = 0
-          setStreamError(null)
-          const reader = res.body.getReader()
-          const decoder = new TextDecoder()
-          let buffer = ""
-          let lastEvent = ""
-
-          for (;;) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
-            const parts = buffer.split("\n\n")
-            buffer = parts.pop() ?? ""
-
-            for (const part of parts) {
-              const evLine = part.split("\n").find((l) => l.startsWith("event:"))
-              const dataLine = part.split("\n").find((l) => l.startsWith("data:"))
-              if (evLine) lastEvent = evLine.slice(6).trim()
-              if (!dataLine) continue
-
-              if (lastEvent === "tick") {
-                try {
-                  const tick = JSON.parse(dataLine.slice(5).trim()) as LiveTick
-                  if (tick.assetId === assetId && typeof tick.price === "number" && tick.price > 0) {
-                    setLastPrice(tick.price)
-                    const tfSec = timeframe
-                    // Mixed-resolution guard: when the base series is a coarser
-                    // fallback (e.g. Yahoo daily bars), minute ticks must NOT
-                    // append buckets onto it — only the live price updates.
-                    const rtf = resolvedTimeframe ?? tfSec
-                    const bucket = Math.floor(tick.ts / 1000 / tfSec) * tfSec
-                    if (!(rtf > tfSec * 4)) {
-                      setCandles((prev) => {
-                        const next = [...prev]
-                        const last = next[next.length - 1]
-                        if (last && (last.time as unknown as number) === bucket) {
-                          next[next.length - 1] = {
-                            ...last,
-                            high: Math.max(last.high, tick.price),
-                            low: Math.min(last.low, tick.price),
-                            close: tick.price
-                          }
-                        } else if (!last || (last.time as unknown as number) < bucket) {
-                          next.push({
-                            time: bucket as unknown as import("lightweight-charts").Time,
-                            open: tick.price,
-                            high: tick.price,
-                            low: tick.price,
-                            close: tick.price
-                          })
-                          if (next.length > count) next.shift()
-                        }
-                        candlesRef.current = next
-                        return next
-                      })
-                    } else {
-                      // Coarse series — keep the displayed candle's close in
-                      // sync with the live price without mutating history.
-                      setCandles((prev) => {
-                        if (!prev.length) return prev
-                        const next = [...prev]
-                        const last = next[next.length - 1]
-                        next[next.length - 1] = { ...last, close: tick.price, high: Math.max(last.high, tick.price), low: Math.min(last.low, tick.price) }
-                        return next
-                      })
-                    }
-                  }
-                } catch {
-                  /* ignore malformed ticks */
-                }
-              }
+    // `timeframe` and `resolvedTimeframe` drive tick bucketing, so they are
+    // dependencies on purpose: after a switch the current candle must be
+    // bucketed at the new resolution, and the coarse-series guard must follow.
+    const unsubscribe = subscribeTicks(assetId, (tick) => {
+      if (typeof tick.price !== "number" || tick.price <= 0) return
+      setLastPrice(tick.price)
+      const tfSec = timeframe
+      // Mixed-resolution guard: when the base series is a coarser
+      // fallback (e.g. Yahoo daily bars), minute ticks must NOT
+      // append buckets onto it — only the live price updates.
+      const rtf = resolvedTimeframe ?? tfSec
+      const bucket = Math.floor(tick.ts / 1000 / tfSec) * tfSec
+      if (!(rtf > tfSec * 4)) {
+        setCandles((prev) => {
+          const next = [...prev]
+          const last = next[next.length - 1]
+          if (last && (last.time as unknown as number) === bucket) {
+            next[next.length - 1] = {
+              ...last,
+              high: Math.max(last.high, tick.price),
+              low: Math.min(last.low, tick.price),
+              close: tick.price
             }
+          } else if (!last || (last.time as unknown as number) < bucket) {
+            next.push({
+              time: bucket as unknown as import("lightweight-charts").Time,
+              open: tick.price,
+              high: tick.price,
+              low: tick.price,
+              close: tick.price
+            })
+            if (next.length > count) next.shift()
           }
-          // Clean server-side close still counts as stream death so we reconnect.
-          throw new Error("realtime stream ended")
+          candlesRef.current = next
+          return next
         })
-        .catch((err) => {
-          if (ctrl.signal.aborted) return // intentional close — not a failure
-          setStreamError(err instanceof Error ? err.message : "realtime stream failed")
-          const delay = Math.min(15000, 1000 * 2 ** attempt)
-          attempt += 1
-          retryTimer = setTimeout(connect, delay)
+      } else {
+        // Coarse series — keep the displayed candle's close in
+        // sync with the live price without mutating history.
+        setCandles((prev) => {
+          if (!prev.length) return prev
+          const next = [...prev]
+          const last = next[next.length - 1]
+          next[next.length - 1] = { ...last, close: tick.price, high: Math.max(last.high, tick.price), low: Math.min(last.low, tick.price) }
+          return next
         })
-    }
-
-    connect()
-    return () => {
-      ctrl.abort()
-      if (retryTimer) clearTimeout(retryTimer)
-    }
+      }
+    })
+    return unsubscribe
   }, [assetId, count, timeframe, resolvedTimeframe])
 
   const volumes = computeVolumes(candles)
