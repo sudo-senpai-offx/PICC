@@ -535,13 +535,25 @@ real fixture/replay research exists.
     it carries. The engine reports honestly either way; the live fixture checklist in the research log
     remains the operator-side verification. Binance/KuCoin/OKX promotion still needs live fixtures.
 
-- [ ] **T12 — Contract locks + docs (P2 · S).** Add pins: capture-config file schema + `VITEST` suppression;
-  account-metrics record shape (no fabricated zeros); headless-status row shape; popup storage-key read
-  list; EO-only tests that need updating (list below). Update `docs/TRADING_MULTIPLATFORM_ROADMAP.md` and
-  `docs/ARCHITECTURE.md` (headless session capture + metrics data-flow, coverage matrix, demo-first rule).
-  **Acceptance:** a deliberate violation (writing a `0` where a metric is missing, adding a message action
-  without both ends, dropping `VITEST` suppression) fails its test, then reverts to a byte-identical tree
-  green.
+- [x] **T12 — Contract locks + docs (P2 · S).** New `server/__tests__/captureContracts.test.mjs` (9 locks):
+  (1) capture-config persisted FILE schema (exact per-user `{venue → {enabled?, refreshCadenceMs?,
+  metricsCadenceMs?}}`, id lowercasing, unknown-venue drop, cadence clamp, per-user buckets preserved);
+  (2) `VITEST` disk-isolation suppression — plain vitest without the `PICC_*_DATA_DIR` vars touches
+  NEITHER `capture-config.json` NOR `account-metrics.json` (state stays in memory, files byte-identical,
+  no orphan `.tmp`); (3) account-metrics record shape — full 14-key vocabulary, absent → `null`, genuine
+  observed `0` stays `0`; (4) headless-status venue-row shape (exact 10-key set) + the endpoint's
+  `lastMetricsAt` merge; (5) popup pure-storage-reader lock — REAL `popup.js` in a vm sandbox: local
+  reads limited to the T8 mirror + relay toggle, sync reads limited to `piccSettings`, sends ONLY
+  `server-status` + `sensor-queue-depth`, never touches a storage area/key that could hold raw session
+  material. **Acceptance demonstrated:** deliberately dropping the capture-config VITEST guard → the
+  suppression lock FAILS (file appears in the real data dir under vitest); reverting to a byte-identical
+  tree (git checkout of the one line) → green again. EO-only pin list (§below) verified green and
+  UNCHANGED — the engine never touched EO-only helpers (`captureExpertOptionSession` host-check, EO URL
+  liveness, extensionIntegrity action vocabulary, executor selection). Docs updated:
+  `docs/ARCHITECTURE.md` (headless data-flow step + configured-keys / coverage-matrix / demo-first
+  design bullets) and `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (status-table row, §3.1 credential capture
+  generalized to the storageScan mechanism, Wave-3 IQ Option live-capture state). Full suite:
+  **96 files / 1012 tests green** (T12 +9), `tsc -b --noEmit` exit 0.
 
 **Existing tests that pin EO-only behavior and would need DELIBERATE updates (count them):**
 - `server/__tests__/browserStudio.login.test.mjs` — `captureExpertOptionSession` host-check (`:297`), EO

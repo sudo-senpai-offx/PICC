@@ -202,6 +202,21 @@ Connector registry (slug: expertoption | honeygain | earnapp | pawns | repocket 
    `/api/trading/status` and `POST /api/trading/pro/expertoption` — no trade messages are ever sent.
 5. `POST /api/trading/assist` answers plain-language questions with a cloud LLM when configured,
    else a local rule-based fallback (source `local`).
+6. **Headless session capture (Phase 5 engine, `docs/specs/PICC_HEADLESS_CAPTURE_ENGINE.md`).**
+   `services/captureProfiles.mjs` drives the in-app browser per venue profile on a per-user,
+   persisted cadence (`/api/trading/capture-config`). `expertoption` captures its session token
+   through the reference `captureExpertOptionSession` hook; `iqoption` through the generic
+   `browserStudio.captureViaStorageScan` hook, which reads ONLY the exact keys the profile row lists
+   in `capture.storageScan` (`ssid` cookie, `verified:false` — a non-primary research candidate that
+   self-validates at runtime). A tab without the configured keys errors honestly ("log in first"); a
+   guest page never saves. Captured tokens land in `server/data/trading-venue-tokens.json` —
+   deliberately SEPARATE from `trading-credentials.json`, because the credentials object is spread
+   into API responses and a shared map would leak raw tokens. The status surface
+   (`/api/trading/headless-status`, mirrored into the popup) reports the engine's OBSERVED state —
+   `idle` / `needs-credentials` / `not-enabled` / `guest` / `error` — plus `tokenChangedAt` (WHEN the
+   token changed) and `lastMetricsAt`, never the token value. Account metrics
+   (`/api/trading/account-metrics`, `services/accountMetrics.mjs`) are strict: an absent balance is
+   `null`, never a fabricated `0`; a genuine observed `0` stays `0`.
 
 ## Key design decisions
 
@@ -224,6 +239,19 @@ Connector registry (slug: expertoption | honeygain | earnapp | pawns | repocket 
 - **Connectors are read-only too.** The browser bridge never clicks buy/withdraw/trade; it reads the
   dashboard DOM and the page's own WebSocket traffic, normalizes it, and persists the time-series
   locally in `server/data/`. Nothing is ever executed on external platforms.
+- **Headless capture reads only configured keys.** The engine never guesses a session-token storage
+  key: every venue row lists the exact `capture.storageScan` keys to read, a missing/cross-host
+  key is an honest "log in first" error, and a captured token is never reported back through any API
+  (only `tokenChangedAt` is). Venues without fixture-backed keys stay `not-enabled`.
+- **Coverage matrix = source of truth for what capture is wired.** Ten venues in
+  `captureProfiles.mjs`: `expertoption` (full, reference liveEO hook) and `iqoption` (full,
+  storageScan) are enabled; `binance`/`kucoin`/`okx` are capture-only with ZERO documented browser
+  session keys (they report `not-enabled` honestly — the mechanism is ready, the keys are not);
+  `bybit`/`etoro`/`deriv`/`olymptrade`/`plus500` are catalog-only. Promoting a row is a data edit
+  backed by a recorded live fixture, never fabricated selectors.
+- **Demo first.** Every venue that can execute trades stays demo-gated (ExpertOption today; the
+  three-layer demo net is non-negotiable per `docs/TRADING_MULTIPLATFORM_ROADMAP.md` §4). Headless
+  capture and metrics are read-only layers — they never open an order path.
 
 ## Module contracts
 

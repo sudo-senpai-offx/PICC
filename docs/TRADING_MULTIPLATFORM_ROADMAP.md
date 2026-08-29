@@ -21,6 +21,7 @@ reference below was verified). Nothing here is speculative about the codebase's 
 | Autopilot | `services/autopilot.mjs` | ✅ Multi-asset ticks, per-asset overrides/cooldowns, stacked gates (confidence→cooldown→caps→AI→MTF→pro→sentiment→consensus→loss-breaker→regime-breaker→liveness), decision log + dry-run `/why` |
 | Venue registry | `services/brokers.mjs` → `GET /api/trading/brokers` | ✅ Live-status rows for expertoption / ccxt / paper with capability vocabulary |
 | Instrument canonicalization | `services/assetCatalog.mjs` | ✅ One alias table shared sensor↔server↔Yahoo; `canonicalAssetId / assetsEquivalent / yahooSymbolFor` |
+| Headless session engine (Phase 5) | `services/captureProfiles.mjs`, `browserStudio.captureViaStorageScan`, `services/accountMetrics.mjs` | ✅ Two full venues (`expertoption` via the reference liveEO hook, `iqoption` via the generic storageScan hook reading exactly the configured `ssid` cookie); capture-config + account-metrics + headless-status APIs; T9 first-login approval gate; per-venue tokens in a dedicated file (never in the credentials object, which leaks into API responses); metrics strict absent→null |
 
 **The one structural gap:** order execution is welded to ExpertOption's session singleton inside
 `autopilot.mjs` (`state.session = connectTradingSession(...)`, `.buy({assetId,type:"call"|"put",...})`).
@@ -134,12 +135,18 @@ Legend: 🟢 pure API · 🟡 needs local daemon/browser · 🔴 unofficial/reve
 ### Wave 3 — browser-bridge venues (PICC's unique edge)
 
 8. **Quotex / IQ Option / Olymp Trade / Deriv (DT/FX)** 🔴🟡 — same class of platform as EO.
-   Reuse the proven pipeline instead of reverse-engineering each gateway:
-   `browserStudio` persistent profile → `studioOnFrame` WS tap → per-venue frame parser module
-   (mirroring `expertoption.mjs`'s parsers: `assetsFrom/candlesFrom/openDealFrom/settlementsFrom`)
-   → same buffer contract. Execution ONLY where the venue exposes a demo-gated documented action
-   inside the tapped protocol AND the venue is added to `SITE_INDEX` with `platformKind:"binary"`
-   (the overlay honesty gate already handles this).
+   IQ Option **session capture is LIVE** (T11): token via `storageScan` (cookie `ssid`,
+   `verified:false` — a non-primary research candidate, self-validating at runtime; honest
+   "log in first" error when the cookie is absent, guests never saved). Execution is still blocked
+   on the tapped protocol — no WS bridge exists for these tokens, so the capture engine reports
+   `liveLeg:false` and never restarts anything. The rest of this class stays `not-enabled` until a
+   recorded live fixture names each venue's real storage keys. Reuse the proven pipeline instead of
+   reverse-engineering each gateway: `browserStudio` persistent profile → `studioOnFrame` WS tap →
+   per-venue frame parser module (mirroring `expertoption.mjs`'s parsers:
+   `assetsFrom/candlesFrom/openDealFrom/settlementsFrom`) → same buffer contract. Execution ONLY
+   where the venue exposes a demo-gated documented action inside the tapped protocol AND the venue
+   is added to `SITE_INDEX` with `platformKind:"binary"` (the overlay honesty gate already handles
+   this).
 9. **TradingView webhook receiver** 🟢 — inbound signal source rather than executor: new endpoint
    `POST /api/trading/signals/incoming` (HMAC-verified) feeding `recordSignal` so external alerts
    enter the same calibration ledger. Low effort, big ecosystem value.
@@ -153,10 +160,15 @@ Legend: 🟢 pure API · 🟡 needs local daemon/browser · 🔴 unofficial/reve
 
 ## 3. Autoconfiguration & adaptation (how "plug-and-play" actually feels)
 
-1. **Credential capture via extension (already built for EO)** — generalize
-   `captureExpertOptionSession` (browserStudio L3516) into per-site capture strategies registered in
-   `SITE_INDEX` entries: `{ credentialCapture: { cookies:[...], storageKeys:[...], validator: fn } }`.
-   Logging into any supported site in the PICC browser auto-populates the right vault entry.
+1. **Credential capture via extension (built for EO, generalized to a mechanism)** — the
+   reference is `captureExpertOptionSession` (browserStudio L3516->). T11 generalized it into
+   `browserStudio.captureViaStorageScan(page, cfg)`: a generic hook that reads a venue profile's
+   exact `capture.storageScan` keys (cookie / localStorage / sessionStorage) behind a host check and
+   the T9 first-login approval gate. Per-site capture strategies are now PROFILE ROW data, not
+   bespoke code — a venue is promoted by listing real, fixture-backed keys plus its login signal
+   (see the fixture checklist at the end of `docs/headless-capture-venue-research.md`). Logging into
+   a supported site in the PICC browser auto-populates the right vault entry once its keys are
+   wired.
 2. **Capability probing at connect**: after `adapter.connect()`, run a 3-step self-test
    (`instruments()` non-empty → `candles()` fresh → tiny `balance()`) and store the PASSING
    capability set — never trust static declarations alone.
