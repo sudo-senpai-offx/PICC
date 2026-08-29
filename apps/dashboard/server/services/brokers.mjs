@@ -76,6 +76,19 @@ export async function listBrokers() {
     notes: "Read-only by contract: order methods are structurally amputated before any network call."
   })
 
+  // ── Yahoo Finance — daily/weekly/monthly market data (read-only) ─────────
+  brokers.push({
+    slug: "yahoo",
+    label: "Yahoo Finance",
+    category: "market-data",
+    capabilities: ["market-data"],
+    timeframes: [86400, 604800, 2592000], // EOD candles: 1D, 1W, 1M (T7)
+    configured: true,
+    connected: true,
+    demoOnly: false,
+    notes: "Always-available EOD fallback (no auth). Delayed daily bars only — no intraday, no trading."
+  })
+
   // ── Paper engine — always-available simulation executor ──────────────────
   brokers.push({
     slug: "paper",

@@ -84,5 +84,7 @@ describe("broker adapter registry (plug-and-play venue status)", () => {
     expect(bySlug.get("expertoption").timeframes).toEqual([60, 300, 900, 3600])
     expect(bySlug.get("ccxt").timeframes).toEqual([60, 300, 900, 1800, 3600, 14400])
     expect(bySlug.get("paper").timeframes).toEqual([60, 300, 900, 3600])
+    // Yahoo joined the registry in T7 to enable 1D/1W/1M in the chart.
+    expect(bySlug.get("yahoo").timeframes).toEqual([86400, 604800, 2592000])
   })
 })
