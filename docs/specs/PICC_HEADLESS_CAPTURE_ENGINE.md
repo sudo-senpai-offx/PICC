@@ -585,6 +585,49 @@ real fixture/replay research exists.
   Added: 2 (real) + 2 (mocked) — the obsolete needs-credentials pins were replaced by the
   no-vault-entry / no-tab assertions (net +2 tests; full suite counts below).
 
+- [x] **T13 — Extension session-capture leg (fix: "still unresolved" — the studio browser is deprecated,
+  so `no-tab` persisted for EVERY venue) (P1 · M).** Live finding: `captureVenue` → `studioLivePages()` reads
+  only `studio.tabs` (the deprecated embedded studio browser). The user's venue tab lives in their REAL
+  browser, where the PICC extension already runs on every `http(s)://*/*` page. Design (user-directed):
+  **the extension becomes the PRIMARY capture source; the studio leg stays as fallback — either present is
+  functional, both is ideal.**
+  (a) **conten script observation (zero mutation).** New `scanVenueSession` in `content.js` reads ONLY the
+  configured venue keys — EO extScan `cookie:token`/`cookie:tokenDemo` plus `localStorage`/`sessionStorage`
+  `token` — plus a storage-tier guest/active account probe (mirror of `domLoginSignals`' storage tier).
+  Anchored host match `(?:^|\\.)${hostRe}$` (server `hostRe` stays unanchored because it matches full URLs
+  elsewhere); `evil-expertoption.com` must NOT match. The zero-DOM pin morphs into a zero-MUTATION lock: the
+  ONLY `document.` reference in the file is `document.cookie` inside `readStoredKeys` (pinned by
+  `extensionIntegrity.test.mjs`). Dedup is in-memory only and advances ONLY on an `ok`/`guest` server reply,
+  so guest / pending-approval re-observe next tick (15s) and a later human approval flows automatically.
+  Kill-switch `piccSessionCapture === false` (chrome.storage.local) disables scanning; scan runs on every
+  `probeServer` tick and on venue-tab visibility regained.
+  (b) **Transport.** content → worker (`capture-session` / `capture-profiles` message actions on the
+  existing `relay-flush` pattern) → `POST /api/trading/capture-session` / `GET /api/trading/capture-profiles`
+  (localhost-only + `requireAuth` + rate-limited `ext-capture` 120/min, `ext-capture-profiles` 60/min).
+  `GET /capture-profiles` returns key NAMES + hostRe + loginPage + profileKeys + enabled ONLY — never token
+  values (iqoption parameterized `ssid` shows as a name with `verified:false`; binance absent).
+  (c) **Server rules identical to the studio leg.** `captureSessionFromExtension` re-validates the venue
+  host, applies the guest decision + the T9 first-login gate, saves through the venue's OWN path
+  (`saveCredentials({expertoptionToken})` / `saveVenueToken`), applies the before/after token compare +
+  `restartLiveEO({force:true})` flap guard (proven no-op on unchanged token), and records EVERY report into
+  `lastReports` + sets `lastAutoRun` on ok/guest — so the row can never sit idle/stale after an extension
+  capture. EO binary-prefix cookie tokens are normalized to the trailing 32-hex server-side. Provenance:
+  `sourceLeg: "extension" | "studio" | null` added to every status row; the popup shows "via extension" /
+  "via studio browser" (never a guessed leg).
+  (d) **Deliberate security-boundary extension (flagged):** the earlier vault rule "extension forwards NO
+  token values" is extended per the user's explicit direction. Protections kept: endpoint localhost-only
+  AND authed AND rate-limited; the token is TRANSIENT — it rides one POST and is never written to
+  `chrome.storage` (worker storage-call count is pinned), never in popup/logs/echoes (masked server-side);
+  the zero-mutation DOM lock above stays.
+  **Tests:** new `extensionSessionCapture.test.mjs` (14) — endpoint auth/localhost surface; EO save+revive;
+  same-token no-restart (T4 flap guard); binary-prefix normalization; storageScan venue `liveLeg:false`;
+  guest not saved; hostRe mismatch refused; T9 pending-approval saves nothing; capture-profiles shape
+  (no token values anywhere); `sourceLeg` extension/studio/null provenance. Extension pins updated in
+  `extensionIntegrity.test.mjs`: action vocabulary +`capture-session`/`capture-profiles`, zero-mutation
+  lock (+`document.cookie` sentinel), built-in EO config ≡ served `extensionCaptureConfigs()` parity, worker
+  storage-call count pinned. `captureContracts.test.mjs` row-key pins amended for `sourceLeg`.
+  **Full suite below; `node --check` on content.js / background.js / popup.js green.**
+
 **Existing tests that pin EO-only behavior and would need DELIBERATE updates (count them):**
 - `server/__tests__/browserStudio.login.test.mjs` — `captureExpertOptionSession` host-check (`:297`), EO
   guest/active/account capture (`:167-287`). T2/T3 keeps these green (EO unchanged) but they pin that
@@ -636,8 +679,13 @@ real fixture/replay research exists.
   open tab instead: the logged-in tab IS the credential, and guests / token-less pages still refuse honestly.
 - Fabricated-state risk addressed head-on: the metrics store must never write `0` where a platform value is
   absent; REQ-B acceptance and a contract-lock test enforce `null`/`n/a` over zeros.
-- The extension is read-only by construction (zero DOM surface, `extensionIntegrity.test.mjs:82-96`); this
-  spec adds NO overlay/DOM automation — all automation lives server-side via `browserBridge`/`browserStudio`
-  behind the workflow approval gate.
+- The extension is read-only by construction: zero DOM MUTATION (no MutationObserver /
+  createElement / insertAdjacentHTML / .innerHTML / appendChild anywhere) and exactly ONE auditable
+  read — `document.cookie` inside `readStoredKeys` for the T13 venue-session scan (pinned by
+  `extensionIntegrity.test.mjs`). All automation lives server-side via `browserBridge`/`browserStudio` behind the
+  workflow approval gate. T13 deliberately extended the boundary (per user direction) from "no token
+  values forwarded" to "venue session tokens are observed and forwarded to the localhost-only, authed,
+  rate-limited capture endpoint" — the token stays TRANSIENT (never written to `chrome.storage`, never
+  in the popup, masked in logs/echoes) and the scan honors a user kill-switch.
 - No real-money orders — order placement is entirely out of scope; the first login defaults to
   paper/demo-first (REQ-E).

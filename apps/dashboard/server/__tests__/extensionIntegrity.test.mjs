@@ -79,18 +79,25 @@ describe("sensor extension integrity", () => {
     }
   })
 
-  it("sensor is read-only by construction — zero DOM surface (T9 lock)", () => {
+  it("sensor is read-only by construction — zero DOM MUTATION, one auditable read (T9/T13 lock)", () => {
     const src = readFileSync(join(EXT_DIR, "content.js"), "utf8")
     for (const forbidden of [
-      "document.",
       "MutationObserver",
       "createElement",
       "insertAdjacentHTML",
       ".innerHTML",
       "appendChild"
     ]) {
-      expect(src.includes(forbidden), `content.js must not touch the page DOM via ${forbidden}`).toBe(false)
+      expect(src.includes(forbidden), `content.js must not mutate the page DOM via ${forbidden}`).toBe(false)
     }
+    // T13: the ONLY `document.` reference in executable code is document.cookie
+    // inside readStoredKeys — the venue-session scan's single auditable read
+    // (querySelector, document.addEventListener, getElementById, … all fail
+    // this lock). Comments are stripped first so prose may name the API.
+    const codeOnly = src.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "")
+    const reads = codeOnly.split("document.")
+    expect(reads.length, "exactly one document. occurrence in executable code").toBe(2)
+    expect(reads[1].startsWith("cookie")).toBe(true)
     // The ONLY page-global writes are the idempotent load guard and the dead marker.
     expect(src.includes("window.__PICC_SENSOR__ = true")).toBe(true)
   })
@@ -166,6 +173,52 @@ describe("sensor extension integrity", () => {
       expect(sends.has(action), `handler ${action} is unreachable from any sender`).toBe(true)
     }
     // The full action vocabulary, pinned — adding an action must touch every side.
-    expect([...sends].sort()).toEqual(["relay-flush", "sensor-queue-depth", "server-status"])
+    expect([...sends].sort()).toEqual([
+      "capture-profiles", "capture-session", "relay-flush", "sensor-queue-depth", "server-status"
+    ])
+  })
+
+  it("T13 vault-rule guard: the venue session token is TRANSIENT — never a chrome.storage value", () => {
+    const bg = readFileSync(join(EXT_DIR, "background.js"), "utf8")
+    const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    // The capture leg adds NO storage surface: the worker's chrome.storage CALL
+    // count is pinned (heartbeat + port + install + headless-status mirror +
+    // auth read) once comments are stripped (prose may name the API). An
+    // observation stored is an observation that can leak to any extension
+    // context / UI — the token rides content→worker→server only.
+    const bgCodeOnly = bg.replace(/\/\/[^\n]*/g, "")
+    const bgStorageCalls = bgCodeOnly.match(/chrome\.storage/g) ?? []
+    expect(bgStorageCalls.length).toBe(7)
+    // The scanner keeps exactly the two guard-wrapped `store` helper hits that
+    // the chromeGuard lock above pins (set/get) — the observed token never
+    // enters extension storage by any route.
+    expect(content.includes("piccSessionCapture")).toBe(true) // user kill-switch, defaults ON
+  })
+
+  it("T13 parity: the built-in EO scan config equals the served capture-profiles entry", async () => {
+    const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    const { extensionCaptureConfigs } = await import("../services/captureProfiles.mjs")
+    const served = extensionCaptureConfigs().find((v) => v.venueId === "expertoption")
+    expect(served).toBeTruthy()
+    // The built-in fallback (used when the web app is absent) must be the
+    // server config verbatim — drift on either side breaks the honesty of
+    // extension-only mode. hostRe is compared after evaluating the JS-string
+    // escape (the built-in source may spell \. or \\. — both evaluate to the
+    // same regex source the server serves).
+    const jsStringValue = (s) => s.replace(/\\\\/g, "\\")
+    expect(jsStringValue(content).includes(`hostRe: "${served.hostRe}"`)).toBe(true)
+    for (const line of [
+      '{ type: "cookie", key: "token" }',
+      '{ type: "cookie", key: "tokenDemo" }',
+      '{ type: "localStorage", key: "token" }',
+      '{ type: "sessionStorage", key: "token" }',
+      'profileKeys: "user|account|profile|auth|session|current|me$|identity"'
+    ]) {
+      expect(content.includes(line), `built-in EO mirror keeps: ${line}`).toBe(true)
+    }
+    expect(served.keys.map((k) => `${k.type}:${k.key}`)).toEqual([
+      "cookie:token", "cookie:tokenDemo", "localStorage:token", "sessionStorage:token"
+    ])
+    expect(served.profileKeys).toBe("user|account|profile|auth|session|current|me$|identity")
   })
 })

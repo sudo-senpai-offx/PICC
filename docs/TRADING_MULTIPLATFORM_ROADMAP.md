@@ -21,7 +21,7 @@ reference below was verified). Nothing here is speculative about the codebase's 
 | Autopilot | `services/autopilot.mjs` | ✅ Multi-asset ticks, per-asset overrides/cooldowns, stacked gates (confidence→cooldown→caps→AI→MTF→pro→sentiment→consensus→loss-breaker→regime-breaker→liveness), decision log + dry-run `/why` |
 | Venue registry | `services/brokers.mjs` → `GET /api/trading/brokers` | ✅ Live-status rows for expertoption / ccxt / paper with capability vocabulary |
 | Instrument canonicalization | `services/assetCatalog.mjs` | ✅ One alias table shared sensor↔server↔Yahoo; `canonicalAssetId / assetsEquivalent / yahooSymbolFor` |
-| Headless session engine (Phase 5) | `services/captureProfiles.mjs`, `browserStudio.captureViaStorageScan`, `services/accountMetrics.mjs` | ✅ Two full venues (`expertoption` via the reference liveEO hook, `iqoption` via the generic storageScan hook reading exactly the configured `ssid` cookie); capture-config + account-metrics + headless-status APIs; T9 first-login approval gate; per-venue tokens in a dedicated file (never in the credentials object, which leaks into API responses); metrics strict absent→null. T12.1: after-login workflow — token venues need NO vault username/password; the engine captures from the venue's OWN open tab found by host (`studioLivePages`), honest `no-tab` when it isn't open |
+| Headless session engine (Phase 5) | `services/captureProfiles.mjs`, `browserStudio.captureViaStorageScan`, `services/accountMetrics.mjs` | ✅ Two full venues (`expertoption` via the reference liveEO hook, `iqoption` via the generic storageScan hook reading exactly the configured `ssid` cookie); capture-config + account-metrics + headless-status APIs; T9 first-login approval gate; per-venue tokens in a dedicated file (never in the credentials object, which leaks into API responses); metrics strict absent→null. T12.1: after-login workflow — token venues need NO vault username/password; the engine captures from the venue's OWN open tab found by host (`studioLivePages`), honest `no-tab` when it isn't open. T13: the PICC extension is the PRIMARY capture leg (`POST /api/trading/capture-session` — content script observes configured venue keys wherever the extension runs; same gate/guest/save/revive rules; `sourceLeg` provenance on status rows; token transient, never in extension storage); studio leg stays as fallback — either present is functional, both is ideal |
 
 **The one structural gap:** order execution is welded to ExpertOption's session singleton inside
 `autopilot.mjs` (`state.session = connectTradingSession(...)`, `.buy({assetId,type:"call"|"put",...})`).
@@ -172,6 +172,11 @@ Legend: 🟢 pure API · 🟡 needs local daemon/browser · 🔴 unofficial/reve
    is only a prerequisite for form-fill captures; EO/IQ capture straight from the user's open,
    logged-in tab (host-matched, `captureProfiles.resolveCapturePage` → `browserStudio.studioLivePages()`),
    so the whole flow is "log in on the venue tab once → approve once → the engine keeps it fresh".
+   T13 makes the PICC EXTENSION the primary capture source (the studio browser is deprecated): the
+   content script observes the venue tab's configured storage keys wherever the extension runs and
+   relays through the worker to `POST /api/trading/capture-session`, which runs the identical
+   gate/guest/save/revive rules and stamps `sourceLeg` on the status rows — extension leg, studio leg,
+   or both; either present is functional, both is ideal.
 2. **Capability probing at connect**: after `adapter.connect()`, run a 3-step self-test
    (`instruments()` non-empty → `candles()` fresh → tiny `balance()`) and store the PASSING
    capability set — never trust static declarations alone.

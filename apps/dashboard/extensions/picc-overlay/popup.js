@@ -101,8 +101,15 @@ function renderHeadless(st) {
       : { text: v.status, tone: "warn" }
     const stale = v.stale === true && v.status !== "not-enabled"
     const tone = stale ? "warn" : base.tone
-    const text = stale ? `${base.text} · stale` : base.text
-    const detail = `capture ${fmtTime(v.lastCaptureAt)} · metrics ${fmtTime(v.lastMetricsAt)} · token ${fmtTime(v.tokenChangedAt)}`
+    // T13: honest provenance — WHERE the session state came from. The vote is
+    // the engine's sourceLeg ("extension" = this extension on the venue tab in
+    // your browser / "studio" = the deprecated studio-browser leg / null =
+    // never captured); the popup never guesses a leg.
+    const src = v.sourceLeg === "extension" ? "via extension"
+      : v.sourceLeg === "studio" ? "via studio browser" : null
+    const prefix = src && (v.status === "ok" || v.status === "guest") ? ` (${src})` : ""
+    const text = stale ? `${base.text} · stale` : `${base.text}${prefix}`
+    const detail = `capture ${fmtTime(v.lastCaptureAt)} · metrics ${fmtTime(v.lastMetricsAt)} · token ${fmtTime(v.tokenChangedAt)}${src ? ` · ${src}` : ""}`
     addRow(v.name ?? v.venueId, text, tone, detail)
   }
 }

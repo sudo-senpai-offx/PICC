@@ -224,8 +224,11 @@ describe("capture contracts (T12 locks 1-4)", () => {
     const row = rows.expertoption
     expect(Object.keys(row).sort()).toEqual([
       "enabled", "lastCaptureAt", "lastStateAt", "name", "reason",
-      "refreshCadenceMs", "stale", "status", "tokenChangedAt", "venueId"
+      "refreshCadenceMs", "sourceLeg", "stale", "status", "tokenChangedAt", "venueId"
     ])
+    // T13 provenance: a venue that never captured reports sourceLeg null —
+    // an honest "no leg has ever captured this", never a guessed one.
+    expect(row.sourceLeg).toBeNull()
     // T11 reflect: iqoption is now a full capture venue.
     expect(rows.iqoption.status).toBe("idle")
     expect(rows.iqoption.stale).toBe(true) // CAN capture but never HAS
@@ -243,7 +246,7 @@ describe("capture contracts (T12 locks 1-4)", () => {
     const iq = res.body.venues.iqoption
     expect(Object.keys(iq).sort()).toEqual([
       "enabled", "lastCaptureAt", "lastMetricsAt", "lastStateAt", "name", "reason",
-      "refreshCadenceMs", "stale", "status", "tokenChangedAt", "venueId"
+      "refreshCadenceMs", "sourceLeg", "stale", "status", "tokenChangedAt", "venueId"
     ])
     expect(iq.lastMetricsAt).toBe("2026-08-30T12:00:00.000Z")
     expect(res.body.venues.expertoption.lastMetricsAt).toBeNull() // never observed → null

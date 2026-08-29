@@ -34,6 +34,7 @@
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
     window.removeEventListener("message", onMessage)
+    window.removeEventListener("visibilitychange", onVisible)
   }
 
   // Three failure routes, one exit: the pre-check (chrome.runtime.id becomes
@@ -105,6 +106,7 @@
     })
     if (online && wasOffline) console.info("[picc-sensor] server found via worker probe")
     if (online) flush() // drain anything queued while offline
+    scanVenueSession() // T13: venue-session observation — every probe tick, gated on online inside
   }
 
   // ── Upstream frame bridge ─────────────────────────────────────────────────
@@ -222,6 +224,190 @@
     }
     return false
   }))
+
+  // ── Venue session observation (T13) ───────────────────────────────────────
+  // The extension is the PRIMARY capture leg (the studio browser is
+  // deprecated): on every venue tab the human browses in their OWN browser it
+  // reads the venue's configured storage keys and relays a CHANGED session
+  // observation to the server through the worker (the relay-flush channel —
+  // a content-script fetch to http://localhost from an https venue page dies
+  // on CORS + mixed content). Rules:
+  //   • reads ONLY the configured keys (cookie/localStorage/sessionStorage) —
+  //     never an invented key, never a full dump;
+  //   • guest/active comes from the SAME storage-tier probe the studio hook
+  //     uses (browserStudio.mjs domLoginSignals storage tier), storage-only,
+  //     zero DOM;
+  //   • relays only when the observed token CHANGED (in-memory dedup, guards
+  //     never in storage) and only non-guest observations (guests re-observe
+  //     until the human logs in — a guest token is never saved server-side);
+  //   • the token is a transient observation: it touches content memory →
+  //     sendMessage → worker POST and NOTHING else. Never extension storage,
+  //     never the popup, never any UI.
+  //
+  // The scanner no-ops on non-venue hosts (one anchored hostname test) —
+  // ALL of the key-reading below runs ONLY on a host that matches a
+  // capture-enabled venue row.
+  const PICC_CAPTURE_BUILTIN = {
+    // EO is the reference venue. Mirror of the server's EO entry in
+    // captureProfiles.extensionCaptureConfigs() — pinned EQUAL to it by
+    // extensionIntegrity.test.mjs (built-in = server config), so the fallback
+    // used when the web app is absent cannot drift from the served one.
+    expertoption: {
+      hostRe: "expertoption\\.(com|finance)",
+      keys: [
+        { type: "cookie", key: "token" },
+        { type: "cookie", key: "tokenDemo" },
+        { type: "localStorage", key: "token" },
+        { type: "sessionStorage", key: "token" }
+      ],
+      profileKeys: "user|account|profile|auth|session|current|me$|identity"
+    }
+  }
+  let captureConfig = null // [{venueId, hostRe, keys, profileKeys, enabled}...] server view (or built-in fallback)
+  let captureConfigAt = 0
+  const CAPTURE_CFG_TTL = 5 * 60 * 1000
+  const captureSent = {} // venueId -> last relayed token (IN-MEMORY only — never persisted)
+
+  // Anchored host match: `expertoption\.(com|finance)` (as served/built-in)
+  // against the bare hostname must be a full trailing label — "evil-expertoption.com"
+  // must NOT match. The server-side hostRe is deliberately unanchored (it runs
+  // against full tab URLs where a trailing slash/query ends the match); the
+  // scanner anchors because a phishing subdomain is a real threat surface here.
+  function matchesVenueHost(hostRe, hostname) {
+    try {
+      return new RegExp(`(?:^|\\.)${hostRe}$`, "i").test(hostname || "")
+    } catch { return false }
+  }
+
+  // THE ONLY document.* access in this file (pinned by extensionIntegrity:
+  // the sentinel "document." appears exactly here). Reads the configured keys;
+  // keys are pushed in CONFIG ORDER, so the FIRST configured key that exists
+  // wins downstream — EO's list puts cookie:token first, mirroring the studio
+  // hook's preference (cookie token > tokenDemo > web-storage mirrors).
+  function readStoredKeys(keys) {
+    const found = []
+    for (const want of keys || []) {
+      if (want.type === "cookie") {
+        try {
+          document.cookie.split(";").forEach((c) => {
+            const i = c.indexOf("=")
+            if (i > 0 && c.slice(0, i).trim() === want.key) found.push({ source: "cookie", key: want.key, value: decodeURIComponent(c.slice(i + 1)) })
+          })
+        } catch { /* cookie read refused — nothing to observe this pass */ }
+      } else if (want.type === "localStorage") {
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i)
+            if (k === want.key) found.push({ source: "localStorage", key: k, value: localStorage.getItem(k) })
+          }
+        } catch { /* opaque origin — no storage to read */ }
+      } else if (want.type === "sessionStorage") {
+        try {
+          for (let i = 0; i < sessionStorage.length; i++) {
+            const k = sessionStorage.key(i)
+            if (k === want.key) found.push({ source: "sessionStorage", key: k, value: sessionStorage.getItem(k) })
+          }
+        } catch { /* opaque origin — no storage to read */ }
+      }
+    }
+    return found
+  }
+
+  // Guest/active from the storage tier only (the studio hook's DOM tier —
+  // login button/avatar — is out of reach for a zero-DOM-mutation sensor, and
+  // the SAVE decision is storage-tier anyway: a profile-shaped value under a
+  // profile key ⇒ active account; only a token with no profile ⇒ guest).
+  function probeAccountProfile(profileKeysRe) {
+    const out = { guest: true, active: false, email: null, name: null, wallet: null }
+    for (const store of [localStorage, sessionStorage]) {
+      try {
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i) || ""
+          if (!profileKeysRe.test(k)) continue
+          const raw = store.getItem(k)
+          if (!raw || raw.length < 8 || raw.length > 20000) continue
+          let obj = null
+          try { obj = JSON.parse(raw) } catch { continue }
+          if (!obj || typeof obj !== "object") continue
+          const cursor = obj.user && typeof obj.user === "object" ? obj.user : obj
+          const em = typeof cursor.email === "string" ? cursor.email : typeof cursor.mail === "string" ? cursor.mail : null
+          const nm = typeof cursor.name === "string" ? cursor.name
+            : typeof cursor.username === "string" ? cursor.username
+            : typeof cursor.first_name === "string" ? cursor.first_name
+            : typeof cursor.full_name === "string" ? cursor.full_name : null
+          if (em || nm) {
+            out.active = true
+            out.guest = false
+            if (!out.email && em) out.email = em
+            if (!out.name && nm) out.name = nm
+          }
+          const low = (raw || "").toLowerCase()
+          if (out.wallet == null && /("is_demo"\s*[:=]\s*1|"demo"\s*[:=]\s*1|"mode"\s*[:=]\s*"demo"|demo\s*account)/.test(low)) out.wallet = "demo"
+          else if (out.wallet == null && /("is_demo"\s*[:=]\s*0|"mode"\s*[:=]\s*"real"|real\s*account)/.test(low)) out.wallet = "real"
+        }
+      } catch { /* opaque origin — keep empty signals */ }
+    }
+    return out
+  }
+
+  // The server's scan config, cached in-memory with a TTL. On ANY failure the
+  // built-in EO fallback (pinned equal to the server view) is used, so the
+  // scanner keeps working with no web app present — the hybrid-independence
+  // rule: either present is functional, both is ideal.
+  async function venueScanConfig() {
+    if (captureConfig && Date.now() - captureConfigAt < CAPTURE_CFG_TTL) return captureConfig
+    let venues = null
+    try {
+      const res = await chromeGuard(() => chrome.runtime.sendMessage({ action: "capture-profiles" }))
+      if (res && Array.isArray(res.venues) && res.venues.length) venues = res.venues
+    } catch { /* worker unreachable — fall through to built-in */ }
+    captureConfig = venues || Object.entries(PICC_CAPTURE_BUILTIN).map(([venueId, cfg]) => ({
+      venueId,
+      hostRe: cfg.hostRe,
+      keys: cfg.keys,
+      profileKeys: cfg.profileKeys,
+      enabled: true
+    }))
+    captureConfigAt = Date.now()
+    return captureConfig
+  }
+
+  async function scanVenueSession() {
+    if (dead || online !== true) return // the recorder is the web app; no app, nothing to relay (retried when it appears)
+    let hostname = ""
+    try { hostname = location.hostname } catch { return }
+    const venues = await venueScanConfig()
+    const venue = venues.find((v) => v && v.enabled !== false && matchesVenueHost(v.hostRe, hostname))
+    if (!venue) return
+    store.get(["piccSessionCapture"], ({ piccSessionCapture }) => {
+      if (piccSessionCapture === false) return // user kill-switch for session capture, defaults ON
+      const hits = readStoredKeys(venue.keys)
+      if (!hits.length) return // none of the configured keys present — nothing honest to observe
+      const best = hits[0] // config order = preference order (cookie:token first for EO)
+      const account = probeAccountProfile(new RegExp(venue.profileKeys, "i"))
+      if (captureSent[venue.venueId] === best.value) return // unchanged since last relay — no noise
+      const p = chromeGuard(() => chrome.runtime.sendMessage({
+        action: "capture-session",
+        venue: venue.venueId,
+        url: location.href,
+        source: `${best.source}:${best.key}`,
+        token: best.value,
+        account: { guest: account.guest, active: account.active, email: account.email, name: account.name, wallet: account.wallet }
+      }))
+      if (p && typeof p.then === "function") {
+        p.then((res) => {
+          // Dedup ONLY on an accepted observation. A guest/pending-approval/etc.
+          // answer leaves the observation un-sent so the next tick re-observes
+          // (a fresh human login, or a later approval, flows within 15 s).
+          if (res && res.ok === true && (res.state === "ok" || res.state === "guest")) captureSent[venue.venueId] = best.value
+        }).catch(() => {})
+      }
+    })
+  }
+  // visibilitychange BUBBLES to window: the listener lives here (window), not
+  // document — the "document." sentinel is pinned to readStoredKeys only.
+  function onVisible() { scanVenueSession() }
+  window.addEventListener("visibilitychange", onVisible)
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   checkTimer = setInterval(probeServer, 15_000)

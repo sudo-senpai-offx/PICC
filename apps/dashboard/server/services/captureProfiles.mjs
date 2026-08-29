@@ -388,7 +388,12 @@ export function headlessSessionStatus() {
       tokenChangedAt: lastTokenChange.get(p.id) ?? null,
       enabled: isVenueEnabled(p.id),
       refreshCadenceMs: refreshCadenceMs(p.id),
-      stale
+      stale,
+      // T13: WHERE the last observation came from — "extension" (the PICC
+      // extension on the venue tab in the human's own browser) / "studio" (the
+      // studio-browser leg) / null (never captured). Honest provenance: the
+      // popup says "via extension" / "via studio browser", never a guessed leg.
+      sourceLeg: last?.sourceLeg ?? null
     }
   }
   return rows
@@ -400,6 +405,233 @@ export function headlessSessionStatus() {
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+/**
+ * T9 / REQ-E — the first-login approval gate, as one helper so the studio leg
+ * (captureVenue) and the T13 extension leg (captureSessionFromExtension) can
+ * never diverge. Returns { approved: true } when the human has approved this
+ * venue's first capture this process, or a full report object to return as-is
+ * when the gate is holding (pending-approval / rejected — including the
+ * rejection cooldown, which suppresses re-asking for REJECT_COOLDOWN_MS).
+ * Expiry of nothing: the approved set is process-local, so a fresh server
+ * process asks the human again (the interventions queue is right there).
+ */
+async function firstLoginGate(profile, at) {
+  const venue = profile.id
+  if (firstLoginApproved.has(venue)) return { approved: true }
+  const { proposeCaptureLogin, captureLoginApproval } = await import("./interventions.mjs")
+  const rejectedAt = loginRejectedAt.get(venue) ?? null
+  const cooldownActive = rejectedAt !== null && Date.now() - rejectedAt < REJECT_COOLDOWN_MS
+  const gate = captureLoginApproval(venue)
+  if (gate?.status === "approved") {
+    firstLoginApproved.add(venue)
+    loginRejectedAt.delete(venue)
+    return { approved: true }
+  }
+  if (cooldownActive) {
+    return { state: "rejected", venue, at, reason: `first login for ${venue} was not approved (rejected)` }
+  }
+  if (gate === null || (gate.status !== "rejected" && gate.status !== "interrupted")) {
+    const proposed = proposeCaptureLogin({ venueId: venue, venueName: profile.name })
+    return { state: "pending-approval", venue, at, proposalId: proposed.id }
+  }
+  // Gate decided NO. First run after the decision starts the cooldown and
+  // reports it; once the cooldown passes, propose() re-arms the gate and the
+  // engine asks again.
+  if (rejectedAt === null) loginRejectedAt.set(venue, Date.now())
+  if (Date.now() - loginRejectedAt.get(venue) < REJECT_COOLDOWN_MS) {
+    return { state: "rejected", venue, at, reason: `first login for ${venue} was not approved (${gate.status})` }
+  }
+  loginRejectedAt.delete(venue)
+  const proposed = proposeCaptureLogin({ venueId: venue, venueName: profile.name })
+  return { state: "pending-approval", venue, at, proposalId: proposed.id }
+}
+
+/**
+ * Shared tail of every successful capture: compare the token that was just
+ * saved against what was there before, revive the live leg on a genuine change
+ * (T4 flap guard: unchanged → NO restart), and build the report. Used by the
+ * studio leg (captureVenue) AND the extension leg (captureSessionFromExtension)
+ * so both can never diverge on save/compare/revive semantics. The returned
+ * report NEVER carries a token value, regardless of branch.
+ */
+async function finalizeCapturedToken({ venue, profile, at, before, after, source, sourceLeg, account }) {
+  const nextToken = after ?? ""
+  const tokenChanged = Boolean(nextToken) && nextToken !== (before ?? "")
+  if (tokenChanged) lastTokenChange.set(venue, at) // T8: status surface exposes WHEN (never the value)
+  let reconnectTriggered = false
+  if (profile.capture.via === "liveEO" && tokenChanged) {
+    try {
+      const { restartLiveEO } = await import("./liveEO.mjs")
+      reconnectTriggered = await restartLiveEO({ force: true })
+    } catch (err) {
+      return { state: "error", venue, at, reason: `token saved but session revive failed: ${String(err?.message ?? err)}` }
+    }
+  }
+  const report = {
+    state: "ok",
+    venue,
+    at,
+    saved: true,
+    source: source ?? null,
+    sourceLeg: sourceLeg ?? null,
+    tokenChanged,
+    reconnectTriggered,
+    loginApproved: true, // T9: the human approved this venue's first login
+    account: account ?? null
+  }
+  if (profile.capture.via !== "liveEO") report.liveLeg = false // honest: storage-scan venues have no live bridge yet
+  return report
+}
+
+/**
+ * T13 — the EXTENSION leg of venue session capture. The PICC content script
+ * runs on every venue tab the human browses (studio browser optional). It
+ * reads the venue's configured storage keys + the storage-tier account profile
+ * on that tab and relays the observation here over the authenticated localhost
+ * channel. This applies the IDENTICAL rules the studio leg runs: profile
+ * status → hostRe validation → guest decision → T9 gate → save through the
+ * venue's own path → compare/revive via finalizeCapturedToken. sourceLeg
+ * "extension" marks the status row so the surface says WHERE it came from.
+ *
+ * The token value is a transient observation: it is never logged, never echoed
+ * (the report has no token), and never written to any extension storage by the
+ * content script — the server creds store is the only resting place.
+ *
+ * @returns {{ state: "ok"|"guest"|"not-enabled"|"pending-approval"|"rejected"|"error", venue, at, ... }}
+ */
+export async function captureSessionFromExtension({ venueId, token = null, source = null, url = null, account = null }) {
+  const report = await captureSessionFromExtensionCore({ venueId, token, source, url, account })
+  // The extension leg must surface through the SAME status bookkeeping as the
+  // scheduler (headlessSessionRefresh): every observation lands in lastReports
+  // (status rows read it), and a REAL capture/guest observation resets the
+  // cadence gate so the next scheduler pass does not re-hammer the venue.
+  lastReports.set(report.venue, report)
+  if (report.state === "ok" || report.state === "guest") lastAutoRun.set(report.venue, Date.now())
+  return report
+}
+
+/** The rule body — separated so the recording wrapper above is the only writer of session state. */
+async function captureSessionFromExtensionCore({ venueId, token = null, source = null, url = null, account = null }) {
+  const venue = String(venueId || "").toLowerCase()
+  const profile = byId.get(venue)
+  const at = nowIso()
+  if (!profile) return { state: "error", venue, at, reason: "unknown venue" }
+  if (!profile.capture?.via) {
+    return { state: "not-enabled", venue, at, reason: "no capture hook for this venue" }
+  }
+
+  // Host validation: the scanner only runs on hosts matching the venue row —
+  // this is the server-side re-check so a token can never land for a venue the
+  // extension was not actually on.
+  if (url) {
+    const hostRe = profile.capture?.hostRe ? new RegExp(profile.capture.hostRe, "i") : null
+    if (hostRe && !hostRe.test(String(url))) {
+      return { state: "error", venue, at, reason: "venue URL does not match the venue row" }
+    }
+  }
+
+  // Guest sessions are observed, reported, and NEVER saved — same contract as
+  // the studio hooks (a guest token must not overwrite an active-account one).
+  // The content script derives guest/active from the SAME storage-tier probe
+  // the studio hook uses (browserStudio.mjs domLoginSignals storage tier:
+  // a profile-shaped value under user|account|... keys ⇒ active, else guest).
+  const guest = account && typeof account === "object" && account.guest === true && account.active !== true
+  if (guest) {
+    return { state: "guest", venue, at, account: sanitizeExtensionAccount(account) }
+  }
+
+  let tokenValue = String(token ?? "").slice(0, 4096)
+  if (!tokenValue) {
+    return { state: "error", venue, at, reason: "no session token observed on the venue tab" }
+  }
+  // EO tokens may carry a binary prefix before the 32-hex session id — the
+  // studio hook extracts the trailing hex run in-page; the extension leg
+  // normalizes HERE (server-side, one place) with the exact same patterns.
+  if (profile.capture.via === "liveEO") {
+    const hex32 = /^[0-9a-f]{32}$/
+    const legacy = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}::[A-Za-z0-9+/=_\-]+$/
+    const tailHex = /([0-9a-f]{32})$/
+    if (!hex32.test(tokenValue) && !legacy.test(tokenValue)) {
+      const m = tokenValue.match(tailHex)
+      if (m) tokenValue = m[1]
+    }
+  }
+
+  const gate = await firstLoginGate(profile, at)
+  if (gate.state) return gate
+
+  // Save through the venue's OWN path — identical to the studio leg, so the
+  // extension can never diverge from where/semantically the token lands.
+  let before
+  if (profile.capture.via === "liveEO") {
+    const { getCredentials, saveCredentials } = await import("./trading.mjs")
+    before = (await getCredentials())?.expertoptionToken ?? null
+    await saveCredentials({ expertoptionToken: tokenValue })
+  } else if (profile.capture.via === "storageScan") {
+    const { getVenueToken, saveVenueToken } = await import("./trading.mjs")
+    before = await getVenueToken(venue)
+    await saveVenueToken(venue, tokenValue)
+  } else {
+    return { state: "not-enabled", venue, at, reason: `capture via "${profile.capture.via}" not implemented` }
+  }
+
+  return finalizeCapturedToken({ venue, profile, at, before, after: tokenValue, source, sourceLeg: "extension", account: sanitizeExtensionAccount(account) })
+}
+
+/** Bound the extension-supplied account probe before it rides a report. */
+function sanitizeExtensionAccount(account) {
+  if (!account || typeof account !== "object") return null
+  const guest = account.guest === true && account.active !== true
+  return {
+    type: guest ? "guest" : "active",
+    guest,
+    email: typeof account.email === "string" ? account.email.slice(0, 256) : null,
+    name: typeof account.name === "string" ? account.name.slice(0, 256) : null,
+    wallet: typeof account.wallet === "string" ? account.wallet.slice(0, 32) : null,
+    balance: typeof account.balance === "string" ? account.balance.slice(0, 64) : null
+  }
+}
+
+/**
+ * T13 — the exact scan config the extension's content script needs on a venue
+ * tab. Key semantics stay server-side ONLY (the studio hooks remain the one
+ * place they are defined); this view hands the extension the keys to READ and
+ * the host pattern to match. The EO entry mirrors the reference hook's
+ * preferred reads (cookie `token` > `tokenDemo` > web-storage mirrors) plus
+ * the storage-tier profile-key regex — and is pinned equal to the extension's
+ * built-in fallback by extensionIntegrity.test.mjs (built-in = server config).
+ * Venues without configured scan keys (binance/kucoin/okx/…) are absent:
+ * there is nothing honest to read on their tabs yet.
+ */
+const EXT_PROFILE_KEYS_RE = "user|account|profile|auth|session|current|me$|identity"
+
+export function extensionCaptureConfigs() {
+  return CAPTURE_PROFILES.filter((p) => p.capture?.via && p.capture?.hostRe)
+    .map((p) => {
+      const cfg = {
+        venueId: p.id,
+        name: p.name,
+        status: p.status,
+        enabled: isVenueEnabled(p.id),
+        hostRe: p.capture.hostRe,
+        loginPage: p.capture.loginPage ?? null,
+        profileKeys: EXT_PROFILE_KEYS_RE
+      }
+      if (p.capture.via === "liveEO" && p.id === "expertoption") {
+        cfg.keys = [
+          { type: "cookie", key: "token", verified: true },
+          { type: "cookie", key: "tokenDemo", verified: true },
+          { type: "localStorage", key: "token", verified: true },
+          { type: "sessionStorage", key: "token", verified: true }
+        ]
+      } else if (Array.isArray(p.capture.storageScan)) {
+        cfg.keys = p.capture.storageScan
+      }
+      return cfg
+    })
+    .filter((c) => Array.isArray(c.keys) && c.keys.length > 0)
 }
 
 /**
@@ -466,32 +698,12 @@ export async function captureVenue(venueId, { page: explicitPage = null } = {}) 
   // process-local: a restart re-proposes once. Demo-first + "real wallet
   // observed, never selected" are structural (demoReal:"demo-first" rows and
   // no order/wallet-selection code anywhere in the engine).
-  if (!firstLoginApproved.has(venue)) {
-    const { proposeCaptureLogin, captureLoginApproval } = await import("./interventions.mjs")
-    const rejectedAt = loginRejectedAt.get(venue) ?? null
-    const cooldownActive = rejectedAt !== null && Date.now() - rejectedAt < REJECT_COOLDOWN_MS
-    const gate = captureLoginApproval(venue)
-    if (gate?.status === "approved") {
-      firstLoginApproved.add(venue)
-      loginRejectedAt.delete(venue)
-    } else if (cooldownActive) {
-      return { state: "rejected", venue, at, reason: `first login for ${venue} was not approved (rejected)` }
-    } else if (gate === null || (gate.status !== "rejected" && gate.status !== "interrupted")) {
-      const proposed = proposeCaptureLogin({ venueId: venue, venueName: profile.name })
-      return { state: "pending-approval", venue, at, proposalId: proposed.id }
-    } else {
-      // Gate decided NO. First run after the decision starts the cooldown and
-      // reports it; once the cooldown passes, propose() re-arms the gate and
-      // the engine asks again.
-      if (rejectedAt === null) loginRejectedAt.set(venue, Date.now())
-      if (Date.now() - loginRejectedAt.get(venue) < REJECT_COOLDOWN_MS) {
-        return { state: "rejected", venue, at, reason: `first login for ${venue} was not approved (${gate.status})` }
-      }
-      loginRejectedAt.delete(venue)
-      const proposed = proposeCaptureLogin({ venueId: venue, venueName: profile.name })
-      return { state: "pending-approval", venue, at, proposalId: proposed.id }
-    }
-  }
+  // T9 / REQ-E — first-login approval gate (shared with the T13 extension leg,
+  // captureSessionFromExtension: ONE approval per venue per process, both legs
+  // respect it). Until the human approves, the incoming observation is reported
+  // pending-approval and NOTHING is saved or revived.
+  const gate = await firstLoginGate(profile, at)
+  if (gate.state) return gate
 
   // Target the venue's OWN tab by host — never the active tab (the human may
   // be looking at anything; the venue tab sits logged-in in the background).
@@ -524,29 +736,16 @@ export async function captureVenue(venueId, { page: explicitPage = null } = {}) 
       return { state: "guest", venue, at, account: captured.account ?? null }
     }
     const after = await readTradingCredentials()
-    const nextToken = after?.expertoptionToken ?? ""
-    const tokenChanged = Boolean(nextToken) && nextToken !== (before?.expertoptionToken ?? "")
-    if (tokenChanged) lastTokenChange.set(venue, at) // T8: status surface exposes WHEN (never the value)
-    let reconnectTriggered = false
-    if (tokenChanged) {
-      try {
-        const { restartLiveEO } = await import("./liveEO.mjs")
-        reconnectTriggered = await restartLiveEO({ force: true })
-      } catch (err) {
-        return { state: "error", venue, at, reason: `token saved but session revive failed: ${String(err?.message ?? err)}` }
-      }
-    }
-    return {
-      state: "ok",
+    return finalizeCapturedToken({
       venue,
+      profile,
       at,
-      saved: true,
+      before: before?.expertoptionToken ?? null,
+      after: after?.expertoptionToken ?? null,
       source: captured?.source ?? null,
-      tokenChanged,
-      reconnectTriggered,
-      loginApproved: true, // T9: the human approved this venue's first login
+      sourceLeg: "studio",
       account: captured?.account ?? null
-    }
+    })
   }
 
   if (profile.capture.via === "storageScan") {
@@ -572,21 +771,16 @@ export async function captureVenue(venueId, { page: explicitPage = null } = {}) 
       return { state: "guest", venue, at, account: captured.account ?? null }
     }
     const after = await getVenueToken(venue)
-    const nextToken = after ?? ""
-    const tokenChanged = Boolean(nextToken) && nextToken !== (before ?? "")
-    if (tokenChanged) lastTokenChange.set(venue, at) // T8: status surface exposes WHEN (never the value)
-    return {
-      state: "ok",
+    return finalizeCapturedToken({
       venue,
+      profile,
       at,
-      saved: true,
+      before: before ?? null,
+      after: after ?? null,
       source: captured?.source ?? null,
-      tokenChanged,
-      reconnectTriggered: false,
-      liveLeg: false, // honest: no live bridge consumes this token yet
-      loginApproved: true, // T9: the human approved this venue's first login
+      sourceLeg: "studio",
       account: captured?.account ?? null
-    }
+    })
   }
 
   return { state: "not-enabled", venue, at, reason: `capture via "${profile.capture.via}" not implemented` }

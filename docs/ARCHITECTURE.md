@@ -95,6 +95,21 @@ design (Phase 1); all decision/display surfaces live in the web dashboard now.
 4. Settings persist in `chrome.storage.local` with MV3-safe debounced saves. The legacy suggestion
    contract (`/api/extension/suggest` + `/api/extension/confirm`) remains server-side for the
    deprecated Plasmo skeleton (`apps/extension/`) only.
+5. **Session capture (T13) — the extension is the PRIMARY headless-capture leg for a venue session
+   the user already opened in their own browser** (the deprecated studio-browser leg stays as
+   fallback — either present is functional, both is ideal). `content.js` runs on every
+   `http(s)://*/*` page and observes ONLY the venue's configured storage keys (EO extScan cookie
+   `token`/`tokenDemo` + `localStorage`/`sessionStorage` `token`) plus a storage-tier guest/active
+   probe, matching the venue host ANCHORED (`(?:^|\.)${hostRe}$` — phishing subdomains never match).
+   The worker relays the observation over the `relay-flush` channel (`capture-session` /
+   `capture-profiles`) to `POST /api/trading/capture-session` (localhost-only + auth + rate-limited);
+   the server applies the same rules as the studio leg (T9 gate, guest decision, venue's own save
+   path, flap-guarded EO revive) and stamps `sourceLeg` across the status rows. The observed token is
+   TRANSIENT: it rides one POST and is never written to `chrome.storage`, never into the popup, logs,
+   or echoes (masked server-side); the popup only ever shows "via extension" / "via studio browser".
+   5-minute TTL keeps the served scan config fresh from `/capture-profiles` when the web app is up,
+   with a server-config-pinned built-in fallback when it is not; a user kill-switch
+   (`piccSessionCapture:false`) disables scanning while the relay stays untouched.
 
 ## Data flow (billing)
 
@@ -214,7 +229,12 @@ guest page never saves. Captured tokens land in `server/data/trading-venue-token
     into API responses and a shared map would leak raw tokens. Token-capture venues need NO vault
     username/password (T12.1): the gate is T9 first-login approval + the venue's OWN open tab, found by
     host (`capture.hostRe` against `browserStudio.studioLivePages()`, never the active tab); no matching
-    tab → honest `no-tab` and a next-pass retry. The status surface
+    tab → honest `no-tab` and a next-pass retry. **T13 makes the PICC extension the PRIMARY capture
+    source** (the studio browser is deprecated): `POST /api/trading/capture-session` ingests the
+    content script's observation of the venue tab's configured storage keys (whatever site the user
+    browses, wherever the extension runs) and applies the identical gate/guest/save/revive rules; the
+    status rows carry `sourceLeg: "extension" | "studio" | null` so the popup shows an honest "via
+    extension" / "via studio browser". The status surface
     (`/api/trading/headless-status`, mirrored into the popup) reports the engine's OBSERVED state —
     `idle` / `needs-credentials` / `not-enabled` / `no-tab` / `guest` / `error` — plus `tokenChangedAt` (WHEN the
    token changed) and `lastMetricsAt`, never the token value. Account metrics

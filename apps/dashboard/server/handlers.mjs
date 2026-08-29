@@ -4377,6 +4377,57 @@ const BROWSER_ROUTES = {
     return true
   },
 
+  // T13 — extension session-capture leg. The content script observes the venue
+  // tab's configured keys + storage-tier account profile and relays the
+  // observation here (the background worker performs the POST — a content-script
+  // fetch to http://localhost from an https venue page dies on CORS + mixed
+  // content, same as relay-flush). Localhost-only AND authenticated (Bearer
+  // piccAuthToken): the payload is a transient venue session observation that
+  // is never logged or echoed — the report carries no token by construction
+  // (captureProfiles.finalizeCapturedToken guarantees it) and the response
+  // shows only state/reason/timing. The vault-rule boundary was extended by
+  // explicit product decision (spec T13): tokens now cross the extension→server
+  // channel, never chrome.storage, never any UI, never mirrored back.
+  "/api/trading/capture-session": async (req, res, parsed) => {
+    if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }
+    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
+    if (!(await requireAuth(req, res))) return true
+    const ip = clientIp(req)
+    if (rateLimited(`ext-capture:${ip}`, 120, 60_000)) {
+      writeJson(res, 429, { error: "rate limited" })
+      return true
+    }
+    const body = parsed?.body || {}
+    const { captureSessionFromExtension } = await import("./services/captureProfiles.mjs")
+    const report = await captureSessionFromExtension({
+      venueId: body.venueId,
+      token: body.token,
+      source: body.source,
+      url: body.url,
+      account: body.account
+    })
+    writeJson(res, 200, report)
+    return true
+  },
+
+  // T13 — the extension's scanner config (venue rows → keys/host patterns the
+  // content script may read). Key NAMES only, no tokens, no credentials, no
+  // values: safe to serve to the extension on the authenticated localhost
+  // channel. Absent venue = nothing honest to scan on its tabs (yet).
+  "/api/trading/capture-profiles": async (req, res, parsed) => {
+    if (req.method !== "GET") { writeJson(res, 405, { error: "GET required" }); return true }
+    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
+    if (!(await requireAuth(req, res))) return true
+    const ip = clientIp(req)
+    if (rateLimited(`ext-capture-profiles:${ip}`, 60, 60_000)) {
+      writeJson(res, 429, { error: "rate limited" })
+      return true
+    }
+    const { extensionCaptureConfigs } = await import("./services/captureProfiles.mjs")
+    writeJson(res, 200, { ok: true, venues: extensionCaptureConfigs() })
+    return true
+  },
+
   // Extension heartbeat (background.js calls this every ~12s)
   "/api/extension/heartbeat": async (req, res, parsed) => {
     if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }

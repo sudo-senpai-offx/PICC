@@ -281,6 +281,45 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
+  // T13 — venue-session observation relay (capture leg). Same channel as
+  // relay-flush: the content script observes the venue tab's configured keys +
+  // storage-tier account profile, tunnels the observation through the worker
+  // (https → localhost fetch dies on CORS/mixed content otherwise) and the
+  // server applies the identical rules the studio leg does (gate, guest, save,
+  // revive). The token is a TRANSIENT observation: it rides this one POST and
+  // is never written to extension storage — the popup never sees any of this.
+  if (msg.action === "capture-session") {
+    const body = {
+      venueId: String(msg.venue ?? "").slice(0, 64),
+      token: String(msg.token ?? "").slice(0, 4096),
+      source: msg.source ? String(msg.source).slice(0, 128) : null,
+      url: msg.url ? String(msg.url).slice(0, 2048) : null,
+      account: msg.account && typeof msg.account === "object"
+        ? {
+            guest: msg.account.guest === true,
+            active: msg.account.active === true,
+            email: typeof msg.account.email === "string" ? msg.account.email.slice(0, 256) : null,
+            name: typeof msg.account.name === "string" ? msg.account.name.slice(0, 256) : null,
+            wallet: typeof msg.account.wallet === "string" ? msg.account.wallet.slice(0, 32) : null
+          }
+        : null
+    }
+    if (!body.venueId || !body.token) { sendResponse({ ok: false, error: "incomplete observation" }); return false }
+    serverFetch("/api/trading/capture-session", { method: "POST", body })
+      .then((r) => sendResponse({ ok: r.ok === true, state: r.data?.state ?? null, reason: r.data?.reason ?? null, status: r.status ?? null }))
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message ?? err) }))
+    return true
+  }
+
+  // T13 — scanner config for the content scripts (the venue rows → keys the
+  // sensor may READ on a venue tab). Key names only, forwarded verbatim.
+  if (msg.action === "capture-profiles") {
+    serverFetch("/api/trading/capture-profiles")
+      .then((r) => sendResponse({ ok: r.ok === true, venues: r.data?.venues ?? null, status: r.status ?? null }))
+      .catch((err) => sendResponse({ ok: false, venues: null, error: String(err?.message ?? err) }))
+    return true
+  }
+
   return false
 })
 
