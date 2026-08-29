@@ -61,7 +61,9 @@ export const CAPTURE_PROFILES = [
     capture: {
       via: "liveEO",
       ref: "browserStudio.captureExpertOptionSession (browserStudio.mjs:3579-3655)",
-      note: "Reference implementation, shipped and tested. Reads the active EO studio tab's session token (cookie/localStorage/sessionStorage scan + 32-hex rank), saves non-guest tokens via trading.saveCredentials, reports guest honestly."
+      hostRe: "expertoption\\.(com|finance)",
+      loginPage: "https://app.expertoption.com/",
+      note: "Reference implementation, shipped and tested. Reads the venue's OWN EO studio tab (host-matched, never the active tab) session token (cookie/localStorage/sessionStorage scan + 32-hex rank), saves non-guest tokens via trading.saveCredentials, reports guest honestly. No vault username/password needed — the logged-in tab is the credential."
     },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     // T5: which heads consume this venue's metrics. ["ws"] = liveEO's
@@ -403,22 +405,27 @@ function nowIso() {
 /**
  * Headless token capture for one venue.
  *
- * v1 flow for `expertoption` (the only row with a `capture.via`):
- *   vault gate (getSiteCredentials) → needs-credentials when missing, NO
- *   capture attempt and NO saveCredentials call (hard constraint, spec
- *   Mechanism A) → delegate to browserStudio.captureExpertOptionSession(page),
- *   the reference implementation, on the ACTIVE studio tab → map the outcome:
- *     - guest (logged-out session)  → { state:"guest" }, token not saved
- *     - saved token                → compare before/after creds; when the
- *       token string CHANGED call restartLiveEO({force:true}) (soft reconnect
- *       preserves buffers — T4 flap guard, mirroring handlers.mjs:1292-1302);
- *       unchanged → NO restart.
+ * Gate order (token-capture venues — EO liveEO + storageScan):
+ *   profile status → [vault gate, ONLY when capture.requiresVaultCreds —
+ *   no current row form-fills] → T9 first-login approval (human decides in
+ *   the dashboard; browser never touched before that) → host-matched tab
+ *   (the venue's OWN open tab, never the active tab; no tab → honest
+ *   { state:"no-tab" }, retried next pass) → hook.
  *
- * @returns {{ state: "ok"|"guest"|"needs-credentials"|"not-enabled"|"error",
+ * Hook outcomes mapped by the runner:
+ *   - guest (logged-out session)  → { state:"guest" }, token not saved
+ *   - saved token                → compare before/after creds; when the
+ *     token string CHANGED call restartLiveEO({force:true}) (soft reconnect
+ *     preserves buffers — T4 flap guard, mirroring handlers.mjs:1292-1302);
+ *     unchanged → NO restart.
+ *   - storageScan venues have NO live leg: reconnectTriggered stays false
+ *     and the report says liveLeg:false instead of pretending a restart.
+ *
+ * @returns {{ state: "ok"|"guest"|"needs-credentials"|"not-enabled"|"no-tab"|"error",
  *             venue: string, at: string, ... }} — token value NEVER present,
  *   regardless of branch.
  */
-export async function captureVenue(venueId, { page } = {}) {
+export async function captureVenue(venueId, { page: explicitPage = null } = {}) {
   const venue = String(venueId || "").toLowerCase()
   const profile = byId.get(venue)
   const at = nowIso()
@@ -433,11 +440,20 @@ export async function captureVenue(venueId, { page } = {}) {
     return { state: "not-enabled", venue, at, reason: "no capture hook for this venue" }
   }
 
-  // Vault gate — never fabricate login, never capture without saved creds.
-  const { getSiteCredentials } = await import("./browserStudio.mjs")
-  const creds = await getSiteCredentials(venue)
-  if (!creds || !creds.username || !creds.password) {
-    return { state: "needs-credentials", venue, at }
+  // Vault gate — ONLY for venues whose capture hook form-fills a login
+  // (profile.capture.requiresVaultCreds; no current row works that way). The
+  // EO (liveEO) and storageScan hooks OBSERVE a session the human already
+  // opened in the PICC browser: their real gates are the T9 approval below
+  // plus host-matched tab presence, and the hooks themselves refuse guests and
+  // token-less pages. The blanket vault gate historically stopped EO cold
+  // ("login needed · stale" forever after a manual relog) because no
+  // username/password vault entry exists for a venue nobody form-fills.
+  if (profile.capture?.requiresVaultCreds) {
+    const { getSiteCredentials } = await import("./browserStudio.mjs")
+    const creds = await getSiteCredentials(venue)
+    if (!creds || !creds.username || !creds.password) {
+      return { state: "needs-credentials", venue, at }
+    }
   }
 
   // T9 / REQ-E — first-login approval gate. The FIRST capture of a venue is a
@@ -477,13 +493,28 @@ export async function captureVenue(venueId, { page } = {}) {
     }
   }
 
+  // Target the venue's OWN tab by host — never the active tab (the human may
+  // be looking at anything; the venue tab sits logged-in in the background).
+  // An explicit page (tests / direct callers) is trusted as-is: the hook
+  // validates its host. No matching tab → honest no-tab; the next scheduler
+  // pass re-tries instead of grabbing an unrelated page.
+  const targetPage = await resolveCapturePage(profile, explicitPage)
+  if (!targetPage) {
+    return {
+      state: "no-tab",
+      venue,
+      at,
+      reason: `no ${profile.name} tab in the PICC browser — open ${profile.capture?.loginPage ?? "the venue"} and log in first`
+    }
+  }
+
   if (profile.capture.via === "liveEO") {
     const { getCredentials: readTradingCredentials } = await import("./trading.mjs")
     const before = await readTradingCredentials()
     const { captureExpertOptionSession } = await import("./browserStudio.mjs")
     let captured
     try {
-      captured = await captureExpertOptionSession(page)
+      captured = await captureExpertOptionSession(targetPage)
     } catch (err) {
       return { state: "error", venue, at, reason: String(err?.message ?? err) }
     }
@@ -531,7 +562,7 @@ export async function captureVenue(venueId, { page } = {}) {
     const { captureViaStorageScan } = await import("./browserStudio.mjs")
     let captured
     try {
-      captured = await captureViaStorageScan(page, { ...profile.capture, venueId: venue, name: profile.name })
+      captured = await captureViaStorageScan(targetPage, { ...profile.capture, venueId: venue, name: profile.name })
     } catch (err) {
       return { state: "error", venue, at, reason: String(err?.message ?? err) }
     }
@@ -559,6 +590,31 @@ export async function captureVenue(venueId, { page } = {}) {
   }
 
   return { state: "not-enabled", venue, at, reason: `capture via "${profile.capture.via}" not implemented` }
+}
+
+/**
+ * Pick the page a capture hook should read. An explicit live page (tests /
+ * direct callers) wins and is trusted as-is — the hook validates its host.
+ * Otherwise the venue's host pattern (capture.hostRe, e.g. EO
+ * "expertoption\\.(com|finance)", IQ "iqoption\\.com") is matched against
+ * every tracked live studio tab: the user's open, logged-in venue tab,
+ * regardless of which tab is focused. Null → no matching tab exists.
+ */
+async function resolveCapturePage(profile, page) {
+  if (page && typeof page.isClosed === "function" && !page.isClosed()) return page
+  const hostRe = profile.capture?.hostRe ? new RegExp(profile.capture.hostRe, "i") : null
+  if (!hostRe) return null // no host knowledge → caller must hand us a page
+  const { studioLivePages } = await import("./browserStudio.mjs")
+  const candidates = await studioLivePages()
+  for (const p of candidates ?? []) {
+    if (!p || (typeof p.isClosed === "function" && p.isClosed())) continue
+    try {
+      if (hostRe.test(String(p.url?.() ?? ""))) return p
+    } catch {
+      /* unreadable url — skip this tab */
+    }
+  }
+  return null
 }
 
 /**

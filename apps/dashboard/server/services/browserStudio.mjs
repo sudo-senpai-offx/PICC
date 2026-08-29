@@ -1015,6 +1015,22 @@ function activePage() {
   return studio.tabs.find((t) => t.id === studio.activeId)?.page ?? null
 }
 
+/**
+ * Every live studio tab's page — the whole shared-browser page set, not just
+ * the ACTIVE tab. Headless capture runners use this to find a venue's OWN tab
+ * by host: the user leaves the venue logged in and open, while the focused
+ * tab may be anything. Reconciles user-opened tabs first (syncTabs), then
+ * returns only live pages.
+ */
+export async function studioLivePages() {
+  try {
+    await syncTabs()
+  } catch {
+    /* browser bridge unavailable — return what we already track */
+  }
+  return studio.tabs.map((t) => t.page).filter(livePage)
+}
+
 const livePage = (p) => Boolean(p && !p.isClosed())
 
 // ---------------------------------------------------------------------

@@ -209,11 +209,14 @@ Connector registry (slug: expertoption | honeygain | earnapp | pawns | repocket 
    `browserStudio.captureViaStorageScan` hook, which reads ONLY the exact keys the profile row lists
    in `capture.storageScan` (`ssid` cookie, `verified:false` — a non-primary research candidate that
    self-validates at runtime). A tab without the configured keys errors honestly ("log in first"); a
-   guest page never saves. Captured tokens land in `server/data/trading-venue-tokens.json` —
-   deliberately SEPARATE from `trading-credentials.json`, because the credentials object is spread
-   into API responses and a shared map would leak raw tokens. The status surface
-   (`/api/trading/headless-status`, mirrored into the popup) reports the engine's OBSERVED state —
-   `idle` / `needs-credentials` / `not-enabled` / `guest` / `error` — plus `tokenChangedAt` (WHEN the
+guest page never saves. Captured tokens land in `server/data/trading-venue-tokens.json` —
+    deliberately SEPARATE from `trading-credentials.json`, because the credentials object is spread
+    into API responses and a shared map would leak raw tokens. Token-capture venues need NO vault
+    username/password (T12.1): the gate is T9 first-login approval + the venue's OWN open tab, found by
+    host (`capture.hostRe` against `browserStudio.studioLivePages()`, never the active tab); no matching
+    tab → honest `no-tab` and a next-pass retry. The status surface
+    (`/api/trading/headless-status`, mirrored into the popup) reports the engine's OBSERVED state —
+    `idle` / `needs-credentials` / `not-enabled` / `no-tab` / `guest` / `error` — plus `tokenChangedAt` (WHEN the
    token changed) and `lastMetricsAt`, never the token value. Account metrics
    (`/api/trading/account-metrics`, `services/accountMetrics.mjs`) are strict: an absent balance is
    `null`, never a fabricated `0`; a genuine observed `0` stays `0`.

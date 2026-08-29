@@ -128,11 +128,16 @@ at `:3520-3528`, and the generic `studioOpenSite`/`studioGoto`/`studioAutofill` 
 `:2771-2780`) drive the browser. `fillLoginFields` (`:2728-2764`) is the generic form filler for non-Google
 venues. The per-platform profile is a NEW seam that parameterizes what today is EO-hardcoded.
 
-**Missing vault credentials — honest state (hard constraint):** when `getSiteCredentials(siteId)`
-(`browserStudio.mjs:126-131`) returns null for a venue scheduled for capture, the engine does NOT fabricate
-login. It records `{ state: "needs-credentials", venue, at }` and stops. No token is saved, no session is
-claimed. This surfaces in the status endpoint and REQ-D rows as "needs credentials", never as a false
-"connected".
+**Missing vault credentials — honest state (hard constraint, form-fill venues):** when the venue's capture
+hook form-fills a login (`capture.requiresVaultCreds`) and `getSiteCredentials(siteId)`
+(`browserStudio.mjs:126-131`) returns null, the engine does NOT fabricate login. It records
+`{ state: "needs-credentials", venue, at }` and stops. No token is saved, no session is claimed. This
+surfaces in the status endpoint and REQ-D rows as "needs credentials", never as a false "connected".
+**Token-capture venues (T12.1):** EO (`liveEO`) and storageScan venues OBSERVE a session the human already
+opened in the PICC browser — their gate is T9 approval + a host-matched tab (`capture.hostRe`, resolved via
+`studioLivePages()`), with the hooks themselves refusing guests and token-less pages. No matching tab →
+honest `{ state:"no-tab" }`; capability is never fabricated, and the vault's username/password is not a
+prerequisite for a venue nobody form-fills.
 
 **Drive/refresh cadence:** a new scheduler job (registered alongside `ccxt-market-data`,
 `scheduler.mjs:304-315`) `"headless-session-refresh"` iterates enabled venues at their configured cadence
@@ -201,7 +206,7 @@ untouched. The extension surfaces headless-session state WITHOUT a new message a
 vocabulary is pinned at `extensionIntegrity.test.mjs:169`). Concretely:
 - Background worker (`background.js`) polls a new read-only, authenticated, **localhost-gated** server
   endpoint `GET /api/trading/headless-status` (rows: `{ venueId, status: "ok"|"needs-credentials"|
-  "not-enabled"|"error", lastCaptureAt, tokenChangedAt, lastMetricsAt, stale }`) and writes the result to
+  "not-enabled"|"no-tab"|"error", lastCaptureAt, tokenChangedAt, lastMetricsAt, stale }`) and writes the result to
   `chrome.storage.local` under `piccHeadlessStatus`.
 - The popup (`popup.js`) reads `piccHeadlessStatus` from storage (the storage-key read list is NOT pinned
   by `extensionIntegrity`; the pinned set is the message-action vocabulary at `:169` and the zero-DOM
@@ -326,7 +331,8 @@ real fixture/replay research exists.
   harness, browserBridge mocked, tmp data dirs): missing-creds short-circuit incl. no token write,
   non-EO host → reason matches `/app\.expertoption\.(com|finance)/`, guest never saved, same-token flap
   guard, changed token → saved on disk + `restartLiveEO({force:true})` + no token in report/status
-  (`JSON.stringify` asserted).
+  (`JSON.stringify` asserted). **Superseded (T12.1):** the blanket vault gate applies only to form-fill
+  rows now (`capture.requiresVaultCreds`); token-capture venues gate on T9 approval + a host-matched tab.
 
 - [x] **T4 — Session-refresh scheduler + token-change revive (P1 · M).** New `"headless-session-refresh"` job
   (pattern of `scheduler.mjs:304-315`) iterating enabled venues at their cadence; on capture, when EO token
@@ -449,11 +455,12 @@ real fixture/replay research exists.
   decision de-gates so the next propose re-arms), `captureLoginApproval(venueId)` reads the gate state,
   `respondIntervention`'s capture branch maps approve/execute/reject/interrupt (anything else throws
   `/unknown decision/`), `_resetCaptureGate()` for test isolation. `captureProfiles.mjs`: `captureVenue`
-  gates AFTER the vault gate (needs-credentials wins first) and BEFORE the liveEO hook; report surface adds
-  `pending-approval {venue,at,proposalId}` (browser UNTOUCHED — no page consulted, no save, no restart),
-  `rejected {reason}` with `REJECT_COOLDOWN_MS = 30min` before the gate re-asks (queue not spammed — no new
-  proposal while one is decided), and `ok` runs echo `loginApproved:true`. Approval is process-local: a
-  restart re-proposes once. Demo-first is structural (`demoReal:"demo-first"` rows + zero
+  gates AFTER the vault gate (needs-credentials wins first) and BEFORE the liveEO hook **(T12.1: the vault
+  gate is form-fill-only now — token-capture venues resolve their host-matched tab after approval)**;
+  report surface adds `pending-approval {venue,at,proposalId}` (browser UNTOUCHED — no page consulted, no
+  save, no restart), `rejected {reason}` with `REJECT_COOLDOWN_MS = 30min` before the gate re-asks (queue
+  not spammed — no new proposal while one is decided), and `ok` runs echo `loginApproved:true`. Approval is
+  process-local: a restart re-proposes once. Demo-first is structural (`demoReal:"demo-first"` rows + zero
   order/wallet-selection code in the engine) and REAL-wallet is observed via the capture report only — there
   is no code path that selects a wallet for trading. `headlessSessionStatus` treats gate-held runs as NOT
   stale (status `pending-approval`/`rejected`, `stale:false`, `lastCaptureAt` = the honest held report's
@@ -550,10 +557,33 @@ real fixture/replay research exists.
   tree (git checkout of the one line) → green again. EO-only pin list (§below) verified green and
   UNCHANGED — the engine never touched EO-only helpers (`captureExpertOptionSession` host-check, EO URL
   liveness, extensionIntegrity action vocabulary, executor selection). Docs updated:
-  `docs/ARCHITECTURE.md` (headless data-flow step + configured-keys / coverage-matrix / demo-first
-  design bullets) and `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (status-table row, §3.1 credential capture
+`docs/ARCHITECTURE.md` (headless data-flow step + configured-keys / coverage-matrix / demo-first design
+  bullets) and `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (status-table row, §3.1 credential capture
   generalized to the storageScan mechanism, Wave-3 IQ Option live-capture state). Full suite:
   **96 files / 1012 tests green** (T12 +9), `tsc -b --noEmit` exit 0.
+
+- [x] **T12.1 — After-login capture + host-matched tab targeting (fix: "login needed · stale" forever after a
+  manual relog) (P1 · M).** Live finding: with expertoption left logged in and open in the PICC browser, the
+  status endpoint still reported `needs-credentials`/stale because the legacy form-fill vault gate demanded a
+  `username`+`password` entry in `browser-credentials.json` before the capture hook ever ran — no venue the
+  user form-fills has such an entry, so the engine never looked at the tab. Fix + scope:
+  (a) **Vault gate is form-fill-only now.** `captureVenue` runs the vault gate ONLY when
+  `profile.capture.requiresVaultCreds` (no row sets it). Token-capture venues (EO `liveEO` + storageScan)
+  observe a session the human already opened: their real gates are the T9 approval + a host-matched tab, and
+  the hooks themselves refuse guests and token-less pages. Capability is still NOT fabricated (REQ-D), but the
+  vault is not the gate for a venue nobody fills a form for.
+  (b) **Host-matched tab targeting.** New `browserStudio.studioLivePages()` returns every live studio tab;
+  `captureVenue` resolves `profile.capture.hostRe` against those tabs (EO `expertoption\.(com|finance)`, IQ
+  `iqoption\.com`). No matching tab → honest `{ state:"no-tab" }` (added to the status + popup maps),
+  retried next pass. An explicit page (tests / direct callers) is trusted as-is and the hook validates its
+  host.
+  (c) **Workflow result:** relog into the venue once by hand → the next scheduler pass (or manual status read)
+  captures the real session with zero token pasting. Guest / no-key pages still refuse honestly; never
+  fabricated, never token-in-report. **Tests:** `captureVenue.test.mjs` — empty-vault + logged-in tab → `ok`
+  with `restartLiveEO`, no matching tab → `no-tab` (real hooks); `captureProfiles.test.mjs` — no-vault-entry
+  is NOT vault-gated, host-matched tab handed to `captureViaStorageScan`, approved-but-no-tab → `no-tab`.
+  Added: 2 (real) + 2 (mocked) — the obsolete needs-credentials pins were replaced by the
+  no-vault-entry / no-tab assertions (net +2 tests; full suite counts below).
 
 **Existing tests that pin EO-only behavior and would need DELIBERATE updates (count them):**
 - `server/__tests__/browserStudio.login.test.mjs` — `captureExpertOptionSession` host-check (`:297`), EO
@@ -600,9 +630,10 @@ real fixture/replay research exists.
   and the human-approval gate on mutating steps: untouched and preserved.
 - Token values never enter this spec, logs, or responses — masking at `handlers.mjs:1279,1303` stays; token
   values are never logged by the capture or refresh path (a grep-the-write-path guard test is a T12 pin).
-- Credentials for headless logins come ONLY from the vault (`browser-credentials.json`); when vault creds
-  are missing the engine reports an honest `needs-credentials` state — it never fabricates a login or a
-  session.
+- Credentials for FORM-FILL headless logins come ONLY from the vault (`browser-credentials.json`); when
+  those vault creds are missing the engine reports an honest `needs-credentials` state — it never fabricates
+  a login or a session. Token-capture venues (EO + storageScan, T12.1) gate on T9 approval + a host-matched
+  open tab instead: the logged-in tab IS the credential, and guests / token-less pages still refuse honestly.
 - Fabricated-state risk addressed head-on: the metrics store must never write `0` where a platform value is
   absent; REQ-B acceptance and a contract-lock test enforce `null`/`n/a` over zeros.
 - The extension is read-only by construction (zero DOM surface, `extensionIntegrity.test.mjs:82-96`); this

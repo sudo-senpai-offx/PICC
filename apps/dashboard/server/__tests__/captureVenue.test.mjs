@@ -4,10 +4,11 @@
 // trading.mjs getCredentials/saveCredentials on a tmp data dir, and liveEO
 // vi.mocked so the revive wiring is asserted rather than a real socket session.
 //
-// Covered: missing vault creds → needs-credentials with NO capture/save; guest
-// session never saved; same-token re-capture → no revive (flap guard); changed
-// token → restartLiveEO({force:true}) + observable token save; non-EO host →
-// honest error with the pinned message; token never in any returned report.
+// Covered: empty vault + logged-in tab → capture still runs (after-login
+// workflow, T12.1); no matching tab → honest no-tab; guest session never
+// saved; same-token re-capture → no revive (flap guard); changed token →
+// restartLiveEO({force:true}) + observable token save; non-EO host → honest
+// error with the pinned message; token never in any returned report.
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -175,14 +176,42 @@ beforeEach(() => {
 })
 
 describe("captureVenue — real EO reference path", () => {
-  it("missing vault credentials → needs-credentials, NO capture, NO save", async () => {
-    await writeFile(VAULT_FILE(), JSON.stringify({}))
-    const r = await captureVenue("expertoption", { page: eoPage() })
-    expect(r).toMatchObject({ state: "needs-credentials", venue: "expertoption" })
-    expect(r.at).toBeTruthy()
-    // Nothing captured, nothing saved (nostroke on the token file).
-    expect(restartLiveEO).not.toHaveBeenCalled()
+  it("vault has NO expertoption entry — the logged-in tab alone drives capture (after-login workflow)", async () => {
+    // The user logged into EO by hand in the PICC browser; no username/password
+    // was ever pasted into the vault. The vault gate must not block: the REAL
+    // session on the open EO tab IS the credential. (Regression: EO showed
+    // "login needed · stale" forever after relogging because the legacy
+    // form-fill vault gate stopped the engine before it ever looked at the tab.)
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+    await writeFile(VAULT_FILE(), JSON.stringify({})) // no expertoption entry at all
+    await seedTradingToken(TOKEN_A)
+    const p = eoPage()
+    p.setEval(scanHits(TOKEN_B))
+    const r = await captureVenue("expertoption", { page: p })
+    expect(r.state).toBe("ok")
+    expect(r.saved).toBe(true)
+    expect(r.tokenChanged).toBe(true)
+    expect(r.reconnectTriggered).toBe(true) // token changed → liveEO restart
+    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
+    const saved = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+    expect(saved.expertoptionToken).toBe(TOKEN_B)
+    expect(JSON.stringify(r)).not.toContain(TOKEN_B)
     await seedVault() // restore for the rest of the suite
+  })
+
+  it("no matching venue tab → honest no-tab, nothing touched, no revive", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+    // The only tracked studio tab points at a non-EO site — the engine must
+    // NOT grab the active tab (the user may be looking at anything); it asks
+    // for the venue's own tab instead.
+    const p = eoPage()
+    p.setUrl("https://example.com/")
+    const r = await captureVenue("expertoption") // NO page given — host lookup decides
+    expect(r.state).toBe("no-tab")
+    expect(r.venue).toBe("expertoption")
+    expect(r.reason).toMatch(/Ex[ée]xpertOption|expertoption/i)
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    expect(JSON.stringify(r)).not.toContain(TOKEN_B)
   })
 
   it("non-EO page → honest error with the pinned host message", async () => {
@@ -346,7 +375,9 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     restartLiveEO.mockClear()
     await _resetHeadlessSessionState()
     await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
-    // Vault needs IQ credentials for the vault gate, EO creds for the other describes.
+    // Vault entries are vestigial for token-capture venues now (T12.1: the
+    // logged-in tab is the credential, not the vault) — seeded for parity
+    // with the EO describe.
     await writeFile(
       VAULT_FILE(),
       JSON.stringify({

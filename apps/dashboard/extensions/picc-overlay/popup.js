@@ -47,6 +47,7 @@ const HEADLESS_TEXT = {
   guest: "guest session",
   "needs-credentials": "login needed",
   "not-enabled": "not enabled",
+  "no-tab": "open venue tab", // T12.1: engine targets the venue's OWN open tab, never the active one
   "pending-approval": "awaiting approval", // T9: first-login gate — human must approve in the dashboard
   rejected: "login rejected", // T9: cooldown before the gate re-asks
   error: "capture error"
@@ -57,6 +58,7 @@ const HEADLESS_TONE = {
   guest: "warn",
   "needs-credentials": "warn",
   "not-enabled": "dim",
+  "no-tab": "warn",
   "pending-approval": "warn",
   rejected: "bad",
   error: "bad"

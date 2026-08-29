@@ -21,7 +21,7 @@ reference below was verified). Nothing here is speculative about the codebase's 
 | Autopilot | `services/autopilot.mjs` | ✅ Multi-asset ticks, per-asset overrides/cooldowns, stacked gates (confidence→cooldown→caps→AI→MTF→pro→sentiment→consensus→loss-breaker→regime-breaker→liveness), decision log + dry-run `/why` |
 | Venue registry | `services/brokers.mjs` → `GET /api/trading/brokers` | ✅ Live-status rows for expertoption / ccxt / paper with capability vocabulary |
 | Instrument canonicalization | `services/assetCatalog.mjs` | ✅ One alias table shared sensor↔server↔Yahoo; `canonicalAssetId / assetsEquivalent / yahooSymbolFor` |
-| Headless session engine (Phase 5) | `services/captureProfiles.mjs`, `browserStudio.captureViaStorageScan`, `services/accountMetrics.mjs` | ✅ Two full venues (`expertoption` via the reference liveEO hook, `iqoption` via the generic storageScan hook reading exactly the configured `ssid` cookie); capture-config + account-metrics + headless-status APIs; T9 first-login approval gate; per-venue tokens in a dedicated file (never in the credentials object, which leaks into API responses); metrics strict absent→null |
+| Headless session engine (Phase 5) | `services/captureProfiles.mjs`, `browserStudio.captureViaStorageScan`, `services/accountMetrics.mjs` | ✅ Two full venues (`expertoption` via the reference liveEO hook, `iqoption` via the generic storageScan hook reading exactly the configured `ssid` cookie); capture-config + account-metrics + headless-status APIs; T9 first-login approval gate; per-venue tokens in a dedicated file (never in the credentials object, which leaks into API responses); metrics strict absent→null. T12.1: after-login workflow — token venues need NO vault username/password; the engine captures from the venue's OWN open tab found by host (`studioLivePages`), honest `no-tab` when it isn't open |
 
 **The one structural gap:** order execution is welded to ExpertOption's session singleton inside
 `autopilot.mjs` (`state.session = connectTradingSession(...)`, `.buy({assetId,type:"call"|"put",...})`).
@@ -168,7 +168,10 @@ Legend: 🟢 pure API · 🟡 needs local daemon/browser · 🔴 unofficial/reve
    bespoke code — a venue is promoted by listing real, fixture-backed keys plus its login signal
    (see the fixture checklist at the end of `docs/headless-capture-venue-research.md`). Logging into
    a supported site in the PICC browser auto-populates the right vault entry once its keys are
-   wired.
+   wired. T12.1 removed the last paste-a-token step for token venues: the vault's username/password
+   is only a prerequisite for form-fill captures; EO/IQ capture straight from the user's open,
+   logged-in tab (host-matched, `captureProfiles.resolveCapturePage` → `browserStudio.studioLivePages()`),
+   so the whole flow is "log in on the venue tab once → approve once → the engine keeps it fresh".
 2. **Capability probing at connect**: after `adapter.connect()`, run a 3-step self-test
    (`instruments()` non-empty → `candles()` fresh → tiny `balance()`) and store the PASSING
    capability set — never trust static declarations alone.

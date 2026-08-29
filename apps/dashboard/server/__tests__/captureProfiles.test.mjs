@@ -23,7 +23,7 @@ import {
   _resetHeadlessSessionState,
   _approveFirstLogin
 } from "../services/captureProfiles.mjs"
-import { captureExpertOptionSession, captureViaStorageScan, getSiteCredentials } from "../services/browserStudio.mjs"
+import { captureExpertOptionSession, captureViaStorageScan, getSiteCredentials, studioLivePages } from "../services/browserStudio.mjs"
 import { getCredentials, saveCredentials, getVenueToken, saveVenueToken } from "../services/trading.mjs"
 import { restartLiveEO } from "../services/liveEO.mjs"
 
@@ -32,6 +32,12 @@ vi.mock("../services/browserStudio.mjs", () => ({
   captureExpertOptionSession: vi.fn(),
   captureViaStorageScan: vi.fn(), // T11 generic storage-scan hook
   maskToken: vi.fn((t) => t ?? ""),
+  // Host-matched tab lookup (T12.1 after-login flow): a stub EO + IQ tab so
+  // captureVenue's venue-by-host resolution finds a page for either venue.
+  studioLivePages: vi.fn(() => [
+    { url: () => "https://app.expertoption.com/", isClosed: () => false },
+    { url: () => "https://iqoption.com/en/login", isClosed: () => false }
+  ]),
   // The REAL interventions module loads in this file (the T9 gate uses it) —
   // give it the broadcast/lookup surface it statically imports.
   studioBroadcast: vi.fn(),
@@ -220,13 +226,28 @@ describe("captureVenue states (T3)", () => {
     }
   })
 
-  it("missing vault credentials → needs-credentials and NO capture/save (never fabricate login)", async () => {
-    getSiteCredentials.mockResolvedValueOnce(null)
+  it("no vault entry → capture is NOT vault-gated (the logged-in tab is the credential)", async () => {
+    // Regression (T12.1): EO showed "login needed · stale" forever after a
+    // manual relog because the legacy form-fill vault gate demanded a
+    // username/password entry that exists for no venue the user form-fills.
+    // Token-capture venues gate on T9 approval + a host-matched tab instead.
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+    getSiteCredentials.mockResolvedValue(null) // vault: no expertoption entry at all
     const r = await captureVenue("expertoption")
-    expect(r).toMatchObject({ state: "needs-credentials", venue: "expertoption" })
-    expect(r.at).toBeTruthy()
+    expect(r.state).toBe("ok")
+    expect(r.loginApproved).toBe(true)
+    expect(captureExpertOptionSession).toHaveBeenCalledTimes(1)
+    expect(saveCredentials).not.toHaveBeenCalled() // the SAVE itself runs inside the hook
+  })
+
+  it("approved but NO matching venue tab → honest no-tab, hook never called", async () => {
+    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+    studioLivePages.mockReturnValueOnce([]) // no tabs at all
+    const r = await captureVenue("expertoption")
+    expect(r.state).toBe("no-tab")
+    expect(r.venue).toBe("expertoption")
     expect(captureExpertOptionSession).not.toHaveBeenCalled()
-    expect(saveCredentials).not.toHaveBeenCalled()
+    expect(restartLiveEO).not.toHaveBeenCalled()
   })
 
   it("guest session is reported guest — token never saved, no revive", async () => {
@@ -287,8 +308,9 @@ describe("captureVenue states (T3)", () => {
       liveLeg: false, // honest: no live bridge consumes this token yet
       loginApproved: true
     })
+    // The runner hands the hook the HOST-MATCHED tab (never the active tab).
     expect(captureViaStorageScan).toHaveBeenCalledWith(
-      undefined,
+      expect.objectContaining({ url: expect.any(Function) }),
       expect.objectContaining({ via: "storageScan", hostRe: "iqoption\\.com", venueId: "iqoption" })
     )
     // The SAVE itself runs inside the hook (trading.saveVenueToken) — this
