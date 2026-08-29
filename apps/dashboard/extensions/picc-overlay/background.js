@@ -227,6 +227,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
+  // Popup server status: a LIVE health probe owned by this worker, NOT the
+  // broker-tab sensor's stored view. The sensor content script only runs on
+  // broker domains, so its piccSensorStatus alone made the popup report PICC
+  // offline while the backend was healthy (T11 finding 2026-08-29).
+  if (msg.action === "server-status") {
+    checkServer()
+      .then((online) => sendResponse({ action: "server-status", online, port: detectedPort, at: Date.now() }))
+      .catch(() => sendResponse({ action: "server-status", online: false, port: null, at: Date.now() }))
+    return true
+  }
+
   return false
 })
 
