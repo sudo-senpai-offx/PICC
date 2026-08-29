@@ -124,6 +124,40 @@ LIVE badge; no gaps longer than one batch interval while the tab is visible.
 [ ] Dragging / asset switch in the broker does not kill the dashboard feed
 ```
 
+## E. Live-check findings 2026-08-29 — sensor discovery defect found and fixed
+
+Verification of the live stack (user report: extension feed empty — MTF blank,
+confluence idle, chart on Yahoo while Yahoo/paper trading work) surfaced a
+code defect in the sensor's server discovery, not an environment quirk:
+
+- Health probes against the RUNNING dev server (2026-08-29, PowerShell):
+
+  ```
+  http://127.0.0.1:5173/api/health  ->  REFUSED: Unable to connect
+  http://localhost:5173/api/health  ->  HTTP 200
+  http://127.0.0.1:3000/api/health  ->  REFUSED: Unable to connect
+  ```
+
+- Root cause: the vite dev server bound IPv6 loopback (`[::1]:5173`) only, and
+  the sensor probed IPv4 literals (`127.0.0.1:5173` then `127.0.0.1:3000`).
+  Both probes were refused; `online` stayed `false` and the relay never fired,
+  so the extension feed delivered zero frames — even though the dashboard UI
+  worked (it talks same-origin `/api` through `localhost`, which resolves to
+  the reachable `::1`).
+- Fix (this change): `content.js` now probes BOTH loopback families
+  (`127.0.0.1` and `localhost`) across dev (5173) and prod (3000), remembers
+  the reachable ORIGIN, and POSTs ingested frames to that same origin.
+  `sidepanel.js` server fetch probes `localhost` first, then the IPv4 literal.
+  `background.js` already probed via `localhost` and needed no change.
+- Machine verification: 47/47 extension tests, full suite 91 files / 900 tests
+  green, typecheck 0. The lifecycle harness drains every candidate fetch in one
+  sweep, so teardown/dedup/queue semantics are unchanged.
+- NOT agent-verified: the browser-side re-check after loading the fixed
+  extension (needs a real browser + EO session). Human steps: reload the
+  extension from `chrome://extensions`, reopen the broker tab, then the popup
+  should read `online :5173` and queue depth a number while streaming; the C/D
+  checkboxes above remain the T11 gate.
+
 ---
 
 ## How the machine rows were produced

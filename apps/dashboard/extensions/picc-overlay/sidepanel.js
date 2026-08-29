@@ -20,13 +20,18 @@ async function serverFetch(path) {
   const headers = {}
   if (token) headers["Authorization"] = `Bearer ${token}`
   for (const p of ports) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${p}/api${path}`, { signal: AbortSignal.timeout(3000), headers })
-      if (r.ok) {
-        if (p !== port) chrome.storage.local.set({ [CACHED_PORT]: p })
-        return await r.json()
-      }
-    } catch {}
+    // Probe both loopback families: a vite dev server may bind ::1 only and
+    // refuse the IPv4 literal 127.0.0.1 (same defect class fixed in content.js
+    // sensor discovery, T11 finding 2026-08-29).
+    for (const host of ["localhost", "127.0.0.1"]) {
+      try {
+        const r = await fetch(`http://${host}:${p}/api${path}`, { signal: AbortSignal.timeout(3000), headers })
+        if (r.ok) {
+          if (p !== port) chrome.storage.local.set({ [CACHED_PORT]: p })
+          return await r.json()
+        }
+      } catch {}
+    }
   }
   return null
 }

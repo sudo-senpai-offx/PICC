@@ -65,31 +65,44 @@
 
   // ── Server discovery ──────────────────────────────────────────────────────
   // The web app owns analysis/notifications; the sensor only needs to find it.
-  let serverPort = null
+  // Probes BOTH loopback families by hostname, dev AND prod ports: a vite dev
+  // server may bind IPv6 loopback (::1) only and REFUSE the IPv4 literal
+  // 127.0.0.1 — with IPv4-only probes the sensor never found a healthy local
+  // dev server and sat offline forever while the dashboard answered at
+  // localhost:5173 (T11 finding 2026-08-29; the running server refused
+  // 127.0.0.1:5173 and answered 200 on localhost:5173). The discovered ORIGIN
+  // is reused for the flush, so both the health probe and the frame POST
+  // always hit a reachable address.
+  let serverOrigin = null // e.g. "http://localhost:5173" — the reachable origin
   let online = null
-  const PORTS = [5173, 3000]
+  const SERVER_CANDIDATES = [
+    { origin: "http://127.0.0.1:5173", port: 5173 }, // vite dev, IPv4 loopback
+    { origin: "http://localhost:5173", port: 5173 }, // vite dev, IPv6 loopback
+    { origin: "http://127.0.0.1:3000", port: 3000 }, // prod server, IPv4
+    { origin: "http://localhost:3000", port: 3000 }  // prod server, IPv6
+  ]
   let backoffMs = 0
 
   async function checkServer() {
-    for (const port of PORTS) {
+    for (const c of SERVER_CANDIDATES) {
       try {
         const ctl = new AbortController()
         setTimeout(() => ctl.abort(), 2500)
-        const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: ctl.signal })
+        const res = await fetch(`${c.origin}/api/health`, { signal: ctl.signal })
         if (res.ok) {
           const wasOffline = online === false
-          serverPort = port
+          serverOrigin = c.origin
           online = true
           backoffMs = 0
-          store.set({ piccSensorStatus: { online, port, at: Date.now() } })
-          if (wasOffline) console.info("[picc-sensor] server found on", port)
+          store.set({ piccSensorStatus: { online, port: c.port, origin: c.origin, at: Date.now() } })
+          if (wasOffline) console.info("[picc-sensor] server found on", c.origin)
           flush() // drain anything queued while offline
           return
         }
-      } catch { /* try next port */ }
+      } catch { /* try next candidate */ }
     }
     online = false
-    store.set({ piccSensorStatus: { online, port: null, at: Date.now() } })
+    store.set({ piccSensorStatus: { online, port: null, origin: null, at: Date.now() } })
   }
 
   // ── Upstream frame bridge ─────────────────────────────────────────────────
@@ -126,14 +139,14 @@
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
     if (flushing) return
     if (!QUEUE.length) return
-    if (!serverPort || online === false) {
+    if (!serverOrigin || online === false) {
       scheduleFlush(backoffMs || FLUSH_MS)
       return
     }
     flushing = true
     const batch = QUEUE.splice(0, MAX_BATCH)
     try {
-      const res = await fetch(`http://127.0.0.1:${serverPort}/api/extension/ingest`, {
+      const res = await fetch(`${serverOrigin}/api/extension/ingest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ frames: batch })
