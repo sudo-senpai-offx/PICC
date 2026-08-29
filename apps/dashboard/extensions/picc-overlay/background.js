@@ -238,6 +238,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
+  // Sensor frame relay: content scripts tunnel their batches here because a
+  // content-script fetch to http://localhost from an https broker page is
+  // CORS + mixed-content blocked. THIS worker context is host-permission
+  // exempt, so it performs the ingest POST on the sensor's behalf. Frame
+  // batches are already sanitized by content.js; the server re-validates.
+  if (msg.action === "relay-flush") {
+    const frames = Array.isArray(msg.frames) ? msg.frames : []
+    if (!frames.length) { sendResponse({ ok: false, error: "no frames" }); return false }
+    if (frames.length > 200) { sendResponse({ ok: false, error: "batch too large" }); return false } // ingest cap (handlers.mjs:4294)
+    serverFetch("/api/extension/ingest", { method: "POST", body: { frames } })
+      .then((r) => sendResponse({ ok: r.ok === true, status: r.status ?? null, error: r.error ?? null }))
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message ?? err) }))
+    return true
+  }
+
   return false
 })
 

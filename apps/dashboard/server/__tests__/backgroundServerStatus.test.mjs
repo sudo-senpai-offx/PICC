@@ -145,4 +145,46 @@ describe("background worker server-status for the popup (T11 follow-up)", () => 
     expect(resp).toEqual({ error: "untrusted sender" })
     expect(fetchCalls).toBe(before) // no extra probe after the rejection
   })
+
+  it("relay-flush: a trusted sensor's batch is POSTed to /api/extension/ingest by the worker", async () => {
+    const posts = []
+    const h = makeHarness({
+      fetchFn: async (url, init) => {
+        if (String(url).includes("/api/extension/ingest")) {
+          posts.push({ url, init })
+          return { ok: true, status: 200, json: async () => ({ ok: true, accepted: 1, received: 1 }) }
+        }
+        return { ok: true, json: async () => okHealth }
+      }
+    })
+    await h.settleBoot()
+    const resp = await h.send(
+      { action: "relay-flush", frames: [{ action: "candle", message: { assetId: "BTC" } }] },
+      { id: "picc-test-id" }
+    )
+    expect(resp.ok).toBe(true)
+    expect(resp.status).toBe(200)
+    expect(posts.length).toBe(1)
+    expect(posts[0].url).toContain("/api/extension/ingest")
+    expect(JSON.parse(posts[0].init.body).frames).toHaveLength(1)
+  })
+
+  it("relay-flush: empty/oversized batches and untrusted senders never reach the server", async () => {
+    let fetchCalls = 0
+    const h = makeHarness({ fetchFn: async (url) => { fetchCalls += 1; return { ok: true, json: async () => okHealth } } })
+    await h.settleBoot()
+    const before = fetchCalls
+
+    const empty = await h.send({ action: "relay-flush", frames: [] }, { id: "picc-test-id" })
+    expect(empty.ok).toBe(false)
+    expect(empty.error).toBe("no frames")
+
+    const oversize = await h.send({ action: "relay-flush", frames: Array(201).fill({}) }, { id: "picc-test-id" })
+    expect(oversize.ok).toBe(false)
+
+    const evil = await h.send({ action: "relay-flush", frames: [{}] }, { url: "https://evil.example" })
+    expect(evil).toEqual({ error: "untrusted sender" })
+
+    expect(fetchCalls).toBe(before) // no POST until a valid, trusted batch arrives
+  })
 })

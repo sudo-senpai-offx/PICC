@@ -17,13 +17,22 @@ function renderServer(srv) {
 }
 
 function renderRelay(st) {
-  // The RELAY leg: the sensor's own view. The sensor content script runs only
-  // on broker tabs, so when none is open the relay is honestly "idle", not
-  // "offline" — and queue depth below reads n/a, never a fabricated 0.
+  // The RELAY leg is the sensor's view of the broker-tab feed: online + frames
+  // FLOWING within the last minute. The sensor content script runs only on
+  // broker tabs, so with no tab open the relay is honestly "idle", not
+  // "offline" — and queue depth below reads n/a, never a fabricated 0. The
+  // online flag comes from the worker's probe (the broker-tab sensor cannot
+  // fetch the backend itself — CORS + mixed content, T11 2026-08-29).
   const el = $("relay-st")
   if (!st || (st.online !== true && st.online !== false)) { el.textContent = "idle (no broker tab)"; el.className = "st warn"; return }
-  el.textContent = st.online === true ? `online :${st.port}` : "sensor offline"
-  el.className = st.online === true ? "st ok" : "st bad"
+  if (st.online === true) {
+    const flowing = typeof st.lastRelayAt === "number" && Date.now() - st.lastRelayAt < 60_000
+    el.textContent = flowing ? `online :${st.port}` : "up · waiting for feed"
+    el.className = "st ok"
+    return
+  }
+  el.textContent = "sensor offline"
+  el.className = "st bad"
 }
 
 async function refresh() {

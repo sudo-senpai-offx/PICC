@@ -19,12 +19,18 @@ function makeHarness() {
   const intervalCallbacks = []
   const clearedIntervals = []
   const consoleCalls = { error: [], info: [], log: [] }
-  const pendingFetches = []
+  // The sensor tunnels ALL network I/O through the background worker
+  // (T11 finding 2026-08-29: content-script fetches to http://localhost die on
+  // CORS + mixed content from https broker pages). The harness therefore
+  // mocks chrome.runtime.sendMessage — the worker's probe answers and the
+  // relay-flush POST results are resolved here, not via page fetch().
+  const pendingMessages = []
   const state = {
     storageSetCalls: 0,
     storageGetCalls: 0,
     setImpl: () => undefined,
-    getImpl: (keys, cb) => cb({})
+    getImpl: (keys, cb) => cb({}),
+    relayFlushCalls: []
   }
 
   const windowObj = {
@@ -34,6 +40,10 @@ function makeHarness() {
   const chrome = {
     runtime: {
       id: "picc-test-id",
+      sendMessage: (msg) => {
+        if (msg?.action === "relay-flush") state.relayFlushCalls.push(msg.frames ?? [])
+        return new Promise((resolve, reject) => pendingMessages.push({ resolve, reject, msg }))
+      },
       onMessage: { addListener: (fn) => { state.onMessageListener = fn } }
     },
     storage: {
@@ -47,7 +57,6 @@ function makeHarness() {
   const context = vm.createContext({
     window: windowObj,
     chrome,
-    fetch: () => new Promise((resolve, reject) => pendingFetches.push({ resolve, reject })),
     AbortController: globalThis.AbortController,
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (id) => clearTimeout(id),
@@ -70,19 +79,21 @@ function makeHarness() {
     intervalCallbacks,
     clearedIntervals,
     listeners,
-    pendingFetches,
-    async settleFetches(shape) {
-      while (pendingFetches.length) {
-        const batch = pendingFetches.splice(0, pendingFetches.length)
+    pendingMessages,
+    // Resolve every in-flight sendMessage with the worker's probe answer,
+    // e.g. { online: true, port: 5173 } or { online: false, port: null }.
+    async settleMessages(shape) {
+      while (pendingMessages.length) {
+        const batch = pendingMessages.splice(0, pendingMessages.length)
         for (const p of batch) p.resolve(shape)
         await new Promise((r) => setTimeout(r, 0))
       }
       await new Promise((r) => setTimeout(r, 0))
     },
     async runCheckTick() {
-      const tick = intervalCallbacks[0] // the 15 s checkServer interval
+      const tick = intervalCallbacks[0] // the 15 s probeServer interval
       const p = tick()
-      await this.settleFetches({ ok: false })
+      await this.settleMessages({ online: false, port: null })
       await p
       await new Promise((r) => setTimeout(r, 0))
     },
@@ -99,7 +110,7 @@ describe("sensor content.js context lifecycle (T2)", () => {
     expect(h.state.storageSetCalls).toBe(0)
 
     // boot round: server found → the "online" write succeeds
-    await h.settleFetches({ ok: true })
+    await h.settleMessages({ online: true, port: 5173 })
     expect(h.state.storageSetCalls).toBe(1)
 
     // next 15 s tick: server gone; mid-round Chrome invalidates the context
@@ -122,7 +133,7 @@ describe("sensor content.js context lifecycle (T2)", () => {
   it("promise-rejection path (async chrome APIs) also tears down silently", async () => {
     const h = makeHarness()
     h.state.setImpl = () => Promise.reject(INVALIDATED())
-    await h.settleFetches({ ok: true })
+    await h.settleMessages({ online: true, port: 5173 })
     expect(h.state.storageSetCalls).toBe(1)
     expect(h.window.__PICC_SENSOR_DEAD__).toBe(true)
     expect(h.clearedIntervals).toEqual([1, 2])
@@ -131,7 +142,7 @@ describe("sensor content.js context lifecycle (T2)", () => {
   it("pre-check path: chrome.runtime.id gone ⇒ immediate teardown, zero writes", async () => {
     const h = makeHarness()
     h.chrome.runtime = {} // invalidation is observable as a missing runtime.id
-    await h.settleFetches({ ok: true })
+    await h.settleMessages({ online: true, port: 5173 })
     expect(h.state.storageSetCalls).toBe(0)
     expect(h.window.__PICC_SENSOR_DEAD__).toBe(true)
   })
@@ -139,7 +150,7 @@ describe("sensor content.js context lifecycle (T2)", () => {
   it("kill-switch gate still reads storage through the guard; a dead listener never queues", async () => {
     const h = makeHarness()
     h.state.getImpl = (keys, cb) => cb({ piccRelayEnabled: true })
-    await h.settleFetches({ ok: true })
+    await h.settleMessages({ online: true, port: 5173 })
     expect(h.state.storageSetCalls).toBe(1)
 
     // a real broker-shaped frame routes through the guarded get
@@ -154,6 +165,33 @@ describe("sensor content.js context lifecycle (T2)", () => {
     expect(h.state.storageGetCalls).toBe(1) // listener gone: nothing queued
   })
 
+  it("relay-flush tunnels cleared batches to the worker and surfaces relay activity", async () => {
+    const h = makeHarness()
+    h.state.getImpl = (keys, cb) => cb({ piccRelayEnabled: true })
+    await h.settleMessages({ online: true, port: 5173 })
+    expect(h.state.storageSetCalls).toBe(1)
+
+    let lastStatusWrite = null
+    h.state.setImpl = (entry) => { lastStatusWrite = entry.piccSensorStatus }
+
+    h.dispatchBrokerFrame({ action: "candle", message: { assetId: "BTC", candles: [{ t: 1, tf: 60, v: [1, 2, 3] }] } })
+    // the 30 s heartbeat interval calls flush() → the sensor hands the batch to
+    // the WORKER via relay-flush (never a page-context fetch — CORS/mixed
+    // content would kill it on https broker pages)
+    h.intervalCallbacks[1]()
+    await h.settleMessages({ ok: true }) // the worker's POST result
+    expect(h.state.relayFlushCalls.length).toBe(1)
+    expect(h.state.relayFlushCalls[0][0].message.assetId).toBe("BTC")
+
+    // the next status write reports relay ACTIVITY (frames relayed, last frame),
+    // so the popup can say "online :port" only when frames actually flow
+    await h.runCheckTick()
+    expect(h.state.storageSetCalls).toBe(2)
+    expect(lastStatusWrite.relayedCount).toBe(1)
+    expect(typeof lastStatusWrite.lastRelayAt).toBe("number")
+    expect(lastStatusWrite.online).toBe(false) // probe answered offline this tick
+  })
+
   it("static: content.js touches chrome.* only inside the guarded accessor", () => {
     const tokens = new Set([...SOURCE.matchAll(/chrome\.\w+/g)].map((m) => m[0]))
     for (const t of tokens) {
@@ -166,7 +204,7 @@ describe("sensor content.js context lifecycle (T2)", () => {
 
   it("round-trip: sensor-queue-depth answers observed:true with the live queue length", async () => {
     const h = makeHarness()
-    await h.settleFetches({ ok: true })
+    await h.settleMessages({ online: true, port: 5173 })
 
     let response = null
     const listener = h.state.onMessageListener

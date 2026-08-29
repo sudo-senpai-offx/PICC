@@ -54,7 +54,14 @@ describe("sensor extension integrity", () => {
     const src = readFileSync(join(EXT_DIR, "content.js"), "utf8")
     // inject.js hands frames over under this marker — the relay MUST keep it.
     expect(src.includes("__piccEOFrame")).toBe(true)
-    expect(src.includes("/api/extension/ingest")).toBe(true)
+    // The ingest POST lives in the WORKER (host-permission-exempt): a
+    // content-script fetch to http://localhost from an https broker page dies
+    // on CORS + mixed content (T11 finding 2026-08-29), so content.js must
+    // NEVER fetch the ingest URL itself — it tunnels batches via relay-flush.
+    expect(src.includes("/api/extension/ingest")).toBe(false)
+    expect(src.includes('action: "relay-flush"')).toBe(true)
+    const bg = readFileSync(join(EXT_DIR, "background.js"), "utf8")
+    expect(bg.includes("/api/extension/ingest")).toBe(true)
     // Hostile-input guard survives refactors.
     expect(src.includes("sanitizeUpstreamFrame")).toBe(true)
     expect(src.includes("JSON.stringify(clean).length > 4096")).toBe(true)
@@ -128,14 +135,18 @@ describe("sensor extension integrity", () => {
     }
   })
 
-  it("background handler actions exactly match popup sends (T9 lock)", () => {
+  it("every message action is sent by someone and handled — popup ∪ content scripts, actions pinned (T9 lock)", () => {
     const popup = readFileSync(join(EXT_DIR, "popup.js"), "utf8")
     const background = readFileSync(join(EXT_DIR, "background.js"), "utf8")
     const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
 
-    const sends = new Set(
-      [...popup.matchAll(/chrome\.runtime\.sendMessage\(\s*\{\s*action:\s*"([^"]+)"/g)].map((m) => m[1])
-    )
+    // Both sender contexts: the popup AND the sensor content scripts message
+    // the worker (server-status probe + relay-flush tunnel — T11 2026-08-29).
+    const ACTION_RE = /chrome\.runtime\.sendMessage\(\s*\{\s*action:\s*"([^"]+)"/g
+    const sends = new Set([
+      ...[...popup.matchAll(ACTION_RE)].map((m) => m[1]),
+      ...[...content.matchAll(ACTION_RE)].map((m) => m[1])
+    ])
     const bgHandlers = new Set(
       [...background.matchAll(/msg\.action\s*===\s*"([^"]+)"/g)].map((m) => m[1])
     )
@@ -143,16 +154,18 @@ describe("sensor extension integrity", () => {
       [...content.matchAll(/msg\.action\s*===\s*"([^"]+)"/g)].map((m) => m[1])
     )
     // Background forwards popup actions to the tab; content answers them.
-    // Union = what can actually be answered. Contract: symmetric with popup.
+    // Union = what can actually be answered. Contract: symmetric with sends.
     const allHandlers = new Set([...bgHandlers, ...contentHandlers])
 
     expect(sends.size).toBeGreaterThan(0)
-    expect(sends.size, "no orphan popup sends (every send has a handler)").toBe(allHandlers.size)
+    expect(sends.size, "no orphan sends (every send has a handler)").toBe(allHandlers.size)
     for (const action of sends) {
-      expect(allHandlers.has(action), `popup sends ${action} but nobody handles it`).toBe(true)
+      expect(allHandlers.has(action), `${action} is sent but nobody handles it`).toBe(true)
     }
     for (const action of allHandlers) {
-      expect(sends.has(action), `handler ${action} is unreachable from the popup`).toBe(true)
+      expect(sends.has(action), `handler ${action} is unreachable from any sender`).toBe(true)
     }
+    // The full action vocabulary, pinned — adding an action must touch every side.
+    expect([...sends].sort()).toEqual(["relay-flush", "sensor-queue-depth", "server-status"])
   })
 })

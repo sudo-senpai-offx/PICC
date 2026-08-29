@@ -65,44 +65,46 @@
 
   // ── Server discovery ──────────────────────────────────────────────────────
   // The web app owns analysis/notifications; the sensor only needs to find it.
-  // Probes BOTH loopback families by hostname, dev AND prod ports: a vite dev
-  // server may bind IPv6 loopback (::1) only and REFUSE the IPv4 literal
-  // 127.0.0.1 — with IPv4-only probes the sensor never found a healthy local
-  // dev server and sat offline forever while the dashboard answered at
-  // localhost:5173 (T11 finding 2026-08-29; the running server refused
-  // 127.0.0.1:5173 and answered 200 on localhost:5173). The discovered ORIGIN
-  // is reused for the flush, so both the health probe and the frame POST
-  // always hit a reachable address.
-  let serverOrigin = null // e.g. "http://localhost:5173" — the reachable origin
+  // ALL network I/O runs in the background worker (host-permission-exempt):
+  // a content-script fetch to http://localhost from an https broker page is
+  // CORS-blocked (server allowlists origins at handlers.mjs:219,4453) AND
+  // mixed-content-blocked — the broker-tab sensor could never reach the
+  // backend no matter how health checks were phrased (T11 finding, "server
+  // online / relay offline" 2026-08-29). The worker's `server-status` answer
+  // (detectServerPort → piccServerOnline/piccDetectedPort) is the single
+  // source of truth; storage is the fallback when the worker is unreachable.
+  let serverOrigin = null // e.g. "http://localhost:5173" — for display only
   let online = null
-  const SERVER_CANDIDATES = [
-    { origin: "http://127.0.0.1:5173", port: 5173 }, // vite dev, IPv4 loopback
-    { origin: "http://localhost:5173", port: 5173 }, // vite dev, IPv6 loopback
-    { origin: "http://127.0.0.1:3000", port: 3000 }, // prod server, IPv4
-    { origin: "http://localhost:3000", port: 3000 }  // prod server, IPv6
-  ]
-  let backoffMs = 0
 
-  async function checkServer() {
-    for (const c of SERVER_CANDIDATES) {
-      try {
-        const ctl = new AbortController()
-        setTimeout(() => ctl.abort(), 2500)
-        const res = await fetch(`${c.origin}/api/health`, { signal: ctl.signal })
-        if (res.ok) {
-          const wasOffline = online === false
-          serverOrigin = c.origin
-          online = true
-          backoffMs = 0
-          store.set({ piccSensorStatus: { online, port: c.port, origin: c.origin, at: Date.now() } })
-          if (wasOffline) console.info("[picc-sensor] server found on", c.origin)
-          flush() // drain anything queued while offline
-          return
-        }
-      } catch { /* try next candidate */ }
-    }
-    online = false
-    store.set({ piccSensorStatus: { online, port: null, origin: null, at: Date.now() } })
+  function readCachedServerState() {
+    return new Promise((resolve) => {
+      store.get(["piccServerOnline", "piccServerPort"], ({ piccServerOnline, piccServerPort }) => {
+        resolve({ online: piccServerOnline === true, port: Number(piccServerPort) || null })
+      })
+    })
+  }
+
+  async function probeServer() {
+    // Fresh worker probe first — the heartbeat's cached state is up to 30 s old.
+    let st = null
+    try { st = await chromeGuard(() => chrome.runtime.sendMessage({ action: "server-status" })) } catch { st = null }
+    if (dead) return // torn-down context: the storage fallback would await a callback that never fires
+    if (!st || typeof st.online !== "boolean") st = await readCachedServerState()
+    online = st.online === true
+    serverOrigin = online ? `http://localhost:${st.port}` : null
+    const wasOffline = !online
+    store.set({
+      piccSensorStatus: {
+        online,
+        port: online ? st.port : null,
+        origin: serverOrigin,
+        at: Date.now(),
+        relayedCount,
+        lastRelayAt: lastRelayAt || null
+      }
+    })
+    if (online && wasOffline) console.info("[picc-sensor] server found via worker probe")
+    if (online) flush() // drain anything queued while offline
   }
 
   // ── Upstream frame bridge ─────────────────────────────────────────────────
@@ -134,6 +136,11 @@
   let flushing = false
   const FLUSH_MS = 2000
   const MAX_BATCH = 120
+  let backoffMs = 0
+  // Relay activity, surfaced by the popup so "relay" means frames flowing,
+  // not just the backend being reachable (T11 finding 2026-08-29).
+  let relayedCount = 0
+  let lastRelayAt = 0
 
   async function flush() {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
@@ -145,16 +152,24 @@
     }
     flushing = true
     const batch = QUEUE.splice(0, MAX_BATCH)
+    // Chunk oversized batches: chrome.runtime.sendMessage payloads must stay
+    // modest; an uncapped batch of 120 × 4 KB sanitized frames is too fat.
+    let chunk = batch
+    if (JSON.stringify({ frames: batch }).length > 128 * 1024) {
+      chunk = batch.slice(0, Math.max(1, Math.ceil(batch.length / 2)))
+      QUEUE.unshift(...batch.slice(chunk.length))
+    }
     try {
-      const res = await fetch(`${serverOrigin}/api/extension/ingest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ frames: batch })
-      })
-      if (!res.ok) requeue(batch)
-      else backoffMs = 0
+      // The WORKER performs the POST (host-permission-exempt): a content-script
+      // fetch to http://localhost from an https broker page dies on CORS +
+      // mixed content. The worker answers ok/status; a non-ok answer means the
+      // server rejected the batch (rate limit, oversize) and the sensor
+      // requeues with its usual offline backoff.
+      const res = await chromeGuard(() => chrome.runtime.sendMessage({ action: "relay-flush", frames: chunk }))
+      if (res && res.ok === true) backoffMs = 0
+      else requeue(chunk)
     } catch {
-      requeue(batch)
+      requeue(chunk)
     } finally {
       flushing = false
       if (QUEUE.length) scheduleFlush(FLUSH_MS)
@@ -180,6 +195,8 @@
       const clean = sanitizeUpstreamFrame(frame)
       if (!clean) return
       QUEUE.push(clean)
+      relayedCount += 1
+      lastRelayAt = Date.now()
       while (QUEUE.length > 400) QUEUE.shift()
       scheduleFlush(FLUSH_MS)
     })
@@ -207,7 +224,7 @@
   }))
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
-  checkTimer = setInterval(checkServer, 15_000)
+  checkTimer = setInterval(probeServer, 15_000)
   heartbeatTimer = setInterval(() => { if (online) flush() }, 30_000)
-  checkServer()
+  probeServer()
 })()
