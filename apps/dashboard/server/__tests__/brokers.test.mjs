@@ -71,4 +71,18 @@ describe("broker adapter registry (plug-and-play venue status)", () => {
     expect(ccxt.capabilities).not.toContain("spot-orders")
     expect(ccxt.capabilities).toEqual(["market-data"])
   })
+
+  it("declares a non-empty timeframes curve per row, matching its adapter", async () => {
+    const out = await brokers.listBrokers()
+    const bySlug = new Map(out.brokers.map((b) => [b.slug, b]))
+    for (const b of out.brokers) {
+      expect(Array.isArray(b.timeframes)).toBe(true)
+      expect(b.timeframes.length).toBeGreaterThan(0)
+    }
+    // EO push builds 1m..1h only — the exact set the chart must render as
+    // enabled when EO is the configured source (T6 acceptance).
+    expect(bySlug.get("expertoption").timeframes).toEqual([60, 300, 900, 3600])
+    expect(bySlug.get("ccxt").timeframes).toEqual([60, 300, 900, 1800, 3600, 14400])
+    expect(bySlug.get("paper").timeframes).toEqual([60, 300, 900, 3600])
+  })
 })

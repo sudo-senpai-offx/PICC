@@ -16,6 +16,10 @@
 //   positions      open-deal lifecycle events
 //   account        balance/account reporting
 //
+// Every row also declares `timeframes` — the bar resolutions that venue can
+// actually serve (mirrors its adapter's availableTimeframes). The chart layer
+// uses this to disable unsupported resolutions instead of silently relabeling.
+//
 // Adding a venue = adding one entry here + (when it trades) wiring its
 // session into the autopilot's adapter seam. See
 // docs/TRADING_MULTIPLATFORM_ROADMAP.md for the full integration playbook.
@@ -44,6 +48,7 @@ export async function listBrokers() {
     label: "ExpertOption",
     category: "binary",
     capabilities: ["market-data", "account", "positions", "close-position", "demo-trading", "binary-options"],
+    timeframes: [60, 300, 900, 3600], // live push builds 1m..1h buffers; 5s requests resolve up to 1m, 4h is declined (T5)
     configured: eo.configured,
     connected: eo.connected,
     sessionLive: eo.sessionLive,
@@ -62,6 +67,7 @@ export async function listBrokers() {
     label: "CCXT exchanges",
     category: "spot-market-data",
     capabilities: ["market-data"],
+    timeframes: [60, 300, 900, 1800, 3600, 14400], // REST fetchOHLCV 1m..4h
     configured: pairs.length > 0,
     connected: liveExchanges.length > 0,
     pairs: pairs.map((p) => ({ exchange: p.exchange, symbol: p.symbol, timeframe: p.timeframe || "1m" })),
@@ -76,6 +82,7 @@ export async function listBrokers() {
     label: "Paper engine",
     category: "simulation",
     capabilities: ["market-data", "paper-trading", "positions", "close-position", "account"],
+    timeframes: [60, 300, 900, 3600], // simulation standard; paper serves no candles — data flows from EO/CCXT/Yahoo
     configured: true,
     connected: true,
     demoOnly: true,

@@ -3,6 +3,7 @@ import { Badge, Button } from "@/components/ui"
 import { CandlestickChart, type PriceLine } from "@/components/CandlestickChart"
 import { ChartErrorBoundary } from "@/components/ChartErrorBoundary"
 import { useCandleData, TIMEFRAME_LABELS, type Timeframe } from "@/hooks/useCandleData"
+import { useBrokerCapabilities } from "@/hooks/useBrokerCapabilities"
 import { getEntryLevels, openPaperTrade, type EntryLevelsResult } from "@/lib/trading"
 
 const TIMEFRAMES: Timeframe[] = [5, 15, 30, 60, 300, 900, 1800, 3600, 14400, 86400, 604800, 2592000]
@@ -31,6 +32,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
     loading, error, streamError, lastPrice, timeframe, setTimeframe, source, resolvedTimeframe, resolved
   } = useCandleData({ assetId, timeframe: 300 })
+  const { servableTimeframes, sourceTimeframes } = useBrokerCapabilities()
   const [hover, setHover] = useState<{ open: number; high: number; low: number; close: number } | null>(null)
   const [showIchimoku, setShowIchimoku] = useState(false)
   const [showKeltner, setShowKeltner] = useState(false)
@@ -87,6 +89,16 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   const changePct = display && display.open ? (change / display.open) * 100 : 0
   const isUp = change >= 0
   const sourceBadge = SOURCE_BADGES[source ?? ""] ?? null
+  // The SERVED source (when known) gets the final say: restrict the enabled
+  // button set to its curve. Legacy "live"/"buffer" labels mean EO buffers.
+  const servedSource = source === "live" || source === "buffer" ? "expertoption" : source
+  const sourceCurve = servedSource ? sourceTimeframes.get(servedSource) : undefined
+  const servable = new Set<number>(sourceCurve?.length ? sourceCurve : [...servableTimeframes])
+  const sourceLabel = source === "yahoo" || source === "yahoo-daily"
+    ? "Yahoo"
+    : servedSource === "expertoption" ? "ExpertOption"
+      : servedSource === "ccxt" ? "CCXT"
+        : servedSource && servedSource !== "none" ? servedSource : "no visible source"
   // Honest resolution label: the SERVER decides the bar size (broker
   // resolveTimeframe), never the client's echo of the request. Any mismatch
   // between what the user picked and what the server served triggers the
@@ -124,22 +136,38 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
               O {fmtPrice(display.open)} H {fmtPrice(display.high)} L {fmtPrice(display.low)} C {fmtPrice(display.close)}
             </div>
           ) : null}
-          {TIMEFRAMES.map((tf) => (
-            <Button
-              key={tf}
-              variant={tf === timeframe ? "primary" : "ghost"}
-              className="btn-sm"
-              onClick={() => setTimeframe(tf)}
-            >
-              {TIMEFRAME_LABELS[tf]}
-            </Button>
-          ))}
+          {TIMEFRAMES.map((tf) => {
+            const enabled = servable.has(tf)
+            const button = (
+              <Button
+                key={tf}
+                variant={tf === timeframe ? "primary" : "ghost"}
+                className="btn-sm"
+                disabled={!enabled}
+                onClick={() => setTimeframe(tf)}
+              >
+                {TIMEFRAME_LABELS[tf]}
+              </Button>
+            )
+            if (enabled) return button
+            // Native disabled buttons swallow mouse events, so the tooltip
+            // explaining WHY sits on a wrapper span (T6).
+            return (
+              <span
+                key={tf}
+                title={`${TIMEFRAME_LABELS[tf]} — no configured source serves it (${sourceLabel} provides ${[...servable].map((t) => (TIMEFRAME_LABELS as Record<number, string | undefined>)[t] ?? `${t}s`).join(", ") || "no candle data"})`}
+                style={{ display: "inline-block" }}
+              >
+                {button}
+              </span>
+            )
+          })}
         </div>
       </div>
 
       {resolutionMismatch ? (
         <p className="muted small" style={{ margin: 0 }}>
-          ⚠️ No live {TIMEFRAME_LABELS[timeframe]} feed for {assetId} — showing {source === "yahoo" || source === "yahoo-daily" ? "Yahoo DAILY" : `${servedTfLabel() ?? "coarser"} `}bars instead. Levels below are computed from the served resolution.
+          ⚠️ No live {TIMEFRAME_LABELS[timeframe]} feed for {assetId} — showing {source === "yahoo" || source === "yahoo-daily" ? "Yahoo DAILY" : `${servedTfLabel() ?? "coarser"} `}bars from {sourceLabel} instead. Levels below are computed from the served resolution.
         </p>
       ) : null}
 
