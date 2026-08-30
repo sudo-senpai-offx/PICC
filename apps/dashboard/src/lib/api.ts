@@ -1240,7 +1240,7 @@ export interface Workflow {
 
 export interface InterventionProposal {
   id: string
-  source: "workflow" | "capture"
+  source: "workflow" | "capture" | "trade"
   workflowId: string
   workflowName: string
   tabId: number | null

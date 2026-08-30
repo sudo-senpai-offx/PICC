@@ -908,6 +908,11 @@ async function computeNow() {
   // /decisions, /intel and the first `suite` event. The ledger write must never
   // gate the engine's response (and it already fails closed internally).
   void logTradeVerdicts(decisions).catch(() => {})
+  // T11 — the U4FA Augmentation gate: a U4FA-enabled TRADE verdict that cleared
+  // every composite honesty gate becomes a source:"trade" proposal the human
+  // approves/rejects (approve → openPaperTrade, paper-only). Fire-and-forget
+  // like the ledger write — a proposal must never break the engine tick.
+  void proposeU4faTrades(decisions, data).catch(() => {})
   return cached
 }
 
@@ -918,6 +923,40 @@ function schedule() {
     computeNow().catch(() => {})
     schedule()
   }, DECISION_INTERVAL_MS)
+}
+
+/**
+ * T11 — bridge a winning U4FA verdict into the Augmentation gate. Runs on the
+ * decision tick for whatever batch produced the verdicts: for a U4FA-enabled
+ * asset whose report is the batch best with verdict TRADE and the composite
+ * `gates.payout`/`gates.ev` met, it reaches `interventions.proposeTrade(order)`
+ * with the order shaped from the decision (entry = the same live 60s close the
+ * accuracy ledger samples at decision time). The proposal is idempotent per
+ * asset while one is pending; any proposal risk-gate (barrier/cap/cooldown)
+ * returns quietly — the engine never forces a proposal. Fails closed on any
+ * runtime error.
+ */
+async function proposeU4faTrades(decisions, data) {
+  const d = Array.isArray(decisions) && decisions.find((x) => x?.strategies?.u4fa?.enabled && x?.verdict === "TRADE")
+  if (!d) return
+  const gates = d?.gates
+  if (!gates || gates.payout !== true) {
+    return // a would-be U4FA trade that didn't clear the composite payout gate (spec R5) is never proposed
+  }
+  const asset = (Array.isArray(data?.assets) ? data.assets : []).find((a) => a.id === d.assetId)
+  const close = Number(asset?.periods?.[60]?.[asset.periods[60].length - 1]?.close)
+  const entry = Number.isFinite(close) && close > 0 ? close : Number(d.entry) || Number(asset?.lastPrice)
+  if (!Number.isFinite(entry) || entry <= 0) return // no observable entry price -> no proposal
+  const order = {
+    symbol: d.asset,
+    direction: d.direction,
+    entry,
+    expiry: d.expiry,
+    signalId: null,
+    summary: `U4FA ${d.direction} ${d.asset} ${d.expiry}s · conf ${d.confidence} · phase ${d.phase ?? "?"}`
+  }
+  const { proposeTrade } = await import("./interventions.mjs")
+  await proposeTrade(order)
 }
 
 function startEngine() {

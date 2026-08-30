@@ -22,14 +22,16 @@ const CONDITION_LABELS: Record<string, string> = {
   pct_change_down: "changed down"
 }
 
-// Capture approvals (T9 gate / headless-capture engine) live in the same
-// review queue as workflow steps but previously had NO surface rendering them
-// — a logged-in venue could sit at pending-approval forever with no button to
-// approve it. They belong here, with the other notifications that need a
-// human: the panel polls /api/browser/interventions and renders ONLY real
-// pending capture proposals. Approving saves the token the engine already
-// observed on the venue tab; nothing is bought, sold or executed. When there
-// are none (or the API is unreachable) no fake "all approved" is claimed.
+// Capture approvals (T9 gate / headless-capture engine) and U4FA trade
+// proposals (T11 Augmentation gate) live in the same review queue as workflow
+// steps but have NO other surface rendering them — a signal could sit at
+// pending-approval forever with no button to approve it. They belong here,
+// with the other notifications that need a human: the panel polls
+// /api/browser/interventions and renders ONLY real pending capture/trade
+// proposals. Approving a capture saves the token the engine already observed,
+// approving a trade places a DEMO order (paper only — nothing touches a real
+// account). When there are none (or the API is unreachable) no fake
+// "all approved" is claimed.
 
 export function NotificationCenter() {
   const [notifications, setNotifications] = useState<Notification[]>([])
@@ -43,7 +45,7 @@ export function NotificationCenter() {
   const checkApprovals = useCallback(async () => {
     try {
       const st = await getInterventions()
-      const pending = (st.proposals ?? []).filter((p) => p.source === "capture" && p.status === "pending")
+      const pending = (st.proposals ?? []).filter((p) => (p.source === "capture" || p.source === "trade") && p.status === "pending")
       setApprovals(pending)
     } catch {
       // unreachable / unauthenticated — keep whatever we had, never fabricate a list
@@ -54,7 +56,7 @@ export function NotificationCenter() {
     async (id: string, decision: "approve" | "reject") => {
       try {
         const st = await respondIntervention(id, decision)
-        setApprovals((st.proposals ?? []).filter((p) => p.source === "capture" && p.status === "pending"))
+        setApprovals((st.proposals ?? []).filter((p) => (p.source === "capture" || p.source === "trade") && p.status === "pending"))
       } catch {
         // leave the row visible so the human can retry — a failed decision is
         // never silently swallowed into "done"
@@ -206,14 +208,18 @@ export function NotificationCenter() {
                     key={`approval_${p.id}`}
                     style={{
                       padding: "8px 12px", borderBottom: "1px solid var(--border)",
-                      background: "#ec489811", borderLeft: "3px solid #ec4898"
+                      background: p.source === "trade" ? "#00d9ff11" : "#ec489811",
+                      borderLeft: p.source === "trade" ? "3px solid #00d9ff" : "3px solid #ec4898"
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600 }}>Capture approval</span>
+                      <span style={{ fontSize: 11, fontWeight: 600 }}>
+                        {p.source === "trade" ? "U4FA signal" : "Capture approval"}
+                      </span>
                       <span style={{ fontSize: 9, color: "var(--text-muted)" }}>{p.workflowName}</span>
                     </div>
-                    <div style={{ fontSize: 10, color: "var(--text-muted)" }}>{p.label}</div>
+                    <div style={{ fontSize: 10, color: p.source === "trade" ? "var(--text)" : "var(--text-muted)" }}>{p.label}</div>
+                    <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 2, whiteSpace: "pre-line" }}>{p.detail}</div>
                     <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
                       <button
                         onClick={() => decideApproval(p.id, "approve")}

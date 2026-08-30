@@ -25,6 +25,18 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
+import {
+  U4FA_RISK_PCT,
+  U4FA_DAILY_LOSS_LIMIT_PCT,
+  U4FA_MAX_DAILY_PROPOSALS,
+  U4FA_POST_LOSS_COOLDOWN_MS,
+  u4faAmountFor,
+  pnlByUtcDay,
+  lastLossAtFrom,
+  checkProposalGate,
+  riskDayState,
+  recordU4faProposal
+} from "./u4faRisk.mjs"
 
 const SERVER_DIR = fileURLToPath(new URL("..", import.meta.url))
 const DATA_DIR = process.env.PICC_DATA_DIR
@@ -84,6 +96,15 @@ let runAbort = false
 // never touched before approval. A decided gate re-arms lazily: propose() on a
 // decided gate creates a fresh proposal (used after a rejection cooldown).
 let captureGate = null // { venueId, proposalId, status: "pending"|"approved"|"rejected"|"interrupted" }
+
+// U4FA Augmentation gate (spec T11/M6): the human approves or rejects a U4FA
+// signal BEFORE anything is placed. `tradeGate` mirrors `captureGate`: one
+// pending trade proposal at a time; approve → openPaperTrade (paper only);
+// reject → no order. The 10/day and 15-min-post-loss throttles apply WHEN the
+// proposal is created (never to approving an already-pending one). The order
+// lives on the gate, NOT on the queue entry — the proposal's pinned shape
+// stays clean and the bell only ever sees the summary.
+let tradeGate = null // { proposalId, status: "pending"|"approved"|"rejected"|"interrupted", order }
 
 function currentState() {
   return {
@@ -322,6 +343,133 @@ export function _resetCaptureGate() {
   proposals = proposals.filter((x) => x.source !== "capture")
 }
 
+/**
+ * T11 — risk feeds for the tradeGate from the REAL paper ledger + accuracy
+ * ledger. `paperHistory` closed entries give dollar PnL by UTC day (the barrier
+ * feed); ledger misses by resolvedAt feed the post-loss throttle. Any failure
+ * returns null — the gate fails closed ("risk feed unavailable"), it never
+ * proposes on unobservable state.
+ */
+async function tradeRiskFeeds() {
+  try {
+    const [{ paperOverview, paperHistory }, { ledgerHistory }] = await Promise.all([
+      import("./trading.mjs"),
+      import("./accuracyLedger.mjs")
+    ])
+    const ov = await paperOverview()
+    const closed = await paperHistory(500)
+    const ledger = await ledgerHistory(200)
+    const resolved = Array.isArray(ledger?.entries) ? ledger.entries : []
+    return {
+      balance: Number(ov?.cash) || 0,
+      closed: Array.isArray(closed) ? closed : [],
+      resolved,
+      lastLossAt: lastLossAtFrom({ closed: Array.isArray(closed) ? closed : [], resolved })
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * T11 — the U4FA Augmentation gate. Mirrors proposeCaptureLogin: a normal queue
+ * proposal (source "trade") the human resolves via respondIntervention.
+ * Idempotent while one is pending (no dupes). A NEW proposal is only created
+ * when every U4FA risk gate passes:
+ *
+ *   - the -5% UTC-day daily-loss barrier (Decision B: U4FA day-key, NOT
+ *     autopilot's local-midnight knobs);
+ *   - the 10/day proposal counter (the 11th proposal of a UTC day is refused);
+ *   - the 15-min post-loss proposal throttle (suppresses NEW proposals only);
+ *   - a valid order shape (the engine must show a real asset, direction, price
+ *     and expiry — a malformed proposal is a loud throw, never a silent skip).
+ *
+ * Paper-only at the call site: approve reaches openPaperTrade and nothing else
+ * (`autopilot.mjs:1332-1337` — there is no other execution path in PICC).
+ */
+export async function proposeTrade(order = {}, opts = {}) {
+  const now = opts?.now ?? Date.now()
+  const symbol = String(order.symbol || order.assetId || "").toUpperCase()
+  const direction = String(order.direction || "")
+  const entry = Number(order.entry)
+  const expiry = Number(order.expiry)
+  if (!symbol) throw new Error("trade proposal needs a symbol")
+  if (!["up", "down"].includes(direction)) throw new Error("trade proposal needs direction up|down")
+  if (!Number.isFinite(entry) || entry <= 0) throw new Error("trade proposal needs a valid entry price")
+  if (!Number.isFinite(expiry) || expiry < 60) throw new Error("trade proposal needs an expiry >= 60s")
+
+  if (tradeGate && tradeGate.status === "pending") {
+    return { ok: true, id: tradeGate.proposalId, status: "pending", duplicate: true }
+  }
+
+  const feeds = await tradeRiskFeeds()
+  if (!feeds) return { ok: false, status: "blocked", reason: "risk feed unavailable" }
+
+  const risk = {
+    riskPct: Number(opts?.risk?.riskPct) || U4FA_RISK_PCT,
+    dailyLossLimitPct: Number(opts?.risk?.dailyLossLimitPct) || U4FA_DAILY_LOSS_LIMIT_PCT,
+    maxDailyProposals: Number(opts?.risk?.maxDailyProposals) || U4FA_MAX_DAILY_PROPOSALS,
+    postLossCooldownMs: Number(opts?.risk?.postLossCooldownMs) || U4FA_POST_LOSS_COOLDOWN_MS
+  }
+
+  const state = riskDayState({ now, balance: feeds.balance })
+  const dayPnl = pnlByUtcDay({ closed: feeds.closed, dayKey: state.key })
+  const gate = checkProposalGate({
+    now,
+    dayStartBalance: state.dayStartBalance,
+    pnl: dayPnl,
+    proposalsToday: state.proposals,
+    lastLossAt: feeds.lastLossAt,
+    ...risk
+  })
+  if (!gate.ok) {
+    return { ok: false, status: "blocked", dayKey: gate.dayKey, dayPnl, reason: gate.reason }
+  }
+
+  const size = u4faAmountFor(feeds.balance, risk)
+  const amount = order.amount != null && Number.isFinite(Number(order.amount)) && Number(order.amount) > 0
+    ? Math.round(Number(order.amount) * 100) / 100
+    : size.amount
+  const floorNote = size.floorApplied ? ` · risk floor $1 unit applies (0.5% of $${feeds.balance} < $1)` : ""
+
+  const summary = order.summary || `U4FA ${direction} ${symbol} ${Math.round(expiry)}s`
+  const detail = `${summary} — stake $${amount.toFixed(2)}${floorNote}. PAPER ONLY: approving places a demo order; nothing touches a real account.`
+  const p = newProposal({
+    workflow: { id: "u4fa-trade", name: "U4FA signal" },
+    tabId: null,
+    step: {
+      type: "order",
+      label: `U4FA ${direction} ${symbol} (${Math.round(expiry)}s)`,
+      risk: "high",
+      message: detail
+    },
+    stepIndex: 0
+  })
+  p.source = "trade" // distinct from workflow/capture proposals in the queue UI
+  tradeGate = {
+    proposalId: p.id,
+    status: "pending",
+    order: {
+      symbol,
+      side: direction,
+      entry: Math.round(entry * 1e6) / 1e6,
+      amount,
+      takeProfit: order.takeProfit != null && Number.isFinite(Number(order.takeProfit)) ? Number(order.takeProfit) : null,
+      stopLoss: order.stopLoss != null && Number.isFinite(Number(order.stopLoss)) ? Number(order.stopLoss) : null,
+      signalId: order.signalId || null
+    }
+  }
+  recordU4faProposal({ now, balance: feeds.balance })
+  emit()
+  return { ok: true, id: p.id, status: "pending", amount, floorApplied: size.floorApplied, dayKey: gate.dayKey }
+}
+
+/** Test seam + engine reset — drops the trade gate + its proposals. */
+export function _resetTradeGate() {
+  tradeGate = null
+  proposals = proposals.filter((x) => x.source !== "trade")
+}
+
 export async function respondIntervention({ id, decision } = {}) {
   const p = proposals.find((x) => x.id === id && x.status === "pending")
   if (!p) throw new Error("no pending intervention with that id")
@@ -341,6 +489,34 @@ export async function respondIntervention({ id, decision } = {}) {
     } else {
       setProposalStatus(id, "interrupted")
       captureGate.status = "interrupted"
+    }
+    emit()
+    return currentState()
+  }
+
+  // T11 — trade-gate proposal (Augmentation gate): same queue, same endpoint.
+  // It MUST short-circuit before the running-workflow check (spec R4), exactly
+  // like the capture branch, so a pending U4FA signal stays resolvable while a
+  // browser workflow is running. approve → exactly one openPaperTrade call;
+  // reject/interrupt → no order ever.
+  if (tradeGate && tradeGate.proposalId === id) {
+    if (!["approve", "execute", "reject", "interrupt"].includes(decision)) {
+      throw new Error(`unknown decision: ${decision}`)
+    }
+    if (decision === "approve" || decision === "execute") {
+      // Order FIRST: if openPaperTrade throws (e.g. insufficient paper cash)
+      // the proposal stays pending and the UI keeps the row so the human can
+      // retry — a failed approval is never silently swallowed into "done".
+      const { openPaperTrade } = await import("./trading.mjs")
+      await openPaperTrade(tradeGate.order)
+      setProposalStatus(id, decision === "approve" ? "approved" : "executed")
+      tradeGate.status = "approved"
+    } else if (decision === "reject") {
+      setProposalStatus(id, "rejected")
+      tradeGate.status = "rejected"
+    } else {
+      setProposalStatus(id, "interrupted")
+      tradeGate.status = "interrupted"
     }
     emit()
     return currentState()
