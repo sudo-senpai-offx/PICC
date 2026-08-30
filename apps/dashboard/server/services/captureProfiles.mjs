@@ -584,8 +584,12 @@ async function captureSessionFromExtensionCore({ venueId, token = null, source =
 function sanitizeExtensionAccount(account) {
   if (!account || typeof account !== "object") return null
   const guest = account.guest === true && account.active !== true
+  // "unknown" = neither proven (the extension cannot read the DOM-tier guest
+  // signal — login button/avatar — by construction; unproven is saved, exactly
+  // like the studio hook's catch default, browserStudio.mjs:3662-3664).
+  const type = guest ? "guest" : account.active === true ? "active" : "unknown"
   return {
-    type: guest ? "guest" : "active",
+    type,
     guest,
     email: typeof account.email === "string" ? account.email.slice(0, 256) : null,
     name: typeof account.name === "string" ? account.name.slice(0, 256) : null,
@@ -617,7 +621,11 @@ export function extensionCaptureConfigs() {
         enabled: isVenueEnabled(p.id),
         hostRe: p.capture.hostRe,
         loginPage: p.capture.loginPage ?? null,
-        profileKeys: EXT_PROFILE_KEYS_RE
+        profileKeys: EXT_PROFILE_KEYS_RE,
+        // The scan MODE the content script must mirror per venue: "liveEO" →
+        // the shape-based scan of captureExpertOptionSession; "storageScan" →
+        // the exact configured keys of captureViaStorageScan.
+        via: p.capture.via
       }
       if (p.capture.via === "liveEO" && p.id === "expertoption") {
         cfg.keys = [

@@ -228,24 +228,32 @@
   // ── Venue session observation (T13) ───────────────────────────────────────
   // The extension is the PRIMARY capture leg (the studio browser is
   // deprecated): on every venue tab the human browses in their OWN browser it
-  // reads the venue's configured storage keys and relays a CHANGED session
-  // observation to the server through the worker (the relay-flush channel —
-  // a content-script fetch to http://localhost from an https venue page dies
-  // on CORS + mixed content). Rules:
-  //   • reads ONLY the configured keys (cookie/localStorage/sessionStorage) —
-  //     never an invented key, never a full dump;
-  //   • guest/active comes from the SAME storage-tier probe the studio hook
-  //     uses (browserStudio.mjs domLoginSignals storage tier), storage-only,
-  //     zero DOM;
+  // reads the venue's session surface and relays a CHANGED observation to the
+  // server through the worker (the relay-flush channel — a content-script
+  // fetch to http://localhost from an https venue page dies on CORS + mixed
+  // content). Rules — each EXACTLY mirrors the studio hook it replaces:
+  //   • liveEO venues: scanStoredTokens() replicates captureExpertOptionSession
+  //     (browserStudio.mjs:3601-3639) — EVERY cookie/localStorage/sessionStorage
+  //     entry is matched by VALUE SHAPE (32-hex / legacy uuid::base64 /
+  //     trailing-hex cookie), because the platform can name the session key
+  //     differently per deploy and the studio hook deliberately survives that;
+  //     only the best-scoring hit is relayed, never a dump;
+  //   • storageScan venues: readStoredKeys() replicates captureViaStorageScan
+  //     (browserStudio.mjs:3676+) — ONLY the configured key names, nothing
+  //     invented;
+  //   • guest/active: the storage-tier probe proves ACTIVE (a profile-shaped
+  //     JSON under profile keys). GUEST IS A DOM-TIER SIGNAL (login button /
+  //     avatar — zero-mutation sensor cannot read it), so an unproven session
+  //     is NOT reported guest — mirroring domLoginSignals' catch and the
+  //     studio hook's catch, both of which default guest=false and save;
   //   • relays only when the observed token CHANGED (in-memory dedup, guards
-  //     never in storage) and only non-guest observations (guests re-observe
-  //     until the human logs in — a guest token is never saved server-side);
+  //     never in storage);
   //   • the token is a transient observation: it touches content memory →
   //     sendMessage → worker POST and NOTHING else. Never extension storage,
   //     never the popup, never any UI.
   //
   // The scanner no-ops on non-venue hosts (one anchored hostname test) —
-  // ALL of the key-reading below runs ONLY on a host that matches a
+  // ALL of the reading below runs ONLY on a host that matches a
   // capture-enabled venue row.
   const PICC_CAPTURE_BUILTIN = {
     // EO is the reference venue. Mirror of the server's EO entry in
@@ -254,6 +262,10 @@
     // used when the web app is absent cannot drift from the served one.
     expertoption: {
       hostRe: "expertoption\\.(com|finance)",
+      via: "liveEO",
+      // liveEO mode scans by VALUE SHAPE; these names only drive the same rank
+      // preference the studio hook hardcodes (cookie token > tokenDemo > any
+      // cookie > web storage) — a differently-named cookie still captures.
       keys: [
         { type: "cookie", key: "token" },
         { type: "cookie", key: "tokenDemo" },
@@ -263,7 +275,7 @@
       profileKeys: "user|account|profile|auth|session|current|me$|identity"
     }
   }
-  let captureConfig = null // [{venueId, hostRe, keys, profileKeys, enabled}...] server view (or built-in fallback)
+  let captureConfig = null // [{venueId, hostRe, via, keys, profileKeys, enabled}...] server view (or built-in fallback)
   let captureConfigAt = 0
   const CAPTURE_CFG_TTL = 5 * 60 * 1000
   const captureSent = {} // venueId -> last relayed token (IN-MEMORY only — never persisted)
@@ -280,20 +292,30 @@
   }
 
   // THE ONLY document.* access in this file (pinned by extensionIntegrity:
-  // the sentinel "document." appears exactly here). Reads the configured keys;
-  // keys are pushed in CONFIG ORDER, so the FIRST configured key that exists
-  // wins downstream — EO's list puts cookie:token first, mirroring the studio
-  // hook's preference (cookie token > tokenDemo > web-storage mirrors).
+  // the sentinel "document." appears exactly here, inside readCookies).
+  // Cookies are parsed ONCE here and shared by both scan modes.
+  function readCookies() {
+    const out = []
+    try {
+      document.cookie.split(";").forEach((c) => {
+        const i = c.indexOf("=")
+        if (i > 0) out.push({ key: c.slice(0, i).trim(), value: decodeURIComponent(c.slice(i + 1)) })
+      })
+    } catch { /* cookie read refused — nothing to observe this pass */ }
+    return out
+  }
+
+  // Exact-key reader for storageScan venues — mirror of captureViaStorageScan
+  // (browserStudio.mjs:3676+), which reads ONLY the configured keys and nothing
+  // invented. Keys are pushed in CONFIG ORDER so the FIRST configured key that
+  // exists wins downstream. liveEO venues do NOT use this (they shape-scan).
   function readStoredKeys(keys) {
     const found = []
     for (const want of keys || []) {
       if (want.type === "cookie") {
-        try {
-          document.cookie.split(";").forEach((c) => {
-            const i = c.indexOf("=")
-            if (i > 0 && c.slice(0, i).trim() === want.key) found.push({ source: "cookie", key: want.key, value: decodeURIComponent(c.slice(i + 1)) })
-          })
-        } catch { /* cookie read refused — nothing to observe this pass */ }
+        for (const c of readCookies()) {
+          if (c.key === want.key) found.push({ source: "cookie", key: want.key, value: c.value })
+        }
       } else if (want.type === "localStorage") {
         try {
           for (let i = 0; i < localStorage.length; i++) {
@@ -313,12 +335,59 @@
     return found
   }
 
-  // Guest/active from the storage tier only (the studio hook's DOM tier —
-  // login button/avatar — is out of reach for a zero-DOM-mutation sensor, and
-  // the SAVE decision is storage-tier anyway: a profile-shaped value under a
-  // profile key ⇒ active account; only a token with no profile ⇒ guest).
+  // Shape-based scanner for liveEO venues — a byte-for-byte behavioral mirror
+  // of captureExpertOptionSession's in-page scan (browserStudio.mjs:3601-3639):
+  // every cookie + web-storage entry is matched by VALUE SHAPE so a deploy that
+  // names the session key differently ("auth", "session", …) still captures.
+  // Only the best-scoring hit returns (rank: cookie token 4 > cookie tokenDemo
+  // 3 > any cookie 2 > web storage 1, then score: tail-hex 5 > pure-hex 3 >
+  // legacy 2) — identical to the hook's sort. The three patterns below are
+  // pinned present by extensionIntegrity.
+  function scanStoredTokens() {
+    const pattern = /^[0-9a-f]{32}$/
+    const tailHex = /([0-9a-f]{32})$/
+    const legacy = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}::[A-Za-z0-9+/=_\-]+$/
+    const found = []
+    const check = (source, key, value) => {
+      const v = String(value ?? "")
+      if (!v) return
+      let hit = null
+      if (pattern.test(v)) hit = { value: v, score: 3 }
+      else if (legacy.test(v)) hit = { value: v, score: 2 }
+      else if (source === "cookie") {
+        const m = v.match(tailHex)
+        if (m) hit = { value: m[1], score: 5 }
+      }
+      if (!hit) return
+      const rank = source === "cookie" && key === "token" ? 4
+        : source === "cookie" && key === "tokenDemo" ? 3
+        : source === "cookie" ? 2 : 1
+      found.push({ source, key, value: hit.value, rank, score: hit.score })
+    }
+    try {
+      for (const c of readCookies()) check("cookie", c.key, c.value)
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        check("localStorage", k, localStorage.getItem(k))
+      }
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i)
+        check("sessionStorage", k, sessionStorage.getItem(k))
+      }
+    } catch { /* opaque origin — nothing to observe this pass */ }
+    found.sort((a, b) => b.rank - a.rank || b.score - a.score)
+    return found[0] || null
+  }
+
+  // Active/unknown from the storage tier only. The studio hook's guest signal
+  // is a DOM-tier read (login button / avatar — browserStudio.mjs domLoginSignals
+  // :3016-3025) plus its catch default (guest=false → save). A zero-DOM-mutation
+  // sensor CANNOT prove guest, so unproven = guest:false — the honest mirror of
+  // both the DOM tier's absence and the catch default. Storage proves ACTIVE
+  // (a profile-shaped value under a profile key with email/name); wallet mode
+  // (demo/real) is read from the same storage tier the hook uses.
   function probeAccountProfile(profileKeysRe) {
-    const out = { guest: true, active: false, email: null, name: null, wallet: null }
+    const out = { guest: false, active: false, email: null, name: null, wallet: null }
     for (const store of [localStorage, sessionStorage]) {
       try {
         for (let i = 0; i < store.length; i++) {
@@ -337,7 +406,6 @@
             : typeof cursor.full_name === "string" ? cursor.full_name : null
           if (em || nm) {
             out.active = true
-            out.guest = false
             if (!out.email && em) out.email = em
             if (!out.name && nm) out.name = nm
           }
@@ -364,6 +432,7 @@
     captureConfig = venues || Object.entries(PICC_CAPTURE_BUILTIN).map(([venueId, cfg]) => ({
       venueId,
       hostRe: cfg.hostRe,
+      via: cfg.via,
       keys: cfg.keys,
       profileKeys: cfg.profileKeys,
       enabled: true
@@ -381,9 +450,10 @@
     if (!venue) return
     store.get(["piccSessionCapture"], ({ piccSessionCapture }) => {
       if (piccSessionCapture === false) return // user kill-switch for session capture, defaults ON
-      const hits = readStoredKeys(venue.keys)
-      if (!hits.length) return // none of the configured keys present — nothing honest to observe
-      const best = hits[0] // config order = preference order (cookie:token first for EO)
+      // liveEO → shape scan (mirror of captureExpertOptionSession); every other
+      // via → exact configured keys (mirror of captureViaStorageScan).
+      const best = venue.via === "liveEO" ? scanStoredTokens() : (readStoredKeys(venue.keys)[0] ?? null)
+      if (!best) return // no session-shaped token on this tab — nothing honest to observe
       const account = probeAccountProfile(new RegExp(venue.profileKeys, "i"))
       if (captureSent[venue.venueId] === best.value) return // unchanged since last relay — no noise
       const p = chromeGuard(() => chrome.runtime.sendMessage({
@@ -396,9 +466,9 @@
       }))
       if (p && typeof p.then === "function") {
         p.then((res) => {
-          // Dedup ONLY on an accepted observation. A guest/pending-approval/etc.
+          // Dedup ONLY on an accepted observation. A pending-approval/error
           // answer leaves the observation un-sent so the next tick re-observes
-          // (a fresh human login, or a later approval, flows within 15 s).
+          // (a later approval flows within 15 s).
           if (res && res.ok === true && (res.state === "ok" || res.state === "guest")) captureSent[venue.venueId] = best.value
         }).catch(() => {})
       }

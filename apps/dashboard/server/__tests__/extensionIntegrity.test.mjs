@@ -207,14 +207,27 @@ describe("sensor extension integrity", () => {
     // same regex source the server serves).
     const jsStringValue = (s) => s.replace(/\\\\/g, "\\")
     expect(jsStringValue(content).includes(`hostRe: "${served.hostRe}"`)).toBe(true)
+    expect(served.via).toBe("liveEO")
     for (const line of [
       '{ type: "cookie", key: "token" }',
       '{ type: "cookie", key: "tokenDemo" }',
       '{ type: "localStorage", key: "token" }',
       '{ type: "sessionStorage", key: "token" }',
+      'via: "liveEO"',
       'profileKeys: "user|account|profile|auth|session|current|me$|identity"'
     ]) {
       expect(content.includes(line), `built-in EO mirror keeps: ${line}`).toBe(true)
+    }
+    // The liveEO shape-scan is the extension twin of captureExpertOptionSession's
+    // in-page matcher (browserStudio.mjs:3606-3618) — the three value-shape
+    // patterns must stay present and identical so key-name drift can never
+    // silence the scanner.
+    for (const pat of [
+      "/^[0-9a-f]{32}$/",
+      "/([0-9a-f]{32})$/",
+      "/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}::[A-Za-z0-9+/=_\\-]+$/"
+    ]) {
+      expect(jsStringValue(content).includes(pat), `shape-scan pattern kept: ${pat}`).toBe(true)
     }
     expect(served.keys.map((k) => `${k.type}:${k.key}`)).toEqual([
       "cookie:token", "cookie:tokenDemo", "localStorage:token", "sessionStorage:token"

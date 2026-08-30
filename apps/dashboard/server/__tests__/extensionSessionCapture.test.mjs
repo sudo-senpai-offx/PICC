@@ -221,6 +221,38 @@ describe("POST /api/trading/capture-session (T13 extension leg)", () => {
     expect(restartLiveEO).not.toHaveBeenCalled()
   })
 
+  it("UNPROVEN account (no profile signal) is saved, not reported guest — parity with the studio hook's catch default", async () => {
+    // The extension cannot read the DOM-tier guest signal (login button /
+    // avatar) by construction; the studio hook's own catch defaults to
+    // guest=false and SAVES (browserStudio.mjs:3662-3664). A storage probe
+    // finding no profile object must therefore NOT flip the observation to
+    // guest — that was the live failure ("server never showed ok" for a
+    // logged-in session whose profile was not in web storage).
+    await _approveFirstLogin("expertoption")
+    const res = await call("POST", "/api/trading/capture-session", {
+      venueId: "expertoption",
+      token: EO_TOKEN,
+      url: "https://app.expertoption.com/",
+      account: { guest: false, active: false, email: null, name: null }
+    })
+    expect(res.body.state).toBe("ok")
+    expect(res.body.account).toMatchObject({ type: "unknown", guest: false })
+    expect(saveCredentials).toHaveBeenCalledWith({ expertoptionToken: EO_TOKEN })
+  })
+
+  it("legacy uuid::base64 web-storage tokens are accepted and saved as-is (same normalization as the studio hook)", async () => {
+    await _approveFirstLogin("expertoption")
+    const legacy = "01234567-89ab-cdef-0123-456789abcdef::/WiTID2B3LL6S2BHO3g=="
+    const res = await call("POST", "/api/trading/capture-session", {
+      venueId: "expertoption",
+      token: legacy,
+      url: "https://app.expertoption.com/",
+      account: ACTIVE
+    })
+    expect(res.body.state).toBe("ok")
+    expect(saveCredentials).toHaveBeenCalledWith({ expertoptionToken: legacy })
+  })
+
   it("venue URL that does not match the row's host pattern is refused", async () => {
     await _approveFirstLogin("expertoption")
     const res = await call("POST", "/api/trading/capture-session", {
@@ -280,11 +312,16 @@ describe("GET /api/trading/capture-profiles (T13 scanner config)", () => {
     expect(ids).not.toContain("binance")
     const eo = res.body.venues.find((v) => v.venueId === "expertoption")
     expect(eo.hostRe).toBe("expertoption\\.(com|finance)")
+    // The scan MODE the content script mirrors per venue: EO shape-scans like
+    // the studio hook (captureExpertOptionSession); storageScan venues read
+    // exact configured keys (captureViaStorageScan).
+    expect(eo.via).toBe("liveEO")
     expect(eo.keys.map((k) => `${k.type}:${k.key}`)).toEqual([
       "cookie:token", "cookie:tokenDemo", "localStorage:token", "sessionStorage:token"
     ])
     expect(eo.profileKeys).toBe("user|account|profile|auth|session|current|me$|identity")
     const iq = res.body.venues.find((v) => v.venueId === "iqoption")
+    expect(iq.via).toBe("storageScan")
     expect(iq.keys).toEqual([{ type: "cookie", key: "ssid", verified: false }])
     expect(iq.enabled).toBe(true)
     // The whole payload is key names + host patterns — assert the absence of
