@@ -180,6 +180,56 @@ describe("asset class resolution (REQ-CAL)", () => {
   })
 })
 
+describe("validateU4faConfig — per-asset strategy rows (spec M4)", () => {
+  it("accepts valid assets rows", () => {
+    const res = validateU4faConfig({
+      assets: {
+        EURUSD: { u4fa: { enabled: true, weight: 0.4 } },
+        BTCUSD: { u4fa: { enabled: false, style: "3" } }
+      }
+    })
+    expect(res.ok).toBe(true)
+  })
+
+  it("rejects unknown asset keys and unknown u4fa keys", () => {
+    expect(validateU4faConfig({ assets: { EURUSD: { algo: true } } }).ok).toBe(false)
+    expect(validateU4faConfig({ assets: { EURUSD: { u4fa: { speed: 9 } } } }).ok).toBe(false)
+  })
+
+  it("rejects non-object rows and out-of-range weights / wrong types", () => {
+    expect(validateU4faConfig({ assets: { EURUSD: "on" } }).ok).toBe(false)
+    expect(validateU4faConfig({ assets: { EURUSD: { u4fa: { weight: 1.5 } } } }).ok).toBe(false)
+    expect(validateU4faConfig({ assets: { EURUSD: { u4fa: { weight: -0.1 } } } }).ok).toBe(false)
+    expect(validateU4faConfig({ assets: { EURUSD: { u4fa: { enabled: "yes" } } } }).ok).toBe(false)
+  })
+})
+
+describe("resolveAssetConfig — strategy seam (spec M4)", () => {
+  it("default strategy is OFF with the blueprint weight 0.4 and activeStyle 2", () => {
+    expect(resolveAssetConfig("EURUSD").strategy).toEqual({ enabled: false, weight: 0.4, style: "2" })
+  })
+
+  it("a per-asset row enables the strategy and overrides weight/style", () => {
+    const cfg = deepMergeConfig(U4FA_DEFAULTS, { assets: { EURUSD: { u4fa: { enabled: true, weight: 0.3, style: "1" } } } })
+    expect(resolveAssetConfig("EURUSD", cfg).strategy).toEqual({ enabled: true, weight: 0.3, style: "1" })
+  })
+
+  it("weight is clamped into [0,1] and style falls back to activeStyle", () => {
+    const high = deepMergeConfig(U4FA_DEFAULTS, { assets: { EURUSD: { u4fa: { weight: 5 } } } })
+    expect(resolveAssetConfig("EURUSD", high).strategy.weight).toBe(1)
+    const low = deepMergeConfig(U4FA_DEFAULTS, { assets: { EURUSD: { u4fa: { weight: -2 } } } })
+    expect(resolveAssetConfig("EURUSD", low).strategy.weight).toBe(0)
+    expect(resolveAssetConfig("EURUSD", low).strategy.style).toBe("2")
+  })
+
+  it("AVOID/unclassified assets stay hard-refused even when a row tries to enable them", () => {
+    const oil = deepMergeConfig(U4FA_DEFAULTS, { assets: { OIL: { u4fa: { enabled: true } } } })
+    expect(resolveAssetConfig("OIL", oil).accessibility).toBe("refused")
+    const goo = deepMergeConfig(U4FA_DEFAULTS, { assets: { GOO: { u4fa: { enabled: true } } } })
+    expect(resolveAssetConfig("GOO", goo).accessibility).toBe("refused")
+  })
+})
+
 describe("loadU4faConfig — reads a file, merges over defaults, rejects invalid", () => {
   it("returns the defaults when no file exists (source 'defaults')", async () => {
     const dir = mkdtempSync(join(tmpdir(), "picc-u4fa-cfg-"))

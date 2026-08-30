@@ -119,7 +119,12 @@ export const U4FA_DEFAULTS = Object.freeze({
     riskPerTradePct: 0.5, // REQ-RISK 0.5% of balance per trade (T10 Decision A: U4FA-size amount at proposal time)
     dailyLossLimitPct: 5, // REQ-RISK -5% -> halt until 00:00 GMT (T10 Decision B: U4FA-owned UTC day-key)
     maxDailyTrades: 10 // REQ-RISK max 10 signals/day, counted on U4FA proposals per UTC day
-  })
+  }),
+  // Per-asset strategy toggles (spec M4). Default OFF per asset — the strategy
+  // dimension must never change the decision engine's output unless a watched
+  // asset opts in explicitly (T9 acceptance: OFF path runs byte-identical).
+  // style "2" = blueprint activeStyle default; weight 0.4 as specified in M4.
+  assets: Object.freeze({})
 })
 
 function dataDir() {
@@ -154,11 +159,13 @@ const SESSION_KEYS = new Set(["tz", "start", "end", "label"])
 const CAL_KEYS = new Set(["score", "bbMult", "adxThreshold", "stoch", "expiry", "pipSize", "session", "eligibility", "maxSpreadPips"])
 const STOCH_KEYS = new Set(["long", "short"])
 const RISK_KEYS = new Set(["riskPerTradePct", "dailyLossLimitPct", "maxDailyTrades"])
+const U4FA_ASSET_KEYS = new Set(["enabled", "style", "weight"])
+const ASSET_KEYS = new Set(["u4fa"])
 const TOP_KEYS = new Set([
   "activeStyle", "presets", "sessionWindows", "calibration", "assetClassMap",
   "pipSizes", "calendarCurrencyMap", "correlations", "newsBlackoutMin",
   "bbHugPct", "regimeConfirmBars", "emaSlopeLookback", "expiries",
-  "timingAtNextBarMs", "postLossNotifyCooldownMs", "u4faVeto", "spreadSource", "risk"
+  "timingAtNextBarMs", "postLossNotifyCooldownMs", "u4faVeto", "spreadSource", "risk", "assets"
 ])
 
 function checkType(v, kind, errors, path) {
@@ -298,6 +305,29 @@ export function validateU4faConfig(raw) {
     if (raw.risk.dailyLossLimitPct != null && raw.risk.dailyLossLimitPct <= 0) errors.push("risk.dailyLossLimitPct must be > 0")
     if (raw.risk.maxDailyTrades != null && (raw.risk.maxDailyTrades < 0 || !Number.isInteger(raw.risk.maxDailyTrades))) errors.push("risk.maxDailyTrades: non-negative integer or 0=unlimited")
   }
+  // per-asset strategy rows (spec M4): assets.<id>.u4fa.{enabled,style,weight}
+  if (raw.assets != null && typeof raw.assets === "object") {
+    for (const [assetId, row] of Object.entries(raw.assets)) {
+      if (row == null || typeof row !== "object" || Array.isArray(row)) {
+        errors.push(`assets.${assetId}: must be an object`)
+        continue
+      }
+      for (const k of Object.keys(row)) if (!ASSET_KEYS.has(k)) errors.push(`assets.${assetId}.${k}: unknown asset key (only "u4fa")`)
+      const u4fa = row.u4fa
+      if (u4fa == null) continue
+      if (typeof u4fa !== "object" || Array.isArray(u4fa)) {
+        errors.push(`assets.${assetId}.u4fa: must be an object`)
+        continue
+      }
+      for (const k of Object.keys(u4fa)) if (!U4FA_ASSET_KEYS.has(k)) errors.push(`assets.${assetId}.u4fa.${k}: unknown key (enabled/style/weight)`)
+      if (u4fa.enabled != null) checkType(u4fa.enabled, "boolean", errors, `assets.${assetId}.u4fa.enabled`)
+      if (u4fa.style != null && typeof u4fa.style !== "string") errors.push(`assets.${assetId}.u4fa.style: preset key string required`)
+      if (u4fa.weight != null) {
+        checkType(u4fa.weight, "number", errors, `assets.${assetId}.u4fa.weight`)
+        if (u4fa.weight != null && (u4fa.weight < 0 || u4fa.weight > 1)) errors.push(`assets.${assetId}.u4fa.weight: in [0,1]`)
+      }
+    }
+  }
   return { ok: errors.length === 0, errors }
 }
 
@@ -427,11 +457,21 @@ export function resolveCurrencyMap(assetId, config = U4FA_DEFAULTS) {
  * Precedence: calibration row wins over preset for any field it defines
  * (REQ-CAL is class-defining). AVOID-class and unclassified assets are refused
  * (hard gate, never a soft penalty — REQ-CAL).
+ * `strategy` (spec M4) is the per-asset U4FA toggle: default OFF, weight 0.4,
+ * style = per-asset override else activeStyle. AVOID/unclassified rows are
+ * refused and cannot be enabled by a per-asset toggle.
  * @returns {{ accessibility, reason?, ... }|{ accessibility: string, class?: string }}
  */
 export function resolveAssetConfig(assetId, config = U4FA_DEFAULTS) {
   const id = String(assetId ?? "").toUpperCase()
   const classKey = assetClassOf(id, config)
+  const defaultStrategy = (row) => ({
+    enabled: row?.u4fa?.enabled === true,
+    weight: Number.isFinite(row?.u4fa?.weight) ? Math.min(1, Math.max(0, row.u4fa.weight)) : 0.4,
+    style: typeof row?.u4fa?.style === "string" && row.u4fa.style
+      ? row.u4fa.style
+      : String(config.activeStyle ?? "2")
+  })
   if (!classKey) {
     return { accessibility: "refused", reason: `no calibration class resolvable for "${id}"; unclassified assets are hard-refused (REQ-CAL)` }
   }
@@ -463,6 +503,7 @@ export function resolveAssetConfig(assetId, config = U4FA_DEFAULTS) {
     expiry: calibration.expiry ?? 900,
     maxSpreadPips: calibration.maxSpreadPips ?? 1.5,
     currencies: resolveCurrencyMap(id, config),
-    eligibility: calibration.eligibility ?? "trade"
+    eligibility: calibration.eligibility ?? "trade",
+    strategy: defaultStrategy((config.assets ?? {})[id])
   }
 }

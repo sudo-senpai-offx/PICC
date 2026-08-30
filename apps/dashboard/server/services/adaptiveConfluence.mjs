@@ -27,8 +27,21 @@ import { recordSignal } from "./trading.mjs"
 import { recordDecision } from "./accuracyLedger.mjs"
 import { getSentiment } from "./sentimentEngine.mjs"
 import { quickMtfCheck } from "./multiTimeframe.mjs"
+import { evaluateU4FA, MIN_5M_BARS } from "./fourFactor.mjs"
+import { U4FA_DEFAULTS, resolveAssetConfig } from "./u4faConfig.mjs"
 
 export const CANDIDATE_EXPIRIES = [60, 120, 300, 900] // seconds (15s excluded: 60s bar resolution can't estimate it honestly)
+/**
+ * With the U4FA strategy ON the 30-min expiry (indices/crypto per REQ-CAL)
+ * enters the candidate space. It is NOT in `CANDIDATE_EXPIRIES` so that the
+ * U4FA-off path — the T9 byte-identical regression lock — is untouched in
+ * constant AND behavior. 1800 is pay-out-ho-nest: `ASSUMED_PAYOUT` deliberately
+ * has no 1800 entry (spec R5) — it only trades on `observedPayout` demo deals;
+ * absent those, `payoutSource:"unavailable"` and `payoutBeats:false` keep it
+ * from ever clearing the composite gate.
+ */
+export const U4FA_CANDIDATE_EXPIRIES = [60, 120, 300, 900, 1800]
+export const U4FA_DEFAULT_WEIGHT = 0.4 // spec M4 confidence-merge weight
 export const ASSUMED_PAYOUT = { 60: 82, 120: 85, 300: 88, 900: 90 } // % per expiry, conservative
 export const ANALYSIS_PERIOD = 60
 export const MIN_BARS = 40
@@ -367,7 +380,44 @@ export function evGate({ winProb, payoutPct, margin = PAYOUT_MARGIN, evRRMin = E
 // Single-asset evaluation across candidate expiries
 // ---------------------------------------------------------------------
 
-export function evaluateAsset({ id, name, candles, volume, observedPayout = null, now = Date.now(), period = ANALYSIS_PERIOD, asset = null, sentimentOverride = null } = {}) {
+export function evaluateAsset({ id, name, candles, volume, observedPayout = null, now = Date.now(), period = ANALYSIS_PERIOD, asset = null, sentimentOverride = null, strategies = null } = {}) {
+  // ── U4FA strategy dimension (spec M4) ──────────────────────────────────
+  // Default OFF per asset: without an enabled strategy the decision object
+  // below is byte-identical to the pre-M4 shape (T9 regression lock). When
+  // enabled, evaluateU4FA runs FIRST — its result also rides the early-return
+  // path so the veto/attach logic is uniform.
+  const u4faEnabled = strategies?.u4fa?.enabled === true
+  const u4faStrat = u4faEnabled ? strategies.u4fa : null
+  let u4faResult = null
+  if (u4faStrat) {
+    u4faResult = evaluateU4FA({
+      assetId: id,
+      candles5m: u4faStrat.candles ?? [],
+      hourlyCandles: u4faStrat.hourlyCandles ?? null,
+      dailyCandles: u4faStrat.dailyCandles ?? null,
+      calendarEvents: u4faStrat.calendarEvents ?? [],
+      calendarSource: u4faStrat.calendarSource ?? "fallback-schedule",
+      spread: u4faStrat.spread ?? null,
+      losses: u4faStrat.losses ?? [],
+      config: u4faStrat.config ?? U4FA_DEFAULTS,
+      regimeState: u4faStrat.regimeState ?? { chop: false, streak: 0 },
+      nowMs: now ?? Date.now(),
+      candleSource: u4faStrat.candleSource ?? "unknown"
+    })
+  }
+  const strategiesOut = {
+    u4fa: {
+      enabled: u4faEnabled,
+      ...(u4faStrat ? { weight: u4faStrat.weight ?? U4FA_DEFAULT_WEIGHT, result: u4faResult } : {})
+    }
+  }
+  // U4FA veto (default on, spec M4): F1–F3 NO_TRADE (my engine's NEUTRAL token)
+  // blocks any confluence TRADE — the composite gates stay on top (G3), this is
+  // an additional hard abort, never a bypass.
+  const veto = u4faStrat
+    ? (u4faStrat.veto ?? U4FA_DEFAULTS.u4faVeto ?? true) !== false && u4faResult?.verdict === "NEUTRAL"
+    : false
+
   const read = confluenceRead(candles, volume)
   if (!read.ok || read.direction === 0) {
     return {
@@ -386,7 +436,8 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
       payoutSource: null,
       bars: read.bars,
       reasons: read.ok ? ["no directional confluence — stand aside"] : [read.error],
-      ts: now
+      ts: now,
+      strategies: strategiesOut
     }
   }
   const { closes, times } = arraysOf(cleanCandles(candles))
@@ -431,10 +482,17 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     }
   }
 
-  const expiryRuns = CANDIDATE_EXPIRIES.map((expiry) => {
+  const expiryRuns = (u4faStrat ? U4FA_CANDIDATE_EXPIRIES : CANDIDATE_EXPIRIES).map((expiry) => {
     const wp = winProbEstimate({ closes, times, period, direction, expiry })
-    const pay = observedPayout?.[`${id}:${expiry}`] ?? ASSUMED_PAYOUT[expiry]
-    const gate = evGate({ winProb: wp.winProb, payoutPct: pay })
+    // Payout honesty (spec R5): 1800 has NO ASSUMED_PAYOUT entry — an unobserved
+    // 30-min candidate reports `payout:null` + `payoutSource:"unavailable"` and
+    // can never clear `payoutBeats` (hence never TRADE) until real demo-deal
+    // payouts exist. Everything else keeps the exact old label semantics.
+    const obsKey = `${id}:${expiry}`
+    const obsPay = observedPayout?.[obsKey]
+    const pay = obsPay ?? ASSUMED_PAYOUT[expiry]
+    const payKnown = Number.isFinite(Number(pay)) && Number(pay) > 0
+    const gate = evGate({ winProb: wp.winProb, payoutPct: payKnown ? pay : null })
     const rr = pricePathRR({ candles, direction, expiry, period })
     const mttd = mttdEstimate({ candles, direction })
 
@@ -449,7 +507,7 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     let verdict
     // MTF veto: if higher TFs strongly disagree (0 agree out of 2 checked), block TRADE
     const mtfBlock = mtf.total >= 2 && mtf.agree === 0
-    if (passCount === 5 && read.phase !== "volatile_range" && !mtfBlock) verdict = "TRADE"
+    if (passCount === 5 && read.phase !== "volatile_range" && !mtfBlock && !veto) verdict = "TRADE"
     else if (passCount >= 3 && Math.abs(read.score) >= MIN_SCORE * 0.5) verdict = "OBSERVE"
     else verdict = "NEUTRAL"
 
@@ -459,6 +517,20 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     if (wp.sampleSize < 12) confidence -= 5
     confidence += mtf.boost * 100 // MTF agreement/disagreement adjustment
     confidence += sentimentBoost * 100 // sentiment alignment adjustment
+    // U4FA merged confidence (spec M4): confluence confidence + weight * signed
+    // signal strength. TRADE = strength 1, OBSERVE = 0.5, NEUTRAL = −0.5·weight;
+    // same +1/-1 direction-agreement shape as the MTF boost; same [45,92] clamp.
+    const u4faSignal = u4faStrat
+      ? u4faResult?.verdict === "TRADE" || u4faResult?.verdict === "OBSERVE"
+        ? (u4faResult.direction ?? "flat") === (direction > 0 ? "up" : "down")
+          ? (u4faResult.verdict === "TRADE" ? 1 : 0.5)
+          : -(u4faResult.verdict === "TRADE" ? 1 : 0.5)
+        : -0.5
+      : 0
+    if (u4faStrat) {
+      const weight = u4faStrat.weight ?? U4FA_DEFAULT_WEIGHT
+      confidence += u4faSignal * weight * 100
+    }
     confidence = clamp(Math.round(confidence), 45, 92)
 
     return {
@@ -468,8 +540,8 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
       winProb: round(wp.winProb, 4),
       empirical: wp.empirical,
       sampled: wp.sampleSize,
-      payout: pay,
-      payoutSource: observedPayout?.[`${id}:${expiry}`] ? "observed" : "assumed",
+      payout: payKnown ? pay : null,
+      payoutSource: obsPay != null ? "observed" : payKnown ? "assumed" : "unavailable",
       ev: gate.ev,
       breakevenPayout: gate.breakevenPayout,
       evRR: gate.evRR,
@@ -480,7 +552,8 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
       gates,
       confidence,
       mtf: { agree: mtf.agree, total: mtf.total, details: mtf.tfDetails },
-      sentiment: { score: round(sent.score, 4), source: sent.source, aligned: sentimentAligned }
+      sentiment: { score: round(sent.score, 4), source: sent.source, aligned: sentimentAligned },
+      ...(u4faStrat ? { u4fa: { signalStrength: round(u4faSignal, 3) } } : {})
     }
   })
 
@@ -503,9 +576,15 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     )
   } else if (best.verdict === "OBSERVE") {
     const missing = Object.entries(best.gates).filter(([, v]) => !v).map(([k]) => k)
-    reasons.push(`gates not all met (${missing.join(", ")}) — ${best.expiry}s at ${best.winProb != null ? (best.winProb * 100).toFixed(0) + "%" : "?"} win prob, payout ${best.payout}%`)
+    reasons.push(`gates not all met (${missing.join(", ")}) — ${best.expiry}s at ${best.winProb != null ? (best.winProb * 100).toFixed(0) + "%" : "?"} win prob, payout ${best.payout ?? "n/a"}%`)
   } else {
     reasons.push("no candidate expiry clears enough gates")
+  }
+  if (u4faStrat) {
+    reasons.push(
+      `U4FA strategy: verdict ${u4faResult?.verdict ?? "n/a"} (signal ${best.u4fa?.signalStrength ?? "n/a"}, expiry ${u4faResult?.expiry ?? "n/a"}s, chop ${u4faResult?.regime?.chop ?? "n/a"})` +
+      (veto ? " — U4FA VETO: F1–F3 NO_TRADE blocks confluence TRADE" : "")
+    )
   }
   reasons.push("decision support only — no order is placed")
 
@@ -538,7 +617,21 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     volume: read.volume,
     bars: read.bars,
     reasons,
-    ts: now
+    ts: now,
+    strategies: {
+      u4fa: {
+        enabled: u4faEnabled,
+        ...(u4faStrat
+          ? {
+              weight: u4faStrat.weight ?? U4FA_DEFAULT_WEIGHT,
+              vetoApplied: veto,
+              veto: veto ? "U4FA F1–F3 NO_TRADE blocked confluence TRADE" : null,
+              signalStrength: best.u4fa?.signalStrength ?? null,
+              result: u4faResult
+            }
+          : {})
+      }
+    }
   }
 }
 
@@ -546,7 +639,50 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
 // Watch-set decisions
 // ---------------------------------------------------------------------
 
-export async function decideAssets({ data, observedPayout = null, now = Date.now() } = {}) {
+/**
+ * Per-asset U4FA regime latch (chop/streak) carried across decision cycles —
+ * the pure engine is stateless; continuity lives here (spec T9). Populated by
+ * `decideAssets` from each decision's result. `resetU4faRegimeStates()` exists
+ * for tests only (it is NOT part of a live reset path).
+ */
+const u4faRegimeStates = new Map()
+export function resetU4faRegimeStates() {
+  u4faRegimeStates.clear()
+}
+
+/**
+ * Build the per-asset U4FA strategy row for `decideAssets` from the runtime
+ * context. Honest-by-default: no spread feed (T6) and no Yahoo D1 EOD in the
+ * live cycle (T8) mean F1 spread and the D1 leg surface as unavailable/null —
+ * truthful abort states, never fabricated numbers (G2).
+ */
+function buildU4faStrategy(a, ctx, now) {
+  const id = String(a.id ?? "")
+  const resolved = resolveAssetConfig(id, ctx.config ?? U4FA_DEFAULTS)
+  const enabled = resolved.accessibility === "trade" && resolved.strategy?.enabled === true
+  if (!enabled) return { u4fa: { enabled: false } }
+  const candles300 = a?.periods?.[300]
+  const candles3600 = a?.periods?.[3600]
+  return {
+    u4fa: {
+      enabled: true,
+      candles: Array.isArray(candles300) ? candles300 : [],
+      hourlyCandles: Array.isArray(candles3600) ? candles3600 : null,
+      dailyCandles: null, // Yahoo EOD not in the live cycle — D1 leg honestly unavailable
+      calendarEvents: ctx.calendarEvents ?? [],
+      calendarSource: ctx.calendarSource ?? "fallback-schedule",
+      spread: ctx.spread ?? null,
+      losses: ctx.losses ?? [],
+      config: ctx.config ?? U4FA_DEFAULTS,
+      regimeState: u4faRegimeStates.get(id) ?? { chop: false, streak: 0 },
+      weight: resolved.strategy?.weight ?? U4FA_DEFAULT_WEIGHT,
+      candleSource: ctx.candleSource ?? "unknown",
+      now
+    }
+  }
+}
+
+export async function decideAssets({ data, observedPayout = null, now = Date.now(), u4faContext = null } = {}) {
   const assets = Array.isArray(data?.assets) ? data.assets : []
   const sentimentMap = await Promise.all(
     assets.map(async (a) => {
@@ -566,7 +702,14 @@ export async function decideAssets({ data, observedPayout = null, now = Date.now
     .map((a) => {
       const candles = a?.periods?.[ANALYSIS_PERIOD] ?? []
       if (!Array.isArray(candles) || candles.length < MIN_BARS) return null
-      return evaluateAsset({ id: a.id, name: a.name, candles, volume: a.ticks, observedPayout, now, asset: a, sentimentOverride: sentimentMap[a.id] || null })
+      const strategies = u4faContext ? buildU4faStrategy(a, u4faContext, now) : null
+      const d = evaluateAsset({ id: a.id, name: a.name, candles, volume: a.ticks, observedPayout, now, asset: a, sentimentOverride: sentimentMap[a.id] || null, strategies })
+      // Regime latch continuity: persist whatever the pure engine reported
+      // (refused/insufficient carry the prior latch through untouched).
+      if (d?.strategies?.u4fa?.enabled && d?.strategies?.u4fa?.result?.regimeState) {
+        u4faRegimeStates.set(a.id, d.strategies.u4fa.result.regimeState)
+      }
+      return d
     })
     .filter(Boolean)
   const rank = { TRADE: 0, OBSERVE: 1, NEUTRAL: 2 }
@@ -677,6 +820,52 @@ async function logTradeVerdicts(decisions) {
   }
 }
 
+/**
+ * U4FA runtime context for the live cycle: config + calendar + resolved losses.
+ * Returns null under VITEST so tests never touch real config/calendar/ledger
+ * storage, and null on any failure (engine runs U4FA-off, honesty preserved).
+ * T10 wire-up note: `losses` currently stays [] — the correlation-loss feed
+ * lands with the risk layer (same ledger read, spec T10), not here.
+ */
+async function u4faRuntimeContext() {
+  if (process.env.VITEST) return null
+  try {
+    const [{ loadU4faConfig }, { getEconomicCalendar }, { ledgerHistory }] = await Promise.all([
+      import("./u4faConfig.mjs"),
+      import("./economicCalendar.mjs"),
+      import("./accuracyLedger.mjs")
+    ])
+    const { config } = await loadU4faConfig({})
+    let events = []
+    try {
+      const cal = await getEconomicCalendar()
+      events = Array.isArray(cal) ? cal : cal?.events ?? []
+    } catch {
+      events = [] // calendar outage → engine runs with fallback-schedule honesty (F2 latch uses candles only)
+    }
+    let losses = []
+    try {
+      const ledger = ledgerHistory(200) ?? {}
+      losses = (ledger.entries ?? []).filter((e) => e?.result === "miss").slice(-50).map((e) => ({
+        asset: e.assetId,
+        ts: e.resolvedAt ? Date.parse(e.resolvedAt) : e.entryTs
+      }))
+    } catch {
+      losses = []
+    }
+    return {
+      config,
+      calendarEvents: events,
+      calendarSource: events.length ? "feed" : "fallback-schedule",
+      spread: null, // T6: no bid/ask feed in PICC → F1 spread honestly unmeasurable (abort, never fabricate)
+      losses,
+      candleSource: "liveEO-extension"
+    }
+  } catch {
+    return null
+  }
+}
+
 async function computeNow() {
   // Phase 9: fold the read-only CCXT exchange candles (liveCCXT.mjs, fed by the
   // scheduler's ccxt-market-data job) into the same decision batch so exchange
@@ -702,7 +891,8 @@ async function computeNow() {
     return cached
   }
   const observedPayout = await loadObservedPayouts()
-  const decisions = await decideAssets({ data, observedPayout, now: Date.now() })
+  const u4faContext = await u4faRuntimeContext()
+  const decisions = await decideAssets({ data, observedPayout, now: Date.now(), u4faContext })
   cached = {
     ts: Date.now(),
     status: data.status,
