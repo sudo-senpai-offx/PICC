@@ -9,7 +9,6 @@ import { getHoldings, getSnapshots } from "@/lib/finance"
 import { getPaperOverview } from "@/lib/trading"
 import { getStreams, getEarnings, streamSummary } from "@/lib/streams"
 import { CryptoMarkets } from "@/components/CryptoMarkets"
-import { CaptureApprovals } from "@/components/CaptureApprovals"
 
 function SystemStatus() {
   const [health, setHealth] = useState<Awaited<ReturnType<typeof getHealth>> | null>(null)
@@ -255,8 +254,6 @@ export function Dashboard() {
               ))}
             </div>
           </Card>
-
-          <CaptureApprovals />
 
           <SystemStatus />
 

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
+import { getInterventions, respondIntervention, type InterventionProposal } from "@/lib/api"
 
 interface Notification {
   id: string
@@ -21,13 +22,53 @@ const CONDITION_LABELS: Record<string, string> = {
   pct_change_down: "changed down"
 }
 
+// Capture approvals (T9 gate / headless-capture engine) live in the same
+// review queue as workflow steps but previously had NO surface rendering them
+// — a logged-in venue could sit at pending-approval forever with no button to
+// approve it. They belong here, with the other notifications that need a
+// human: the panel polls /api/browser/interventions and renders ONLY real
+// pending capture proposals. Approving saves the token the engine already
+// observed on the venue tab; nothing is bought, sold or executed. When there
+// are none (or the API is unreachable) no fake "all approved" is claimed.
+
 export function NotificationCenter() {
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [approvals, setApprovals] = useState<InterventionProposal[]>([])
   const [open, setOpen] = useState(false)
   const [lastCheck, setLastCheck] = useState(0)
   const panelRef = useRef<HTMLDivElement>(null)
 
-  const unread = notifications.filter((n) => !n.read).length
+  const unread = notifications.filter((n) => !n.read).length + approvals.length
+
+  const checkApprovals = useCallback(async () => {
+    try {
+      const st = await getInterventions()
+      const pending = (st.proposals ?? []).filter((p) => p.source === "capture" && p.status === "pending")
+      setApprovals(pending)
+    } catch {
+      // unreachable / unauthenticated — keep whatever we had, never fabricate a list
+    }
+  }, [])
+
+  const decideApproval = useCallback(
+    async (id: string, decision: "approve" | "reject") => {
+      try {
+        const st = await respondIntervention(id, decision)
+        setApprovals((st.proposals ?? []).filter((p) => p.source === "capture" && p.status === "pending"))
+      } catch {
+        // leave the row visible so the human can retry — a failed decision is
+        // never silently swallowed into "done"
+        checkApprovals()
+      }
+    },
+    [checkApprovals]
+  )
+
+  useEffect(() => {
+    checkApprovals()
+    const t = setInterval(checkApprovals, 10000)
+    return () => clearInterval(t)
+  }, [checkApprovals])
 
   const checkAlerts = useCallback(async () => {
     try {
@@ -149,7 +190,7 @@ export function NotificationCenter() {
           </div>
 
           <div style={{ maxHeight: 340, overflowY: "auto" }}>
-            {notifications.length === 0 ? (
+            {approvals.length === 0 && notifications.length === 0 ? (
               <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)", fontSize: 11 }}>
                 No notifications
                 <div style={{ marginTop: 8 }}>
@@ -159,7 +200,37 @@ export function NotificationCenter() {
                 </div>
               </div>
             ) : (
-              notifications.map((n) => (
+              <>
+                {approvals.map((p) => (
+                  <div
+                    key={`approval_${p.id}`}
+                    style={{
+                      padding: "8px 12px", borderBottom: "1px solid var(--border)",
+                      background: "#ec489811", borderLeft: "3px solid #ec4898"
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
+                      <span style={{ fontSize: 11, fontWeight: 600 }}>Capture approval</span>
+                      <span style={{ fontSize: 9, color: "var(--text-muted)" }}>{p.workflowName}</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)" }}>{p.label}</div>
+                    <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+                      <button
+                        onClick={() => decideApproval(p.id, "approve")}
+                        style={{ fontSize: 10, padding: "2px 10px", borderRadius: 4, border: "none", background: "var(--accent)", color: "#fff", cursor: "pointer" }}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => decideApproval(p.id, "reject")}
+                        style={{ fontSize: 10, padding: "2px 10px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", cursor: "pointer" }}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {notifications.map((n) => (
                 <div
                   key={n.id}
                   onClick={() => markRead(n.id)}
@@ -179,7 +250,8 @@ export function NotificationCenter() {
                   </div>
                   {n.message && <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 2 }}>{n.message}</div>}
                 </div>
-              ))
+              ))}
+              </>
             )}
           </div>
         </div>
