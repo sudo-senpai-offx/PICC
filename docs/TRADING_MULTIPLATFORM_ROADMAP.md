@@ -23,10 +23,29 @@ reference below was verified). Nothing here is speculative about the codebase's 
 | Instrument canonicalization | `services/assetCatalog.mjs` | ✅ One alias table shared sensor↔server↔Yahoo; `canonicalAssetId / assetsEquivalent / yahooSymbolFor` |
 | Headless session engine (Phase 5) | `services/captureProfiles.mjs`, `browserStudio.captureViaStorageScan`, `services/accountMetrics.mjs` | ✅ Two full venues (`expertoption` via the reference liveEO hook, `iqoption` via the generic storageScan hook reading exactly the configured `ssid` cookie); capture-config + account-metrics + headless-status APIs; T9 first-login approval gate; per-venue tokens in a dedicated file (never in the credentials object, which leaks into API responses); metrics strict absent→null. T12.1: after-login workflow — token venues need NO vault username/password; the engine captures from the venue's OWN open tab found by host (`studioLivePages`), honest `no-tab` when it isn't open. T13: the PICC extension is the PRIMARY capture leg (`POST /api/trading/capture-session` — content script observes configured venue keys wherever the extension runs; same gate/guest/save/revive rules; `sourceLeg` provenance on status rows; token transient, never in extension storage); studio leg stays as fallback — either present is functional, both is ideal |
 
-**The one structural gap:** order execution is welded to ExpertOption's session singleton inside
-`autopilot.mjs` (`state.session = connectTradingSession(...)`, `.buy({assetId,type:"call"|"put",...})`).
-Everything downstream (handlers `/api/trading/demo/*`, UI) duck-types the session but nothing can
-*provide a different session implementation*. That weld is what this roadmap removes.
+**The one structural gap (SUPERSEDED 2026-08-31 — execution removed, not re-welded):** this paragraph
+once described order execution bound to ExpertOption's session singleton inside `autopilot.mjs`
+(`state.session`, `.buy(...)`). That binding is **gone by design**:
+`bootstrapAutopilot/autopilotTick/runAutopilotTick/startAutopilot/stopAutopilot/placeDemoTrade`
+are deprecated-removed
+(`autopilot.mjs:1332-1337`), and `demoStatus` reports `running:false // execution removed — advisory-only`
+(`autopilot.mjs:963`). No `executorRegistry.mjs`/`brokerAdapter.mjs` files exist — the real seam is the
+data-side `LiveBroker` registry + four adapters (`brokers/index.mjs:9-26,56-146`), which has **no order
+placement surface**. §1, §2 and the §6 checklist items 1–3 are **dead-letter** — superseded by
+`docs/specs/NEXT_WAVE_generalization.md` (redirect, not execute) and `docs/specs/PICC_UNIVERSAL_4FA_ENGINE.md`
+(advisory dimension). The only order path in the tree is `openPaperTrade` (`trading.mjs:552`) behind the
+human-approval interventions gate. `getDemoSession` is not in autopilot's exports; its importers
+(`brokers.mjs:41`, `positionManager.mjs:60`, `trading.mjs:915`) fail closed via try/catch.
+
+**U4FA — advisory strategy dimension (`docs/specs/PICC_UNIVERSAL_4FA_ENGINE.md`):** the confluence
+decision engine gains a 4-factor strategy dimension (F1 session/spread/news/correlation → F2 structure →
+F3 regime → F4 boosters). It is OFF by default per asset; when ON it can VETO a confluence TRADE, never
+force one. Delivery is advisory: `type:"u4fa"` SSE events on the existing `/api/trading/realtime` socket
+plus `strategies.u4fa` in `/api/trading/decisions`; a TRADE verdict enqueues a PAPER proposal
+(`source:"trade"`) in the interventions queue for human approval — nothing auto-executes. Honesty
+contract: the spread leg aborts with `"spread unmeasurable"` and `spreadSource:null` (no live bid/ask
+source), a blackout may come from the static schedule (labelled `calendarSource:"fallback-schedule"`), and
+no win-rate string may appear before the T14 ledger gate (≥200 resolved decisions) passes.
 
 ---
 

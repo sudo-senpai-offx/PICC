@@ -240,6 +240,20 @@ guest page never saves. Captured tokens land in `server/data/trading-venue-token
    token changed) and `lastMetricsAt`, never the token value. Account metrics
    (`/api/trading/account-metrics`, `services/accountMetrics.mjs`) are strict: an absent balance is
    `null`, never a fabricated `0`; a genuine observed `0` stays `0`.
+7. **U4FA advisory dimension (`docs/specs/PICC_UNIVERSAL_4FA_ENGINE.md`).** The confluence decision
+   engine (`services/adaptiveConfluence.mjs`) runs `evaluateU4FA` per U4FA-enabled asset on its own
+   `periods[300]` candle slice; the result rides (a) `strategies.u4fa` on the decision objects served
+   by `/api/trading/decisions` and (b) `type:"u4fa"` SSE events on the SAME `/api/trading/realtime`
+   socket as `decision` events — one event per U4FA-enabled decision, on the engine's existing
+   `DECISION_INTERVAL_MS` tick; no new timer or endpoint. `compliance.proposalId` is the pending trade
+   proposal for that symbol as observed at emit time (null honestly when none). A TRADE verdict places
+   NO order by itself: `interventions.proposeTrade` enqueues a `source:"trade"` proposal in the
+   applications queue, and only a human `approve` (`respondIntervention` trade branch →
+   `openPaperTrade`, `trading.mjs:552`) creates a paper order. Honesty contract (all `honesty.*` keys):
+   `spreadSource` is `null` when the spread was unmeasurable (`"spread":"unmeasurable"`, never a numeric
+   estimate), `calendarSource` names the static schedule (`"fallback-schedule"`) when a live feed is
+   absent, `structureSource` names the actual derivation (`"aggregate-h4"`/`"yahoo-d1"`), and no win-rate
+   string ships before the T14 ledger gate (≥200 resolved decisions) passes.
 
 ## Key design decisions
 

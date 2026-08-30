@@ -84,6 +84,22 @@ Machine-only items CI cannot prove (Part-B): real token capture against the
 live site, ≥60s of live ticks on a real chart, one full demo trade cycle,
 network-drop recovery while watching the dashboard chart live.
 
+**Part-B · U4FA live venue-session (T13, `docs/specs/PICC_UNIVERSAL_4FA_ENGINE.md` T13 — the
+blocking edge for any real-data claim):** on ONE real, logged-in EO demo tab —
+1. Extension popup shows the venue row with `sourceLeg` and the ok status (`popup.js:45,105-109`).
+2. The popup row appears and the server ACKs the saved session (`POST /api/trading/capture-session`).
+3. Live venue data flows — `getBrokerData` shows the real asset, `periods[300]` advances, and
+   `getSessionLive()` reports the extension leg.
+4. U4FA verdicts over that real data carry honest `candleSource:"liveEO-extension"`; repeat across
+   ≥15 min of live bars. Log in the `docs/T11_E2E_MANUAL_LOG.md` format (VERIFIED-MACHINE /
+   UNVERIFIED-HUMAN split); any failure blocks T14 and every real-data-consumption UI claim.
+
+**Honesty while watching U4FA (T5/T6):** an unmeasurable spread reports `"spread":"unmeasurable"` with
+`spreadSource:null` and never a numeric estimate — the F1 spread gate aborts by design. A news-blackout
+verdict may come from the static fallback schedule and is then labelled
+`calendarSource:"fallback-schedule"` — never presented as a live feed. Both are intended honesty
+signals, not engine faults.
+
 ## 5. Operating posture (demo)
 
 - Autopilot ON only while you watch, initially. The dashboard now answers
