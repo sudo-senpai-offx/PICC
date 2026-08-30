@@ -231,3 +231,18 @@ describe("interventions — trade gate vs running workflow (spec R4)", () => {
     expect(after.running.status).toBe("aborted")
   })
 })
+
+describe("interventions — pendingTradeProposals (T12 M8 compliance.proposalId feed)", () => {
+  it("reports the pending proposal keyed by upper-case symbol; nothing when no gate", async () => {
+    expect(m.pendingTradeProposals()).toEqual({})
+    const r = await m.proposeTrade({ ...ORDER }, { now: NOW })
+    expect(m.pendingTradeProposals()).toEqual({ EURUSD: r.id })
+    await m.respondIntervention({ id: r.id, decision: "approve" })
+    expect(m.pendingTradeProposals()).toEqual({}) // resolved → nothing pending
+  })
+
+  it("matches the gate symbol regardless of case", async () => {
+    const r = await m.proposeTrade({ ...ORDER, symbol: "eurusd" }, { now: NOW })
+    expect(m.pendingTradeProposals()).toEqual({ EURUSD: r.id })
+  })
+})

@@ -18,6 +18,11 @@ vi.mock("../services/adaptiveConfluence.mjs", () => ({
     cb({ type: "decision", ts: 1, status: "connected", mode: "demo", account: null, viewed: [], decisions: [] })
     return () => {}
   }),
+  // T12/M8 — the `type:"u4fa"` event is delivered on this SAME socket.
+  subscribeU4faEvents: vi.fn((cb) => {
+    cb({ type: "u4fa", ts: 1, assetId: "EURUSD", verdict: "TRADE", direction: "up", expiry: 900 })
+    return () => {}
+  }),
   getDecisions: vi.fn(async () => ({
     ts: 1,
     status: "connected",
@@ -93,6 +98,9 @@ describe("trading realtime SSE event names", () => {
     expect(body).toContain("event: stats")
     expect(body).toContain("event: decision")
     expect(body).toContain("event: decisions")
+    // T12/M8 — `type:"u4fa"` rides this same SSE socket (no separate endpoint).
+    expect(body).toContain("event: u4fa")
+    expect(body).toContain('"verdict":"TRADE"')
     // decisions payload is a full decision snapshot, NOT `{ ok: false }`
     expect(body).toContain('"verdict":"TRADE"')
     // suite is emitted independently of the (slow) decisions fetch

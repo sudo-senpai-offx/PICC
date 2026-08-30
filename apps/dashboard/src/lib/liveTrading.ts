@@ -94,7 +94,35 @@ export type LiveEvent =
   | { type: "account"; account: LiveAccount; mode: string; ts: number }
   | { type: "status"; status: string; mode?: string; account?: LiveAccount | null; error?: string; ts: number }
   | ({ type: "decision" } & LiveDecisions)
+  | ({ type: "u4fa" } & LiveU4faSignal)
   | { type: "suite"; snapshot: TradingSuiteSnapshot }
+
+/**
+ * T12/M8 — the `type:"u4fa"` SSE event (U4FA engine payload, spec
+ * PICC_UNIVERSAL_4FA_ENGINE.md M8). Deep blocks come verbatim from the server's
+ * evaluateU4FA result; `honesty` names the real producers of this run
+ * (spreadSource null when the spread was unmeasurable — never a number).
+ */
+export interface LiveU4faSignal {
+  ts: number
+  assetId: string
+  style: string | null
+  direction: "up" | "down" | "flat"
+  verdict: "TRADE" | "OBSERVE" | "NEUTRAL"
+  expiry: number | null
+  factors: {
+    f1: { pass: boolean; checks: { session: string; spread: string; news: string; correlation: string }; details?: unknown }
+    f2: { pass: boolean; structure: { tf: number; level: number; distancePips: number; tolerancePips: number; trigger: string } | null; reasons?: string[] }
+    f3: { pass: boolean; adx: number | null; ema50Side: string | null; ema50Slope: number | null; chop: boolean; reason?: string }
+    f4: { boosters: number[]; passed: number; required: number; detail: unknown } | null
+  } | null
+  regime: { adx: number | null; adxThreshold: number; phase: string; pccPhase: string; chop: boolean; streak: number; atrPct: string | null } | null
+  timing: { mode: string; atMs: number | null; note: string } | null
+  indicators: { close: number | null; ema50: number | null; adx: number | null; bb: object | null; stochRsi: object | null } | null
+  risk: { riskPct: number; dailyLossLimitPct: number; maxDailyTrades: number } | null
+  compliance: { requiresHumanApproval: boolean; proposalId: string | null }
+  honesty: { spreadSource: string | null; structureSource: string | null; calendarSource: string; candleSource: string } | null
+}
 
 export interface LiveDecisionGates {
   score: boolean
@@ -397,6 +425,11 @@ export function streamLiveTrading(
               } else {
                 onEvent({ type: "decision", ...p })
               }
+            } else if (lastEvent === "u4fa") {
+              // T12/M8 — U4FA engine signal: forwarded intact on its own event
+              // name. Without this branch the generic fall-through below would
+              // mis-route every u4fa payload into a `ready` event.
+              onEvent({ type: "u4fa", ...payload } as LiveEvent)
             } else if (lastEvent === "suite") {
               onEvent({ type: "suite", snapshot: payload as unknown as TradingSuiteSnapshot })
             } else {

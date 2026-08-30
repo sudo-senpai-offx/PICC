@@ -728,6 +728,7 @@ let cachedAt = 0
 let inflight = null
 let bootStarted = false
 const decisionSubs = new Set()
+const u4faSubs = new Set()
 const logCooldowns = new Map()
 
 function emitDecisions() {
@@ -903,6 +904,22 @@ async function computeNow() {
   }
   cachedAt = cached.ts
   emitDecisions()
+  // T12/M8 — one `type:"u4fa"` event per U4FA-enabled decision, on the same
+  // tick/cadence as the decision event (no new timer, no ledger IO — the
+  // DECISION_INTERVAL_MS / LEDGER_LOG_COOLDOWN_MS rhythm is untouched). The
+  // payload is lifted off the live evaluateU4FA result (grounding-in-code:
+  // honesty keys report exactly what the producer observed this run).
+  // `compliance.proposalId` mirrors the trade gate as observed NOW — a proposal
+  // this same tick's async proposeU4faTrades has not finished writing yet
+  // reports null, honestly (it shows up in the next tick's event).
+  let proposalMap = {}
+  try {
+    const { pendingTradeProposals } = await import("./interventions.mjs")
+    proposalMap = pendingTradeProposals() ?? {}
+  } catch {
+    proposalMap = {}
+  }
+  emitU4faEvents(decisions, { ts: cached.ts, proposalMap })
   // Fire-and-forget: verdict logging does serial file I/O under the ledger
   // lock; awaiting it here made every cold computeNow take ~20s and blocked
   // /decisions, /intel and the first `suite` event. The ledger write must never
@@ -985,6 +1002,7 @@ export function stopDecisionEngine() {
     liveOff = null
   }
   decisionSubs.clear()
+  u4faSubs.clear()
   cached = null
   cachedAt = 0
 }
@@ -1001,7 +1019,82 @@ export function subscribeDecisions(cb) {
   }
   return () => {
     decisionSubs.delete(cb)
-    if (decisionSubs.size === 0 && !bootStarted) stopDecisionEngine()
+    if (decisionSubs.size === 0 && u4faSubs.size === 0 && !bootStarted) stopDecisionEngine()
+  }
+}
+
+/**
+ * T12/M8 — lift one decision's U4FA run into the `type:"u4fa"` SSE payload.
+ * Every deep block (factors/regime/timing/indicators/risk/honesty) passes
+ * through verbatim from the real producer (evaluateU4FA's result) — nothing is
+ * default-filled, so an unmeasurable spread stays `"unmeasurable"` and absent
+ * sources stay null. `compliance.proposalId` is the pending trade proposal for
+ * that symbol as observed at emit time (null = nothing is pending for it).
+ * Returns null for decisions without an enabled U4FA result (they emit nothing).
+ * Exported for the M8 contract pins (u4faPayload.test.mjs).
+ */
+export function u4faEventFromDecision(d, { proposalMap = {}, ts = Date.now() } = {}) {
+  const strat = d?.strategies?.u4fa
+  if (!strat?.enabled || !strat?.result) return null
+  const r = strat.result
+  const symbolKeys = [d?.asset, d?.assetId, r.assetId]
+    .filter((x) => x != null && x !== "")
+    .map((x) => String(x).toUpperCase())
+  let proposalId = null
+  for (const k of symbolKeys) {
+    if (proposalMap[k] != null) {
+      proposalId = proposalMap[k]
+      break
+    }
+  }
+  return {
+    type: "u4fa",
+    ts: d?.ts ?? ts,
+    assetId: r.assetId ?? d?.assetId ?? null,
+    style: r.style ?? null,
+    direction: r.direction ?? "flat",
+    verdict: r.verdict ?? "NEUTRAL",
+    expiry: r.expiry ?? null,
+    factors: r.factors ?? null,
+    regime: r.regime ?? null,
+    timing: r.timing ?? null,
+    indicators: r.indicators ?? null,
+    risk: r.risk ?? null,
+    compliance: {
+      requiresHumanApproval: r.compliance?.requiresHumanApproval ?? true,
+      proposalId
+    },
+    honesty: r.honesty ?? null
+  }
+}
+
+/** T12/M8 — push one `type:"u4fa"` event per U4FA-enabled decision to subscribers. */
+export function emitU4faEvents(decisions = [], { ts = Date.now(), proposalMap = {} } = {}) {
+  for (const d of decisions) {
+    const msg = u4faEventFromDecision(d, { proposalMap, ts })
+    if (!msg) continue
+    for (const cb of u4faSubs) {
+      try {
+        cb(msg)
+      } catch {
+        /* subscriber errors never break the stream */
+      }
+    }
+  }
+}
+
+/**
+ * T12/M8 — subscribe to `type:"u4fa"` events (same realtime stream infra as
+ * subscribeDecisions). No replay of past events on connect: the SSE handler's
+ * initial `decisions` snapshot already carries `strategies.u4fa` per decision
+ * (T9), so a fresh connection sees the current state without a stale copy.
+ */
+export function subscribeU4faEvents(cb) {
+  u4faSubs.add(cb)
+  if (!liveOff) startEngine()
+  return () => {
+    u4faSubs.delete(cb)
+    if (u4faSubs.size === 0 && decisionSubs.size === 0 && !bootStarted) stopDecisionEngine()
   }
 }
 

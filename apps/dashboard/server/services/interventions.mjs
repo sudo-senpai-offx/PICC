@@ -470,6 +470,18 @@ export function _resetTradeGate() {
   proposals = proposals.filter((x) => x.source !== "trade")
 }
 
+/**
+ * T12/M8 — pending trade proposal per SYMBOL (upper-case), read purely from
+ * module memory (never disk). The realtime `u4fa` payload fills
+ * `compliance.proposalId` from this at emit time: a pending gate reports its
+ * proposal id; no gate / already resolved reports nothing (absent data is
+ * reported, never guessed).
+ */
+export function pendingTradeProposals() {
+  if (!tradeGate || tradeGate.status !== "pending" || !tradeGate.order?.symbol) return {}
+  return { [tradeGate.order.symbol]: tradeGate.proposalId }
+}
+
 export async function respondIntervention({ id, decision } = {}) {
   const p = proposals.find((x) => x.id === id && x.status === "pending")
   if (!p) throw new Error("no pending intervention with that id")
