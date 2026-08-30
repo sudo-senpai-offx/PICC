@@ -6,6 +6,7 @@ import { getHealth, getBtcpayStatus, getExtensionStatus } from "@/lib/api"
 import { listData } from "@/lib/localdata"
 import type { AgentLog, SimulationRow } from "@/lib/types"
 import { getHoldings, getSnapshots } from "@/lib/finance"
+import { getPaperOverview } from "@/lib/trading"
 import { getStreams, getEarnings, streamSummary } from "@/lib/streams"
 import { CryptoMarkets } from "@/components/CryptoMarkets"
 import { CaptureApprovals } from "@/components/CaptureApprovals"
@@ -95,6 +96,7 @@ export function Dashboard() {
   const [sims, setSims] = useState<SimulationRow[]>([])
   const [logs, setLogs] = useState<AgentLog[]>([])
   const [loading, setLoading] = useState(true)
+  const [paperBalance, setPaperBalance] = useState<number | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -111,6 +113,17 @@ export function Dashboard() {
       .catch(() => setLoading(false))
   }, [user])
 
+  useEffect(() => {
+    // The net-worth hero card below has no manual-entry UI anywhere in the
+    // app yet, so getSnapshots() is permanently empty for every user — this
+    // was showing a dead "—" forever, even for someone actively trading.
+    // Until a real holdings tracker exists, fall back to the one number PICC
+    // already knows for certain: the paper engine's live cash balance.
+    getPaperOverview()
+      .then((ov) => setPaperBalance(ov.ok ? ov.cash : null))
+      .catch(() => setPaperBalance(null))
+  }, [])
+
   const money = (n: unknown) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(n) || 0)
 
@@ -119,9 +132,12 @@ export function Dashboard() {
   const prevSnap = snapshots[snapshots.length - 2] ?? null
   const netWorth = lastSnap
     ? `MYR ${Math.round(lastSnap.total).toLocaleString("en-US")}`
-    : getHoldings().length > 0
-      ? "Add a holding"
-      : "—"
+    : paperBalance != null
+      ? money(paperBalance)
+      : getHoldings().length > 0
+        ? "Add a holding"
+        : "—"
+  const netWorthIsLiveFallback = !lastSnap && paperBalance != null
   const deltaPct = lastSnap && prevSnap && prevSnap.total ? ((lastSnap.total - prevSnap.total) / prevSnap.total) * 100 : null
   const summary = streamSummary(getStreams(), getEarnings())
   const incomeMonthly = summary.monthly ? `$${Math.round(summary.monthly).toLocaleString("en-US")}/mo` : "—"
@@ -158,8 +174,15 @@ export function Dashboard() {
       <Card className="hero-card">
             <div className="row space-between wrap">
               <div className="stack">
-                <div className="metric-label">Net worth · last snapshot</div>
+                <div className="metric-label">
+                  {netWorthIsLiveFallback ? "Paper trading balance · live" : "Net worth · last snapshot"}
+                </div>
                 <div className="hero-value">{netWorth}</div>
+                {netWorthIsLiveFallback ? (
+                  <div className="muted small">
+                    Not full net worth — holdings tracking isn't built yet, this is only your simulated trading balance.
+                  </div>
+                ) : null}
                 <div className="row wrap" style={{ gap: 8 }}>
                   {deltaPct != null ? (
                     <Badge tone={deltaPct >= 0 ? "success" : "danger"}>

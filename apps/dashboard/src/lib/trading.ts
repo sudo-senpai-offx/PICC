@@ -159,6 +159,21 @@ export function getPaperPositions(): Promise<{ ok: boolean; positions: PaperPosi
   return request("/trading/paper/positions")
 }
 
+export interface PaperOverview {
+  ok: boolean
+  starting: number
+  cash: number
+  committed: number
+  realizedPnl: number
+  openCount: number
+  closedCount: number
+  winRate: number | null
+}
+
+export function getPaperOverview(): Promise<PaperOverview> {
+  return request("/trading/paper/overview")
+}
+
 export function getPaperHistory(limit = 50): Promise<{ ok: boolean; closed: ClosedTrade[] }> {
   return post("/trading/paper/history", { limit })
 }

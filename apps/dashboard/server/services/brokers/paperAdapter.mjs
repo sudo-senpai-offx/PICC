@@ -33,7 +33,16 @@ registerBroker({
     // Dynamic import avoids a load-time cycle: trading.mjs imports the broker
     // registry, and the registry must be ready before this adapter registers.
     try {
-      return import("../trading.mjs").then((t) => t.paperOverview())
+      return import("../trading.mjs").then((t) => t.paperOverview()).then((ov) => ({
+        // Normalized to the same shape every other adapter returns (see
+        // brokers/expertoption.mjs) — the ledger's own field is `cash`, not
+        // `balance`; without this mapping any venue-agnostic reader of
+        // state.balance silently got undefined for the paper venue only.
+        balance: Number(ov?.cash) || 0,
+        demo: true,
+        real: false,
+        currency: "USD"
+      })).catch(() => null)
     } catch {
       return null
     }

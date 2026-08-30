@@ -64,6 +64,7 @@ import {
   openPaperTrade,
   closePaperTrade,
   paperPositions,
+  paperOverview,
   paperHistory,
   paperAnalytics,
   recentSignals,
@@ -1538,6 +1539,11 @@ async function _handleApiInner(req, res, url, reqId) {
 
   if (path === "/api/trading/paper/positions" && (req.method === "GET" || req.method === "POST")) {
     writeJson(res, 200, { ok: true, positions: await paperPositions() })
+    return
+  }
+
+  if (path === "/api/trading/paper/overview" && req.method === "GET") {
+    writeJson(res, 200, { ok: true, ...(await paperOverview()) })
     return
   }
 
