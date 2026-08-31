@@ -1249,6 +1249,51 @@ export function getTradingVenues(assetId: string | null): Promise<TradingVenuesR
   return request(`/trading/venues${q}`)
 }
 
+export interface CatalogSymbol {
+  id: string
+  name: string
+  yahooSymbol: string
+}
+
+export interface CatalogCategory {
+  id: string
+  name: string
+  symbols: CatalogSymbol[]
+}
+
+export interface TradingCatalogResult {
+  ok: boolean
+  categories: CatalogCategory[]
+}
+
+/** Full asset breadth for the Live Chart selector (spec T4, Decision D). */
+export function getTradingCatalog(): Promise<TradingCatalogResult> {
+  return request("/trading/catalog")
+}
+
+export interface AssetOptionGroup {
+  label: string
+  options: { value: string; label: string }[]
+}
+
+/**
+ * Build the grouped Live Chart selector options: the user's watched assets
+ * stay pinned at the top (they are the live EO feed), then the catalog groups.
+ * Pure — extracted so the T4 selector behavior is unit-testable without a
+ * React DOM harness.
+ */
+export function assetOptionGroups(catalog: CatalogCategory[], watched: string[]): AssetOptionGroup[] {
+  const groups: AssetOptionGroup[] = []
+  const pinned = (watched ?? []).filter(Boolean)
+  if (pinned.length > 0) {
+    groups.push({ label: "Watched", options: pinned.map((v) => ({ value: v, label: v })) })
+  }
+  for (const cat of catalog ?? []) {
+    groups.push({ label: cat.name, options: cat.symbols.map((s) => ({ value: s.id, label: s.name })) })
+  }
+  return groups
+}
+
 export interface BrokersResult {
   ok: boolean
   activeExecutor: string

@@ -16,7 +16,7 @@ import { WatchlistPanel } from "@/components/WatchlistPanel"
 import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { PatternPanel } from "@/components/PatternPanel"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
-import { getBrokers, getTradingVenues, type BrokersResult, type TradingVenuesResult } from "@/lib/trading"
+import { getBrokers, getTradingVenues, getTradingCatalog, assetOptionGroups, type BrokersResult, type TradingVenuesResult, type CatalogCategory } from "@/lib/trading"
 import { request, post } from "@/lib/api"
 import { urlBase64ToUint8Array, isPushSupported } from "@/lib/push"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
@@ -106,6 +106,7 @@ export function MarketsSuite() {
   const [loaded, setLoaded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [chartAsset, setChartAsset] = useState("EURUSD")
+  const [catalog, setCatalog] = useState<CatalogCategory[]>([])
   const lastLoadAt = useRef(0)
   const { snapshot, error: streamError } = useRealtimeSuite()
 
@@ -115,13 +116,15 @@ export function MarketsSuite() {
       getTradingStatus(),
       getPaperPositions(),
       getPaperHistory(),
-      getTradingSignals()
-    ]).then(([s, p, h, g]) => {
+      getTradingSignals(),
+      getTradingCatalog()
+    ]).then(([s, p, h, g, c]) => {
       if (!alive) return
       if (s.status === "fulfilled") setStatus(s.value)
       if (p.status === "fulfilled") setPositions(p.value.positions)
       if (h.status === "fulfilled") setClosed(h.value.closed)
       if (g.status === "fulfilled") setSignals(g.value.signals)
+      if (c.status === "fulfilled" && c.value.ok) setCatalog(c.value.categories)
       lastLoadAt.current = Date.now()
       setLoaded(true)
     })
@@ -158,13 +161,13 @@ export function MarketsSuite() {
               <h3 style={{ margin: 0 }}>Live Chart</h3>
               <div className="row gap" style={{ alignItems: "center" }}>
                 <Select value={chartAsset} onChange={(e) => setChartAsset(e.target.value)}>
-                  {watchedAssets.map((a) => (
-                    <option key={a} value={a}>{a}</option>
+                  {assetOptionGroups(catalog, watchedAssets).map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.options.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </optgroup>
                   ))}
-                  <option value="EURUSD">EURUSD</option>
-                  <option value="BTCUSD">BTCUSD</option>
-                  <option value="AAPL">AAPL</option>
-                  <option value="TSLA">TSLA</option>
                 </Select>
                 <span className="muted small">
                   {chartAsset} · {watchedAssets.includes(chartAsset) ? "EO live" : "Yahoo"}

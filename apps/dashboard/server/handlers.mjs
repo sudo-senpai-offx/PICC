@@ -2410,6 +2410,21 @@ async function _handleApiInner(req, res, url, reqId) {
     return true
   }
 
+  // ── Trading catalog — full asset breadth for the Live Chart selector ───
+  // Read-only: grouped, symbol-resolvable catalog (Decision D in the trading
+  // suite upgrade spec). Every symbol is yahooSymbolFor-resolvable; unmapable
+  // entries are excluded server-side, so no undefined symbol ever ships.
+  if (path === "/api/trading/catalog" && req.method === "GET") {
+    try {
+      const { tradingCatalog } = await import("./services/tradingCatalog.mjs")
+      const { categories } = tradingCatalog()
+      writeJson(res, 200, { ok: true, categories })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
   // ── Notifications — universal attention layer (advisory signals) ──────
   if (path.startsWith("/api/notifications")) {
     try {
