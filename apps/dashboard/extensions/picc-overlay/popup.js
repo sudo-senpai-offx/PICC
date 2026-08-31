@@ -35,12 +35,12 @@ function renderRelay(st) {
   el.className = "st bad"
 }
 
-// ── Sync status helpers (Phase 5, spec T8) ──────────────────────────────────
-// The popup shows only the ACTIVE tab's venue. Row state comes from the worker's
-// mirrored headless-status read — the ENGINE's observed state (idle / synced /
-// not-enabled), never dressed up as a connected session. No trading controls
-// live here. The per-venue "Headless sessions" list was removed per user request
-// (2026-08-31): the active-tab "Sync (this tab)" row is the surface that matters.
+// ── Session status (Phase 5, spec T8) ───────────────────────────────────────
+// Pure storage reader: the background worker polls the authenticated
+// headless-status endpoint and mirrors it to chrome.storage.local. The maps
+// below translate the ENGINE's observed state (needs-credentials / not-enabled
+// / idle are shown honestly, never dressed up as a connected session) for the
+// active-tab sync row. No trading controls live here.
 const HEADLESS_TEXT = {
   ok: "session synced",
   idle: "idle · never captured",
