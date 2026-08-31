@@ -7,6 +7,8 @@ import { LiveDecisionsPanel } from "@/components/LiveDecisionsPanel"
 import { LedgerPanel } from "@/components/LedgerPanel"
 import { ConvergencePanel } from "@/components/ConvergencePanel"
 import { TradingChart } from "@/components/TradingChart"
+import { SpreadPanel } from "@/components/SpreadPanel"
+import { PortfolioAggregatePanel } from "@/components/PortfolioAggregatePanel"
 import { BacktestPanel } from "@/components/BacktestPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { AlertPanel } from "@/components/AlertPanel"
@@ -175,6 +177,10 @@ export function MarketsSuite() {
               </div>
             </div>
             <TradingChart assetId={chartAsset} height={380} />
+            <div className="grid">
+              <SpreadPanel assetId={chartAsset} />
+              <PortfolioAggregatePanel paperAvailable={Boolean(status?.paper)} />
+            </div>
           </Card>
           <ModelMatrixPanel assetId={chartAsset} />
           <MarketIntelPanel />

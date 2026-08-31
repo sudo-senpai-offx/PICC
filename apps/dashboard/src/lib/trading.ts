@@ -1294,6 +1294,95 @@ export function assetOptionGroups(catalog: CatalogCategory[], watched: string[])
   return groups
 }
 
+// ---------------------------------------------------------------------
+// Cross-venue spread + portfolio aggregate (spec T5 integration surfaces)
+// ---------------------------------------------------------------------
+
+export interface SpreadQuote {
+  venue: string
+  symbol?: string
+  price: number
+}
+
+export interface SpreadBest {
+  buyVenue: string
+  sellVenue: string
+  buyPrice: number
+  sellPrice: number
+  grossPct: number
+  netPct: number
+  opportunity: boolean
+}
+
+export interface SpreadResult {
+  ok: boolean
+  assetId: string
+  venuesPolled: SpreadQuote[]
+  note: string
+  best: SpreadBest | null
+}
+
+/** Cross-venue fee-adjusted spread pre-check for the chart asset (T5). */
+export function getSpread(assetId: string): Promise<SpreadResult> {
+  return post("/trading/spread", { assetId })
+}
+
+export interface AggPosition {
+  venue: string
+  id: string
+  symbol: string
+  side: string
+  entry: number
+  amount: number
+  openedAt: string | null
+}
+
+export interface AggInstrument {
+  symbol: string
+  totalSize: number
+  positions: number
+  avgEntry: number | null
+  venues: string[]
+  hedged: boolean
+}
+
+export interface AggVenue {
+  venue: string
+  totalSize: number
+  positions: number
+}
+
+export interface PnlSlice {
+  pnl: number
+  trades: number
+}
+
+export interface PortfolioRiskCheck {
+  ok: boolean
+  allowed: boolean
+  warnings: string[]
+  proposed: { symbol: string; amount: number }
+  after: { totalNotional: number }
+  todayPnl: PnlSlice
+  exposureByInstrument: Record<string, number>
+}
+
+export interface AggregateResult {
+  ok: boolean
+  generatedAt: string
+  positions: AggPosition[]
+  byInstrument: Record<string, AggInstrument>
+  venues: AggVenue[]
+  totals: { openPositions: number; notional: number; instruments: number }
+  todayPnl: { paper: PnlSlice; expertoption: PnlSlice; total: PnlSlice }
+  riskCheck: PortfolioRiskCheck | null
+}
+
+/** Cross-venue aggregate exposure + optional pre-trade risk check (T5). */
+export function getPortfolioAggregate(proposed?: { symbol: string; amount: number }): Promise<AggregateResult> {
+  return post("/trading/portfolio/aggregate", proposed ? { proposed } : {})
+}
+
 export interface BrokersResult {
   ok: boolean
   activeExecutor: string
