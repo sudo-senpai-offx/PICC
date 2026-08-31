@@ -18,6 +18,44 @@ interface PaymentLinkResult {
   error?: string
 }
 
+/** Honest status from the health payload — no guessing. */
+interface ProviderCard {
+  key: string
+  title: string
+  description: string
+  configured: boolean | undefined
+  hint?: string
+}
+
+const PROVIDER_CARDS: Omit<ProviderCard, "configured">[] = [
+  {
+    key: "btcpay",
+    title: "BTCPay (Bitcoin + Lightning)",
+    description: "Self-hosted on your own node. Buyers pay a bitcoin invoice and funds go straight to you — no platform cut. Invoice creation needs the BTCPay store + API key wired after mainnet sync."
+  },
+  {
+    key: "ewallet",
+    title: "TNG eWallet",
+    description: "Manual transfer to your TNG number. Buyers send the amount and submit their transaction reference.",
+    hint: "add EWALLET_TNG_NUMBER to .env to enable"
+  },
+  {
+    key: "paypal",
+    title: "PayPal",
+    description: "Optional channel. Add a PayPal API key to accept card/PayPal payments."
+  },
+  {
+    key: "stripe",
+    title: "Stripe",
+    description: "Accept card payments via Stripe. Configure STRIPE_SECRET_KEY in .env."
+  },
+  {
+    key: "crypto",
+    title: "Crypto (direct)",
+    description: "Accept cryptocurrency payments directly. Configure wallet addresses in .env."
+  }
+]
+
 function ChannelsTab() {
   const [health, setHealth] = useState<HealthInfo | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
@@ -93,31 +131,16 @@ function ChannelsTab() {
             </p>
           </Card>
         ) : null}
-        <Card>
-          <h3>BTCPay (Bitcoin + Lightning)</h3>
-          <p className="small">
-            Self-hosted on your own node. Buyers pay a bitcoin invoice and funds go straight to
-            you — no platform cut. Invoice creation needs the BTCPay store + API key wired after
-            mainnet sync.
-          </p>
-          <p className="muted small">Status: {health?.providers.btcpay ? "Configured" : "Not configured"}</p>
-        </Card>
-        <Card>
-          <h3>TNG eWallet</h3>
-          <p className="small">
-            Manual transfer to your TNG number. Buyers send the amount and submit their transaction
-            reference.
-          </p>
-          <p className="muted small">
-            Status: {health?.providers.ewallet ? "Configured" : "Not configured"}
-            {!health?.providers.ewallet ? " — add EWALLET_TNG_NUMBER to .env to enable" : ""}
-          </p>
-        </Card>
-        <Card>
-          <h3>PayPal</h3>
-          <p className="small">Optional channel. Add a PayPal API key to accept card/PayPal payments.</p>
-          <p className="muted small">Status: {health?.providers.paypal ? "Configured" : "Not configured"}</p>
-        </Card>
+        {PROVIDER_CARDS.map((p) => (
+          <Card key={p.key}>
+            <h3>{p.title}</h3>
+            <p className="small">{p.description}</p>
+            <p className="muted small">
+              Status: {health?.providers[p.key as keyof typeof health.providers] ? "Configured" : "Not configured"}
+              {!health?.providers[p.key as keyof typeof health.providers] && p.hint ? ` — ${p.hint}` : ""}
+            </p>
+          </Card>
+        ))}
       </div>
 
       <Card>

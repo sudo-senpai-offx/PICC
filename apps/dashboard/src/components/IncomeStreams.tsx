@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { postPresence, pushStreamsSnapshot, testHoneygain, syncCashPilot } from "@/lib/api"
-import { STREAM_CATEGORY_LABELS, CATALOG, BANDWIDTH_APPS, DEPIN_APPS, STORAGE_APPS, COMPUTE_APPS, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS } from "@/lib/streamCatalog"
+import { postPresence, pushStreamsSnapshot, testHoneygain, syncCashPilot, getSessionPolicy, setSessionPolicy } from "@/lib/api"
+import type { SessionPolicyDecision } from "@/lib/api"
+import { STREAM_CATEGORY_LABELS, CATALOG, BANDWIDTH_APPS, DEPIN_APPS, STORAGE_APPS, COMPUTE_APPS, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS, TRADING_PLATFORM_APPS } from "@/lib/streamCatalog"
 import { StreamSetupWizard } from "@/components/StreamSetupWizard"
 import {
   addStream,
@@ -385,8 +386,8 @@ function StreamsTab() {
 // Catalog tab
 // ---------------------------------------------------------------------
 function CatalogTab() {
-  const [filter, setFilter] = useState<"all" | "bandwidth" | "depin" | "storage" | "compute" | "crypto" | "defi" | "nft" | "p2p" | "agent" | "interest" | "dividend" | "rental" | "content">("all")
-  const groups = {
+  const [filter, setFilter] = useState<"all" | "bandwidth" | "depin" | "storage" | "compute" | "crypto" | "defi" | "nft" | "p2p" | "agent" | "interest" | "dividend" | "rental" | "content" | "trading">("all")
+  const groups: Record<string, typeof CATALOG> = {
     all: CATALOG,
     bandwidth: BANDWIDTH_APPS,
     depin: DEPIN_APPS,
@@ -400,9 +401,10 @@ function CatalogTab() {
     interest: INTEREST_APPS,
     dividend: DIVIDEND_APPS,
     rental: RENTAL_APPS,
-    content: CONTENT_APPS
+    content: CONTENT_APPS,
+    trading: TRADING_PLATFORM_APPS
   }
-  const rows = groups[filter]
+  const rows = groups[filter] ?? CATALOG
   const filters: { key: typeof filter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "bandwidth", label: "Bandwidth" },
@@ -413,6 +415,7 @@ function CatalogTab() {
     { key: "dividend", label: "Dividends" },
     { key: "rental", label: "Rental" },
     { key: "content", label: "Content" },
+    { key: "trading", label: "Trading Platform" },
     { key: "crypto", label: "Crypto & Staking" },
     { key: "defi", label: "DeFi & Yield" },
     { key: "nft", label: "NFT & Royalties" },
@@ -456,10 +459,90 @@ function CatalogTab() {
           these are free channels, not income promises.
         </p>
       </div>
+
+      {filter === "trading" ? <TradingSyncSettings /> : null}
     </div>
   )
 }
 
 function usd(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+// ---------------------------------------------------------------------
+// Trading platform sync settings — per-venue first-login decision
+// (session-policy API). "Auto-sync" = approved (gate auto-allows),
+// "Don't sync" = rejected (gate silently blocks), "Ask each time" =
+// undecided (the venue still proposes approval on first visit).
+// ---------------------------------------------------------------------
+function TradingSyncSettings() {
+  const [venues, setVenues] = useState<Record<string, { venueId: string; name: string; decision: SessionPolicyDecision; at: string | null }>>({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    getSessionPolicy()
+      .then((r) => { if (alive) { setVenues(r.venues); setLoading(false) } })
+      .catch((err) => { if (alive) { setError((err as Error).message); setLoading(false) } })
+    return () => { alive = false }
+  }, [])
+
+  const setMode = async (venueId: string, decision: SessionPolicyDecision) => {
+    setSaving(venueId)
+    try {
+      await setSessionPolicy(venueId, decision)
+      setVenues((prev) => ({
+        ...prev,
+        [venueId]: { ...prev[venueId], decision, at: decision === "ask" ? null : new Date().toISOString() }
+      }))
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  if (loading) return <div className="card"><p className="muted">Loading sync settings…</p></div>
+  if (error) return <div className="card"><p className="muted" style={{ color: "#b91c1c" }}>{error}</p></div>
+
+  return (
+    <div className="card">
+      <h2>Per-platform sync mode</h2>
+      <p className="muted small">
+        First-login approval decisions for the headless capture engine. "Auto-sync" means the session capture
+        runs without asking; "Don't sync" means it never captures; "Ask each time" means the server proposes
+        approval on the first visit (default). The decision persists across server restarts.
+      </p>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr><th>Platform</th><th>Sync mode</th><th>Decided</th></tr>
+          </thead>
+          <tbody>
+            {Object.values(venues).map((v) => (
+              <tr key={v.venueId}>
+                <td><strong>{v.name}</strong></td>
+                <td>
+                  <select
+                    className="input"
+                    value={v.decision}
+                    onChange={(e) => setMode(v.venueId, e.target.value as SessionPolicyDecision)}
+                    disabled={saving === v.venueId}
+                    style={{ padding: 2, minWidth: 140 }}
+                  >
+                    <option value="ask">Ask each time</option>
+                    <option value="approved">Auto-sync</option>
+                    <option value="rejected">Don't sync</option>
+                  </select>
+                </td>
+                <td className="muted">{v.at ? new Date(v.at).toLocaleString() : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
 }

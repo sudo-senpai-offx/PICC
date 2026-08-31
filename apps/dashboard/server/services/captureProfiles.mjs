@@ -362,6 +362,87 @@ function loadCaptureConfigAtBoot() {
   if (uid) applyUserConfigToPolicy(uid)
 }
 
+// ---------------------------------------------------------------------
+// First-login SESSION POLICY — the persisted side of the T9 approval gate.
+// The human decides a venue once (approve / reject from the interventions
+// queue); that decision is written here and survives restarts, so a fresh
+// server process does NOT re-ask. Changeable any time via the channel
+// catalog's per-platform sync mode (Settings → Income → Trading platform):
+// "Auto-sync" / "Don't sync" / "Ask each time" ("ask" clears the row back to
+// prompting). Same data dir + tmp/rename + VITEST-disk-guard pattern as
+// capture-config.json directly above.
+// ---------------------------------------------------------------------
+const SESSION_POLICY_FILE = join(
+  process.env.PICC_CAPTURE_CONFIG_DATA_DIR ?? fileURLToPath(new URL("../data", import.meta.url)),
+  "session-policy.json"
+)
+const canTouchPolicyDisk = () => !isVitestMode() || Boolean(process.env.PICC_CAPTURE_CONFIG_DATA_DIR)
+
+/** Latest per-user decisions as loaded off disk at startup (or written live). */
+let sessionPolicyCache = {} // { [userId]: { [venueId]: { decision: "approved"|"rejected", at } } }
+
+/** The runner's single real user — same "default" bucket as capture-config. */
+const SESSION_USER = "default"
+
+/** The persisted decisions for one user: { [venueId]: { decision, at } }. */
+export function sessionPolicyForUser(userId = "default") {
+  const uid = String(userId ?? "default")
+  return structuredClone(sessionPolicyCache[uid] ?? {})
+}
+
+function persistPolicyDisk() {
+  if (!canTouchPolicyDisk()) return Promise.resolve()
+  const tmp = `${SESSION_POLICY_FILE}.${process.pid}.tmp`
+  return writeFile(tmp, JSON.stringify(sessionPolicyCache, null, 2)).then(() => rename(tmp, SESSION_POLICY_FILE))
+}
+
+/**
+ * Persist one venue's first-login decision. decision is "approved" | "rejected";
+ * a venue left undecided (or cleared via clearSessionPolicy) keeps prompting.
+ * @returns {{ venueId: string, decision: string, at: string }}
+ */
+export async function saveSessionPolicy(userId, venueId, decision, at = new Date().toISOString()) {
+  const uid = String(userId ?? "default")
+  const id = String(venueId ?? "").toLowerCase()
+  if (!byId.has(id)) throw new Error(`unknown venue: ${venueId}`)
+  if (!["approved", "rejected"].includes(decision)) throw new Error(`unknown decision: ${decision}`)
+  const userRows = { ...(sessionPolicyCache[uid] ?? {}) }
+  userRows[id] = { decision, at }
+  sessionPolicyCache = { ...sessionPolicyCache, [uid]: userRows }
+  await persistPolicyDisk()
+  return structuredClone({ venueId: id, decision, at })
+}
+
+/** Clear a venue's decision ("ask each time" — back to prompting). */
+export async function clearSessionPolicy(userId, venueId) {
+  const uid = String(userId ?? "default")
+  const id = String(venueId ?? "").toLowerCase()
+  if (!byId.has(id)) return { venueId: id, decision: "ask", at: null }
+  const userRows = { ...(sessionPolicyCache[uid] ?? {}) }
+  delete userRows[id]
+  sessionPolicyCache = { ...sessionPolicyCache, [uid]: userRows }
+  await persistPolicyDisk()
+  // Rearm the in-memory capture gate so the next captureVenue propose fresh
+  // instead of hitting the stale "rejected" / "interrupted" status.
+  try {
+    const { rearmCaptureGate } = await import("./interventions.mjs")
+    rearmCaptureGate(id)
+  } catch { /* interventions unavailable in some test contexts */ }
+  return { venueId: id, decision: "ask", at: null }
+}
+
+/** Boot-time load — a decided venue stays decided across server restarts. */
+loadSessionPolicyAtBoot()
+function loadSessionPolicyAtBoot() {
+  if (!canTouchPolicyDisk()) return
+  try {
+    const parsed = JSON.parse(readFileSync(SESSION_POLICY_FILE, "utf8"))
+    if (parsed && typeof parsed === "object") sessionPolicyCache = parsed
+  } catch {
+    sessionPolicyCache = {} // absent or unreadable → nothing decided yet, keep prompting
+  }
+}
+
 /** Per-venue refresh state for status surfacing (T8 status endpoint + popup). */
 export function headlessSessionStatus() {
   const rows = {}
@@ -411,15 +492,34 @@ function nowIso() {
  * T9 / REQ-E — the first-login approval gate, as one helper so the studio leg
  * (captureVenue) and the T13 extension leg (captureSessionFromExtension) can
  * never diverge. Returns { approved: true } when the human has approved this
- * venue's first capture this process, or a full report object to return as-is
- * when the gate is holding (pending-approval / rejected — including the
- * rejection cooldown, which suppresses re-asking for REJECT_COOLDOWN_MS).
- * Expiry of nothing: the approved set is process-local, so a fresh server
- * process asks the human again (the interventions queue is right there).
+ * venue's first capture, or a full report object to return as-is when the gate
+ * is holding (pending-approval / rejected).
+ *
+ * PERSISTED DECISIONS come first (session-policy.json): a venue the human
+ * decided on — "Auto-sync" → approved silently; "Don't sync" → rejected
+ * silently, no re-ask ever — never proposes again. Only an undecided / cleared
+ * venue ("Ask each time") falls through to the propose flow below, including
+ * its rejection cooldown (which suppresses re-asking for REJECT_COOLDOWN_MS
+ * after a reject/interrupt without a persisted decision).
  */
 async function firstLoginGate(profile, at) {
   const venue = profile.id
   if (firstLoginApproved.has(venue)) return { approved: true }
+  const persisted = sessionPolicyForUser(SESSION_USER)[venue]
+  if (persisted?.decision === "approved") {
+    firstLoginApproved.add(venue)
+    loginRejectedAt.delete(venue)
+    return { approved: true, policy: "approved" }
+  }
+  if (persisted?.decision === "rejected") {
+    return {
+      state: "rejected",
+      venue,
+      at,
+      reason: `sync for ${venue} is turned off in Settings (channel catalog → sync mode)`,
+      policy: "rejected"
+    }
+  }
   const { proposeCaptureLogin, captureLoginApproval } = await import("./interventions.mjs")
   const rejectedAt = loginRejectedAt.get(venue) ?? null
   const cooldownActive = rejectedAt !== null && Date.now() - rejectedAt < REJECT_COOLDOWN_MS
@@ -855,6 +955,7 @@ export async function _resetHeadlessSessionState() {
   policyOverrides.clear()
   firstLoginApproved.clear()
   loginRejectedAt.clear()
+  sessionPolicyCache = {} // in-memory only: never touches session-policy.json (disk is guarded by the env rule)
   try {
     const { _resetCaptureGate } = await import("./interventions.mjs")
     _resetCaptureGate()

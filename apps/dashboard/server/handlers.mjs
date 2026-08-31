@@ -117,7 +117,7 @@ import {
 } from "./services/connectors.mjs"
 import { browserAvailable, realProfileState, importRealProfile } from "./services/browserBridge.mjs"
 import { accountMetricsForUser, getAccountMetrics, staleFrom } from "./services/accountMetrics.mjs"
-import { listCaptureProfiles, metricsCadenceMs, saveCaptureConfigForUser, captureConfigForUser, headlessSessionStatus } from "./services/captureProfiles.mjs"
+import { listCaptureProfiles, metricsCadenceMs, saveCaptureConfigForUser, captureConfigForUser, headlessSessionStatus, sessionPolicyForUser, saveSessionPolicy, clearSessionPolicy } from "./services/captureProfiles.mjs"
 import {
   studioStatus,
   openStudio,
@@ -1359,6 +1359,51 @@ async function _handleApiInner(req, res, url, reqId) {
       console.error("[picc] capture-config save failed:", err)
       writeJson(res, 500, { ok: false, error: err.message })
     }
+    return
+  }
+
+  // T-EDGE — first-login session policy: the persisted half of the T9 approval
+  // gate. GET returns EVERY venue's decision — "approved" (Auto-sync) /
+  // "rejected" (Don't sync) / "ask" (undecided, still prompting) — so the
+  // channel catalog can render per-platform sync modes. POST { venueId,
+  // decision } sanitizes both (unknown venue/decision → 400) and persists;
+  // decision "ask" clears the row back to prompting. Same auth as
+  // capture-config above.
+  if (path === "/api/trading/session-policy") {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    if (req.method === "GET") {
+      const saved = sessionPolicyForUser(userId)
+      const venues = {}
+      for (const p of listCaptureProfiles()) {
+        const rec = saved[p.id]
+        venues[p.id] = { venueId: p.id, name: p.name, decision: rec?.decision ?? "ask", at: rec?.at ?? null }
+      }
+      writeJson(res, 200, { ok: true, userId, venues })
+      return
+    }
+    if (req.method === "POST") {
+      const venueId = String(body?.venueId ?? "").toLowerCase()
+      const decision = String(body?.decision ?? "")
+      if (!listCaptureProfiles().some((p) => p.id === venueId)) {
+        writeJson(res, 400, { ok: false, error: `unknown venue: ${venueId}` })
+        return
+      }
+      if (!["approved", "rejected", "ask"].includes(decision)) {
+        writeJson(res, 400, { ok: false, error: "unknown decision: expected approved | rejected | ask" })
+        return
+      }
+      try {
+        const row =
+          decision === "ask" ? await clearSessionPolicy(userId, venueId) : await saveSessionPolicy(userId, venueId, decision)
+        writeJson(res, 200, { ok: true, userId, venueId, decision, at: row.at })
+      } catch (err) {
+        console.error("[picc] session-policy save failed:", err)
+        writeJson(res, 500, { ok: false, error: err.message })
+      }
+      return
+    }
+    writeJson(res, 405, { ok: false, error: "method not allowed" })
     return
   }
 

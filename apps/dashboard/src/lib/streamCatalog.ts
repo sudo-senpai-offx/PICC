@@ -18,6 +18,7 @@ export interface CatalogEntry {
     | "dividend"
     | "rental"
     | "content"
+    | "trading"
     | "other"
   residential: boolean
   vps: boolean
@@ -38,6 +39,7 @@ export const STREAM_CATEGORY_LABELS: Record<string, string> = {
   defi: "DeFi & Yield",
   nft: "NFT & Royalties",
   agent: "AI Agent",
+  trading: "Trading Platform",
   other: "Other"
 }
 
@@ -174,6 +176,25 @@ export const RENTAL_APPS: CatalogEntry[] = [
   { id: "parking-space", name: "Parking space rental", category: "rental", residential: true, vps: false, payout: "Bank transfer", url: "https://www.justpark.com", note: "Rent out unused parking. Sync bookings with n8n." }
 ]
 
+// ---------------------------------------------------------------------
+// Trading platforms — PICC's headless capture engine tracks session status
+// and account metrics for these venues. Per-platform sync mode (auto-sync /
+// don't sync / ask) is managed in the channel catalog or the capture-config
+// settings. Not income streams — these are active trading platforms.
+// ---------------------------------------------------------------------
+export const TRADING_PLATFORM_APPS: CatalogEntry[] = [
+  { id: "expertoption", name: "ExpertOption", category: "trading", residential: false, vps: false, payout: "—", url: "https://app.expertoption.com/", note: "Reference implementation: full capture + live session (liveEO). Binary options — demo-first." },
+  { id: "iqoption", name: "IQ Option", category: "trading", residential: false, vps: false, payout: "—", url: "https://iqoption.com/en/login", note: "Full capture via storage-scan hook (ssid cookie). Binary options — demo-first." },
+  { id: "olymptrade", name: "Olymp Trade", category: "trading", residential: false, vps: false, payout: "—", url: "https://olymptrade.com", note: "Binary options — demo-first. Capture hook pending." },
+  { id: "deriv", name: "Deriv", category: "trading", residential: false, vps: false, payout: "—", url: "https://deriv.com", note: "Binary options — demo-first. Capture hook pending." },
+  { id: "binance", name: "Binance", category: "trading", residential: false, vps: false, payout: "—", url: "https://www.binance.com", note: "Spot exchange. T10 research done — storage-scan keys needed for capture." },
+  { id: "kucoin", name: "KuCoin", category: "trading", residential: false, vps: false, payout: "—", url: "https://www.kucoin.com", note: "Spot exchange. T10 research done — storage-scan keys needed for capture." },
+  { id: "okx", name: "OKX", category: "trading", residential: false, vps: false, payout: "—", url: "https://www.okx.com", note: "Spot exchange. T10 research done — storage-scan keys needed for capture." },
+  { id: "bybit", name: "Bybit", category: "trading", residential: false, vps: false, payout: "—", url: "https://www.bybit.com", note: "Derivatives exchange. T10 research done — browser session keys unknown." },
+  { id: "etoro", name: "eToro", category: "trading", residential: false, vps: false, payout: "—", url: "https://www.etoro.com", note: "CFD trading. Capture hook pending." },
+  { id: "plus500", name: "Plus500", category: "trading", residential: false, vps: false, payout: "—", url: "https://www.plus500.com", note: "CFD trading. Capture hook pending." }
+]
+
 export const CATALOG = [
   ...BANDWIDTH_APPS,
   ...DEPIN_APPS,
@@ -187,6 +208,7 @@ export const CATALOG = [
   ...INTEREST_APPS,
   ...DIVIDEND_APPS,
   ...CONTENT_APPS,
-  ...RENTAL_APPS
+  ...RENTAL_APPS,
+  ...TRADING_PLATFORM_APPS
 ]
 

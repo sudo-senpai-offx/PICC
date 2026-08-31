@@ -21,6 +21,7 @@
  */
 import { readPage } from "./browserBridge.mjs"
 import { studioBroadcast, studioIsOpen, studioPageFor, studioTypeText } from "./browserStudio.mjs"
+import { saveSessionPolicy } from "./captureProfiles.mjs"
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -340,7 +341,18 @@ export function captureLoginApproval(venueId) {
 /** Test seam (also used by the engine's reset) — drops the gate + its proposals. */
 export function _resetCaptureGate() {
   captureGate = null
-  proposals = proposals.filter((x) => x.source !== "capture")
+}
+
+/**
+ * Clear a resolved (non-pending) capture gate for a specific venue so the
+ * firstLoginGate can propose fresh. Called when the human clears a persisted
+ * decision back to "ask" via Settings — without this, the stale in-memory
+ * gate status blocks re-proposing even though the persisted policy is gone.
+ */
+export function rearmCaptureGate(venueId) {
+  if (captureGate && captureGate.venueId === venueId && captureGate.status !== "pending") {
+    captureGate = null
+  }
 }
 
 /**
@@ -501,6 +513,14 @@ export async function respondIntervention({ id, decision } = {}) {
     } else {
       setProposalStatus(id, "interrupted")
       captureGate.status = "interrupted"
+    }
+    // PERSIST the human's decision so a fresh server process does NOT re-ask
+    // (session-policy.json; changeable in Settings → channel catalog). approve
+    // / execute → "approved" (silent auto-sync next visit); reject →
+    // "rejected" (silent no-sync, no prompt ever); interrupt = no decision, so
+    // the venue stays in "ask" mode and the gate's cooldown governs re-asking.
+    if (decision !== "interrupt") {
+      await saveSessionPolicy("default", captureGate.venueId, decision === "reject" ? "rejected" : "approved")
     }
     emit()
     return currentState()

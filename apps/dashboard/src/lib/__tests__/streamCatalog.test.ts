@@ -13,7 +13,8 @@ import {
   INTEREST_APPS,
   DIVIDEND_APPS,
   RENTAL_APPS,
-  CONTENT_APPS
+  CONTENT_APPS,
+  TRADING_PLATFORM_APPS
 } from "../streamCatalog"
 
 const GROUPS: Record<string, typeof CATALOG> = {
@@ -29,7 +30,8 @@ const GROUPS: Record<string, typeof CATALOG> = {
   interest: INTEREST_APPS,
   dividend: DIVIDEND_APPS,
   rental: RENTAL_APPS,
-  content: CONTENT_APPS
+  content: CONTENT_APPS,
+  trading: TRADING_PLATFORM_APPS
 }
 
 describe("stream catalog integrity", () => {
@@ -57,6 +59,7 @@ describe("stream catalog integrity", () => {
       "dividend",
       "rental",
       "content",
+      "trading",
       "other"
     ])
     for (const e of CATALOG) {

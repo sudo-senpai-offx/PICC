@@ -128,7 +128,31 @@ async function refresh() {
   // never a fabricated 0.
   const q = await chrome.runtime.sendMessage({ action: "sensor-queue-depth" }).catch(() => null)
   $("queued").textContent = q?.observed === true ? String(q.depth) : "n/a"
+  // T-EDGE: this tab's sync target. Generalized beyond "trading platform" —
+  // whatever PICC venue (if any) the active tab hosts, show its state and the
+  // per-platform sync decision. No venue host => honestly "not a PICC venue".
+  renderSyncTab(q?.venueId ?? null, q?.venueName ?? null, piccHeadlessStatus?.venues ?? null)
   $("relay").classList.toggle("on", piccRelayEnabled !== false)
+}
+
+function renderSyncTab(venueId, venueName, allVenues) {
+  const el = $("sync-tab")
+  if (!venueId) {
+    el.textContent = "not a PICC venue"
+    el.className = "st dim"
+    return
+  }
+  const label = venueName || venueId
+  const row = allVenues && allVenues[venueId]
+  // Show the ENGINE-observed state for this venue (idle / synced / not-enabled…),
+  // or just "venue detected" when the status feed hasn't landed yet.
+  const text = row ? (HEADLESS_TEXT[row.status] ?? row.status) : "venue detected"
+  const tone = row ? (HEADLESS_TONE[row.status] ?? "warn") : "ok"
+  el.textContent = `${label} · ${text}`
+  el.className = `st ${tone}`
+  el.title = row
+    ? `this tab: ${label} · session ${fmtTime(row.lastCaptureAt)} · metrics ${fmtTime(row.lastMetricsAt)}`
+    : `this tab hosts ${label}`
 }
 
 $("relay").addEventListener("click", async () => {

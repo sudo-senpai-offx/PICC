@@ -211,7 +211,8 @@ describe("sensor content.js context lifecycle (T2)", () => {
     expect(typeof listener).toBe("function")
     const handedBack = listener({ action: "sensor-queue-depth" }, {}, (r) => { response = r })
     expect(handedBack).toBe(false) // synchronous reply: port closed
-    expect(response).toEqual({ action: "sensor-queue-depth", depth: 0, observed: true })
+    // With no venue config cached yet, the tab reports no venue honestly.
+    expect(response).toEqual({ action: "sensor-queue-depth", depth: 0, observed: true, venueId: null, venueName: null })
 
     // push one real broker-shaped frame, then re-read: the observed depth is 1
     h.state.getImpl = (keys, cb) => cb({ piccRelayEnabled: true })

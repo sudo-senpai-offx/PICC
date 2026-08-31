@@ -338,7 +338,9 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
     p.setEval(scanHits(TOKEN_B)) // live session observed — still not captured
     const r = await captureVenue("expertoption", { page: p })
     expect(r).toMatchObject({ state: "rejected", venue: "expertoption" })
-    expect(r.reason).toMatch(/not approved/)
+    // Honest non-approval reason: either the persisted "turned off in Settings"
+    // path (this harness persists in-memory only) or the classic cooldown text.
+    expect(r.reason).toMatch(/not approved|turned off in Settings/)
     expect(restartLiveEO).not.toHaveBeenCalled()
     let file = null
     try {

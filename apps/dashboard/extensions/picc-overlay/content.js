@@ -219,8 +219,27 @@
   // Registered through the guard so a dead context never registers.
   chromeGuard(() => chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (msg && msg.action === "sensor-queue-depth") {
-      respond({ action: "sensor-queue-depth", depth: QUEUE.length, observed: true })
-      return false // synchronous reply: close the port, nothing async pending
+      // Identify WHICH venue (if any) this tab hosts so the popup can show the
+      // active tab's sync status, generalized beyond "trading platform". The
+      // host-matched verdict mirrors scanVenueSession (line 444). Best-effort:
+      // if the config lookup fails, report no venue rather than guessing.
+      let venueId = null
+      let venueName = null
+      let hostname = ""
+      try { hostname = location.hostname } catch { /* no DOM */ }
+      venueScanConfig()
+        .then((venues) => {
+          const venue = (venues || []).find((v) => v && v.enabled !== false && matchesVenueHost(v.hostRe, hostname))
+          if (venue) {
+            venueId = String(venue.venueId ?? "").slice(0, 64) || null
+            venueName = String(venue.name ?? "").slice(0, 80) || null
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          respond({ action: "sensor-queue-depth", depth: QUEUE.length, observed: true, venueId, venueName })
+        })
+      return true // async reply — keep the channel open until .finally
     }
     return false
   }))

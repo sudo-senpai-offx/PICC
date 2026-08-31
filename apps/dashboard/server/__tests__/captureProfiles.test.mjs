@@ -21,7 +21,10 @@ import {
   setHeadlessSessionPolicy,
   captureVenue,
   _resetHeadlessSessionState,
-  _approveFirstLogin
+  _approveFirstLogin,
+  saveSessionPolicy,
+  clearSessionPolicy,
+  sessionPolicyForUser
 } from "../services/captureProfiles.mjs"
 import { captureExpertOptionSession, captureViaStorageScan, getSiteCredentials, studioLivePages } from "../services/browserStudio.mjs"
 import { getCredentials, saveCredentials, getVenueToken, saveVenueToken } from "../services/trading.mjs"
@@ -500,6 +503,7 @@ describe("first-login approval gate (T9 / REQ-E)", () => {
 
   it("reject → no token saved, state rejected; the cooldown suppresses re-asking", async () => {
     const { listInterventions, respondIntervention } = await import("../services/interventions.mjs")
+    const before = listInterventions().proposals.filter((p) => p.source === "capture").length
     getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
     const first = await captureVenue("expertoption")
     expect(first.state).toBe("pending-approval")
@@ -514,11 +518,12 @@ describe("first-login approval gate (T9 / REQ-E)", () => {
     // the queue with a fresh proposal.
     const again = await captureVenue("expertoption")
     expect(again.state).toBe("rejected")
-    const captureProposals = listInterventions().proposals.filter((p) => p.source === "capture")
-    expect(captureProposals.filter((p) => p.status === "pending")).toHaveLength(0)
+    const after = listInterventions().proposals.filter((p) => p.source === "capture").length
+    // At most 1 new proposal (the initial propose), no extra ones from re-asking
+    expect(after - before).toBeLessThanOrEqual(1)
   })
 
-  it("after the rejection cooldown the gate re-arms and asks again (fake timers)", async () => {
+  it("persisted rejection stays rejected across time; 'ask' re-arms the gate (fake timers)", async () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"))
@@ -526,16 +531,22 @@ describe("first-login approval gate (T9 / REQ-E)", () => {
       getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
       const first = await captureVenue("expertoption")
       await respondIntervention({ id: first.proposalId, decision: "reject" })
+
+      // Persisted rejection: 31 min later the gate is still rejected (no re-ask).
+      vi.setSystemTime(new Date("2026-01-01T00:31:00.000Z"))
       let r = await captureVenue("expertoption")
       expect(r.state).toBe("rejected")
+      expect(r.policy).toBe("rejected")
 
-      vi.setSystemTime(new Date("2026-01-01T00:31:00.000Z")) // 31 minutes later
+      // Clearing the decision to "ask" re-arms the gate — next pass proposes.
+      await clearSessionPolicy("default", "expertoption")
+      vi.setSystemTime(new Date("2026-01-01T00:32:00.000Z"))
       r = await captureVenue("expertoption")
-      expect(r.state).toBe("pending-approval") // re-asked, honestly
+      expect(r.state).toBe("pending-approval")
       expect(r.proposalId).not.toBe(first.proposalId) // a FRESH proposal
 
-      // And the fresh proposal can be approved to completion.
-      vi.setSystemTime(new Date("2026-01-01T00:32:00.000Z"))
+      // The fresh proposal can be approved to completion.
+      vi.setSystemTime(new Date("2026-01-01T00:33:00.000Z"))
       await respondIntervention({ id: r.proposalId, decision: "approve" })
       getCredentials.mockResolvedValue({ expertoptionToken: TOK_A })
       const ok = await captureVenue("expertoption")
@@ -576,5 +587,60 @@ describe("first-login approval gate (T9 / REQ-E)", () => {
     // REQ-E: no order/wallet-selection code exists anywhere in the engine —
     // nothing in the capture path can select a real wallet for trading.
     expect(getCaptureProfile("expertoption").kind).toBe("binary")
+  })
+})
+
+describe("session-policy persistence (T-EDGE: approve/reject survives restarts)", () => {
+it("a persisted 'approved' decision is honored instantly — no proposal is made", async () => {
+    await saveSessionPolicy("default", "expertoption", "approved")
+    const { listInterventions } = await import("../services/interventions.mjs")
+    const before = listInterventions().proposals.filter((p) => p.source === "capture").length
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    const r = await captureVenue("expertoption")
+    expect(r.state).toBe("ok") // approved → straight to the capture, no gate hold
+    expect(r.loginApproved).toBe(true)
+    expect(captureExpertOptionSession).toHaveBeenCalled() // the hook ran (bypassed the gate)
+    const after = listInterventions().proposals.filter((p) => p.source === "capture").length
+    expect(after).toBe(before) // no new proposal was created
+  })
+
+  it("a persisted 'rejected' decision is honored silently — no re-ask, ever", async () => {
+    await saveSessionPolicy("default", "expertoption", "rejected")
+    const { listInterventions } = await import("../services/interventions.mjs")
+    const before = listInterventions().proposals.filter((p) => p.source === "capture").length
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    const r = await captureVenue("expertoption")
+    expect(r).toMatchObject({ state: "rejected", venue: "expertoption", policy: "rejected" })
+    expect(captureExpertOptionSession).not.toHaveBeenCalled()
+    expect(restartLiveEO).not.toHaveBeenCalled()
+    const after = listInterventions().proposals.filter((p) => p.source === "capture").length
+    expect(after).toBe(before) // no new proposal appeared (the T9 propose flow was bypassed)
+    // And a second pass stays silent too — no cooldown churn.
+    const again = await captureVenue("expertoption")
+    expect(again.state).toBe("rejected")
+  })
+
+  it("clearSessionPolicy (decision 'ask') puts the venue back to prompting", async () => {
+    await saveSessionPolicy("default", "expertoption", "rejected")
+    await clearSessionPolicy("default", "expertoption")
+    expect(sessionPolicyForUser("default").expertoption).toBeUndefined()
+    getSiteCredentials.mockResolvedValue({ site: "expertoption", username: "u", password: "p" })
+    const r = await captureVenue("expertoption")
+    expect(r.state).toBe("pending-approval")
+  })
+
+  it("saveSessionPolicy rejects unknown venues and decisions", async () => {
+    await expect(saveSessionPolicy("default", "not-a-venue", "approved")).rejects.toThrow("unknown venue")
+    await expect(saveSessionPolicy("default", "expertoption", "maybe")).rejects.toThrow("unknown decision")
+    expect(sessionPolicyForUser("default").expertoption).toBeUndefined() // failed saves are no-ops
+  })
+
+  it("sessionPolicyForUser returns copies and per-user buckets stay separate", async () => {
+    await saveSessionPolicy("alice", "expertoption", "approved")
+    expect(sessionPolicyForUser("alice").expertoption.decision).toBe("approved")
+    expect(sessionPolicyForUser("default").expertoption).toBeUndefined()
+    const copy = sessionPolicyForUser("alice")
+    copy.expertoption.decision = "rejected"
+    expect(sessionPolicyForUser("alice").expertoption.decision).toBe("approved") // untouched
   })
 })

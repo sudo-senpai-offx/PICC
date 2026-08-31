@@ -237,4 +237,79 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
     await handleApi(remote, res, "/api/trading/headless-status")
     expect(res.status).toBe(401)
   })
+
+  // ── T-EDGE — first-login session policy (persisted approve/reject) ─────────
+
+  it("GET session-policy returns every venue with 'ask' before anything is decided", async () => {
+    const res = await call(handleApi, "GET", "/api/trading/session-policy")
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(res.body.userId).toBe("default")
+    expect(Object.keys(res.body.venues)).toHaveLength(10)
+    for (const row of Object.values(res.body.venues)) {
+      expect(row.decision).toBe("ask") // undecided = still prompting
+      expect(row.at).toBeNull()
+      expect(row.name).toBeTruthy()
+    }
+  })
+
+  it("POST session-policy persists the decision; GET reflects it", async () => {
+    const post = await call(handleApi, "POST", "/api/trading/session-policy", {
+      venueId: "expertoption", decision: "approved"
+    })
+    expect(post.status).toBe(200)
+    expect(post.body).toMatchObject({ ok: true, userId: "default", venueId: "expertoption", decision: "approved" })
+    expect(post.body.at).toBeTruthy()
+    const res = await call(handleApi, "GET", "/api/trading/session-policy")
+    expect(res.body.venues.expertoption.decision).toBe("approved")
+    expect(res.body.venues.iqoption.decision).toBe("ask") // untouched
+  })
+
+  it("a persisted decision survives a module restart (session-policy.json boot read)", async () => {
+    await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "iqoption", decision: "rejected" })
+    vi.resetModules()
+    const cp2 = await import("../services/captureProfiles.mjs")
+    expect(cp2.sessionPolicyForUser("default").iqoption).toMatchObject({ decision: "rejected" })
+    // And the "default" user bucket is the one the gate reads (SESSION_USER).
+    expect(cp2.sessionPolicyForUser("default").expertoption).toBeUndefined()
+  })
+
+  it("POST session-policy 'ask' clears the decision back to prompting", async () => {
+    await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "rejected" })
+    const clear = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "ask" })
+    expect(clear.body).toMatchObject({ decision: "ask", at: null })
+    const res = await call(handleApi, "GET", "/api/trading/session-policy")
+    expect(res.body.venues.expertoption.decision).toBe("ask")
+    expect(res.body.venues.expertoption.at).toBeNull()
+  })
+
+  it("POST session-policy sanitizes unknown venues and decisions", async () => {
+    const unknownVenue = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "notavenue", decision: "approved" })
+    expect(unknownVenue.status).toBe(400)
+    const unknownDecision = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "sure" })
+    expect(unknownDecision.status).toBe(400)
+    const res = await call(handleApi, "GET", "/api/trading/session-policy")
+    expect(res.body.venues.expertoption.decision).toBe("ask")
+  })
+
+  it("session-policy is authenticated: remote caller without a session gets 401", async () => {
+    await auth.createAccount({ email: "charlie@example.com", password: "correct-horse-battery", name: "Charlie" })
+    const res = makeRes()
+    const remote = makeReq("POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "approved" })
+    remote.socket = { remoteAddress: "203.0.113.5" }
+    await handleApi(remote, res, "/api/trading/session-policy")
+    expect(res.status).toBe(401)
+  })
+
+  it("a real authenticated session keys its own policy bucket", async () => {
+    const acct = await auth.createAccount({ email: "dave@example.com", password: "correct-horse-battery", name: "Dave" })
+    expect(acct.error).toBeUndefined()
+    const headers = { authorization: `Bearer ${acct.token}` }
+    await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "approved" }, headers)
+    const resA = await call(handleApi, "GET", "/api/trading/session-policy", undefined, headers)
+    expect(resA.body.userId).toBe(acct.user.id)
+    expect(resA.body.venues.expertoption.decision).toBe("approved")
+    const resDefault = await call(handleApi, "GET", "/api/trading/session-policy")
+    expect(resDefault.body.venues.expertoption.decision).toBe("ask") // bucketed — never mixed
+  })
 })

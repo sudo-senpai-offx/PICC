@@ -244,13 +244,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Popup telemetry: queue depth of the ACTIVE tab's sensor. The depth lives in
   // the content-script context; only a live sensor can observe it. When there
   // is no observable sensor we say so (observed:false) instead of zero-filling.
+  // The active tab's venueId/name (if the tab hosts a PICC venue) round-trips
+  // so the popup can show exactly THIS tab's sync status, generalized beyond
+  // "trading platform".
   if (msg.action === "sensor-queue-depth") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0]
-      if (!tab?.id) return sendResponse({ action: "sensor-queue-depth", depth: null, observed: false })
+      if (!tab?.id) return sendResponse({ action: "sensor-queue-depth", depth: null, observed: false, venueId: null, venueName: null })
       chrome.tabs.sendMessage(tab.id, { action: "sensor-queue-depth" })
-        .then((r) => sendResponse({ action: "sensor-queue-depth", depth: Number(r?.depth) || 0, observed: r?.observed === true }))
-        .catch(() => sendResponse({ action: "sensor-queue-depth", depth: null, observed: false }))
+        .then((r) => sendResponse({
+          action: "sensor-queue-depth",
+          depth: Number(r?.depth) || 0,
+          observed: r?.observed === true,
+          venueId: r?.venueId ?? null,
+          venueName: r?.venueName ?? null
+        }))
+        .catch(() => sendResponse({ action: "sensor-queue-depth", depth: null, observed: false, venueId: null, venueName: null }))
     })
     return true
   }

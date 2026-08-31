@@ -252,6 +252,32 @@ export function getCryptoMarket(): Promise<CryptoMarket> {
 }
 
 // ---------------------------------------------------------------------
+// Trading — first-login session policy (persisted approve/reject). The channel
+// catalog's per-platform sync mode reads + writes this. "ask" = undecided
+// (cleared) → the venue still prompts on first visit.
+// ---------------------------------------------------------------------
+export type SessionPolicyDecision = "approved" | "rejected" | "ask"
+
+export interface SessionPolicyRow {
+  venueId: string
+  name: string
+  decision: SessionPolicyDecision
+  at: string | null
+}
+
+export function getSessionPolicy(token?: string): Promise<{ ok: boolean; userId: string; venues: Record<string, SessionPolicyRow> }> {
+  return request("/api/trading/session-policy", {}, token)
+}
+
+export function setSessionPolicy(
+  venueId: string,
+  decision: SessionPolicyDecision,
+  token?: string
+): Promise<{ ok: boolean; userId: string; venueId: string; decision: SessionPolicyDecision; at: string | null }> {
+  return post("/api/trading/session-policy", { venueId, decision }, token)
+}
+
+// ---------------------------------------------------------------------
 // Crypto & staking yield monitor — DeFiLlama (keyless) + curated reference
 // ---------------------------------------------------------------------
 export interface DefiPool {
