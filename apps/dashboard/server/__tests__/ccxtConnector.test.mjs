@@ -85,6 +85,7 @@ const {
   mergeCCXTAssets,
   indicatorSnapshot,
   volumeProxy,
+  subscribeLiveCCXT,
   resetCCXTData
 } = await import("../services/liveCCXT.mjs")
 
@@ -405,6 +406,46 @@ describe("liveCCXT shared state + indicator feed", () => {
     const after = liveCCXTData().assets.find((a) => a.id === "binance:BTC/USDT")
     expect(after.lastPrice).toBe(555.5)
     expect(after.indicators[60].price).toBe(150)
+  })
+
+  it("subscribeLiveCCXT fans canonical ticks to live subscribers (Slice A)", () => {
+    resetCCXTData()
+    const received = []
+    const off = subscribeLiveCCXT((msg) => received.push(msg))
+    // Record candles -> a canonical BTCUSD tick (period = bar seconds).
+    recordCandles({
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "5m",
+      candles: normalizeCandles(rawRows(35, 1_700_000_000_000, 5 * 60_000))
+    })
+    expect(received.some((m) => m.type === "tick")).toBe(true)
+    const tick = received.find((m) => m.type === "tick")
+    expect(tick.assetId).toBe("BTCUSD") // canonical, not "binance:BTC/USDT"
+    expect(tick.source).toBe("ccxt")
+    expect(tick.price).toBeGreaterThan(0)
+    expect(tick.period).toBe(300)
+    expect(Number.isFinite(tick.ts)).toBe(true)
+    expect(typeof tick.name).toBe("string")
+
+    // A ticker refresh pushes a fresher quote even between bar polls.
+    const before = received.length
+    recordTicker({ exchange: "binance", symbol: "BTC/USDT", ticker: { price: 9_876.5, symbol: "BTC/USDT" } })
+    expect(received.length).toBeGreaterThan(before)
+    const last = received[received.length - 1]
+    expect(last.assetId).toBe("BTCUSD")
+    expect(last.price).toBe(9_876.5)
+
+    // Unsubscribing stops the fan-out.
+    off()
+    const countAfterOff = received.length
+    recordCandles({
+      exchange: "binance",
+      symbol: "ETH/USDT",
+      timeframe: "1m",
+      candles: normalizeCandles(rawRows(30, 1_800_000_000_000))
+    })
+    expect(received.length).toBe(countAfterOff)
   })
 
   it("indicatorSnapshot degrades gracefully on thin/invalid input", () => {

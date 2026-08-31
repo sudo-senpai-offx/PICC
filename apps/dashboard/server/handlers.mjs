@@ -84,6 +84,7 @@ import {
 } from "./services/trading.mjs"
 import { proAnalyzeSymbol, proAnalyzeExpertOption, summarizeProAnalysis } from "./services/proanalysis.mjs"
 import { subscribeLiveEO, liveEOStats, liveSnapshot, liveEOData } from "./services/liveEO.mjs"
+import { subscribeLiveCCXT } from "./services/liveCCXT.mjs"
 import { tradingSuiteSnapshot, bustRealtimeSuite } from "./services/realtimeSuite.mjs"
 import { subscribeDecisions, subscribeU4faEvents, getDecisions, observedPayouts } from "./services/adaptiveConfluence.mjs"
 import { getMarketIntel } from "./services/marketIntel.mjs"
@@ -1158,6 +1159,7 @@ async function _handleApiInner(req, res, url, reqId) {
     let off = null
     let offDecisions = null
     let offU4fa = null
+    let offCCXT = null
     let keepalive = null
     let suiteTimer = null
     const detach = () => {
@@ -1166,6 +1168,7 @@ async function _handleApiInner(req, res, url, reqId) {
       if (off) off()
       if (offDecisions) offDecisions()
       if (offU4fa) offU4fa()
+      if (offCCXT) offCCXT()
       if (keepalive) clearInterval(keepalive)
       if (suiteTimer) clearInterval(suiteTimer)
       try {
@@ -1188,6 +1191,10 @@ async function _handleApiInner(req, res, url, reqId) {
     // T12/M8 — `type:"u4fa"` events ride the SAME socket as decision events
     // (no separate endpoint; the client parser routes them on the u4fa name).
     offU4fa = subscribeU4faEvents((msg) => send(msg.type, msg))
+    // Slice A — CCXT exchange quotes ride the same socket with identical tick
+    // shape (canonical assetId), so the chart routes them on assetId exactly
+    // like EO ticks. No-op fan-out until a connected exchange polls data.
+    offCCXT = subscribeLiveCCXT((msg) => send(msg.type, msg))
     keepalive = setInterval(() => {
       try {
         res.write(": ping\n\n")

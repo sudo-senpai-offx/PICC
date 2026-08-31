@@ -8,6 +8,7 @@
 // snapshot via liveCCXTData() or mergeCCXTAssets(data).
 
 import { rsi, macd, ema, atr, adx, bollinger } from "./indicators.mjs"
+import { canonicalAssetId } from "./assetCatalog.mjs"
 import { createLogger } from "../logger.mjs"
 
 const log = createLogger("picc-live-ccxt")
@@ -18,6 +19,66 @@ const BUFFER_CAP = 400 // per pair/timeframe, same order as liveEO buffers
 const buffers = new Map()
 // `${exchange}:${symbol}` -> { price, ts }
 const lastTick = new Map()
+
+// ── Live push (Slice A) — a SECOND realtime source alongside liveEO. ────────
+// CCXT exchanges don't push, so liveCCXT is the write-side sink the scheduler
+// polls (every 15s). To wire that data into the same SSE tick bus EO feeds,
+// anyone who records a fresh quote/candle also emits a canonical tick to these
+// subscribers. The tick's assetId is the CANONICAL PICC id ("BTCUSD", not
+// "binance:BTC/USDT") so the chart's subscribeTicks(canonicalId) routes it to
+// the right candle series. No subscribers => nobody pays for the emit.
+const subscribers = new Set()
+
+function emit(type, payload) {
+  const msg = { type, ts: Date.now(), ...payload }
+  for (const cb of subscribers) {
+    try {
+      cb(msg)
+    } catch {
+      /* subscriber errors never break the stream */
+    }
+  }
+}
+
+/**
+ * Public subscription to the CCXT live tick bus. Returns an unsubscribe fn.
+ * Mirrors subscribeLiveEO: first subscriber doesn't boot any session (the
+ * scheduler owns collection), this is purely a fan-out for consumers.
+ */
+export function subscribeLiveCCXT(cb) {
+  subscribers.add(cb)
+  return () => {
+    subscribers.delete(cb)
+  }
+}
+
+/**
+ * Emit a canonical live tick for a freshly recorded CCXT quote. `assetId` is
+ * the canonical PICC id; `price` is the pair's latest close; `period` is the
+ * bar seconds. Honest provenance rides on the symbol + exchange the caller
+ * records, not on this helper.
+ */
+function pushTick({ exchange, symbol, price, period, ts }) {
+  const priceN = Number(price)
+  if (!Number.isFinite(priceN) || priceN <= 0 || subscribers.size === 0) return
+  const canonical = canonicalAssetId(symbol)
+  if (!canonical) return
+  emit("tick", {
+    assetId: canonical,
+    name: displayNameFor(canonical, symbol),
+    price: priceN,
+    change: 0,
+    changePct: 0,
+    period: Number(period) || 60,
+    ts: Number(ts) || Date.now(),
+    source: "ccxt"
+  })
+}
+
+/** Friendly label: canonical id where possible, else the raw symbol. */
+function displayNameFor(canonical, symbol) {
+  return canonical || String(symbol ?? "").toUpperCase()
+}
 
 /** "1m"|"5m"|"15m"|"4h"|"1d"|60 -> seconds (null when unparseable). */
 export function timeframeSeconds(tf) {
@@ -152,6 +213,8 @@ export function recordCandles({ exchange, symbol, timeframe = "1m", candles }) {
   } catch (err) {
     log.warn("indicator computation failed", { pair: pairKey(id, symbol), error: err.message })
   }
+  // Slice A — fan the freshest close out to live subscribers at its bar size.
+  pushTick({ exchange: id, symbol, price: buf.lastPrice, period: tfSec, ts: buf.updatedAt })
   return { ...buf, ohlc: buf.ohlc.length }
 }
 
@@ -162,12 +225,16 @@ export function recordTicker({ exchange, symbol, ticker }) {
   if (!id || !Number.isFinite(price) || price <= 0) return null
   const key = pairKey(id, symbol)
   lastTick.set(key, { price, ts: Date.now(), symbol: ticker.symbol ?? symbol })
+  let tfSec = 0
   for (const buf of buffers.values()) {
     if (buf.key.startsWith(`${key}:`)) {
       buf.ticker = ticker
       buf.lastPrice = price
+      if (tfSec === 0) tfSec = buf.tfSec
     }
   }
+  // Slice A — a ticker refresh is a live quote even between bar polls.
+  pushTick({ exchange: id, symbol, price, period: tfSec, ts: Date.now() })
   return lastTick.get(key)
 }
 
