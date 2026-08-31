@@ -4,7 +4,7 @@
 //   - an empty portfolio renders "no open positions", never a fake zero entry;
 //   - the risk check mirrors the server's allowed/warnings verdict verbatim.
 
-import type { AggregateResult, SpreadResult } from "./trading"
+import type { AccountMetricsResult, AggregateResult, SpreadResult, SystemCapabilitiesResult } from "./trading"
 
 export type SpreadDisplay =
   | {
@@ -71,5 +71,64 @@ export function aggregatePanelModel(res: AggregateResult): AggregateDisplay {
           afterNotional: res.riskCheck.after?.totalNotional ?? null
         }
       : null
+  }
+}
+
+// ---------------------------------------------------------------------
+// T6 — account metrics + capabilities display models
+// ---------------------------------------------------------------------
+
+export interface MetricsVenueDisplay {
+  venueId: string
+  balance: number | null
+  currency: string
+  active: "demo" | "real" | null
+  stale: boolean
+  observedAt: string | null
+}
+
+export interface MetricsDisplay {
+  venues: MetricsVenueDisplay[]
+  observedVenueCount: number
+}
+
+export function metricsPanelModel(res: AccountMetricsResult): MetricsDisplay {
+  const venues = Object.entries(res.venues ?? {}).map(([vid, rec]) => ({
+    venueId: vid,
+    // Strict honesty: a genuine observed 0 stays 0, an unobserved balance is
+    // null — the UI renders one as 0.00 and the other as "—".
+    balance: typeof rec?.balance === "number" ? rec.balance : null,
+    currency: rec?.currency ?? "USD",
+    active: rec?.active ?? null,
+    stale: Boolean(rec?.stale),
+    observedAt: rec?.observedAt ?? null
+  }))
+  return { venues, observedVenueCount: venues.length }
+}
+
+export interface CapabilitiesDisplay {
+  browserFound: boolean
+  sensorSeen: boolean
+  sensorLastSeen: number | null
+  notifierChannels: { inApp: boolean; webpush: boolean; email: boolean }
+  signalEngine: boolean
+  uptimeSec: number
+  node: string
+  platform: string
+  arch: string
+}
+
+export function capabilitiesPanelModel(res: SystemCapabilitiesResult): CapabilitiesDisplay | null {
+  if (!res?.ok) return null
+  return {
+    browserFound: Boolean(res.browserFound),
+    sensorSeen: Boolean(res.extensionSensor?.seen),
+    sensorLastSeen: res.extensionSensor?.lastSeen ?? null,
+    notifierChannels: res.notifierChannels ?? { inApp: true, webpush: false, email: false },
+    signalEngine: Boolean(res.signalEngine),
+    uptimeSec: Number(res.uptime) || 0,
+    node: res.node ?? "unknown",
+    platform: res.platform ?? "unknown",
+    arch: res.arch ?? "unknown"
   }
 }

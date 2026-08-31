@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { aggregatePanelModel, spreadPanelModel } from "../integrationPanels"
-import type { AggregateResult, SpreadResult } from "../trading"
+import { aggregatePanelModel, capabilitiesPanelModel, metricsPanelModel, spreadPanelModel } from "../integrationPanels"
+import type { AccountMetricsResult, AggregateResult, SpreadResult, SystemCapabilitiesResult } from "../trading"
 
 // T5 acceptance: spread renders n/a (never 0) when <2 venues; measured edge
 // carries the AFTER-fee number; aggregate surfaces todayPnl + riskCheck.
@@ -100,5 +100,98 @@ describe("aggregatePanelModel (T5)", () => {
   it("reports no risk check when none was requested", () => {
     const d = aggregatePanelModel({ ...AGG, riskCheck: null })
     expect(d.riskCheck).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------
+// T6 — account metrics + capabilities models
+// ---------------------------------------------------------------------
+
+const METRICS_EMPTY: AccountMetricsResult = { ok: true, userId: "u1", venues: {} }
+
+const METRICS_FULL: AccountMetricsResult = {
+  ok: true,
+  userId: "u1",
+  venues: {
+    expertoption: {
+      demoWallet: { balance: 0, currency: "USD" }, // genuine observed 0 — must stay 0
+      realWallet: { balance: null, currency: "USD" },
+      active: "demo",
+      currency: "USD",
+      balance: 0,
+      demo: true,
+      email: null,
+      name: null,
+      openPositions: null,
+      exposurePct: null,
+      venueId: "expertoption",
+      sourceLeg: "ws",
+      observedAt: "2026-08-31T10:00:00.000Z",
+      stale: true
+    },
+    binance: {
+      demoWallet: { balance: null, currency: "USD" },
+      realWallet: { balance: null, currency: "USD" },
+      active: null,
+      currency: "USD",
+      balance: 4250.5,
+      demo: null,
+      email: "a@b.c",
+      name: null,
+      openPositions: null,
+      exposurePct: null,
+      venueId: "binance",
+      sourceLeg: "ws",
+      observedAt: "2026-08-31T10:05:00.000Z",
+      stale: false
+    }
+  }
+}
+
+describe("metricsPanelModel (T6)", () => {
+  it("reports honest empty state when no venue has ever been observed", () => {
+    const d = metricsPanelModel(METRICS_EMPTY)
+    expect(d.observedVenueCount).toBe(0)
+    expect(d.venues).toEqual([])
+  })
+
+  it("keeps a genuine observed 0 as 0 and an absent balance as null", () => {
+    const d = metricsPanelModel(METRICS_FULL)
+    const eo = d.venues.find((v) => v.venueId === "expertoption")!
+    expect(eo.balance).toBe(0) // a real zero is not nulled out
+    const binance = d.venues.find((v) => v.venueId === "binance")!
+    expect(binance.balance).toBe(4250.5)
+    expect(binance.stale).toBe(false)
+    expect(eo.stale).toBe(true)
+    expect(eo.active).toBe("demo")
+  })
+})
+
+const CAPS: SystemCapabilitiesResult = {
+  ok: true,
+  arch: "x64",
+  platform: "win32",
+  node: "v22.0.0",
+  browserFound: true,
+  extensionSensor: { seen: false, lastSeen: null },
+  notifierChannels: { inApp: true, webpush: true, email: false },
+  signalEngine: true,
+  uptime: 4321
+}
+
+describe("capabilitiesPanelModel (T6)", () => {
+  it("reports the extension sensor absent honestly — never a claimed session", () => {
+    const d = capabilitiesPanelModel(CAPS)!
+    expect(d.sensorSeen).toBe(false)
+    expect(d.sensorLastSeen).toBeNull()
+  })
+
+  it("passes notifier channel configuration through (unconfigured stays false)", () => {
+    const d = capabilitiesPanelModel(CAPS)!
+    expect(d.notifierChannels).toEqual({ inApp: true, webpush: true, email: false })
+  })
+
+  it("returns null when the probe did not succeed", () => {
+    expect(capabilitiesPanelModel({ ok: false } as SystemCapabilitiesResult)).toBeNull()
   })
 })

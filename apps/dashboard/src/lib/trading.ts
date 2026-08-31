@@ -1383,6 +1383,55 @@ export function getPortfolioAggregate(proposed?: { symbol: string; amount: numbe
   return post("/trading/portfolio/aggregate", proposed ? { proposed } : {})
 }
 
+// ---------------------------------------------------------------------
+// Account metrics + system capabilities (spec T6 integration surfaces)
+// ---------------------------------------------------------------------
+
+export interface AccountMetricRecord {
+  demoWallet: { balance: number | null; currency: string }
+  realWallet: { balance: number | null; currency: string }
+  active: "demo" | "real" | null
+  currency: string
+  balance: number | null
+  demo: boolean | null
+  email: string | null
+  name: string | null
+  openPositions: number | null
+  exposurePct: number | null
+  venueId: string
+  sourceLeg: string | null
+  observedAt: string
+  stale: boolean
+}
+
+export interface AccountMetricsResult {
+  ok: boolean
+  userId: string
+  venues: Record<string, AccountMetricRecord>
+}
+
+/** Observed per-venue account metrics (auth attached by the request helper). */
+export function getAccountMetrics(): Promise<AccountMetricsResult> {
+  return request("/trading/account-metrics")
+}
+
+export interface SystemCapabilitiesResult {
+  ok: boolean
+  arch: string
+  platform: string
+  node: string
+  browserFound: boolean
+  extensionSensor: { seen: boolean; lastSeen: number | null }
+  notifierChannels: { inApp: boolean; webpush: boolean; email: boolean }
+  signalEngine: boolean
+  uptime: number
+}
+
+/** Read-only machine-level snapshot: what this instance can reach (T6). */
+export function getSystemCapabilities(): Promise<SystemCapabilitiesResult> {
+  return post("/system/capabilities", {})
+}
+
 export interface BrokersResult {
   ok: boolean
   activeExecutor: string

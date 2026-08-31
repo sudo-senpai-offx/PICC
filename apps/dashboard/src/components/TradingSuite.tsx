@@ -9,6 +9,8 @@ import { ConvergencePanel } from "@/components/ConvergencePanel"
 import { TradingChart } from "@/components/TradingChart"
 import { SpreadPanel } from "@/components/SpreadPanel"
 import { PortfolioAggregatePanel } from "@/components/PortfolioAggregatePanel"
+import { AccountMetricsPanel } from "@/components/AccountMetricsPanel"
+import { CapabilitiesPanel } from "@/components/CapabilitiesPanel"
 import { BacktestPanel } from "@/components/BacktestPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { AlertPanel } from "@/components/AlertPanel"
@@ -195,11 +197,13 @@ export function MarketsSuite() {
           <AlertPanel />
           <CalendarPanel />
           <PortfolioPanel />
+          <AccountMetricsPanel />
           <WatchlistPanel />
           <ScreenerPanel />
           <PatternPanel />
           <TradeJournalPanel />
           <SessionPanel />
+          <CapabilitiesPanel />
           <div className="grid">
             <PaperTradingCard positions={positions} closed={closed} refresh={refresh} />
             <div className="stack">
