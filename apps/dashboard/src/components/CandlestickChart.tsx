@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useMemo, memo } from "react"
-import { createChart, CandlestickSeries, HistogramSeries, LineSeries, ColorType } from "lightweight-charts"
-import type { IChartApi, ISeriesApi, CandlestickData, HistogramData, Time, DeepPartial, TimeChartOptions, IPriceLine } from "lightweight-charts"
+import { createChart, createSeriesMarkers, CandlestickSeries, HistogramSeries, LineSeries, ColorType } from "lightweight-charts"
+import type { IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, HistogramData, Time, DeepPartial, TimeChartOptions, IPriceLine, SeriesMarker } from "lightweight-charts"
 
 export interface CandleDatum {
   time: Time
@@ -28,6 +28,15 @@ export interface PriceLine {
   dashed?: boolean
 }
 
+/** T7 — U4FA advisory decision markers (mapped by lib/u4faOverlay). */
+export interface U4faMarker {
+  time: Time
+  position: "aboveBar" | "belowBar"
+  shape: "arrowUp" | "arrowDown" | "circle"
+  color: string
+  text: string
+}
+
 interface CandlestickChartProps {
   candles: CandleDatum[]
   volumes?: VolumeDatum[]
@@ -42,6 +51,8 @@ interface CandlestickChartProps {
   kcLower?: EmaDatum[]
   /** Ideal buy/sell levels drawn as horizontal price lines. */
   priceLines?: PriceLine[]
+  /** T7 — U4FA advisory decision markers drawn on the candle series. */
+  u4faMarkers?: U4faMarker[]
   height?: number
   onCrosshair?: (data: { time: Time; open: number; high: number; low: number; close: number } | null) => void
   autoScroll?: boolean
@@ -80,9 +91,12 @@ const THEME: DeepPartial<TimeChartOptions> = {
  * picc-errors.log with duplicated Yahoo daily bars). Sort AND dedupe every
  * series; the newest row wins for duplicate timestamps.
  */
+function toSec(t: Time): number {
+  return typeof t === "number" ? t : new Date(t as string).getTime() / 1000
+}
+
 function sanitizeSeries<T extends { time: Time }>(rows: T[] | undefined): T[] {
   if (!rows?.length) return []
-  const toSec = (t: Time) => (typeof t === "number" ? t : new Date(t as string).getTime() / 1000)
   const byTime = new Map<number, T>()
   for (const row of rows) {
     const sec = toSec(row.time)
@@ -105,6 +119,7 @@ function CandlestickChartInner({
   kcMiddle,
   kcLower,
   priceLines,
+  u4faMarkers,
   height = 360,
   onCrosshair,
   autoScroll = true
@@ -123,6 +138,7 @@ function CandlestickChartInner({
   const kcMiddleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const kcLowerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const priceLineRefs = useRef<IPriceLine[]>([])
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const onCrosshairRef = useRef(onCrosshair)
   onCrosshairRef.current = onCrosshair
 
@@ -138,6 +154,18 @@ function CandlestickChartInner({
   const safeKcUpper = useMemo(() => sanitizeSeries(kcUpper), [kcUpper])
   const safeKcMiddle = useMemo(() => sanitizeSeries(kcMiddle), [kcMiddle])
   const safeKcLower = useMemo(() => sanitizeSeries(kcLower), [kcLower])
+  // Markers: same ascending/unique treatment (newest row wins a duplicate time),
+  // matching the candle series contract setMarkers requires.
+  const safeU4faMarkers = useMemo(() => {
+    if (!u4faMarkers?.length) return []
+    const byTime = new Map<number, U4faMarker>()
+    for (const m of u4faMarkers) {
+      const sec = toSec(m.time)
+      if (!Number.isFinite(sec)) continue
+      byTime.set(sec, m)
+    }
+    return [...byTime.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v)
+  }, [u4faMarkers])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -225,6 +253,8 @@ function CandlestickChartInner({
 
     chartRef.current = chart
     candleSeriesRef.current = cs
+    // T7 — lightweight-charts v5 marker plugin (series.setMarkers is gone).
+    markersPluginRef.current = createSeriesMarkers(cs)
     volumeSeriesRef.current = vs
     ema20SeriesRef.current = e20
     ema50SeriesRef.current = e50
@@ -238,6 +268,8 @@ function CandlestickChartInner({
 
     return () => {
       priceLineRefs.current = []
+      try { markersPluginRef.current?.detach() } catch { /* plugin already gone */ }
+      markersPluginRef.current = null
       chart.remove()
       chartRef.current = null
       candleSeriesRef.current = null
@@ -318,6 +350,21 @@ function CandlestickChartInner({
   const refFn = useCallback((el: HTMLDivElement | null) => {
     containerRef.current = el
   }, [])
+
+  // T7 — U4FA advisory markers on the candle series (decision points only).
+  useEffect(() => {
+    const plugin = markersPluginRef.current
+    if (!plugin) return
+    if (!safeU4faMarkers.length) {
+      plugin.setMarkers([])
+      return
+    }
+    try {
+      plugin.setMarkers(safeU4faMarkers as unknown as SeriesMarker<Time>[])
+    } catch {
+      /* malformed marker input must never kill the chart */
+    }
+  }, [safeU4faMarkers])
 
   return (
     <div

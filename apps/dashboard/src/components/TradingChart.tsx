@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react"
 import { Badge, Button } from "@/components/ui"
-import { CandlestickChart, type PriceLine } from "@/components/CandlestickChart"
+import { CandlestickChart, type PriceLine, type U4faMarker } from "@/components/CandlestickChart"
 import { ChartErrorBoundary } from "@/components/ChartErrorBoundary"
 import { useCandleData, TIMEFRAME_LABELS, type Timeframe } from "@/hooks/useCandleData"
 import { useBrokerCapabilities } from "@/hooks/useBrokerCapabilities"
+import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { getEntryLevels, openPaperTrade, type EntryLevelsResult } from "@/lib/trading"
+import { u4faMarkersFor } from "@/lib/u4faOverlay"
+import type { LiveEvent, LiveU4faSignal } from "@/lib/liveTrading"
 
 const TIMEFRAMES: Timeframe[] = [5, 15, 30, 60, 300, 900, 1800, 3600, 14400, 86400, 604800, 2592000]
 
@@ -37,11 +40,21 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   const [showIchimoku, setShowIchimoku] = useState(false)
   const [showKeltner, setShowKeltner] = useState(false)
   const [showLevels, setShowLevels] = useState(true)
+  const [showU4fa, setShowU4fa] = useState(true)
   const [levels, setLevels] = useState<EntryLevelsResult | null>(null)
   // Hover emphasis: which zone the pointer is on ("buy" | "sell" | null) and
   // simulation feedback.
   const [hoverZone, setHoverZone] = useState<"buy" | "sell" | null>(null)
   const [simMsg, setSimMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // T7 — real U4FA engine signals for THIS asset, captured off the shared
+  // realtime stream (no second connection). Ring buffer keeps the last 60;
+  // markers are derived via u4faMarkersFor, never fabricated client-side.
+  const [u4faEvents, setU4faEvents] = useState<LiveEvent[]>([])
+  useRealtimeSuite((e: LiveEvent) => {
+    if (e.type !== "u4fa") return
+    if (e.assetId !== assetId) return
+    setU4faEvents((prev) => (prev.length >= 60 ? [...prev.slice(prev.length - 59), e] : [...prev, e]))
+  })
 
   // Ideal buy/sell price points for the active asset + selected timeframe.
   useEffect(() => {
@@ -113,6 +126,20 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   const nearestBuy = levels?.buyZone ? levels.levels?.find((l) => l.price === levels.buyZone?.anchor) ?? null : null
   const nearestSell = levels?.sellZone ? levels.levels?.find((l) => l.price === levels.sellZone?.anchor) ?? null : null
 
+  // T7 — advisory decision markers: drawn when toggled, strictly from real u4fa
+  // events for this asset (honesty gate lives in u4faMarkersFor).
+  const u4faMarkers = useMemo<U4faMarker[]>(
+    () => (showU4fa ? u4faMarkersFor(u4faEvents, assetId, candles) : []),
+    [showU4fa, u4faEvents, assetId, candles]
+  )
+  const latestU4fa = useMemo(() => {
+    for (let i = u4faEvents.length - 1; i >= 0; i--) {
+      const e = u4faEvents[i]
+      if (e.type === "u4fa" && e.assetId === assetId && e.honesty) return e as LiveEvent & LiveU4faSignal
+    }
+    return null
+  }, [u4faEvents, assetId])
+
   return (
     <div className="stack" style={{ gap: 6 }}>
       <div className="row-between" style={{ alignItems: "center" }}>
@@ -132,6 +159,16 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
             : feed === "studio" ? <Badge tone="success">EO headless live</Badge>
               : sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
           {streamError ? <Badge tone="warn">stream offline — retrying</Badge> : null}
+          {latestU4fa ? (
+            <span
+              title={`U4FA advisory (decision readout only — never auto-executes) · producers: ${JSON.stringify(latestU4fa.honesty)}`}
+              style={{ display: "inline-flex" }}
+            >
+              <Badge tone={latestU4fa.verdict === "TRADE" ? "success" : latestU4fa.verdict === "OBSERVE" ? "warn" : "muted"}>
+                U4FA {latestU4fa.verdict} {latestU4fa.direction === "up" ? "↑" : latestU4fa.direction === "down" ? "↓" : "→"}
+              </Badge>
+            </span>
+          ) : null}
         </div>
         <div className="row gap" style={{ alignItems: "center" }}>
           {display ? (
@@ -197,6 +234,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
             kcMiddle={showKeltner ? kcMiddle : undefined}
             kcLower={showKeltner ? kcLower : undefined}
             priceLines={priceLines}
+            u4faMarkers={u4faMarkers}
             height={height}
             onCrosshair={crosshair}
             autoScroll
@@ -289,6 +327,17 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
           }}
         >
           Keltner
+        </button>
+        <button
+          onClick={() => setShowU4fa(!showU4fa)}
+          title="U4FA decision markers — advisory readout only, never auto-executes; shown only from engine events with named producers"
+          style={{
+            padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
+            background: showU4fa ? "rgba(74, 222, 128, 0.25)" : "transparent",
+            color: showU4fa ? "#4ade80" : "var(--text-muted)"
+          }}
+        >
+          U4FA
         </button>
       </div>
     </div>
