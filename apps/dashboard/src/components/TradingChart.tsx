@@ -33,6 +33,7 @@ const SOURCE_BADGES: Record<string, { text: string; tone: "success" | "warn" | "
 export function TradingChart({ assetId, label, height = 380, onCrosshair }: TradingChartProps) {
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
+    sma20, bbUpper, bbMid, bbLower, rsiLine, macdLine, macdSignal, macdHist,
     loading, error, streamError, lastPrice, timeframe, setTimeframe, source, feed, resolvedTimeframe, resolved
   } = useCandleData({ assetId, timeframe: 300, count: 2000 }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
   const { servableTimeframes, sourceTimeframes } = useBrokerCapabilities()
@@ -41,6 +42,13 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   const [showKeltner, setShowKeltner] = useState(false)
   const [showLevels, setShowLevels] = useState(true)
   const [showU4fa, setShowU4fa] = useState(true)
+  // T10 — indicator overlays. EMA/SMA and Volume default ON (pre-T10 look
+  // preserved); Bollinger/RSI/MACD start off.
+  const [showSma, setShowSma] = useState(true)
+  const [showVolume, setShowVolume] = useState(true)
+  const [showBollinger, setShowBollinger] = useState(false)
+  const [showRsi, setShowRsi] = useState(false)
+  const [showMacd, setShowMacd] = useState(false)
   const [levels, setLevels] = useState<EntryLevelsResult | null>(null)
   // Hover emphasis: which zone the pointer is on ("buy" | "sell" | null) and
   // simulation feedback.
@@ -233,6 +241,19 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
             kcUpper={showKeltner ? kcUpper : undefined}
             kcMiddle={showKeltner ? kcMiddle : undefined}
             kcLower={showKeltner ? kcLower : undefined}
+            sma20={sma20}
+            bbUpper={bbUpper}
+            bbMid={bbMid}
+            bbLower={bbLower}
+            rsiLine={rsiLine}
+            macdLine={macdLine}
+            macdSignal={macdSignal}
+            macdHist={macdHist}
+            showVolume={showVolume}
+            showSma={showSma}
+            showBollinger={showBollinger}
+            showRsi={showRsi}
+            showMacd={showMacd}
             priceLines={priceLines}
             u4faMarkers={u4faMarkers}
             height={height}
@@ -298,6 +319,8 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
         <span className="muted small" style={{ color: "#e2e8f0" }}>Price</span>
         <span className="muted small" style={{ color: "#4ade80" }}>EMA20</span>
         <span className="muted small" style={{ color: "#f59e0b" }}>EMA50</span>
+        <span className="muted small" style={{ color: "#38bdf8" }}>SMA20</span>
+        <span className="muted small" style={{ color: "#facc15" }}>BB</span>
         <button
           onClick={() => setShowLevels(!showLevels)}
           style={{
@@ -327,6 +350,61 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
           }}
         >
           Keltner
+        </button>
+        <button
+          onClick={() => setShowSma(!showSma)}
+          title="SMA/EMA overlays (SMA20 + EMA20 + EMA50)"
+          style={{
+            padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
+            background: showSma ? "rgba(56, 189, 248, 0.3)" : "transparent",
+            color: showSma ? "#38bdf8" : "var(--text-muted)"
+          }}
+        >
+          SMA/EMA
+        </button>
+        <button
+          onClick={() => setShowBollinger(!showBollinger)}
+          title="Bollinger Bands (20, 2σ)"
+          style={{
+            padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
+            background: showBollinger ? "rgba(250, 204, 21, 0.3)" : "transparent",
+            color: showBollinger ? "#facc15" : "var(--text-muted)"
+          }}
+        >
+          Bollinger
+        </button>
+        <button
+          onClick={() => setShowVolume(!showVolume)}
+          title="Volume histogram"
+          style={{
+            padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
+            background: showVolume ? "rgba(148, 163, 184, 0.3)" : "transparent",
+            color: showVolume ? "#94a3b8" : "var(--text-muted)"
+          }}
+        >
+          Volume
+        </button>
+        <button
+          onClick={() => setShowRsi(!showRsi)}
+          title="RSI(14) in a secondary pane"
+          style={{
+            padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
+            background: showRsi ? "rgba(167, 139, 250, 0.3)" : "transparent",
+            color: showRsi ? "#a78bfa" : "var(--text-muted)"
+          }}
+        >
+          RSI
+        </button>
+        <button
+          onClick={() => setShowMacd(!showMacd)}
+          title="MACD (12, 26, 9) in a secondary pane"
+          style={{
+            padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
+            background: showMacd ? "rgba(74, 222, 128, 0.25)" : "transparent",
+            color: showMacd ? "#4ade80" : "var(--text-muted)"
+          }}
+        >
+          MACD
         </button>
         <button
           onClick={() => setShowU4fa(!showU4fa)}

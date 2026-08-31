@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import type { CandleDatum, EmaDatum, VolumeDatum } from "@/components/CandlestickChart"
 import { getToken } from "@/lib/auth"
 import { subscribeTicks, useRealtimeSuite } from "./useRealtimeSuite"
+import { sma, bollinger, rsi, macd } from "@/lib/indicators"
 
 export type Timeframe =
   | 5 | 15 | 30 | 60 | 300 | 900 | 1800 | 3600 | 14400 | 86400 | 604800 | 2592000
@@ -41,6 +42,18 @@ interface UseCandleDataResult {
   kcUpper: EmaDatum[]
   kcMiddle: EmaDatum[]
   kcLower: EmaDatum[]
+  /** T10 — SMA(20) overlay (mirrors server indicators.mjs sma). */
+  sma20: EmaDatum[]
+  /** T10 — Bollinger bands (20, 2σ), matching the server bollinger. */
+  bbUpper: EmaDatum[]
+  bbMid: EmaDatum[]
+  bbLower: EmaDatum[]
+  /** T10 — RSI(14) secondary-pane line. */
+  rsiLine: EmaDatum[]
+  /** T10 — MACD (12/26/9): line, signal, histogram. */
+  macdLine: EmaDatum[]
+  macdSignal: EmaDatum[]
+  macdHist: EmaDatum[]
   loading: boolean
   error: string | null
   streamError: string | null
@@ -306,9 +319,24 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
   const { tenkan, kijun, senkouA, senkouB } = useMemo(() => computeIchimoku(candles), [candles])
   const { kcUpper, kcMiddle, kcLower } = useMemo(() => computeKeltner(candles), [candles])
 
+  // T10 — SMA / Bollinger / RSI / MACD via the client-side indicators lib,
+  // mirroring the server indicators.mjs formulas so the overlays and the
+  // dashboard panel always agree.
+  const sma20 = useMemo(() => sma(candles, 20), [candles])
+  const bb = useMemo(() => bollinger(candles, { period: 20 }), [candles])
+  const rsiLine = useMemo(() => rsi(candles, 14), [candles])
+  const macdSeries = useMemo(() => macd(candles), [candles])
+
   const handleSetTimeframe = useCallback((tf: Timeframe) => {
     setTimeframe(tf)
   }, [])
 
-  return { candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower, loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source, feed, resolvedTimeframe, resolved }
+  return {
+    candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
+    sma20,
+    bbUpper: bb.upper, bbMid: bb.mid, bbLower: bb.lower,
+    rsiLine,
+    macdLine: macdSeries.line, macdSignal: macdSeries.signal, macdHist: macdSeries.hist,
+    loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source, feed, resolvedTimeframe, resolved
+  }
 }

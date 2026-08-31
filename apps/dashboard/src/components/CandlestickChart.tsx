@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useMemo, memo } from "react"
 import { createChart, createSeriesMarkers, CandlestickSeries, HistogramSeries, LineSeries, ColorType } from "lightweight-charts"
-import type { IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, HistogramData, Time, DeepPartial, TimeChartOptions, IPriceLine, SeriesMarker } from "lightweight-charts"
+import type { IChartApi, ISeriesApi, ISeriesMarkersPluginApi, CandlestickData, HistogramData, Time, DeepPartial, TimeChartOptions, IPriceLine, SeriesMarker, LineSeriesOptions, HistogramSeriesOptions } from "lightweight-charts"
+import { activePaneKeys } from "@/lib/chartOverlays"
 
 export interface CandleDatum {
   time: Time
@@ -49,6 +50,23 @@ interface CandlestickChartProps {
   kcUpper?: EmaDatum[]
   kcMiddle?: EmaDatum[]
   kcLower?: EmaDatum[]
+  /** T10 — SMA(20) overlay (shown when showSma). */
+  sma20?: EmaDatum[]
+  /** T10 — Bollinger bands (20, 2σ), shown when showBollinger. */
+  bbUpper?: EmaDatum[]
+  bbMid?: EmaDatum[]
+  bbLower?: EmaDatum[]
+  /** T10 — RSI(14) / MACD (12/26/9) secondary-pane series. */
+  rsiLine?: EmaDatum[]
+  macdLine?: EmaDatum[]
+  macdSignal?: EmaDatum[]
+  macdHist?: EmaDatum[]
+  /** T10 — overlay toggles. Volume and SMA default on (keeps the pre-T10 look). */
+  showVolume?: boolean
+  showSma?: boolean
+  showBollinger?: boolean
+  showRsi?: boolean
+  showMacd?: boolean
   /** Ideal buy/sell levels drawn as horizontal price lines. */
   priceLines?: PriceLine[]
   /** T7 — U4FA advisory decision markers drawn on the candle series. */
@@ -85,6 +103,14 @@ const THEME: DeepPartial<TimeChartOptions> = {
   }
 }
 
+// T10 — RSI/MACD secondary pane series options, mirroring the specs in
+// lib/chartOverlays.ts (single source of truth lives there; these are the
+// concrete v5 options the chart passes to addSeries).
+const RSI_LINE_OPTIONS: DeepPartial<LineSeriesOptions> = { color: "#a78bfa", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
+const MACD_LINE_OPTIONS: DeepPartial<LineSeriesOptions> = { color: "#4ade80", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
+const MACD_SIGNAL_OPTIONS: DeepPartial<LineSeriesOptions> = { color: "#f59e0b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
+const MACD_HIST_OPTIONS: DeepPartial<HistogramSeriesOptions> = { color: "rgba(108, 99, 255, 0.35)", priceLineVisible: false, lastValueVisible: false }
+
 /**
  * lightweight-charts requires STRICTLY ascending, unique timestamps — equal
  * times throw "data must be asc ordered by time" and kill the chart (seen in
@@ -118,6 +144,19 @@ function CandlestickChartInner({
   kcUpper,
   kcMiddle,
   kcLower,
+  sma20,
+  bbUpper,
+  bbMid,
+  bbLower,
+  rsiLine,
+  macdLine,
+  macdSignal,
+  macdHist,
+  showVolume = true,
+  showSma = false,
+  showBollinger = false,
+  showRsi = false,
+  showMacd = false,
   priceLines,
   u4faMarkers,
   height = 360,
@@ -137,6 +176,18 @@ function CandlestickChartInner({
   const kcUpperSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const kcMiddleSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const kcLowerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const sma20SeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const bbUpperSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const bbMidSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const bbLowerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  // T10 — RSI/MACD secondary pane: created lazily on first enable (each toggle
+  // ADDS its series), torn down with chart.removeSeries + chart.removePane
+  // when the last one turns off (each toggle REMOVES its series).
+  const paneIndexRef = useRef<number | null>(null)
+  const rsiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const macdLineRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const macdSignalRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null)
   const priceLineRefs = useRef<IPriceLine[]>([])
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const onCrosshairRef = useRef(onCrosshair)
@@ -154,6 +205,14 @@ function CandlestickChartInner({
   const safeKcUpper = useMemo(() => sanitizeSeries(kcUpper), [kcUpper])
   const safeKcMiddle = useMemo(() => sanitizeSeries(kcMiddle), [kcMiddle])
   const safeKcLower = useMemo(() => sanitizeSeries(kcLower), [kcLower])
+  const safeSma20 = useMemo(() => sanitizeSeries(sma20), [sma20])
+  const safeBbUpper = useMemo(() => sanitizeSeries(bbUpper), [bbUpper])
+  const safeBbMid = useMemo(() => sanitizeSeries(bbMid), [bbMid])
+  const safeBbLower = useMemo(() => sanitizeSeries(bbLower), [bbLower])
+  const safeRsiLine = useMemo(() => sanitizeSeries(rsiLine), [rsiLine])
+  const safeMacdLine = useMemo(() => sanitizeSeries(macdLine), [macdLine])
+  const safeMacdSignal = useMemo(() => sanitizeSeries(macdSignal), [macdSignal])
+  const safeMacdHist = useMemo(() => sanitizeSeries(macdHist), [macdHist])
   // Markers: same ascending/unique treatment (newest row wins a duplicate time),
   // matching the candle series contract setMarkers requires.
   const safeU4faMarkers = useMemo(() => {
@@ -190,7 +249,8 @@ function CandlestickChartInner({
 
     const vs = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
-      priceScaleId: "volume"
+      priceScaleId: "volume",
+      visible: showVolume
     })
     vs.priceScale().applyOptions({
       scaleMargins: { top: 0.8, bottom: 0 }
@@ -234,6 +294,20 @@ function CandlestickChartInner({
       color: "rgba(236, 72, 153, 0.8)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false
     })
 
+    // T10 — SMA(20) + Bollinger (20, 2σ): always created, visibility-gated.
+    const sm20 = chart.addSeries(LineSeries, {
+      color: "#38bdf8", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: showSma
+    })
+    const bu = chart.addSeries(LineSeries, {
+      color: "rgba(250, 204, 21, 0.35)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: showBollinger
+    })
+    const bm = chart.addSeries(LineSeries, {
+      color: "rgba(250, 204, 21, 0.8)", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: showBollinger
+    })
+    const bl = chart.addSeries(LineSeries, {
+      color: "rgba(250, 204, 21, 0.35)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: showBollinger
+    })
+
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.time || !param.seriesData) {
         onCrosshairRef.current?.(null)
@@ -265,11 +339,22 @@ function CandlestickChartInner({
     kcUpperSeriesRef.current = ku
     kcMiddleSeriesRef.current = km
     kcLowerSeriesRef.current = kl
+    sma20SeriesRef.current = sm20
+    bbUpperSeriesRef.current = bu
+    bbMidSeriesRef.current = bm
+    bbLowerSeriesRef.current = bl
 
     return () => {
       priceLineRefs.current = []
       try { markersPluginRef.current?.detach() } catch { /* plugin already gone */ }
       markersPluginRef.current = null
+      // T10 — pane refs die with the chart; the chart's own remove() drops the
+      // pane and its series. Leave the refs null so a remount starts clean.
+      paneIndexRef.current = null
+      rsiSeriesRef.current = null
+      macdLineRef.current = null
+      macdSignalRef.current = null
+      macdHistRef.current = null
       chart.remove()
       chartRef.current = null
       candleSeriesRef.current = null
@@ -283,6 +368,10 @@ function CandlestickChartInner({
       kcUpperSeriesRef.current = null
       kcMiddleSeriesRef.current = null
       kcLowerSeriesRef.current = null
+      sma20SeriesRef.current = null
+      bbUpperSeriesRef.current = null
+      bbMidSeriesRef.current = null
+      bbLowerSeriesRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only create chart once on mount
@@ -320,7 +409,75 @@ function CandlestickChartInner({
     if (kcUpperSeriesRef.current && safeKcUpper.length) kcUpperSeriesRef.current.setData(safeKcUpper as never[])
     if (kcMiddleSeriesRef.current && safeKcMiddle.length) kcMiddleSeriesRef.current.setData(safeKcMiddle as never[])
     if (kcLowerSeriesRef.current && safeKcLower.length) kcLowerSeriesRef.current.setData(safeKcLower as never[])
-  }, [safeEma20, safeEma50, safeTenkan, safeKijun, safeSenkouA, safeSenkouB, safeKcUpper, safeKcMiddle, safeKcLower])
+    if (sma20SeriesRef.current && safeSma20.length) sma20SeriesRef.current.setData(safeSma20 as never[])
+    if (bbUpperSeriesRef.current && safeBbUpper.length) bbUpperSeriesRef.current.setData(safeBbUpper as never[])
+    if (bbMidSeriesRef.current && safeBbMid.length) bbMidSeriesRef.current.setData(safeBbMid as never[])
+    if (bbLowerSeriesRef.current && safeBbLower.length) bbLowerSeriesRef.current.setData(safeBbLower as never[])
+  }, [safeEma20, safeEma50, safeTenkan, safeKijun, safeSenkouA, safeSenkouB, safeKcUpper, safeKcMiddle, safeKcLower, safeSma20, safeBbUpper, safeBbMid, safeBbLower])
+
+  // T10 — main-pane overlay visibility follows the toggles (series are created
+  // once on mount; the toggle only flips `visible`, matching the mock-executor
+  // contract tested in chartOverlays.test.ts).
+  useEffect(() => {
+    ema20SeriesRef.current?.applyOptions({ visible: showSma })
+    ema50SeriesRef.current?.applyOptions({ visible: showSma })
+    sma20SeriesRef.current?.applyOptions({ visible: showSma })
+    volumeSeriesRef.current?.applyOptions({ visible: showVolume })
+  }, [showSma, showVolume])
+
+  useEffect(() => {
+    bbUpperSeriesRef.current?.applyOptions({ visible: showBollinger })
+    bbMidSeriesRef.current?.applyOptions({ visible: showBollinger })
+    bbLowerSeriesRef.current?.applyOptions({ visible: showBollinger })
+  }, [showBollinger])
+
+  // T10 — RSI/MACD secondary pane lifecycle. Enabling an indicator ADDS its
+  // series (plus the pane when none exists); disabling the last one REMOVES
+  // the series and the whole pane. Data is refreshed on every pass, so warm-up
+  // (empty rows) renders nothing instead of crashing.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const requested = activePaneKeys({ rsi: showRsi, macd: showMacd })
+    const mounted = paneIndexRef.current != null
+    if (!requested.length) {
+      if (mounted) {
+        for (const s of [rsiSeriesRef, macdLineRef, macdSignalRef, macdHistRef]) {
+          if (s.current) {
+            try { chart.removeSeries(s.current) } catch { /* series already gone */ }
+            s.current = null
+          }
+        }
+        try { chart.removePane(paneIndexRef.current as number) } catch { /* pane already gone */ }
+        paneIndexRef.current = null
+      }
+      return
+    }
+    if (!mounted) {
+      try {
+        paneIndexRef.current = chart.addPane().paneIndex()
+      } catch {
+        paneIndexRef.current = null
+        return
+      }
+    }
+    const pi = paneIndexRef.current as number
+    if (requested.includes("rsi") && !rsiSeriesRef.current) {
+      rsiSeriesRef.current = chart.addSeries(LineSeries, RSI_LINE_OPTIONS, pi)
+    }
+    if (requested.includes("macd")) {
+      if (!macdLineRef.current) macdLineRef.current = chart.addSeries(LineSeries, MACD_LINE_OPTIONS, pi)
+      if (!macdSignalRef.current) macdSignalRef.current = chart.addSeries(LineSeries, MACD_SIGNAL_OPTIONS, pi)
+      if (!macdHistRef.current) macdHistRef.current = chart.addSeries(HistogramSeries, MACD_HIST_OPTIONS, pi)
+    }
+  }, [showRsi, showMacd])
+
+  useEffect(() => {
+    if (rsiSeriesRef.current) rsiSeriesRef.current.setData(safeRsiLine as never[])
+    if (macdLineRef.current) macdLineRef.current.setData(safeMacdLine as never[])
+    if (macdSignalRef.current) macdSignalRef.current.setData(safeMacdSignal as never[])
+    if (macdHistRef.current) macdHistRef.current.setData(safeMacdHist as never[])
+  }, [safeRsiLine, safeMacdLine, safeMacdSignal, safeMacdHist])
 
   // Ideal buy/sell level price lines — recreated whenever the set changes.
   useEffect(() => {
