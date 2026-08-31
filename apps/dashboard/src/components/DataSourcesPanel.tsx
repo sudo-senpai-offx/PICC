@@ -147,6 +147,31 @@ export function DataSourcesPanel() {
                     <div className="small" style={{ color: state.text === "unconfigured" ? "#888" : "#e2e8f0", marginTop: 4 }}>
                       {whyEmpty}
                     </div>
+                    {b.slug === "ccxt" ? (
+                      <div
+                        className="small"
+                        style={{
+                          marginTop: 6,
+                          background: "#101024",
+                          border: "1px solid #2a2a4a",
+                          borderRadius: 6,
+                          padding: "6px 8px",
+                          color: "#9ca3c8",
+                          fontFamily: "ui-monospace, monospace",
+                          lineHeight: 1.5,
+                          overflowX: "auto",
+                          whiteSpace: "pre"
+                        }}
+                      >
+{`Add in Settings → Trading → CCXT exchanges (public, no key):
+[
+ { "exchange": "binance", "symbol": "BTCUSDT", "timeframe": "5m" },
+ { "exchange": "coinbase", "symbol": "ETH/USD", "timeframe": "5m" },
+ { "exchange": "binance", "symbol": "SOLUSDT", "timeframe": "1m" }
+]
+Also reachable (crypto): XRP · ADA · DOGE · LINK · AVAX · DOT · LTC`}
+                      </div>
+                    ) : null}
                   </div>
                 )
               })}
