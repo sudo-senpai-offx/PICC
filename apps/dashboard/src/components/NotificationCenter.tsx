@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { getInterventions, respondIntervention, type InterventionProposal } from "@/lib/api"
+import { useWebPush } from "@/hooks/useWebPush"
 
 interface Notification {
   id: string
@@ -39,6 +40,10 @@ export function NotificationCenter() {
   const [open, setOpen] = useState(false)
   const [lastCheck, setLastCheck] = useState(0)
   const panelRef = useRef<HTMLDivElement>(null)
+  // T8 — the SAME shared web-push hook as the suite card: permission request +
+  // subscription happen together here (the bell no longer asks for permission
+  // without subscribing), and unconfigured VAPID surfaces as "unavailable".
+  const wp = useWebPush()
 
   const unread = notifications.filter((n) => !n.read).length + approvals.length
 
@@ -136,11 +141,9 @@ export function NotificationCenter() {
     setNotifications([])
   }
 
-  const requestPermission = async () => {
-    if ("Notification" in window) {
-      await Notification.requestPermission()
-    }
-  }
+  // Permission + subscribe through the shared hook (T8) — one flow, one
+  // call site; harmless if the suite card already subscribed (idempotent).
+  const enablePush = () => void wp.enable()
 
   const formatTime = (ts: number) => {
     const diff = Date.now() - ts
@@ -196,9 +199,13 @@ export function NotificationCenter() {
               <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)", fontSize: 11 }}>
                 No notifications
                 <div style={{ marginTop: 8 }}>
-                  <button onClick={requestPermission} style={{ fontSize: 10, padding: "3px 8px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--text)", cursor: "pointer" }}>
-                    Enable browser notifications
-                  </button>
+                  {wp.enabled ? (
+                    <span>Push enabled on this browser.</span>
+                  ) : (
+                    <button onClick={enablePush} style={{ fontSize: 10, padding: "3px 8px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--text)", cursor: "pointer" }}>
+                      {wp.unavailable ? "Push unavailable (not configured)" : "Enable browser notifications"}
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
