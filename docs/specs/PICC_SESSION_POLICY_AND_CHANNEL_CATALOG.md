@@ -55,25 +55,43 @@ it is a separate user-authorized workstream that takes priority over T11 for now
 
 ## Non-goals (this workstream)
 
-- No new data collection / novel-source capture yet — exploration result is
-  proposed in the final report, not implemented.
+- No NEW open-positions/position-exposure capture. Exploration finding: the
+  live-chart / trading-data feedback loop ALREADY exists
+  (`/api/extension/trading-data` + the liveEO candle/account buffer, wired in
+  `handlers.mjs:3784`); the only genuine gap is open-positions exposure
+  (`accountMetrics` `openPositions`/`exposurePct` stay `null` — never
+  fabricated — because no documented/verified EO position key exists and no
+  live session is observed to reverse against). Extracting it requires the same
+  "T10 research-first" gate used for Binance/KuCoin: a live fixture must name a
+  real key before any capture hook is wired. NOT done — flagged in report.
 - No T11 multi-timeframe panes (still pending from trading suite).
 - No changes to gate semantics for **decided** venues beyond persistence.
 
+## Error-log triage (directive: check logs for issue determination)
+
+`picc-errors.log` (checked 2026-08-31): no crashes. Recurring benign warnings —
+(a) "EURUSD: model matrix falling back to Yahoo DAILY bars" (Decision B, honest
+daily cap — EO intraday heartbeats have no live chart to buffer when the venue
+tab isn't open), (b) "market news failed: Serper 400" (degraded market-news
+integration — operational, flagged to user), (c) "ExpertOption rejected the
+session token" for the REAL-user context (operational — user must re-login).
+None are caused by, or block, this workstream.
+
 ## Checklist
 
-1. [ ] `session-policy.json` store in `captureProfiles.mjs` (boot load, save,
+1. [x] `session-policy.json` store in `captureProfiles.mjs` (boot load, save,
        per-user keys, VITEST disk guard, `_resetHeadlessSessionState` clears
        in-memory cache).
-2. [ ] `firstLoginGate` honors persisted policy before the propose flow.
-3. [ ] `interventions.mjs` `respondIntervention` capture branch persists
+2. [x] `firstLoginGate` honors persisted policy before the propose flow.
+3. [x] `interventions.mjs` `respondIntervention` capture branch persists
        approve/reject (import cycle checked: none — interventions does not
        import captureProfiles currently).
-4. [ ] `GET/POST /api/trading/session-policy` in `handlers.mjs` (auth = same as
+4. [x] `GET/POST /api/trading/session-policy` in `handlers.mjs` (auth = same as
        capture-config) + client fns in `src/lib/api.ts`.
-5. [ ] Tests: gate persistence (approved fast-path / rejected no-reask), "ask"
+5. [x] Tests: gate persistence (approved fast-path / rejected no-reask), "ask"
        re-arms, interventions write path, API clamp + restart round-trip.
-6. [ ] `streamCatalog.ts` trading category + entries; CatalogTab filter + sync
+6. [x] `streamCatalog.ts` trading category + entries; CatalogTab filter + sync
        settings table; ChannelsTab from health payload.
-7. [ ] Extension active-tab sync row (content/background/popup).
-8. [ ] Full `npx vitest run` + `npx tsc -b --noEmit` green; commit(s).
+7. [x] Extension active-tab sync row (content/background/popup).
+8. [x] Full `npx vitest run` (116 files / 1303 tests) + `npx tsc -b --noEmit`
+       green; committed `0159703`.
