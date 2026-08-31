@@ -87,7 +87,7 @@ interface CandleResponse {
   resolved?: boolean
 }
 
-async function fetchCandles(assetId: string, timeframe: Timeframe, count: number): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean }> {
+export async function fetchCandles(assetId: string, timeframe: Timeframe, count: number): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean }> {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -227,6 +227,12 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
   const [resolvedTimeframe, setResolvedTimeframe] = useState<number | null>(null)
   const [resolved, setResolved] = useState(false)
   const candlesRef = useRef<CandleDatum[]>([])
+
+  // Allow a PARENT to drive the timeframe (Slice C — multi-timeframe). When the
+  // `timeframe` arg changes externally, resync the internal state so the fetch
+  // and the tick-bucketing effect rerun. Unchanged behavior when nothing passes
+  // a different value.
+  useEffect(() => { setTimeframe(initialTf) }, [initialTf])
 
   // Fetch initial candle data
   useEffect(() => {

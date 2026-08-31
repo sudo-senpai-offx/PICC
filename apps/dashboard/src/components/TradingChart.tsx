@@ -16,6 +16,9 @@ interface TradingChartProps {
   label?: string
   height?: number
   onCrosshair?: (data: { time: import("lightweight-charts").Time; open: number; high: number; low: number; close: number } | null) => void
+  /** Slice C — controlled timeframe (defaults to internal 5m when omitted). */
+  timeframe?: Timeframe
+  onTimeframeChange?: (tf: Timeframe) => void
 }
 
 function fmtPrice(n: number | null): string {
@@ -30,12 +33,18 @@ const SOURCE_BADGES: Record<string, { text: string; tone: "success" | "warn" | "
   "yahoo-daily": { text: "Yahoo daily · delayed", tone: "warn" }
 }
 
-export function TradingChart({ assetId, label, height = 380, onCrosshair }: TradingChartProps) {
+export function TradingChart({ assetId, label, height = 380, onCrosshair, timeframe, onTimeframeChange }: TradingChartProps) {
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
     sma20, bbUpper, bbMid, bbLower, rsiLine, macdLine, macdSignal, macdHist,
-    loading, error, streamError, lastPrice, timeframe, setTimeframe, source, feed, resolvedTimeframe, resolved
-  } = useCandleData({ assetId, timeframe: 300, count: 2000 }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
+    loading, error, streamError, lastPrice, timeframe: activeTf, setTimeframe, source, feed, resolvedTimeframe, resolved
+  } = useCandleData({ assetId, timeframe: timeframe ?? 300, count: 2000 }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
+  // Slice C — when the parent controls the timeframe, its change wins; the
+  // hook's own state stays in sync via the initialTf effect in useCandleData.
+  const chooseTimeframe = (tf: Timeframe) => {
+    if (onTimeframeChange) onTimeframeChange(tf)
+    else setTimeframe(tf)
+  }
   const { servableTimeframes, sourceTimeframes } = useBrokerCapabilities()
   const [hover, setHover] = useState<{ open: number; high: number; low: number; close: number } | null>(null)
   const [showIchimoku, setShowIchimoku] = useState(false)
@@ -68,11 +77,11 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   useEffect(() => {
     let alive = true
     setLevels(null)
-    getEntryLevels(assetId, timeframe)
+    getEntryLevels(assetId, activeTf)
       .then((r) => { if (alive) setLevels(r) })
       .catch(() => { /* levels stay hidden — never breaks the chart */ })
     return () => { alive = false }
-  }, [assetId, timeframe])
+  }, [assetId, activeTf])
 
   const crosshair = (data: { time: import("lightweight-charts").Time; open: number; high: number; low: number; close: number } | null) => {
     setHover(data)
@@ -125,7 +134,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   // resolveTimeframe), never the client's echo of the request. Any mismatch
   // between what the user picked and what the server served triggers the
   // warning — a 5s request that comes back as 1m bars must say so.
-  const resolutionMismatch = resolved || (resolvedTimeframe != null && resolvedTimeframe !== timeframe)
+  const resolutionMismatch = resolved || (resolvedTimeframe != null && resolvedTimeframe !== activeTf)
   const servedTfLabel = () => {
     if (resolvedTimeframe == null) return null
     return (TIMEFRAME_LABELS as Record<number, string | undefined>)[resolvedTimeframe] ?? `${resolvedTimeframe}s`
@@ -189,10 +198,10 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
             const button = (
               <Button
                 key={tf}
-                variant={tf === timeframe ? "primary" : "ghost"}
+                variant={tf === activeTf ? "primary" : "ghost"}
                 className="btn-sm"
                 disabled={!enabled}
-                onClick={() => setTimeframe(tf)}
+                onClick={() => chooseTimeframe(tf)}
               >
                 {TIMEFRAME_LABELS[tf]}
               </Button>
@@ -215,7 +224,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
 
       {resolutionMismatch ? (
         <p className="muted small" style={{ margin: 0 }}>
-          ⚠️ No live {TIMEFRAME_LABELS[timeframe]} feed for {assetId} — showing {source === "yahoo" || source === "yahoo-daily" ? "Yahoo DAILY" : `${servedTfLabel() ?? "coarser"} `}bars from {sourceLabel} instead. Levels below are computed from the served resolution.
+          ⚠️ No live {TIMEFRAME_LABELS[activeTf]} feed for {assetId} — showing {source === "yahoo" || source === "yahoo-daily" ? "Yahoo DAILY" : `${servedTfLabel() ?? "coarser"} `}bars from {sourceLabel} instead. Levels below are computed from the served resolution.
         </p>
       ) : null}
 
@@ -269,7 +278,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
           style={{ height, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}
           className="muted"
         >
-          <span>No data for {label ?? assetId} at {TIMEFRAME_LABELS[timeframe]}</span>
+          <span>No data for {label ?? assetId} at {TIMEFRAME_LABELS[activeTf]}</span>
           <span className="small" style={{ maxWidth: 420, textAlign: "center" }}>
             No configured source is serving it — live-feed legs are offline and the fallbacks
             ({sourceLabel}) have no candles at this resolution{streamError ? "; the realtime stream is offline and retrying" : ""}.

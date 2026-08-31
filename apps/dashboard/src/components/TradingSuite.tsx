@@ -7,6 +7,8 @@ import { LiveDecisionsPanel } from "@/components/LiveDecisionsPanel"
 import { LedgerPanel } from "@/components/LedgerPanel"
 import { ConvergencePanel } from "@/components/ConvergencePanel"
 import { TradingChart } from "@/components/TradingChart"
+import { MultiTimeframePanel } from "@/components/MultiTimeframePanel"
+import type { Timeframe } from "@/hooks/useCandleData"
 import { DataSourcesPanel } from "@/components/DataSourcesPanel"
 import { SpreadPanel } from "@/components/SpreadPanel"
 import { PortfolioAggregatePanel } from "@/components/PortfolioAggregatePanel"
@@ -112,6 +114,7 @@ export function MarketsSuite() {
   const [loaded, setLoaded] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [chartAsset, setChartAsset] = useState("EURUSD")
+  const [chartTf, setChartTf] = useState<Timeframe>(300)
   const [catalog, setCatalog] = useState<CatalogCategory[]>([])
   const lastLoadAt = useRef(0)
   const { snapshot, error: streamError } = useRealtimeSuite()
@@ -180,7 +183,8 @@ export function MarketsSuite() {
                 </span>
               </div>
             </div>
-            <TradingChart assetId={chartAsset} height={380} />
+            <TradingChart assetId={chartAsset} height={380} timeframe={chartTf} onTimeframeChange={setChartTf} />
+            <MultiTimeframePanel assetId={chartAsset} onSelect={setChartTf} selected={chartTf} />
             <div className="grid">
               <SpreadPanel assetId={chartAsset} />
               <PortfolioAggregatePanel paperAvailable={Boolean(status?.paper)} />
