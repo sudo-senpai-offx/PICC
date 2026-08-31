@@ -43,8 +43,30 @@ export function listAlerts(userId = null) {
   return [...alerts]
 }
 
-export function createAlert({ userId = "default", symbol, condition, value, message = "", recurring = false, expiresAt = null, band = null }) {
+const ALERT_CONDITIONS = [
+  "price_above", "price_below", "price_crossing_up", "price_crossing_down",
+  "pct_change_up", "pct_change_down", "convergence_above"
+]
+
+/** Normalize a composed-condition entry; returns null for anything unusable. */
+function normalizeCondition(c) {
+  if (!c || typeof c !== "object") return null
+  const condition = String(c.condition ?? "")
+  if (!ALERT_CONDITIONS.includes(condition)) return null
+  // Null/empty value is unusable — drop, don't coerce to a guessed number.
+  if (c.value == null || c.value === "") return null
+  const value = Number(c.value)
+  if (!Number.isFinite(value)) return null
+  const band = Array.isArray(c.band) && c.band.length ? c.band.map(String) : null
+  return { condition, value, band }
+}
+
+export function createAlert({ userId = "default", symbol, condition, value, message = "", recurring = false, expiresAt = null, band = null, conditions = null, logic = "AND" }) {
   const id = `alert_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  // T9 — composed conditions (AND/OR over the same condition enum). When
+  // present, `condition`/`value` remain the alert's headline for display and
+  // backward compatibility; evaluation uses `conditions`.
+  const normalized = Array.isArray(conditions) ? conditions.map(normalizeCondition).filter((c) => c) : []
   const alert = {
     id,
     userId,
@@ -56,6 +78,9 @@ export function createAlert({ userId = "default", symbol, condition, value, mess
     // Optional state band for convergence_above: an array of engine states
     // (e.g. ["LONG BIAS", "SHORT BIAS"]) that also fires the alert.
     band: Array.isArray(band) && band.length ? band : null,
+    // T9 — multi-condition compose: [{condition,value,band?}] + "AND" | "OR".
+    conditions: normalized.length ? normalized : null,
+    logic: normalized.length ? (String(logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND") : null,
     message: String(message || ""),
     recurring: Boolean(recurring),
     expiresAt: expiresAt ? new Date(expiresAt).getTime() : null,
@@ -146,6 +171,41 @@ function crossesDown(prev, curr, threshold) {
   return prev > threshold && curr <= threshold
 }
 
+/**
+ * Evaluate ONE condition against the live caches. Absent data NEVER triggers
+ * (no fabricated fires): a missing convergence read or price returns false.
+ * Shared by the legacy single-condition path and the T9 composed conditions.
+ */
+function matchCondition(spec, symbol) {
+  const condition = spec?.condition
+  const value = Number(spec?.value)
+  if (condition === "convergence_above") {
+    const conv = convergenceCache.get(symbol)
+    if (!conv || conv.score5 == null) return false
+    const bandHit = Array.isArray(spec.band) && spec.band.includes(conv.state)
+    return bandHit || conv.score5 >= value
+  }
+  const cached = priceCache.get(symbol)
+  if (!cached || cached.price == null) return false
+  const { price, prevPrice } = cached
+  switch (condition) {
+    case "price_above":
+      return price > value
+    case "price_below":
+      return price < value
+    case "price_crossing_up":
+      return crossesUp(prevPrice, price, value)
+    case "price_crossing_down":
+      return crossesDown(prevPrice, price, value)
+    case "pct_change_up":
+      return !!(prevPrice && prevPrice > 0) && ((price - prevPrice) / prevPrice) * 100 >= value
+    case "pct_change_down":
+      return !!(prevPrice && prevPrice > 0) && ((prevPrice - price) / prevPrice) * 100 >= value
+    default:
+      return false
+  }
+}
+
 function evaluateAlert(alert) {
   if (alert.status !== "armed") return null
   if (alert.expiresAt && Date.now() > alert.expiresAt) {
@@ -154,6 +214,43 @@ function evaluateAlert(alert) {
     return null
   }
   let triggered = false
+
+  // T9 — composed conditions (AND/OR over the same enum). Absent data within a
+  // condition counts as unmet, so a composed alert never fires on missing reads.
+  if (alert.conditions?.length) {
+    const results = alert.conditions.map((c) => matchCondition(c, alert.symbol))
+    triggered = alert.logic === "OR" ? results.some(Boolean) : results.every(Boolean)
+    if (triggered) {
+      alert.lastPrice = priceCache.get(alert.symbol)?.price ?? null
+      alert.lastScore = convergenceCache.get(alert.symbol)?.score5 ?? null
+      alert.triggeredAt = Date.now()
+      if (alert.recurring) {
+        alert.status = "armed" // re-arm
+      } else {
+        alert.status = "triggered"
+      }
+      saveAlerts()
+      const notification = {
+        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        alertId: alert.id,
+        symbol: alert.symbol,
+        condition: alert.condition,
+        value: alert.value,
+        conditions: alert.conditions,
+        logic: alert.logic,
+        price: alert.lastPrice,
+        message: alert.message || `${alert.symbol} composed alert fired (${alert.logic}: ${results.map((r, i) => `${alert.conditions[i].condition}${r ? " ✓" : " ✗"}`).join(" | ")})`,
+        ts: Date.now()
+      }
+      for (const cb of listeners) {
+        try { cb(notification) } catch { /* ignore */ }
+      }
+      alertHistory.unshift(notification)
+      if (alertHistory.length > MAX_HISTORY) alertHistory.length = MAX_HISTORY
+      return notification
+    }
+    return null
+  }
 
   // convergence_above: no prices involved — reads the MTF convergence cache
   // (score5 0-5 threshold and/or a configured state band).

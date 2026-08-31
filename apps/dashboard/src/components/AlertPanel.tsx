@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { Card, Badge, Button } from "@/components/ui"
 import { getAlerts, createAlert, deleteAlert, toggleAlert, type Alert, type AlertStats } from "@/lib/trading"
+import { describeAlertConditions } from "@/lib/alertConditions"
 
 const CONDITIONS = [
   { value: "price_above", label: "Price Above" },
@@ -181,8 +182,17 @@ export function AlertPanel() {
             <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", borderBottom: "1px solid var(--border)" }}>
               <div style={{ fontSize: 11 }}>
                 <span style={{ fontWeight: 600 }}>{a.symbol}</span>{" "}
-                <span style={{ color: "var(--text-muted)" }}>{a.condition.replace(/_/g, " ")}</span>{" "}
-                <span style={{ fontWeight: 600 }}>{a.value}</span>
+                {a.conditions?.length ? (
+                  <span style={{ color: "var(--text-accent)" }}>
+                    {describeAlertConditions(a)}
+                    <Badge tone="accent">{a.logic}</Badge>
+                  </span>
+                ) : (
+                  <>
+                    <span style={{ color: "var(--text-muted)" }}>{a.condition.replace(/_/g, " ")}</span>{" "}
+                    <span style={{ fontWeight: 600 }}>{a.value}</span>
+                  </>
+                )}
                 {a.band && a.band.length > 0 && (
                   <span style={{ color: "var(--text-muted)", marginLeft: 4 }}>
                     ▸ {a.band.join(", ")}

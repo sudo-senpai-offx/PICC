@@ -966,6 +966,12 @@ export function getAdvancedIndicators(assetId: string, timeframe = "daily", coun
   return request<IndicatorsResult>(`/trading/indicators?assetId=${encodeURIComponent(assetId)}&timeframe=${encodeURIComponent(timeframe)}&count=${count}`)
 }
 
+export interface AlertCondition {
+  condition: string
+  value: number
+  band: string[] | null
+}
+
 export interface Alert {
   id: string
   userId: string
@@ -975,6 +981,10 @@ export interface Alert {
   // Optional state band for the convergence_above condition (slice 8): engine
   // states (e.g. ["LONG BIAS", "SHORT BIAS"]) that also fire the alert.
   band: string[] | null
+  // T9 — multi-condition compose: conditions + AND/OR logic. When present,
+  // evaluation uses these; `condition`/`value` remain the headline.
+  conditions: AlertCondition[] | null
+  logic: "AND" | "OR" | null
   message: string
   recurring: boolean
   expiresAt: number | null
@@ -999,7 +1009,7 @@ export function getAlerts(): Promise<{ ok: boolean; alerts: Alert[]; stats: Aler
   return request("/trading/alerts")
 }
 
-export function createAlert(input: { symbol: string; condition: string; value: number; message?: string; recurring?: boolean; expiresAt?: string; band?: string[] }): Promise<{ ok: boolean; alert: Alert }> {
+export function createAlert(input: { symbol: string; condition: string; value: number; message?: string; recurring?: boolean; expiresAt?: string; band?: string[]; conditions?: AlertCondition[]; logic?: "AND" | "OR" }): Promise<{ ok: boolean; alert: Alert }> {
   return post("/trading/alerts", input)
 }
 

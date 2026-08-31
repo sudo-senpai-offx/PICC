@@ -111,3 +111,117 @@ describe("convergence_above condition (8a)", () => {
     expect(listAlerts().find((x) => x.id === a.id).status).toBe("triggered")
   })
 })
+
+// T9 — multi-condition compose (AND/OR over the same enum). Fresh symbols keep
+// the isolated tests above untouched; absent reads NEVER count as a fire.
+
+describe("composed conditions (T9)", () => {
+  it("AND fires only when every condition matches", () => {
+    const a = createAlert({
+      symbol: "AUDUSD",
+      condition: "price_above",
+      value: 1.09,
+      conditions: [
+        { condition: "price_above", value: 1.09 },
+        { condition: "price_below", value: 1.12 }
+      ],
+      logic: "AND"
+    })
+    created.push(a.id)
+    updatePrice("AUDUSD", 1.125) // above ✓, below ✗
+    evaluateAlerts()
+    expect(listAlerts().find((x) => x.id === a.id).status).toBe("armed")
+
+    updatePrice("AUDUSD", 1.095) // above ✓, below ✓
+    evaluateAlerts()
+    const fired = listAlerts().find((x) => x.id === a.id)
+    expect(fired.status).toBe("triggered")
+    expect(fired.logic).toBe("AND")
+    const n = getAlertHistory({ symbol: "AUDUSD", limit: 5 }).find((h) => h.alertId === a.id)
+    expect(n.conditions).toHaveLength(2)
+    expect(n.logic).toBe("AND")
+  })
+
+  it("OR fires when any condition matches", () => {
+    const a = createAlert({
+      symbol: "USDCAD",
+      condition: "price_above",
+      value: 1.09,
+      conditions: [
+        { condition: "price_above", value: 1.09 },
+        { condition: "price_below", value: 1.08 }
+      ],
+      logic: "OR"
+    })
+    created.push(a.id)
+    updatePrice("USDCAD", 1.085) // neither side
+    evaluateAlerts()
+    expect(listAlerts().find((x) => x.id === a.id).status).toBe("armed")
+
+    updatePrice("USDCAD", 1.095) // above side wins
+    evaluateAlerts()
+    expect(listAlerts().find((x) => x.id === a.id).status).toBe("triggered")
+
+    const a2 = createAlert({
+      symbol: "USDCHF",
+      condition: "price_above",
+      value: 1.09,
+      conditions: [{ condition: "price_below", value: 1.08 }],
+      logic: "OR"
+    })
+    created.push(a2.id)
+    updatePrice("USDCHF", 1.075) // below side wins
+    evaluateAlerts()
+    expect(listAlerts().find((x) => x.id === a2.id).status).toBe("triggered")
+  })
+
+  it("respects the convergence band inside a composed condition", () => {
+    const a = createAlert({
+      symbol: "NZDUSD",
+      condition: "convergence_above",
+      value: 5,
+      conditions: [
+        { condition: "convergence_above", value: 5, band: ["LONG BIAS"] },
+        { condition: "price_below", value: 1.5 }
+      ],
+      logic: "AND"
+    })
+    created.push(a.id)
+    updateConvergence("NZDUSD", { score5: 4, state: "LONG BIAS", confidence: 70 })
+    updatePrice("NZDUSD", 1.45) // in band (4 < 5 but band hit) ✓ AND below ✓
+    evaluateAlerts()
+    expect(listAlerts().find((x) => x.id === a.id).status).toBe("triggered")
+  })
+
+  it("absent data never fires a composed alert (R10 extended)", () => {
+    const a = createAlert({
+      symbol: "GBPJPY",
+      condition: "price_above",
+      value: 190,
+      conditions: [{ condition: "price_above", value: 190 }, { condition: "convergence_above", value: 1 }],
+      logic: "AND"
+    })
+    created.push(a.id)
+    // No price, no convergence read at all
+    evaluateAlerts()
+    expect(listAlerts().find((x) => x.id === a.id).status).toBe("armed")
+  })
+
+  it("malformed composed conditions are dropped at creation (never half-evaluated)", () => {
+    const a = createAlert({
+      symbol: "USDCAD",
+      condition: "price_above",
+      value: 1.09,
+      conditions: [
+        { condition: "not_a_real_condition", value: 1 },
+        { condition: "price_above", value: null },
+        { condition: "price_below", value: 1.08 }
+      ],
+      logic: "AND"
+    })
+    created.push(a.id)
+    // Only the usable condition survives; two malformed entries dropped.
+    expect(a.conditions).toHaveLength(1)
+    expect(a.conditions[0].condition).toBe("price_below")
+  })
+})

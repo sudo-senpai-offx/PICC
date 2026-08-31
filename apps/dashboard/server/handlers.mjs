@@ -1950,9 +1950,9 @@ async function _handleApiInner(req, res, url, reqId) {
   if (path === "/api/trading/alerts" && req.method === "POST") {
     const { createAlert } = await import("./services/alertEngine.mjs")
     if (validateOr400(res, body, "alertCreate")) return true
-    const { symbol, condition, value, message, recurring, expiresAt, band } = body ?? {}
+    const { symbol, condition, value, message, recurring, expiresAt, band, conditions, logic } = body ?? {}
     if (!symbol || !condition || value == null) return writeJson(res, 400, { error: "symbol, condition, and value required" })
-    const alert = createAlert({ symbol, condition, value: Number(value), message, recurring, expiresAt, band })
+    const alert = createAlert({ symbol, condition, value: Number(value), message, recurring, expiresAt, band, conditions, logic })
     writeJson(res, 200, { ok: true, alert })
     return
   }

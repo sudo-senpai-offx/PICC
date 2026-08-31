@@ -6,6 +6,7 @@
 //   in-app   — always on; forwards into notificationCenter (existing bell UI)
 //   webpush  — Web Push (VAPID); active when VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY set
 //   email    — Resend HTTP API; active when RESEND_API_KEY + ALERT_EMAIL_TO set
+//   webhook  — generic outbound HTTP POST; active when WEBHOOK_URL set (T9)
 //
 // Honesty rules: send results are recorded per channel (sent/failed/skipped +
 // reason). A channel that is not configured is "skipped", never "failed" — and
@@ -29,7 +30,7 @@ function loadState() {
         minConfidence: 65,
         leadMinutes: 3,
         windowMinutes: 15,
-        channels: { inApp: true, webpush: true, email: true },
+        channels: { inApp: true, webpush: true, email: true, webhook: true },
       },
       subscriptions: [], // web-push subscription objects
       recent: []         // last 20 alert records (payload + per-channel results)
@@ -62,8 +63,11 @@ export function setPrefs(patch = {}) {
   if (patch.leadMinutes != null) p.leadMinutes = Math.min(60, Math.max(0, Math.round(Number(patch.leadMinutes) ?? 3)))
   if (patch.windowMinutes != null) p.windowMinutes = Math.min(240, Math.max(1, Math.round(Number(patch.windowMinutes) ?? 15)))
   if (patch.channels && typeof patch.channels === "object") {
-    for (const k of Object.keys(p.channels)) {
-      if (k in patch.channels) p.channels[k] = Boolean(patch.channels[k])
+    // Iterate the PATCH keys: newly added channels (e.g. webhook, T9) may not
+    // exist yet in state persisted before the channel shipped — toggling them
+    // must still work.
+    for (const k of Object.keys(patch.channels)) {
+      p.channels[k] = Boolean(patch.channels[k])
     }
   }
   persist()
@@ -143,10 +147,31 @@ async function sendEmail(payload) {
   return true
 }
 
+/** T9 — generic webhook channel: POSTs the alert payload to WEBHOOK_URL. */
+async function sendWebhook(payload) {
+  const url = process.env.WEBHOOK_URL
+  if (!url) return false // skipped
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind: payload.kind,
+      assetId: payload.assetId,
+      title: payload.title,
+      body: payload.body,
+      ts: payload.ts,
+      sentAt: new Date().toISOString()
+    })
+  })
+  if (!res.ok) throw new Error(`webhook ${res.status}: ${(await res.text()).slice(0, 120)}`)
+  return true
+}
+
 const CHANNELS = [
   { name: "inApp", enabled: () => state.prefs.channels.inApp !== false, send: sendInApp },
   { name: "webpush", enabled: () => Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY), send: sendWebPush },
-  { name: "email", enabled: () => Boolean(process.env.RESEND_API_KEY && process.env.ALERT_EMAIL_TO), send: sendEmail }
+  { name: "email", enabled: () => Boolean(process.env.RESEND_API_KEY && process.env.ALERT_EMAIL_TO), send: sendEmail },
+  { name: "webhook", enabled: () => Boolean(process.env.WEBHOOK_URL), send: sendWebhook }
 ]
 
 /**

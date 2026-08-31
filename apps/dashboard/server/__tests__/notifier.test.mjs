@@ -113,3 +113,61 @@ it("removePushSubscription deletes only the matching endpoint and persists the d
     expect(rec.results.email).toBe("skipped")
   })
 })
+
+describe("webhook channel (T9)", () => {
+  it("unconfigured webhook records 'skipped', never fabricated as sent/failed", async () => {
+    // WEBHOOK_URL is unset in beforeAll on purpose.
+    const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "WEBHOOK", title: "t", body: "b" })
+    expect(rec.results.webhook).toBe("skipped")
+  })
+
+  it("configured webhook POSTs the payload and records 'sent'", async () => {
+    process.env.WEBHOOK_URL = "https://hooks.example/picc"
+    const calls = []
+    const orig = globalThis.fetch
+    // Minimal mocked fetch: assert request shape, respond with ok.
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, init: JSON.parse(init.body) })
+      return { ok: true }
+    }
+    try {
+      const rec = await notifier.dispatchAlert({
+        kind: "convergence",
+        assetId: "EURUSD",
+        title: "convergence hook",
+        body: "state LONG BIAS · score 4/5"
+      })
+      expect(rec.results.webhook).toBe("sent")
+      expect(calls).toHaveLength(1)
+      expect(calls[0].url).toBe("https://hooks.example/picc")
+      expect(calls[0].init.kind).toBe("convergence")
+      expect(calls[0].init.assetId).toBe("EURUSD")
+      expect(calls[0].init.title).toBe("convergence hook")
+      expect(calls[0].init.sentAt).toBeTruthy()
+    } finally {
+      globalThis.fetch = orig
+      delete process.env.WEBHOOK_URL
+    }
+  })
+
+  it("non-ok webhook response records 'failed' with the status surfaced", async () => {
+    process.env.WEBHOOK_URL = "https://hooks.example/picc"
+    const orig = globalThis.fetch
+    globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => "boom" })
+    try {
+      const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
+      expect(rec.results.webhook).toBe("failed")
+      expect(rec.webhookError).toMatch(/500/)
+    } finally {
+      globalThis.fetch = orig
+      delete process.env.WEBHOOK_URL
+    }
+  })
+
+  it("user-disabled webhook records 'off', distinct from unconfigured 'skipped'", async () => {
+    notifier.setPrefs({ channels: { webhook: false } })
+    const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
+    expect(rec.results.webhook).toBe("off")
+    notifier.setPrefs({ channels: { webhook: true } }) // restore
+  })
+})
