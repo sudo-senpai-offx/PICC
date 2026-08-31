@@ -333,11 +333,14 @@ describe("PICC API handlers", () => {
     expect(unset.status).toBe(503)
     expect(unset.body.ok).toBe(false)
 
+    // The handler reads VAPID_PUBLIC_KEY at request time (handlers.mjs:~2428),
+    // so flipping the env var needs no second module bootstrap — re-importing
+    // exists purely at request-time env state. A fresh import here would pay the
+    // full handlers-graph bootstrap (~3.6s/module load on this machine) and blow
+    // the 5000ms default timeout on top of the first import's cost.
     process.env.VAPID_PUBLIC_KEY = "test-public-key"
-    vi.resetModules()
-    const { handleApi: hApi2 } = await import("../handlers.mjs?vapid-set")
     const set = makeRes()
-    await hApi2(makeReq("GET", "/api/notifications/vapid-public-key", undefined, {}), set, "/api/notifications/vapid-public-key")
+    await hApi(makeReq("GET", "/api/notifications/vapid-public-key", undefined, {}), set, "/api/notifications/vapid-public-key")
     expect(set.status).toBe(200)
     expect(set.body.publicKey).toBe("test-public-key")
     delete process.env.VAPID_PUBLIC_KEY
