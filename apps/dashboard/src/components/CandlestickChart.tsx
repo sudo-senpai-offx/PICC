@@ -74,6 +74,19 @@ interface CandlestickChartProps {
   height?: number
   onCrosshair?: (data: { time: Time; open: number; high: number; low: number; close: number } | null) => void
   autoScroll?: boolean
+  /**
+   * Fired when the user drags or zooms the time axis away from real-time,
+   * so the parent can disable autoScroll (stop snapping back to the present
+   * on every tick) until the user explicitly recenters.
+   */
+  onUserScroll?: () => void
+  /**
+   * Multi-timeframe overlay: a higher-timeframe close line plotted over the
+   * active candle series, so the chart itself shows more than one timeframe
+   * at once instead of a separate duplicate widget. Toggled via showHtf.
+   */
+  htfLine?: EmaDatum[]
+  showHtf?: boolean
 }
 
 const THEME: DeepPartial<TimeChartOptions> = {
@@ -161,7 +174,10 @@ function CandlestickChartInner({
   u4faMarkers,
   height = 360,
   onCrosshair,
-  autoScroll = true
+  autoScroll = true,
+  onUserScroll,
+  htfLine,
+  showHtf = false
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -180,6 +196,7 @@ function CandlestickChartInner({
   const bbUpperSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const bbMidSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   const bbLowerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
+  const htfSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
   // T10 — RSI/MACD secondary pane: created lazily on first enable (each toggle
   // ADDS its series), torn down with chart.removeSeries + chart.removePane
   // when the last one turns off (each toggle REMOVES its series).
@@ -192,6 +209,8 @@ function CandlestickChartInner({
   const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const onCrosshairRef = useRef(onCrosshair)
   onCrosshairRef.current = onCrosshair
+  const onUserScrollRef = useRef(onUserScroll)
+  onUserScrollRef.current = onUserScroll
 
   // Sanitize once per render pass — every series below consumes sorted output.
   const safeCandles = useMemo(() => sanitizeSeries(candles), [candles])
@@ -209,6 +228,7 @@ function CandlestickChartInner({
   const safeBbUpper = useMemo(() => sanitizeSeries(bbUpper), [bbUpper])
   const safeBbMid = useMemo(() => sanitizeSeries(bbMid), [bbMid])
   const safeBbLower = useMemo(() => sanitizeSeries(bbLower), [bbLower])
+  const safeHtfLine = useMemo(() => sanitizeSeries(htfLine), [htfLine])
   const safeRsiLine = useMemo(() => sanitizeSeries(rsiLine), [rsiLine])
   const safeMacdLine = useMemo(() => sanitizeSeries(macdLine), [macdLine])
   const safeMacdSignal = useMemo(() => sanitizeSeries(macdSignal), [macdSignal])
@@ -308,6 +328,12 @@ function CandlestickChartInner({
       color: "rgba(250, 204, 21, 0.35)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: showBollinger
     })
 
+    // MTF overlay — a higher-timeframe close line (e.g. 4h/1D) plotted over the
+    // active candle series so the chart itself shows multiple timeframes.
+    const htf = chart.addSeries(LineSeries, {
+      color: "#818cf8", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, lineStyle: 0, visible: showHtf
+    })
+
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.time || !param.seriesData) {
         onCrosshairRef.current?.(null)
@@ -324,6 +350,20 @@ function CandlestickChartInner({
         })
       }
     })
+
+    // AutoScroll trip-wire: when the user drags the time axis so the newest
+    // candle is no longer visible (right edge < latest bar), tell the parent to
+    // suppress the per-tick snap-to-present — otherwise past browsing is
+    // destroyed while live ticks keep self-scrolling. Recentering via
+    // scrollToRealTime puts the latest bar back in view (to == latest), so this
+    // does NOT re-fire; the parent's "recent" button flips autoScroll back on.
+    chart
+      .timeScale()
+      .subscribeVisibleLogicalRangeChange?.((_range) => {
+        if (!_range || !candles.length) return
+        const latestIdx = candles.length - 1
+        if (_range.to < latestIdx) onUserScrollRef.current?.()
+      })
 
     chartRef.current = chart
     candleSeriesRef.current = cs
@@ -343,6 +383,7 @@ function CandlestickChartInner({
     bbUpperSeriesRef.current = bu
     bbMidSeriesRef.current = bm
     bbLowerSeriesRef.current = bl
+    htfSeriesRef.current = htf
 
     return () => {
       priceLineRefs.current = []
@@ -372,6 +413,7 @@ function CandlestickChartInner({
       bbUpperSeriesRef.current = null
       bbMidSeriesRef.current = null
       bbLowerSeriesRef.current = null
+      htfSeriesRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only create chart once on mount
@@ -413,7 +455,8 @@ function CandlestickChartInner({
     if (bbUpperSeriesRef.current && safeBbUpper.length) bbUpperSeriesRef.current.setData(safeBbUpper as never[])
     if (bbMidSeriesRef.current && safeBbMid.length) bbMidSeriesRef.current.setData(safeBbMid as never[])
     if (bbLowerSeriesRef.current && safeBbLower.length) bbLowerSeriesRef.current.setData(safeBbLower as never[])
-  }, [safeEma20, safeEma50, safeTenkan, safeKijun, safeSenkouA, safeSenkouB, safeKcUpper, safeKcMiddle, safeKcLower, safeSma20, safeBbUpper, safeBbMid, safeBbLower])
+    if (htfSeriesRef.current && safeHtfLine.length) htfSeriesRef.current.setData(safeHtfLine as never[])
+  }, [safeEma20, safeEma50, safeTenkan, safeKijun, safeSenkouA, safeSenkouB, safeKcUpper, safeKcMiddle, safeKcLower, safeSma20, safeBbUpper, safeBbMid, safeBbLower, safeHtfLine])
 
   // T10 — main-pane overlay visibility follows the toggles (series are created
   // once on mount; the toggle only flips `visible`, matching the mock-executor
@@ -430,6 +473,10 @@ function CandlestickChartInner({
     bbMidSeriesRef.current?.applyOptions({ visible: showBollinger })
     bbLowerSeriesRef.current?.applyOptions({ visible: showBollinger })
   }, [showBollinger])
+
+  useEffect(() => {
+    htfSeriesRef.current?.applyOptions({ visible: showHtf })
+  }, [showHtf])
 
   // T10 — RSI/MACD secondary pane lifecycle. Enabling an indicator ADDS its
   // series (plus the pane when none exists); disabling the last one REMOVES

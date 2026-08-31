@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { Badge, Button } from "@/components/ui"
-import { CandlestickChart, type PriceLine, type U4faMarker } from "@/components/CandlestickChart"
+import { CandlestickChart, type EmaDatum, type PriceLine, type U4faMarker } from "@/components/CandlestickChart"
 import { ChartErrorBoundary } from "@/components/ChartErrorBoundary"
-import { useCandleData, TIMEFRAME_LABELS, type Timeframe } from "@/hooks/useCandleData"
+import { useCandleData, fetchCandles, TIMEFRAME_LABELS, type Timeframe } from "@/hooks/useCandleData"
 import { useBrokerCapabilities } from "@/hooks/useBrokerCapabilities"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { getEntryLevels, openPaperTrade, type EntryLevelsResult } from "@/lib/trading"
@@ -67,11 +67,41 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   // realtime stream (no second connection). Ring buffer keeps the last 60;
   // markers are derived via u4faMarkersFor, never fabricated client-side.
   const [u4faEvents, setU4faEvents] = useState<LiveEvent[]>([])
+  // Past/present browsing: autoScroll ON keeps the chart pinned to real-time
+  // (snaps to the newest bar on every tick). The moment the user drags/zooms
+  // off the present, we flip it OFF so the view stays put while live ticks
+  // keep arriving — otherwise self-scrolling destroys past browsing. The
+  // header "recent" button flips it back ON (recenter + follow live).
+  const [autoScroll, setAutoScroll] = useState(true)
+  const leavePresent = () => setAutoScroll(false)
+  const recenter = () => setAutoScroll(true)
+  // Multi-timeframe overlay: a coarser timeframe's close line drawn over the
+  // active candle series so the chart itself shows multiple timeframes at once.
+  const [showHtf, setShowHtf] = useState(false)
+  const [htfLine, setHtfLine] = useState<EmaDatum[]>([])
   useRealtimeSuite((e: LiveEvent) => {
     if (e.type !== "u4fa") return
     if (e.assetId !== assetId) return
     setU4faEvents((prev) => (prev.length >= 60 ? [...prev.slice(prev.length - 59), e] : [...prev, e]))
   })
+
+  // HTF overlay data: pick a coarser timeframe relative to the active one and
+  // fetch its close line when the overlay is enabled. Honest — if the fetch
+  // fails or the source can't serve it, htfLine stays empty and the toggle
+  // explains itself (no fabricated bars).
+  useEffect(() => {
+    if (!showHtf) { setHtfLine([]); return }
+    let alive = true
+    setHtfLine([])
+    const overlayTf = activeTf < 3600 ? 14400 : activeTf < 86400 ? 86400 : 604800
+    fetchCandles(assetId, overlayTf, 400)
+      .then(({ rows }) => {
+        if (!alive) return
+        setHtfLine(rows.map((r) => ({ time: r.time, value: r.close })))
+      })
+      .catch(() => { if (alive) setHtfLine([]) })
+    return () => { alive = false }
+  }, [showHtf, assetId, activeTf])
 
   // Ideal buy/sell price points for the active asset + selected timeframe.
   useEffect(() => {
@@ -193,6 +223,20 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
               O {fmtPrice(display.open)} H {fmtPrice(display.high)} L {fmtPrice(display.low)} C {fmtPrice(display.close)}
             </div>
           ) : null}
+          {!autoScroll ? (
+            <Button variant="primary" className="btn-sm" onClick={recenter} style={{ marginRight: 8 }}>
+              ⟳ Recent
+            </Button>
+          ) : null}
+          <Button
+            variant={showHtf ? "primary" : "ghost"}
+            className="btn-sm"
+            onClick={() => setShowHtf((v) => !v)}
+            style={{ marginRight: 8 }}
+            title={`Overlay a coarser timeframe (${TIMEFRAME_LABELS[activeTf < 3600 ? 14400 : activeTf < 86400 ? 86400 : 604800]}) close line on these candles`}
+          >
+            {showHtf ? "HTF: on" : "HTF"}
+          </Button>
           {TIMEFRAMES.map((tf) => {
             const enabled = servable.has(tf)
             const button = (
@@ -267,7 +311,10 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
             u4faMarkers={u4faMarkers}
             height={height}
             onCrosshair={crosshair}
-            autoScroll
+            autoScroll={autoScroll}
+            onUserScroll={leavePresent}
+            htfLine={htfLine}
+            showHtf={showHtf}
           />
         </ChartErrorBoundary>
       ) : (
