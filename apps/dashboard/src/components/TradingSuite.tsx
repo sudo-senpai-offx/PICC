@@ -7,6 +7,7 @@ import { LiveDecisionsPanel } from "@/components/LiveDecisionsPanel"
 import { LedgerPanel } from "@/components/LedgerPanel"
 import { ConvergencePanel } from "@/components/ConvergencePanel"
 import { TradingChart } from "@/components/TradingChart"
+import { DataSourcesPanel } from "@/components/DataSourcesPanel"
 import { SpreadPanel } from "@/components/SpreadPanel"
 import { PortfolioAggregatePanel } from "@/components/PortfolioAggregatePanel"
 import { AccountMetricsPanel } from "@/components/AccountMetricsPanel"
@@ -185,6 +186,7 @@ export function MarketsSuite() {
               <PortfolioAggregatePanel paperAvailable={Boolean(status?.paper)} />
             </div>
           </Card>
+          <DataSourcesPanel />
           <ModelMatrixPanel assetId={chartAsset} />
           <MarketIntelPanel />
           <ConvergencePanel />

@@ -1228,6 +1228,8 @@ export interface BrokerRow {
   pairs?: Array<{ exchange: string; symbol: string; timeframe?: string }>
   liveExchanges?: string[]
   sessionLive?: boolean | null
+  /** Bar resolutions (seconds) this venue's adapter can actually serve. */
+  timeframes?: number[]
 }
 
 export interface LatencyRow {
