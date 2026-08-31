@@ -1,7 +1,9 @@
 // Yahoo Finance broker adapter — wraps existing yahoo.mjs behind LiveBroker interface.
-// Yahoo is the always-available fallback: daily EOD candles, no auth needed.
-// Wired for [1D, 1W, 1M] (T7): getHistory supports 1d/1wk/1mo intervals, so
-// every returned candle is tagged with the resolution it ACTUALLY represents.
+// Yahoo is the always-available fallback: historical candles with no auth.
+// Wired for intraday + daily (T1): the v8 chart API serves 1m/5m/15m/30m/1h
+// intervals as well as 1d/1wk/1mo, so a 5m request now returns REAL 5m history
+// (up to Yahoo's range contract) instead of being rounded up to daily bars.
+// Every returned candle is tagged with the resolution it ACTUALLY represents.
 
 import { registerBroker } from "./index.mjs"
 
@@ -12,8 +14,31 @@ async function getYahoo() {
 }
 
 // Yahoo chart API interval/range per served timeframe.
-const INTERVAL_BY_TF = { 86400: "1d", 604800: "1wk", 2592000: "1mo" }
-const RANGE_BY_TF = { 86400: "3y", 604800: "10y", 2592000: "max" }
+// Range caps honor Yahoo's own contract so a 429 or empty series is the API's
+// honest answer, never a padded series: 1m caps ~5-7d, 5m/15m/30m ~60d,
+// 1h ~730d (2y), daily ~untouched. 14400 (4h) is DELIBERATELY absent — the
+// chart API has no 4h interval, so a 4h request resolves up to daily via the
+// resolver contract (in-range round-up) instead of fabricating a 4h bar.
+const INTERVAL_BY_TF = {
+  60: "1m",
+  300: "5m",
+  900: "15m",
+  1800: "30m",
+  3600: "60m",
+  86400: "1d",
+  604800: "1wk",
+  2592000: "1mo"
+}
+const RANGE_BY_TF = {
+  60: "5d",
+  300: "1mo",
+  900: "1mo",
+  1800: "1mo",
+  3600: "2y",
+  86400: "3y",
+  604800: "10y",
+  2592000: "max"
+}
 
 registerBroker({
   slug: "yahoo",
@@ -57,7 +82,7 @@ registerBroker({
   },
 
   availableTimeframes() {
-    return [86400, 604800, 2592000] // 1D, 1W, 1M
+    return [60, 300, 900, 1800, 3600, 86400, 604800, 2592000] // 1m, 5m, 15m, 30m, 1h, 1D, 1W, 1M
   },
 
   getAccountState() {

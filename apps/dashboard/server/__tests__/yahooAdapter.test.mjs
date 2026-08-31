@@ -56,15 +56,46 @@ describe("yahoo adapter getCandles (wired, no network)", () => {
     return adapter
   }
 
-  it("resolves 1D/1W/1M through the contract default; finer requests round UP to daily (honest fallback)", async () => {
+  it("resolves intraday 1m/5m/15m/30m/1h exactly + 1D/1W/1M; 4h rounds UP to daily (counted T1 change)", async () => {
     const adapter = await loadAdapter()
+    // T1 — Yahoo curve gained intraday; a 1m request is served as 1m, NOT
+    // rounded up to daily as it was before (deliberate, counted resolver flip).
+    expect(adapter.resolveTimeframe(60)).toBe(60)
+    expect(adapter.resolveTimeframe(300)).toBe(300)
+    expect(adapter.resolveTimeframe(900)).toBe(900)
+    expect(adapter.resolveTimeframe(1800)).toBe(1800)
+    expect(adapter.resolveTimeframe(3600)).toBe(3600)
     expect(adapter.resolveTimeframe(86400)).toBe(86400)
     expect(adapter.resolveTimeframe(604800)).toBe(604800)
     expect(adapter.resolveTimeframe(2592000)).toBe(2592000)
-    // An intraday request against Yahoo resolves up to DAILY bars — served
-    // tagged 86400 with resolved:true so the UI warns instead of mislabeling.
-    expect(adapter.resolveTimeframe(60)).toBe(86400)
+    // Sub-minute rounds UP to 1m; 4h has NO Yahoo interval so it rounds UP to
+    // daily (honest — never a fabricated 4h bar); above 1M declines.
+    expect(adapter.resolveTimeframe(5)).toBe(60)
     expect(adapter.resolveTimeframe(14400)).toBe(86400)
+    expect(adapter.resolveTimeframe(6048000)).toBeNull()
+  })
+
+  it("asks Yahoo for the interval matching the SERVED intraday timeframe and tags bars with it", async () => {
+    const adapter = await loadAdapter()
+    const cases = [
+      [60, "interval=1m"],
+      [300, "interval=5m"],
+      [900, "interval=15m"],
+      [1800, "interval=30m"],
+      [3600, "interval=60m"]
+    ]
+    for (const [tf, needle] of cases) {
+      // Re-stub per case so the fixture cadence matches the served tf.
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => chartFixture(60, { stepSec: tf }) })))
+      await adapter.getCandles("AAPL", { timeframe: tf, count: 60 })
+      const url = String(vi.mocked(fetch).mock.calls.at(-1)[0])
+      expect(url).toContain(needle)
+      // Distinct cache key per interval — a second call reuses the same fetch.
+      const candles = await adapter.getCandles("AAPL", { timeframe: tf, count: 60 })
+      expect(candles[0].timeframe).toBe(tf)
+      const t = candles.map((c) => c.time)
+      expect(t[1] - t[0]).toBe(tf) // fixture step == served tf (seconds)
+    }
   })
 
   it("returns daily bars: seconds timestamps, per-candle timeframe 86400, count-sliced", async () => {
@@ -129,5 +160,19 @@ describe("bus-level yahoo fallback (stock symbol → 86400 source:yahoo)", () =>
     expect(out.resolved).toBe(false)
     expect(out.candles.length).toBe(50)
     expect(out.candles[0].timeframe).toBe(86400)
+  })
+
+  it("serves REAL 5m intraday history for a 5m chart request (T1 — past candles are rendered)", async () => {
+    await import("../services/brokers/yahooAdapter.mjs")
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => chartFixture(120, { stepSec: 300 }) })))
+    const { getBestCandles } = await import("../services/marketDataBus.mjs")
+    const out = await getBestCandles("AAPL", { timeframe: 300, count: 50 })
+    expect(out.source).toBe("yahoo")
+    expect(out.timeframe).toBe(300)
+    expect(out.resolved).toBe(false)
+    expect(out.candles).toHaveLength(50)
+    expect(out.candles[0].timeframe).toBe(300)
+    const t = out.candles.map((c) => c.time)
+    expect(t[1] - t[0]).toBe(300) // 5 minutes apart — NOT daily bars on a 5m chart
   })
 })
