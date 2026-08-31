@@ -31,7 +31,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair }: Trad
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
     loading, error, streamError, lastPrice, timeframe, setTimeframe, source, feed, resolvedTimeframe, resolved
-  } = useCandleData({ assetId, timeframe: 300 })
+  } = useCandleData({ assetId, timeframe: 300, count: 2000 }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
   const { servableTimeframes, sourceTimeframes } = useBrokerCapabilities()
   const [hover, setHover] = useState<{ open: number; high: number; low: number; close: number } | null>(null)
   const [showIchimoku, setShowIchimoku] = useState(false)

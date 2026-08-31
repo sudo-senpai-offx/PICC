@@ -1807,7 +1807,10 @@ async function _handleApiInner(req, res, url, reqId) {
     // can SERVE and tag it — a 4h request may come back as honest 1h/1D bars
     // (timeframe 3600/86400) or source:"none", never as silent 4h mislabels.
     const timeframe = Math.min(Math.max(Number(body?.timeframe) || 60, 5), 2592000)
-    const count = Math.min(Math.max(Number(body?.count) || 200, 20), 500)
+    // Count clamp up to 2000 (T3 — deep chart history): the market data bus
+    // caps at 2000 bars; the response is shaped by what the source can SERVE,
+    // so a 2000-bar request may honestly return far fewer (e.g. Yahoo 3y daily).
+    const count = Math.min(Math.max(Number(body?.count) || 200, 20), 2000)
     if (!assetId) return writeJson(res, 400, { error: "assetId required" })
     try {
       // Unified fan-in: EO push buffers → live EO fetch → CCXT aggregates →
@@ -1834,7 +1837,12 @@ async function _handleApiInner(req, res, url, reqId) {
         requestedTimeframe: timeframe,
         timeframe: out.timeframe,
         resolved: out.resolved ?? false,
-        candles: out.candles
+        candles: out.candles,
+        // T3-additive depth tags (always present for a deterministic shape):
+        historyDepth: out.historyDepth ?? out.candles.length,
+        backfilled: out.backfilled ?? 0,
+        historySpanMs: out.historySpanMs ?? 0,
+        historySource: out.historySource ?? null
       })
     } catch (err) {
       throttledWarn(`[picc] candles failed for ${assetId}: ${err.message}`)
