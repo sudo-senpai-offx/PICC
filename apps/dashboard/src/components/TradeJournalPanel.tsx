@@ -14,8 +14,11 @@ export function TradeJournalPanel() {
   const refresh = useCallback(async () => {
     try {
       const res = await getJournal({ limit: 50 })
-      setEntries(res.entries)
-      setStats(res.stats)
+      // Null-guards: a well-formed-but-non-ok body must NOT overwrite the
+      // initial empty array/null with `undefined` — that crashes the panel on
+      // `entries.map()` below. Leave the honest empty state intact instead.
+      if (Array.isArray(res?.entries)) setEntries(res.entries)
+      if (res?.stats) setStats(res.stats)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load journal")
     }

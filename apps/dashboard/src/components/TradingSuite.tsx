@@ -127,9 +127,13 @@ export function MarketsSuite() {
     ]).then(([s, p, h, g, c]) => {
       if (!alive) return
       if (s.status === "fulfilled") setStatus(s.value)
-      if (p.status === "fulfilled") setPositions(p.value.positions)
-      if (h.status === "fulfilled") setClosed(h.value.closed)
-      if (g.status === "fulfilled") setSignals(g.value.signals)
+      // Null-guards: a well-formed-but-non-ok body (HTTP 200 that parses to
+      // { ok:false, ... } with no data arrays) must NOT overwrite the initial
+      // empty arrays with `undefined` — that would crash PaperTradingCard on
+      // `positions.length`. Leave the empty/observed state intact instead.
+      if (p.status === "fulfilled" && Array.isArray(p.value?.positions)) setPositions(p.value.positions)
+      if (h.status === "fulfilled" && Array.isArray(h.value?.closed)) setClosed(h.value.closed)
+      if (g.status === "fulfilled" && Array.isArray(g.value?.signals)) setSignals(g.value.signals)
       if (c.status === "fulfilled" && c.value.ok) setCatalog(c.value.categories)
       lastLoadAt.current = Date.now()
       setLoaded(true)
@@ -1446,8 +1450,8 @@ function ProAnalysisResultView({ result }: { result: ProAnalysisResult }) {
 // Paper trading ledger
 // ---------------------------------------------------------------------
 function PaperTradingCard({
-  positions,
-  closed,
+  positions = [],
+  closed = [],
   refresh
 }: {
   positions: PaperPosition[]

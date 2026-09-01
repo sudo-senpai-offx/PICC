@@ -34,8 +34,12 @@ export function AlertPanel() {
   const refresh = useCallback(async () => {
     try {
       const res = await getAlerts()
-      setAlerts(res.alerts)
-      setStats(res.stats)
+      // Null-guard: a well-formed-but-non-ok body (HTTP 200 parsing to
+      // { ok:false } without data arrays) must NOT overwrite the initial
+      // empty array with `undefined` — that crashes this panel on
+      // `alerts.length`. Leave the honest empty state intact instead.
+      if (Array.isArray(res?.alerts)) setAlerts(res.alerts)
+      if (res?.stats) setStats(res.stats)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load alerts")
     }

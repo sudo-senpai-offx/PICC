@@ -23,9 +23,12 @@ export function ScreenerPanel() {
     setLoading(true)
     try {
       const res = await screenerRun({ sort, limit })
-      setResults(res.results)
-      setTotal(res.total)
-      setUniverse(res.universe)
+      // Null-guards: a well-formed-but-non-ok body must NOT overwrite the
+      // initial empty array / zero counts with `undefined` — that crashes the
+      // panel on `results.map()` below. Leave the honest empty state intact.
+      if (Array.isArray(res?.results)) setResults(res.results)
+      if (typeof res?.total === "number") setTotal(res.total)
+      if (typeof res?.universe === "number") setUniverse(res.universe)
     } catch { /* ignore */ }
     setLoading(false)
   }, [sort, limit])

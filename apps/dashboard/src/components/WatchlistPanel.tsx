@@ -13,8 +13,11 @@ export function WatchlistPanel() {
     setLoading(true)
     try {
       const res = await getWatchlists()
-      setWatchlists(res.watchlists)
-      if (!activeId && res.watchlists.length) setActiveId(res.watchlists[0].id)
+      // Null-guard: a well-formed-but-non-ok body must NOT overwrite the
+      // initial empty array with `undefined` — that crashes the panel on
+      // `watchlists.find()` below. Leave the honest empty state intact.
+      if (Array.isArray(res?.watchlists)) setWatchlists(res.watchlists)
+      if (!activeId && Array.isArray(res?.watchlists) && res.watchlists.length) setActiveId(res.watchlists[0].id)
     } catch { /* ignore */ }
     setLoading(false)
   }, [activeId])
