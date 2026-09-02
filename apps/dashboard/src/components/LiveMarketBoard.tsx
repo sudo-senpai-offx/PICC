@@ -73,11 +73,16 @@ export function LiveMarketBoard() {
   // instead of opening a second one for the live board.
   const onEvent = useCallback((e: LiveEvent) => {
     if (e.type === "snapshot") {
+      // Null-guard, same pattern as commit 8460843's sibling panels: a
+      // well-formed-but-non-ok snapshot body (assets/watching undefined)
+      // must not crash render on .map()/.length — leave the prior state
+      // intact instead of overwriting it with a broken shape.
+      if (!Array.isArray(e.snapshot?.assets)) return
       assetsRef.current = new Map(e.snapshot.assets.map((a) => [a.id, a]))
       setSnap(e.snapshot)
       setAccount(e.snapshot.account ?? null)
       setViewed(e.snapshot.viewed)
-      if (e.snapshot.watching.length) setStatus("connected")
+      if (Array.isArray(e.snapshot.watching) && e.snapshot.watching.length) setStatus("connected")
     } else if (e.type === "tick") {
       const cur = assetsRef.current.get(e.assetId)
       if (cur) {
