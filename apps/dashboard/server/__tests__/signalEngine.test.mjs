@@ -44,7 +44,8 @@ vi.mock("../services/autopilot.mjs", () => ({
 }))
 
 import { dispatchAlert } from "../services/notifier.mjs"
-import { evaluateAsset, resolveAlertVenue, windowLabel } from "../services/signalEngine.mjs"
+import { computeModelMatrix } from "../services/modelMatrix.mjs"
+import { evaluateAsset, resolveAlertVenue, windowLabel, signalEngineStatus } from "../services/signalEngine.mjs"
 
 describe("windowLabel (T5 / REQ-7)", () => {
   it("renders the local-time span boundary — lead = window start, lead+window = end", () => {
@@ -110,5 +111,31 @@ describe("signal engine PRE_TRADE dispatch (T5)", () => {
     // exactly-one rule omits `venue` — asserted here so the engine behavior
     // can never silently start guessing a venue.
     expect(call.venue).toBeUndefined()
+  })
+})
+
+describe("signalEngineStatus per-state `since` (T7 / REQ-8)", () => {
+  it("reports {phase:'alerted', since} for an alerted asset — fresh asset each run", async () => {
+    // A dedicated assetId keeps this ordered-independent: any prior test alerting
+    // EURUSD flips it to the ALERTED watch branch, never re-arms PRE_TRADE.
+    const note = await evaluateAsset("XAUUSD")
+    expect(note).toContain("PRE_TRADE alerted")
+    const st = signalEngineStatus().states["XAUUSD"]
+    expect(st.phase).toBe("alerted")
+    expect(typeof st.since).toBe("number")
+    expect(Number.isFinite(st.since)).toBe(true)
+  })
+
+  it("omits `since` for an idle asset (phase key unchanged)", async () => {
+    // Flat consensus → no-signal path → stays idle; mockImplementationOnce keeps
+    // the default up-consensus intact for the rest of the file.
+    vi.mocked(computeModelMatrix).mockImplementationOnce(() =>
+      ({ ok: true, consensus: { direction: "flat", confidence: 40, agree: 2, total: 7 } })
+    )
+    const note = await evaluateAsset("GBPUSD")
+    expect(note).toContain("no signal")
+    const st = signalEngineStatus().states["GBPUSD"]
+    expect(st.phase).toBe("idle")
+    expect("since" in st).toBe(false)
   })
 })

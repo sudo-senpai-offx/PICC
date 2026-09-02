@@ -2535,6 +2535,20 @@ async function _handleApiInner(req, res, url, reqId) {
     }
   }
 
+  // ── Signal engine status — advisory window snapshot (T7 / REQ-8) ────────
+  // The in-app countdown chip polls this; the push dispatch writes the same
+  // state machine. One source of truth — the chip must never count down from a
+  // different clock than the engine that opened the window.
+  if (path === "/api/signals/status" && req.method === "GET") {
+    try {
+      const { signalEngineStatus } = await import("./services/signalEngine.mjs")
+      writeJson(res, 200, signalEngineStatus())
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
   // ── Broker adapter registry — plug-and-play venue status ──────────────
   if (path === "/api/trading/brokers" && req.method === "GET") {
     try {

@@ -27,6 +27,7 @@ import { getBrokers, getTradingVenues, getTradingCatalog, assetOptionGroups, typ
 import { request, post } from "@/lib/api"
 import { isPushSupported } from "@/lib/push"
 import { useWebPush } from "@/hooks/useWebPush"
+import { SignalWindowChip } from "@/components/SignalWindowChip"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
@@ -448,6 +449,11 @@ export function AutopilotSuite() {
       </p>
 
       <ReadinessPanel />
+
+      {/* T7 / REQ-8 — live window countdown for the in-scope asset. Renders
+          nothing until the engine reports it alerted; counts down to the
+          window close computed from the SAME prefs feed the dispatch used. */}
+      <SignalWindowChip assetId={chartAssetId} />
 
       <SignalNotificationsCard />
 

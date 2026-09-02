@@ -31,13 +31,23 @@ const engine = {
   states: {}, // assetId → { phase: "idle"|"alerted", since, zone, alert }
 }
 
+// T7 / REQ-8: per-state records are ADDITIVE — `phase` keeps its semantics and
+// `since` is present ONLY for assets currently inside a trade window. Idle /
+// warming assets never fabricate a window start; the in-app countdown chip
+// draws its windowEndAt from here plus the SAME prefs feed that dispatch used.
 export function signalEngineStatus() {
   return {
     ok: true,
     running: Boolean(engine.timer),
     lastRun: engine.lastRun,
     watched: Object.keys(engine.states).length,
-    states: Object.fromEntries(Object.entries(engine.states).map(([k, v]) => [k, v.phase]))
+    states: Object.fromEntries(
+      Object.entries(engine.states).map(([k, v]) => {
+        const rec = { phase: v.phase }
+        if (v.since != null) rec.since = v.since
+        return [k, rec]
+      })
+    )
   }
 }
 
