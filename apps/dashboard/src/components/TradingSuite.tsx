@@ -28,6 +28,7 @@ import { request, post } from "@/lib/api"
 import { isPushSupported } from "@/lib/push"
 import { useWebPush } from "@/hooks/useWebPush"
 import { SignalWindowChip } from "@/components/SignalWindowChip"
+import { IOSInstallBanner } from "@/components/IOSInstallBanner"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
@@ -449,6 +450,9 @@ export function AutopilotSuite() {
       </p>
 
       <ReadinessPanel />
+
+      {/* T2 / REQ-2 — iOS install-first guidance, next to the advisory surface. */}
+      <IOSInstallBanner />
 
       {/* T7 / REQ-8 — live window countdown for the in-scope asset. Renders
           nothing until the engine reports it alerted; counts down to the

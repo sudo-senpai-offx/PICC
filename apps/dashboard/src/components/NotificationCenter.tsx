@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { getInterventions, respondIntervention, type InterventionProposal } from "@/lib/api"
 import { useWebPush } from "@/hooks/useWebPush"
+import { IOSInstallBanner } from "@/components/IOSInstallBanner"
 
 interface Notification {
   id: string
@@ -199,6 +200,10 @@ export function NotificationCenter() {
               <div style={{ padding: 24, textAlign: "center", color: "var(--text-muted)", fontSize: 11 }}>
                 No notifications
                 <div style={{ marginTop: 8 }}>
+                  {/* T2 / REQ-2 — iOS install-first guidance sits right where the
+                      subscribe button is, so the user sees the requirement before
+                      tapping it. */}
+                  <IOSInstallBanner />
                   {wp.enabled ? (
                     <span>Push enabled on this browser.</span>
                   ) : (
