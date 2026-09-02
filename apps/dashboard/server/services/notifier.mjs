@@ -106,11 +106,18 @@ async function sendWebPush(payload) {
   if (!pub || !priv || state.subscriptions.length === 0) return false // skipped
   const webpush = (await import("web-push")).default
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || "mailto:picc@localhost", pub, priv)
+  // Payload v2 (REQ-3/REQ-6/REQ-7): venue/windowText/actions/requireInteraction
+  // are forwarded ONLY when the caller provided them — never defaulted here, so
+  // the body stays byte-compatible with the pre-v2 sw.js contract by default.
   const body = JSON.stringify({
     title: payload.title,
     body: payload.body,
     asset: payload.assetId,
-    kind: payload.kind
+    kind: payload.kind,
+    ...(payload.venue !== undefined && { venue: payload.venue }),
+    ...(payload.windowText !== undefined && { windowText: payload.windowText }),
+    ...(payload.actions !== undefined && { actions: payload.actions }),
+    ...(payload.requireInteraction !== undefined && { requireInteraction: payload.requireInteraction })
   })
   let delivered = 0
   const dead = []
@@ -178,8 +185,15 @@ const CHANNELS = [
  * Fan an alert out through every configured+enabled channel.
  * @returns record: {ts, kind, assetId, title, results:{channel:"sent"|"skipped"|"failed"|"off"}}
  */
-export async function dispatchAlert({ kind, assetId, title, body, details }) {
+export async function dispatchAlert({ kind, assetId, title, body, details, venue, windowText, actions, requireInteraction }) {
   const payload = { kind, assetId, title, body, plainDetails: details, ts: Date.now() }
+  // Payload v2: optional additive fields forwarded verbatim to the channels
+  // (webpush body above; webhook intentionally keeps its own fixed shape).
+  // Unprovided fields stay absent — unconfigured ≠ zero-filled.
+  if (venue !== undefined) payload.venue = venue
+  if (windowText !== undefined) payload.windowText = windowText
+  if (actions !== undefined) payload.actions = actions
+  if (requireInteraction !== undefined) payload.requireInteraction = requireInteraction
   const record = { ts: new Date().toISOString(), kind, assetId, title, results: {} }
   for (const ch of CHANNELS) {
     if (!ch.enabled()) { record.results[ch.name] = state.prefs.channels[ch.name] === false ? "off" : "skipped"; continue }

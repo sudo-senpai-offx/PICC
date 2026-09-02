@@ -1,7 +1,19 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+
+// Hoisted mock state — referenced from inside the vi.mock("web-push") factory,
+// so the exported sendWebPush can be driven without a real VAPID endpoint (T3).
+const { webPushCalls } = vi.hoisted(() => ({ webPushCalls: [] }))
+vi.mock("web-push", () => ({
+  default: {
+    setVapidDetails: () => {},
+    sendNotification: async (_sub, body) => {
+      webPushCalls.push(typeof body === "string" ? JSON.parse(body) : body)
+    }
+  }
+}))
 
 let tmp
 let notifier
@@ -169,5 +181,62 @@ describe("webhook channel (T9)", () => {
     const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
     expect(rec.results.webhook).toBe("off")
     notifier.setPrefs({ channels: { webhook: true } }) // restore
+  })
+})
+
+describe("web-push payload v2 (T3)", () => {
+  beforeEach(() => {
+    webPushCalls.length = 0
+    process.env.VAPID_PUBLIC_KEY = "test-pub"
+    process.env.VAPID_PRIVATE_KEY = "test-priv"
+    notifier.addPushSubscription({ endpoint: "https://push.example/t3" })
+  })
+
+  afterEach(() => {
+    delete process.env.VAPID_PUBLIC_KEY
+    delete process.env.VAPID_PRIVATE_KEY
+    notifier.removePushSubscription("https://push.example/t3")
+  })
+
+  it("forwards optional payload-v2 fields to the web-push transport when provided", async () => {
+    const rec = await notifier.dispatchAlert({
+      kind: "PRE_TRADE",
+      assetId: "EURUSD",
+      title: "Entry window",
+      body: "entry above 1.08 · model agreement 4/5",
+      venue: { venueId: "expertoption", tradeUrl: "https://expertoption.com/trading" },
+      windowText: "Window: 21:57–22:12 EET",
+      actions: [
+        { action: "view", title: "View" },
+        { action: "snooze", title: "Snooze 10m" }
+      ],
+      requireInteraction: false
+    })
+    expect(rec.results.webpush).toBe("sent")
+    // Exactly one send per active subscription — earlier tests may have left
+    // other endpoints in state, so the count is subscription-driven, not fixed.
+    expect(webPushCalls).toHaveLength(notifier.listPushSubscriptions())
+    expect(webPushCalls.at(-1)).toMatchObject({
+      title: "Entry window",
+      body: "entry above 1.08 · model agreement 4/5",
+      asset: "EURUSD",
+      kind: "PRE_TRADE",
+      venue: { venueId: "expertoption", tradeUrl: "https://expertoption.com/trading" },
+      windowText: "Window: 21:57–22:12 EET",
+      actions: [
+        { action: "view", title: "View" },
+        { action: "snooze", title: "Snooze 10m" }
+      ],
+      requireInteraction: false
+    })
+  })
+
+  it("omits payload-v2 fields by default — body stays backward-compatible with sw.js", async () => {
+    await notifier.dispatchAlert({ kind: "FOLLOW_UP", assetId: "BTCUSD", title: "t", body: "b" })
+    expect(webPushCalls.length).toBeGreaterThan(0)
+    const sent = webPushCalls.at(-1)
+    expect(Object.keys(sent).sort()).toEqual(["asset", "body", "kind", "title"])
+    expect(sent.actions).toBeUndefined()
+    expect(sent.requireInteraction).toBeUndefined()
   })
 })
