@@ -72,16 +72,22 @@ export function windowLabel({ leadMinutes = 0, windowMinutes = 0, at = Date.now(
 /**
  * Decision D: resolve the deep-link venue for an alerting asset from the
  * sensor-covered set — the SAME catalog the extension live-scans
- * (captureProfiles.extensionCaptureConfigs). Each candidate is resolved via
- * instrumentUrl (browserStudio.mjs:573-582); EXACTLY ONE non-"none" candidate
- * wins → { venueId, tradeUrl }. Anything else (none, or several) omits the
- * field — never a fabrication, never a deep link into a venue PICC cannot open.
- * Injectable for tests; defaults to the live catalog + real resolver.
+ * (captureProfiles.extensionCaptureConfigs). Candidate pool narrowed to
+ * liveEO-verified capture venues only (PICC_SIGNAL_VENUE_POOL_DECISION.md,
+ * 2026-09-02): IS/storageScan venues have no verified live session path, so a
+ * deep link onto them would be a fabrication of openability. Each survivor is
+ * resolved via instrumentUrl (browserStudio.mjs:573-582); EXACTLY ONE
+ * non-"none" candidate wins → { venueId, tradeUrl }. Anything else (none, or
+ * several) omits the field — never a fabrication, never a deep link into a
+ * venue PICC cannot actually open. Injectable for tests; defaults to the live
+ * catalog + real resolver. Tests inject `via: "liveEO"` on synthetic
+ * candidates so the seam stays in lockstep with the real catalog.
  */
 export async function resolveAlertVenue({ assetId, candidateConfigs, instrument } = {}) {
   const configs = candidateConfigs ?? (await import("./captureProfiles.mjs")).extensionCaptureConfigs()
   const urlFor = instrument ?? (await import("./browserStudio.mjs")).instrumentUrl
   const candidates = configs
+    .filter((c) => c.via === "liveEO")
     .map((c) => ({ venueId: c.venueId, ...urlFor(c.venueId, assetId) }))
     .filter((c) => c.mode !== "none" && c.url)
   if (candidates.length === 1) return { venueId: candidates[0].venueId, tradeUrl: candidates[0].url }

@@ -1862,7 +1862,7 @@ function NewsCard() {
         </Button>
       </div>
       <p className="muted small">Real-time Google News via Serper. Decision research only.</p>
-      {news && news.items.length > 0 ? (
+      {news && Array.isArray(news.items) && news.items.length > 0 ? (
         <div className="stack">
           {news.items.map((it, i) => (
             <div key={`${it.link}-${i}`} className="stack" style={{ gap: 2 }}>
@@ -2089,7 +2089,7 @@ function SignalsCard({ signals, refresh }: { signals: TradingSignal[]; refresh: 
           </Badge>
         </div>
       ))}
-      {accuracy && accuracy.byDirection.length > 0 ? (
+      {accuracy && Array.isArray(accuracy.byDirection) && accuracy.byDirection.length > 0 ? (
         <div className="stack">
           <h4>Accuracy by direction</h4>
           {accuracy.byDirection.map((b) => (

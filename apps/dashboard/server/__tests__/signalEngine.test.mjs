@@ -70,29 +70,39 @@ describe("windowLabel (T5 / REQ-7)", () => {
 
 describe("resolveAlertVenue (T5 / Decision D)", () => {
   it("wins the exactly-one-non-none branch for an EO-resolvable asset (REAL instrumentUrl)", async () => {
-    // A candidate pool with a single resolvable venue (ExpertOption — live via
-    // liveEO today) resolves to an honest {venueId, tradeUrl}, never fabricated.
-    const candidateConfigs = [{ venueId: "expertoption", name: "ExpertOption" }]
+    // A liveEO candidate pool with a single resolvable venue (ExpertOption —
+    // live via liveEO today) resolves to an honest {venueId, tradeUrl}, never
+    // fabricated.
+    const candidateConfigs = [{ venueId: "expertoption", name: "ExpertOption", via: "liveEO" }]
     const out = await resolveAlertVenue({ assetId: "EURUSD", candidateConfigs })
     expect(out).toEqual({ venueId: "expertoption", tradeUrl: "https://app.expertoption.finance/" })
   })
 
-  it("omits the venue under the REAL catalog: expertoption AND iqoption both resolve non-'none'", async () => {
-    // Ground truth (spec Decision D assumes only ExpertOption resolves non-"none"): iqoption
-    // is a SITE_INDEX trading venue too, so instrumentUrl gives mode "venue" for both →
-    // two candidates → the exactly-one rule omits the field. This is the honest else-branch.
+  it("wins the exactly-one-non-none branch under the REAL catalog (EO wins, IS excluded)", async () => {
+    // Ground truth (PICC_SIGNAL_VENUE_POOL_DECISION.md, 2026-09-02): the pool
+    // narrows to liveEO-verified venues, so iqoption (storageScan) is excluded
+    // and ExpertOption (liveEO) is the sole non-"none" survivor → it wins.
     const out = await resolveAlertVenue({ assetId: "EURUSD" })
-    expect(out).toBeUndefined()
+    expect(out).toEqual({ venueId: "expertoption", tradeUrl: "https://app.expertoption.finance/" })
   })
 
   it("omits the venue when every candidate resolves mode 'none' (catalog-only asset)", async () => {
-    const candidateConfigs = [{ venueId: "honeygain", name: "Honeygain" }, { venueId: "whatever", name: "Whatever" }]
+    const candidateConfigs = [{ venueId: "honeygain", name: "Honeygain", via: "liveEO" }, { venueId: "whatever", name: "Whatever", via: "liveEO" }]
+    const out = await resolveAlertVenue({ assetId: "EURUSD", candidateConfigs })
+    expect(out).toBeUndefined()
+  })
+
+  it("omits the venue for a storageScan-only pool — IS-mode venues never produce a deep link", async () => {
+    // PICC_SIGNAL_VENUE_POOL_DECISION.md: IQ Option (storageScan) has no
+    // verified live-session path, so even a single resolvable IS venue must
+    // NOT emit a venue. A pure storageScan pool → undefined, never EO-style.
+    const candidateConfigs = [{ venueId: "iqoption", name: "IQ Option", via: "storageScan" }]
     const out = await resolveAlertVenue({ assetId: "EURUSD", candidateConfigs })
     expect(out).toBeUndefined()
   })
 
   it("omits the venue when several candidates resolve non-'none' (no pick between venues)", async () => {
-    const candidateConfigs = [{ venueId: "expertoption", name: "Expert Option" }, { venueId: "binance", name: "Binance" }]
+    const candidateConfigs = [{ venueId: "expertoption", name: "Expert Option", via: "liveEO" }, { venueId: "binance", name: "Binance", via: "liveEO" }]
     const out = await resolveAlertVenue({ assetId: "BTCUSD", candidateConfigs })
     expect(out).toBeUndefined()
   })
@@ -107,10 +117,9 @@ describe("signal engine PRE_TRADE dispatch (T5)", () => {
     expect(call.kind).toBe("PRE_TRADE")
     expect(call.body).toMatch(/Window: \d{2}:\d{2}–\d{2}:\d{2} .+/)
     expect(call.windowText).toMatch(/^Window: \d{2}:\d{2}–\d{2}:\d{2} .+$/)
-    // Under today's real catalog (expertoption + iqoption both "venue") the
-    // exactly-one rule omits `venue` — asserted here so the engine behavior
-    // can never silently start guessing a venue.
-    expect(call.venue).toBeUndefined()
+    // Under the narrowed liveEO pool (PICC_SIGNAL_VENUE_POOL_DECISION.md),
+    // ExpertOption is the sole survivor → `venue` resolves to EO's tradeUrl.
+    expect(call.venue).toEqual({ venueId: "expertoption", tradeUrl: "https://app.expertoption.finance/" })
   })
 })
 
