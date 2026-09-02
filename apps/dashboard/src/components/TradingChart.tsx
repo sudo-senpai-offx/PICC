@@ -37,7 +37,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
     sma20, bbUpper, bbMid, bbLower, rsiLine, macdLine, macdSignal, macdHist,
-    loading, error, streamError, lastPrice, timeframe: activeTf, setTimeframe, source, feed, resolvedTimeframe, resolved
+    loading, error, streamError, lastPrice, timeframe: activeTf, setTimeframe, source, pinnedSource, availableSources, setSource, feed, resolvedTimeframe, resolved
   } = useCandleData({ assetId, timeframe: timeframe ?? 300, count: 2000 }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
   // Slice C — when the parent controls the timeframe, its change wins; the
   // hook's own state stays in sync via the initialTf effect in useCandleData.
@@ -45,6 +45,16 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
     if (onTimeframeChange) onTimeframeChange(tf)
     else setTimeframe(tf)
   }
+  // T6 — source dropdown. Options come from the server's additive
+  // `availableSources` (slug + label + capability). "auto" = default = the
+  // broker-priority fan-in ideal/best source; picking a slug pins the NEXT
+  // fetch to that source only. Only sources that CAN serve the current
+  // resolution are selectable — honest options, never fabricated.
+  const sourceOptions: { value: string; label: string; serves: boolean }[] = [
+    { value: "auto", label: "Auto (best)", serves: true },
+    ...(availableSources ?? []).map((s) => ({ value: s.slug, label: s.label, serves: s.serves }))
+  ]
+  const chooseSource = (slug: string) => setSource(slug)
   const { servableTimeframes, sourceTimeframes } = useBrokerCapabilities()
   const [hover, setHover] = useState<{ open: number; high: number; low: number; close: number } | null>(null)
   const [showIchimoku, setShowIchimoku] = useState(false)
@@ -205,6 +215,8 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           {feed === "extension" ? <Badge tone="success">Extension live</Badge>
             : feed === "studio" ? <Badge tone="success">EO headless live</Badge>
               : sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
+          {/* T6 — show when the user pinned a specific source (not "auto"). */}
+          {pinnedSource !== "auto" ? <span title={`Pinned to source: ${sourceLabel} — fetch from this broker only`}><Badge tone="muted">Source: {sourceLabel}</Badge></span> : null}
           {streamError ? <Badge tone="warn">stream offline — retrying</Badge> : null}
           {latestU4fa ? (
             <span
@@ -237,6 +249,36 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           >
             {showHtf ? "HTF: on" : "HTF"}
           </Button>
+          {/* T6 — source dropdown: selects the market-data lens for this chart.
+              Options come from the server's additive `availableSources` response.
+              "Auto (best)" is the default fan-in; picking a specific source pins
+              the fetch to that broker slug (resolveTimeframe + honest decline
+              still apply). Only brokers that CAN serve the current resolution
+              are selectable (serves=true); others are shown disabled so the user
+              knows they exist but can't serve this timeframe. */}
+          {sourceOptions.length > 1 ? (
+            <select
+              value={pinnedSource}
+              onChange={(e) => chooseSource(e.target.value)}
+              style={{
+                marginRight: 8,
+                padding: "2px 6px",
+                fontSize: 11,
+                borderRadius: 4,
+                border: "1px solid rgba(148,163,184,0.3)",
+                background: "rgba(30,41,59,0.8)",
+                color: "#e2e8f0",
+                cursor: "pointer"
+              }}
+              title="Data source: Auto uses the best available; picking a source fetches from that broker only."
+            >
+              {sourceOptions.map((opt) => (
+                <option key={opt.value} value={opt.value} disabled={!opt.serves && opt.value !== "auto"}>
+                  {opt.label}{!opt.serves && opt.value !== "auto" ? " (can't serve this TF)" : ""}
+                </option>
+              ))}
+            </select>
+          ) : null}
           {TIMEFRAMES.map((tf) => {
             const enabled = servable.has(tf)
             const button = (

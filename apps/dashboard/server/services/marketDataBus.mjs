@@ -158,7 +158,31 @@ function spanMs(candles) {
 }
 
 /**
+ * Fetch a single broker's best available candles for an asset, or null when it
+ * has none at the requested resolution. Honesty preserved: the broker's own
+ * resolveTimeframe decides the served resolution and a decline (null) returns
+ * null — the caller decides what emptiness means (never a silent relabel).
+ */
+async function fetchFromBroker(broker, id, tf, n) {
+  try {
+    const servedTf = broker.resolveTimeframe(tf)
+    if (servedTf === null || servedTf === undefined) return null
+    const candles = await timed(broker.slug, async () => broker.getCandles(id, { timeframe: servedTf, count: n }))
+    if (!Array.isArray(candles) || !candles.length) return null
+    return { candles: candles.slice(-n), source: broker.slug, servedTf }
+  } catch { return null }
+}
+
+/**
  * Fetch the best available candles for an asset.
+ *
+ * `source` (optional) pins the request to ONE broker slug ("expertoption",
+ * "ccxt", "yahoo", ...). When it names a registered market-data broker we fetch
+ * from that source ONLY — resolveTimeframe (and honest decline) still apply, so
+ * a pinned source that cannot serve the resolution returns honest emptiness,
+ * never a relabel. When omitted, `"auto"`, or an unknown slug the current
+ * broker-priority fan-in runs unchanged (the ideal/best source wins).
+ *
  * @returns {candles[], source, stale, timeframe, resolved} — never throws for
  *          data-absence (returns empty + source:"none"); network errors from
  *          a broker fall through to the next. `timeframe` is the SERVED
@@ -168,13 +192,31 @@ function spanMs(candles) {
  *          `historyDepth`, `backfilled`, `historySpanMs`, `historySource`
  *          (+ per-bar `backfilled:true` on appended older bars).
  */
-export async function getBestCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null } = {}) {
+export async function getBestCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null, source = "auto" } = {}) {
   const tf = Math.min(Math.max(Number(timeframe) || 60, 5), 2592000) // up to 1M
   const n = Math.min(Math.max(Number(count) || 200, 20), 2000)
   const id = String(assetId ?? "").trim().toUpperCase() || "EURUSD"
 
-  const { getActiveBrokers } = await registry()
+  const { getActiveBrokers, getBroker } = await registry()
   const brokers = getActiveBrokers()
+
+  // Pinned source: fetch from that ONE broker. The EO watch-and-fetch bridge
+  // and the fan-in are both skipped — the user asked for a specific lens. An
+  // unknown slug falls through to the auto path (never a fabricated source).
+  if (typeof source === "string" && source !== "" && source !== "auto") {
+    const broker = getBroker(source)
+    if (broker) {
+      const single = await fetchFromBroker(broker, id, tf, n)
+      if (single) {
+        const withHistory = await withHistoryBackfill({ brokers, id, primary: single.candles, servedTf: single.servedTf, n, primarySlug: single.source })
+        return { ...withHistory, source: single.source, stale: false, timeframe: single.servedTf, resolved: single.servedTf !== tf }
+      }
+      return { candles: [], source, stale: true, timeframe: tf, resolved: false, historyDepth: 0, backfilled: 0, historySpanMs: 0, historySource: null }
+    }
+    // Unknown slug — fall through to auto fan-in rather than error.
+    if (/^[a-z0-9-]+$/.test(source)) console.warn(`[picc] candles: unknown source '${source}' — falling back to auto (best)`)
+  }
+
   let thinData = null // best thin result so far (last-resort fallback)
 
   for (const broker of brokers) {
@@ -218,4 +260,33 @@ export async function getBestCandles(assetId, { timeframe = 60, count = 200, ens
   // Last resort: thin data from any broker, else honest emptiness.
   if (thinData) return thinData
   return { candles: [], source: "none", stale: true, timeframe: tf, resolved: false, historyDepth: 0, backfilled: 0, historySpanMs: 0, historySource: null }
+}
+
+/**
+ * List the market-data sources that COULD serve a requested resolution for a
+ * given asset — the honest option set for the chart's source dropdown.
+ *
+ * `serves` is a CAPABILITY claim (does this broker's resolution curve cover
+ * the request?), computed cheaply via the broker's own resolveTimeframe — it
+ * says nothing about whether the source currently has data or is connected.
+ * Ordering follows the fan-in priority (weight DESC), so "Auto" always points
+ * at the first entry (the ideal/best source).
+ *
+ * @returns {Array<{slug: string, label: string, weight: number, serves: boolean}>}
+ */
+export async function listAvailableSources(assetId, { timeframe = 60 } = {}) {
+  const tf = Math.min(Math.max(Number(timeframe) || 60, 5), 2592000)
+  const { getActiveBrokers } = await registry()
+  return getActiveBrokers()
+    .filter((b) => b.slug !== "paper")          // paper serves no candle data
+    .map((b) => {
+      let served = null
+      try { served = b.resolveTimeframe(tf) } catch { /* capability unknown */ }
+      return {
+        slug: b.slug,
+        label: typeof b.label === "string" && b.label ? b.label : b.slug,
+        weight: Number(b.weight) || 0,
+        serves: served !== null && served !== undefined
+      }
+    })
 }

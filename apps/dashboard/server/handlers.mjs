@@ -1864,21 +1864,25 @@ async function _handleApiInner(req, res, url, reqId) {
     // so a 2000-bar request may honestly return far fewer (e.g. Yahoo 3y daily).
     const count = Math.min(Math.max(Number(body?.count) || 200, 20), 2000)
     if (!assetId) return writeJson(res, 400, { error: "assetId required" })
+    // Optional source pin (T6 source dropdown): naming a registered market-data
+    // broker slug ("expertoption", "ccxt", "yahoo", ...) fetches from that source
+    // ONLY; "auto"/omitted keeps the broker-priority fan-in (best/ideal source).
+    const source = typeof body?.source === "string" ? body.source.trim() : "auto"
     try {
       // Unified fan-in: EO push buffers → live EO fetch → CCXT aggregates →
       // Yahoo daily fallback. Source + staleness tagged for honest labeling.
-      const { getBestCandles } = await import("./services/marketDataBus.mjs")
+      // A pinned `source` overrides the fan-in to view one specific lens.
+      const { getBestCandles, listAvailableSources } = await import("./services/marketDataBus.mjs")
       const { ensureWatchingAsset, feedProvenance } = await import("./services/liveEO.mjs")
-      const out = await getBestCandles(assetId, {
-        timeframe,
-        count,
-        ensureWatch: ensureWatchingAsset
-      })
+      const [out, availableSources] = await Promise.all([
+        getBestCandles(assetId, { timeframe, count, ensureWatch: ensureWatchingAsset, source }),
+        listAvailableSources(assetId, { timeframe })
+      ])
       // Leg-level provenance when the live EO leg served: extension frames vs
       // headless studio frames (mirrors dataSources.collectSourceStatuses).
       const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : null
       if (!out.candles.length) {
-        return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [] })
+        return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources })
       }
       writeJson(res, 200, {
         ok: true,
@@ -1890,6 +1894,9 @@ async function _handleApiInner(req, res, url, reqId) {
         timeframe: out.timeframe,
         resolved: out.resolved ?? false,
         candles: out.candles,
+        // T6 — the selectable source set (additive). Frontend dropdown default:
+        // "Auto" = the fan-in winner this response served.
+        availableSources,
         // T3-additive depth tags (always present for a deterministic shape):
         historyDepth: out.historyDepth ?? out.candles.length,
         backfilled: out.backfilled ?? 0,

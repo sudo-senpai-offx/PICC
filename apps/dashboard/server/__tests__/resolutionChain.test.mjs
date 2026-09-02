@@ -8,7 +8,7 @@
 
 import { afterEach, describe, expect, it } from "vitest"
 import { handleApi } from "../handlers.mjs"
-import { getBestCandles } from "../services/marketDataBus.mjs"
+import { getBestCandles, listAvailableSources } from "../services/marketDataBus.mjs"
 import { registerBroker, unregisterBroker, resolveTimeframeFor } from "../services/brokers/index.mjs"
 import { stopLiveEO } from "../services/liveEO.mjs"
 
@@ -194,5 +194,200 @@ describe("POST /api/trading/candles resolution response", () => {
     expect(res.body.resolved).toBe(false)
     expect(res.body.source).toBe("none")
     expect(res.body.candles).toEqual([])
+  })
+})
+
+// T6 — Source dropdown: getBestCandles source override + listAvailableSources +
+// /api/trading/candles additive availableSources response.
+describe("T6 source override (getBestCandles)", () => {
+  it("fetches from the named broker ONLY when source is a valid slug", async () => {
+    registerTestBroker({
+      slug: "t6-pinned",
+      label: "T6 Pinned",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    registerTestBroker({
+      slug: "t6-other",
+      label: "T6 Other",
+      weight: 100, // higher weight — would win in auto mode
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    // Without pin: t6-other wins (higher weight, more bars)
+    const auto = await getBestCandles("EURUSD", { timeframe: 60, count: 50 })
+    expect(auto.source).toBe("t6-other")
+    // With pin: t6-pinned is fetched (lower weight, fewer bars — but user asked)
+    const pinned = await getBestCandles("EURUSD", { timeframe: 60, count: 50, source: "t6-pinned" })
+    expect(pinned.source).toBe("t6-pinned")
+    expect(pinned.stale).toBe(false)
+  })
+
+  it("declines (honest emptiness) when the pinned source can't serve the resolution", async () => {
+    registerTestBroker({
+      slug: "t6-1h-only",
+      label: "T6 1h only",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 900, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    const out = await getBestCandles("EURUSD", { timeframe: 14400, count: 50, source: "t6-1h-only" })
+    // Above its 1h cap — resolveTimeframe returns null — honest emptiness.
+    expect(out.source).toBe("t6-1h-only")
+    expect(out.candles).toEqual([])
+    expect(out.stale).toBe(true)
+  })
+
+  it("falls back to auto fan-in for an unknown source slug", async () => {
+    registerTestBroker({
+      slug: "t6-auto-fallback",
+      label: "T6 auto fallback",
+      weight: 100,
+      isAlive: () => true,
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    const out = await getBestCandles("EURUSD", { timeframe: 60, count: 50, source: "bogus-source" })
+    expect(out.source).toBe("t6-auto-fallback")
+  })
+
+  it("source:'auto' behaves identically to omitting source (no regression)", async () => {
+    registerTestBroker({
+      slug: "t6-auto-exact",
+      label: "T6 auto exact",
+      weight: 100,
+      isAlive: () => true,
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    const out = await getBestCandles("EURUSD", { timeframe: 60, count: 50, source: "auto" })
+    expect(out.source).toBe("t6-auto-exact")
+  })
+})
+
+describe("T6 listAvailableSources", () => {
+  it("returns registered brokers with serves:true when their curve covers the resolution", async () => {
+    registerTestBroker({
+      slug: "t6-src-full",
+      label: "T6 Full",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600]
+    })
+    registerTestBroker({
+      slug: "t6-src-1h",
+      label: "T6 1h cap",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 900, 3600]
+    })
+    registerTestBroker({
+      slug: "paper",
+      label: "Paper",
+      weight: 10,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300]
+    })
+    const sources = await listAvailableSources("EURUSD", { timeframe: 60 })
+    // Paper excluded
+    expect(sources.find((s) => s.slug === "paper")).toBeUndefined()
+    // Both non-paper sources can serve 60s
+    const full = sources.find((s) => s.slug === "t6-src-full")
+    const capped = sources.find((s) => s.slug === "t6-src-1h")
+    expect(full).toBeDefined()
+    expect(full.serves).toBe(true)
+    expect(capped).toBeDefined()
+    expect(capped.serves).toBe(true)
+    // Order by weight DESC (100 > 50)
+    expect(sources[0].slug).toBe("t6-src-full")
+  })
+
+  it("marks serves:false when the resolution is above a source's cap", async () => {
+    registerTestBroker({
+      slug: "t6-src-capped",
+      label: "T6 capped",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 900, 3600]
+    })
+    const sources = await listAvailableSources("EURUSD", { timeframe: 14400 })
+    const src = sources.find((s) => s.slug === "t6-src-capped")
+    expect(src).toBeDefined()
+    expect(src.serves).toBe(false)
+  })
+
+  it("returns an empty array when no brokers are registered", async () => {
+    const sources = await listAvailableSources("EURUSD", { timeframe: 60 })
+    expect(sources).toEqual([])
+  })
+})
+
+describe("POST /api/trading/candles T6 source override", () => {
+  it("accepts source in request body and passes it through to getBestCandles", async () => {
+    registerTestBroker({
+      slug: "t6-ep-pinned",
+      label: "T6 EP pinned",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    registerTestBroker({
+      slug: "t6-ep-other",
+      label: "T6 EP other",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    const res = await call("POST", "/api/trading/candles", {
+      assetId: "EURUSD",
+      timeframe: 60,
+      count: 50,
+      source: "t6-ep-pinned"
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(res.body.source).toBe("t6-ep-pinned")
+  })
+
+  it("returns availableSources (additive) in the response", async () => {
+    registerTestBroker({
+      slug: "t6-ep-a",
+      label: "T6 EP A",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    const res = await call("POST", "/api/trading/candles", {
+      assetId: "EURUSD",
+      timeframe: 60,
+      count: 50
+    })
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body.availableSources)).toBe(true)
+    const a = res.body.availableSources.find((s) => s.slug === "t6-ep-a")
+    expect(a).toBeDefined()
+    expect(a.serves).toBe(true)
+    expect(a.label).toBe("T6 EP A")
+  })
+
+  it("defaults source to 'auto' when omitted (backward compat)", async () => {
+    registerTestBroker({
+      slug: "t6-ep-default",
+      label: "T6 EP default",
+      weight: 100,
+      isAlive: () => true,
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    const res = await call("POST", "/api/trading/candles", {
+      assetId: "EURUSD",
+      timeframe: 60,
+      count: 50
+    })
+    expect(res.body.source).toBe("t6-ep-default")
   })
 })

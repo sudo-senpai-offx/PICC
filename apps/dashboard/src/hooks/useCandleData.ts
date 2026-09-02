@@ -28,6 +28,17 @@ interface UseCandleDataOpts {
   assetId: string
   timeframe?: Timeframe
   count?: number
+  /** T6 — optional pinned source ("auto" = best/ideal fan-in default). */
+  source?: string
+}
+
+/** T6 — one selectable market-data source for the chart dropdown. */
+export interface AvailableSource {
+  slug: string
+  label: string
+  weight: number
+  /** Capability only (resolution curve covers the request) — NOT a live-data guarantee. */
+  serves: boolean
 }
 
 interface UseCandleDataResult {
@@ -62,6 +73,12 @@ interface UseCandleDataResult {
   setTimeframe: (tf: Timeframe) => void
   /** Where the candles came from: live / buffer / yahoo-daily fallback. */
   source: string | null
+  /** T6 — the currently-selected dropdown lens ("auto" = best/ideal). */
+  pinnedSource: string
+  /** T6 — the selectable source set driving the chart's source dropdown. */
+  availableSources: AvailableSource[]
+  /** T6 — pin the next fetch to one source slug ("auto" = best/ideal). */
+  setSource: (source: string) => void
   /** Which live leg fed the series when the EO source served: "extension" | "studio" | null. */
   feed: string | null
   /** Actual bar resolution of the returned series (86400 = Yahoo daily). */
@@ -79,6 +96,8 @@ interface CandleResponse {
   error?: string
   /** Which live leg fed the series: "extension" | "studio" | null (EO source only). */
   feed?: string | null
+  /** T6 — the selectable source set for the dropdown (additive). */
+  availableSources?: AvailableSource[]
   /** SERVED bar resolution (post broker.resolveTimeframe) — the honest tag. */
   timeframe?: number
   /** Requested resolution, kept for the mismatch warning. */
@@ -87,14 +106,14 @@ interface CandleResponse {
   resolved?: boolean
 }
 
-export async function fetchCandles(assetId: string, timeframe: Timeframe, count: number): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean }> {
+export async function fetchCandles(assetId: string, timeframe: Timeframe, count: number, source: string = "auto"): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean; availableSources: AvailableSource[] }> {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
   const res = await fetch(`${BASE}/trading/candles`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ assetId, timeframe, count })
+    body: JSON.stringify({ assetId, timeframe, count, source })
   })
   if (!res.ok) {
     const j = await res.json().catch(() => null) as { error?: string } | null
@@ -117,7 +136,7 @@ export async function fetchCandles(assetId: string, timeframe: Timeframe, count:
   const served = typeof data.timeframe === "number" && data.timeframe > 0
     ? data.timeframe
     : (data.candles[0]?.timeframe ?? timeframe)
-  return { rows, source: data.source ?? null, feed: data.feed ?? null, resolvedTimeframe: served, resolved: data.resolved === true || served !== timeframe }
+  return { rows, source: data.source ?? null, feed: data.feed ?? null, resolvedTimeframe: served, resolved: data.resolved === true || served !== timeframe, availableSources: data.availableSources ?? [] }
 }
 
 function computeEma(candles: CandleDatum[], period: number): EmaDatum[] {
@@ -215,14 +234,19 @@ function computeKeltner(candles: CandleDatum[]) {
   return { kcUpper, kcMiddle, kcLower }
 }
 
-export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 }: UseCandleDataOpts): UseCandleDataResult {
+export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240, source: initialSource = "auto" }: UseCandleDataOpts): UseCandleDataResult {
   const [candles, setCandles] = useState<CandleDatum[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [streamError, setStreamError] = useState<string | null>(null)
   const [lastPrice, setLastPrice] = useState<number | null>(null)
   const [timeframe, setTimeframe] = useState<Timeframe>(initialTf)
-  const [source, setSource] = useState<string | null>(null)
+  // T6 — two distinct source signals:
+  //   pinned  — the user's dropdown choice ("auto" = best/ideal fan-in default)
+  //   served  — the slug the SERVER actually served (the honest label)
+  const [pinned, setPinned] = useState<string>(initialSource)
+  const [served, setServed] = useState<string | null>(null)
+  const [availableSources, setAvailableSources] = useState<AvailableSource[]>([])
   const [feed, setFeed] = useState<string | null>(null)
   const [resolvedTimeframe, setResolvedTimeframe] = useState<number | null>(null)
   const [resolved, setResolved] = useState(false)
@@ -234,20 +258,25 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
   // a different value.
   useEffect(() => { setTimeframe(initialTf) }, [initialTf])
 
+  // T6 — allow a PARENT to drive the pinned source too (dropdown lives in the
+  // chart, but nothing stops an outer component passing a default).
+  useEffect(() => { setPinned(initialSource) }, [initialSource])
+
   // Fetch initial candle data
   useEffect(() => {
     let alive = true
     setLoading(true)
     setError(null)
-    fetchCandles(assetId, timeframe, count)
-      .then(({ rows, source: src, feed: fd, resolvedTimeframe: rtf, resolved: isResolved }) => {
+    fetchCandles(assetId, timeframe, count, pinned)
+      .then(({ rows, source: src, feed: fd, resolvedTimeframe: rtf, resolved: isResolved, availableSources: avail }) => {
         if (!alive) return
         candlesRef.current = rows
         setCandles(rows)
-        setSource(src)
+        setServed(src)
         setFeed(fd)
         setResolvedTimeframe(rtf)
         setResolved(isResolved)
+        setAvailableSources(avail.length ? avail : [])
         if (rows.length > 0) setLastPrice(rows[rows.length - 1].close)
         setLoading(false)
       })
@@ -257,7 +286,7 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
         setLoading(false)
       })
     return () => { alive = false }
-  }, [assetId, timeframe, count])
+  }, [assetId, timeframe, count, pinned])
 
   // Subscribe to the SHARED realtime tick bus (T8): every chart rides the one
   // /api/trading/realtime connection the suite already opens, refcounted by
@@ -337,12 +366,16 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240 
     setTimeframe(tf)
   }, [])
 
+  const handleSetSource = useCallback((slug: string) => {
+    setPinned(slug)
+  }, [])
+
   return {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
     sma20,
     bbUpper: bb.upper, bbMid: bb.mid, bbLower: bb.lower,
     rsiLine,
     macdLine: macdSeries.line, macdSignal: macdSeries.signal, macdHist: macdSeries.hist,
-    loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source, feed, resolvedTimeframe, resolved
+    loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source: served, pinnedSource: pinned, availableSources, setSource: handleSetSource, feed, resolvedTimeframe, resolved
   }
 }
