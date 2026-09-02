@@ -47,9 +47,42 @@ function fmtPx(n) {
   return v < 10 ? v.toFixed(4) : v.toLocaleString("en-US", { maximumFractionDigits: 2 })
 }
 
-async function evaluateAsset(assetId) {
+// ── T5 (REQ-7): literal window copy + Decision D venue resolution ────────────
+// windowLabel is PURE: a local-time HH:MM–HH:MM span where lead = window start
+// and lead+window = window end. Push text is always static — the live
+// countdown lives only in the app (REQ-8, T7).
+export function windowLabel({ leadMinutes = 0, windowMinutes = 0, at = Date.now() } = {}) {
+  const start = new Date(at + leadMinutes * 60_000)
+  const end = new Date(start.getTime() + windowMinutes * 60_000)
+  const hhmm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "local"
+  return `Window: ${hhmm(start)}–${hhmm(end)} ${tz}`
+}
+
+/**
+ * Decision D: resolve the deep-link venue for an alerting asset from the
+ * sensor-covered set — the SAME catalog the extension live-scans
+ * (captureProfiles.extensionCaptureConfigs). Each candidate is resolved via
+ * instrumentUrl (browserStudio.mjs:573-582); EXACTLY ONE non-"none" candidate
+ * wins → { venueId, tradeUrl }. Anything else (none, or several) omits the
+ * field — never a fabrication, never a deep link into a venue PICC cannot open.
+ * Injectable for tests; defaults to the live catalog + real resolver.
+ */
+export async function resolveAlertVenue({ assetId, candidateConfigs, instrument } = {}) {
+  const configs = candidateConfigs ?? (await import("./captureProfiles.mjs")).extensionCaptureConfigs()
+  const urlFor = instrument ?? (await import("./browserStudio.mjs")).instrumentUrl
+  const candidates = configs
+    .map((c) => ({ venueId: c.venueId, ...urlFor(c.venueId, assetId) }))
+    .filter((c) => c.mode !== "none" && c.url)
+  if (candidates.length === 1) return { venueId: candidates[0].venueId, tradeUrl: candidates[0].url }
+  return undefined
+}
+
+// Exported for unit tests (T5) — the full-run entry points are startSignalEngine/runOnce.
+export async function evaluateAsset(assetId) {
   const prefs = getPrefs()
   const st = (engine.states[assetId] ??= { phase: "idle" })
+  const venue = await resolveAlertVenue({ assetId })
 
   const feed = await getBestCandles(assetId, { timeframe: 60, count: 200 })
   if (!feed.candles.length || feed.source === "none") {
@@ -69,7 +102,8 @@ async function evaluateAsset(assetId) {
         kind: "FOLLOW_UP",
         assetId,
         title: `⏱ ${assetId} — window expired`,
-        body: `No entry triggered within ${prefs.windowMinutes} min. Consensus faded to ${c.direction} @ ${c.confidence}%.`
+        body: `No entry triggered within ${prefs.windowMinutes} min. Consensus faded to ${c.direction} @ ${c.confidence}%.`,
+        venue
       })
       engine.states[assetId] = { phase: "idle" }
       return `${assetId}: follow-up expired`
@@ -93,6 +127,11 @@ async function evaluateAsset(assetId) {
       // Fire the PRE_TRADE heads-up now — this IS the lead time; the window
       // that follows is the actionable period the user asked to be warned of.
       const dirWord = c.direction === "up" ? "BUY" : "SELL"
+      const windowText = windowLabel({
+        leadMinutes: prefs.leadMinutes,
+        windowMinutes: prefs.windowMinutes,
+        at: Date.now()
+      })
       await dispatchAlert({
         kind: "PRE_TRADE",
         assetId,
@@ -100,7 +139,10 @@ async function evaluateAsset(assetId) {
         body:
           `Consensus ${c.direction.toUpperCase()} @ ${c.confidence}% (${c.agree}/${c.total} models agree).\n` +
           `Ideal ${dirWord.toLowerCase()} zone ${fmtPx(zone.low)} – ${fmtPx(zone.high)} · spot ${fmtPx(spot)} · strength ${zone.strength}/5.\n` +
-          `Sources: ${zone.sources.join(", ")}. Data: ${feed.source}.`
+          `Sources: ${zone.sources.join(", ")}. Data: ${feed.source}.\n` +
+          windowText,
+        venue,
+        windowText
       })
       engine.states[assetId] = {
         phase: "alerted",
@@ -123,7 +165,8 @@ async function evaluateAsset(assetId) {
       kind: "FOLLOW_UP",
       assetId,
       title: `✅ ${assetId} — level reached`,
-      body: `Price hit the ${st.direction === "up" ? "buy" : "sell"} zone anchor ${fmtPx(st.zoneAnchor)} (spot ${fmtPx(spot)}). Window idea resolved in your favor — act on your platform if you choose.`
+      body: `Price hit the ${st.direction === "up" ? "buy" : "sell"} zone anchor ${fmtPx(st.zoneAnchor)} (spot ${fmtPx(spot)}). Window idea resolved in your favor — act on your platform if you choose.`,
+      venue
     })
     engine.states[assetId] = { phase: "idle" }
     return `${assetId}: follow-up level-reached`
@@ -133,7 +176,8 @@ async function evaluateAsset(assetId) {
       kind: "FOLLOW_UP",
       assetId,
       title: `⏱ ${assetId} — window expired`,
-      body: `The ${st.direction.toUpperCase()} window around ${fmtPx(st.zoneAnchor)} closed without a touch (spot ${fmtPx(spot)}).`
+      body: `The ${st.direction.toUpperCase()} window around ${fmtPx(st.zoneAnchor)} closed without a touch (spot ${fmtPx(spot)}).`,
+      venue
     })
     engine.states[assetId] = { phase: "idle" }
     return `${assetId}: follow-up expired`
