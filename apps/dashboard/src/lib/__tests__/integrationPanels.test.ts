@@ -174,7 +174,7 @@ const CAPS: SystemCapabilitiesResult = {
   node: "v22.0.0",
   browserFound: true,
   extensionSensor: { seen: false, lastSeen: null },
-  notifierChannels: { inApp: true, webpush: true, email: false },
+  notifierChannels: { inApp: true, webpush: true },
   signalEngine: true,
   uptime: 4321
 }
@@ -188,7 +188,7 @@ describe("capabilitiesPanelModel (T6)", () => {
 
   it("passes notifier channel configuration through (unconfigured stays false)", () => {
     const d = capabilitiesPanelModel(CAPS)!
-    expect(d.notifierChannels).toEqual({ inApp: true, webpush: true, email: false })
+    expect(d.notifierChannels).toEqual({ inApp: true, webpush: true })
   })
 
   it("returns null when the probe did not succeed", () => {

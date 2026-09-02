@@ -5,7 +5,6 @@
 // Shipping channels:
 //   in-app   — always on; forwards into notificationCenter (existing bell UI)
 //   webpush  — Web Push (VAPID); active when VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY set
-//   email    — Resend HTTP API; active when RESEND_API_KEY + ALERT_EMAIL_TO set
 //   webhook  — generic outbound HTTP POST; active when WEBHOOK_URL set (T9)
 //
 // Honesty rules: send results are recorded per channel (sent/failed/skipped +
@@ -30,7 +29,7 @@ function loadState() {
         minConfidence: 65,
         leadMinutes: 3,
         windowMinutes: 15,
-        channels: { inApp: true, webpush: true, email: true, webhook: true },
+        channels: { inApp: true, webpush: true, webhook: true },
       },
       subscriptions: [], // web-push subscription objects
       recent: [],        // last 20 alert records (payload + per-channel results)
@@ -141,24 +140,6 @@ async function sendWebPush(payload) {
   return delivered > 0
 }
 
-async function sendEmail(payload) {
-  const key = process.env.RESEND_API_KEY
-  const to = process.env.ALERT_EMAIL_TO
-  if (!key || !to) return false // skipped
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from: process.env.ALERT_EMAIL_FROM || "PICC <onboarding@resend.dev>",
-      to,
-      subject: `${payload.title}`,
-      text: payload.body + (payload.html ? `\n\n${payload.plainDetails ?? ""}` : "")
-    })
-  })
-  if (!res.ok) throw new Error(`resend ${res.status}: ${(await res.text()).slice(0, 120)}`)
-  return true
-}
-
 /** T9 — generic webhook channel: POSTs the alert payload to WEBHOOK_URL. */
 async function sendWebhook(payload) {
   const url = process.env.WEBHOOK_URL
@@ -182,7 +163,6 @@ async function sendWebhook(payload) {
 const CHANNELS = [
   { name: "inApp", enabled: () => state.prefs.channels.inApp !== false, send: sendInApp },
   { name: "webpush", enabled: () => Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY), send: sendWebPush },
-  { name: "email", enabled: () => Boolean(process.env.RESEND_API_KEY && process.env.ALERT_EMAIL_TO), send: sendEmail },
   { name: "webhook", enabled: () => Boolean(process.env.WEBHOOK_URL), send: sendWebhook }
 ]
 

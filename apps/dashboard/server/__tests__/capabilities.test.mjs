@@ -50,11 +50,12 @@ describe("POST /api/system/capabilities", () => {
     expect(b.extensionSensor).toBeDefined()
     expect(typeof b.extensionSensor.seen).toBe("boolean")
 
-    // Notifier channels — shape present; inApp always true
+    // Notifier channels — shape present; inApp always true; exactly the three
+    // shipping channels, no email row (T9 removed the email channel).
     expect(b.notifierChannels).toBeDefined()
     expect(b.notifierChannels.inApp).toBe(true)
     expect(typeof b.notifierChannels.webpush).toBe("boolean")
-    expect(typeof b.notifierChannels.email).toBe("boolean")
+    expect(b.notifierChannels.email).toBeUndefined()
 
     // Signal engine — reflects env kill-switch
     expect(typeof b.signalEngine).toBe("boolean")

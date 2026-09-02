@@ -1434,7 +1434,7 @@ export interface SystemCapabilitiesResult {
   node: string
   browserFound: boolean
   extensionSensor: { seen: boolean; lastSeen: number | null }
-  notifierChannels: { inApp: boolean; webpush: boolean; email: boolean }
+  notifierChannels: { inApp: boolean; webpush: boolean }
   signalEngine: boolean
   uptime: number
 }

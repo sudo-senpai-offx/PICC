@@ -110,7 +110,7 @@ export interface CapabilitiesDisplay {
   browserFound: boolean
   sensorSeen: boolean
   sensorLastSeen: number | null
-  notifierChannels: { inApp: boolean; webpush: boolean; email: boolean }
+  notifierChannels: { inApp: boolean; webpush: boolean }
   signalEngine: boolean
   uptimeSec: number
   node: string
@@ -124,7 +124,7 @@ export function capabilitiesPanelModel(res: SystemCapabilitiesResult): Capabilit
     browserFound: Boolean(res.browserFound),
     sensorSeen: Boolean(res.extensionSensor?.seen),
     sensorLastSeen: res.extensionSensor?.lastSeen ?? null,
-    notifierChannels: res.notifierChannels ?? { inApp: true, webpush: false, email: false },
+    notifierChannels: res.notifierChannels ?? { inApp: true, webpush: false },
     signalEngine: Boolean(res.signalEngine),
     uptimeSec: Number(res.uptime) || 0,
     node: res.node ?? "unknown",

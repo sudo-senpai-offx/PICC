@@ -21,11 +21,9 @@ let notifier
 beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), "picc-notifier-"))
   process.env.PICC_NOTIFICATION_DATA_DIR = tmp
-  // Only in-app configured → webpush/email honestly report "skipped".
+  // Only in-app configured → webpush honestly reports "skipped".
   delete process.env.VAPID_PUBLIC_KEY
   delete process.env.VAPID_PRIVATE_KEY
-  delete process.env.RESEND_API_KEY
-  delete process.env.ALERT_EMAIL_TO
   notifier = await import("../services/notifier.mjs")
 })
 
@@ -47,7 +45,6 @@ describe("generic notifier dispatcher", () => {
     expect(rec.results.inApp).toBe("sent")
     // Unconfigured channels must be SKIPPED, never fabricated as sent/failed.
     expect(rec.results.webpush).toBe("skipped")
-    expect(rec.results.email).toBe("skipped")
   })
 
   it("status reports channel configuration honestly and prefs round-trip", async () => {
@@ -57,10 +54,9 @@ describe("generic notifier dispatcher", () => {
     expect(webpush.configured).toBe(false) // no VAPID env in tests
     expect(webpush.userEnabled).toBe(true)
 
-    const p = notifier.setPrefs({ minConfidence: 72, leadMinutes: 5, channels: { email: false } })
+    const p = notifier.setPrefs({ minConfidence: 72, leadMinutes: 5 })
     expect(p.minConfidence).toBe(72)
     expect(p.leadMinutes).toBe(5)
-    expect(p.channels.email).toBe(false)
     // Clamps hold.
     const bad = notifier.setPrefs({ minConfidence: 999, leadMinutes: -4 })
     expect(bad.minConfidence).toBe(95)
@@ -68,7 +64,7 @@ describe("generic notifier dispatcher", () => {
   })
 
   it("user-disabled channels record 'off', distinct from unconfigured 'skipped'", async () => {
-    notifier.setPrefs({ channels: { inApp: false, webpush: true, email: true } })
+    notifier.setPrefs({ channels: { inApp: false, webpush: true } })
     const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
     expect(rec.results.inApp).toBe("off")
     expect(rec.results.webpush).toBe("skipped") // enabled by user but not configured
@@ -122,7 +118,6 @@ it("removePushSubscription deletes only the matching endpoint and persists the d
     expect(rec.results.inApp).toBe("sent")
     // Unconfigured channels must be SKIPPED, never fabricated as sent/failed.
     expect(rec.results.webpush).toBe("skipped")
-    expect(rec.results.email).toBe("skipped")
   })
 })
 

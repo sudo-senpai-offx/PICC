@@ -76,9 +76,6 @@ export function CapabilitiesPanel() {
             <Badge tone={model.notifierChannels.webpush ? "success" : "muted"}>
               {model.notifierChannels.webpush ? "web-push" : "web-push off (VAPID unset)"}
             </Badge>
-            <Badge tone={model.notifierChannels.email ? "success" : "muted"}>
-              {model.notifierChannels.email ? "email" : "email off (Resend unset)"}
-            </Badge>
           </div>
         </>
       )}

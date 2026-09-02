@@ -930,7 +930,7 @@ export function SignalNotificationsCard() {
   const testSend = async () => {
     try {
       await post("/notifications/test", {})
-      setMsg("Test dispatched — check bell/email/push.")
+      setMsg("Test dispatched — check bell/push.")
     } catch (e) { setMsg((e as Error).message) }
   }
 

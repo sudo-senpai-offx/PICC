@@ -2575,7 +2575,6 @@ async function _handleApiInner(req, res, url, reqId) {
       const notifierChannels = {
         inApp: true,
         webpush: Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
-        email: Boolean(process.env.RESEND_API_KEY && process.env.ALERT_EMAIL_TO),
       }
 
       const hb = globalThis.__picc_ext_heartbeat || null
