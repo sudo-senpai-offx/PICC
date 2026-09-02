@@ -33,19 +33,24 @@ function loadState() {
         channels: { inApp: true, webpush: true, email: true, webhook: true },
       },
       subscriptions: [], // web-push subscription objects
-      recent: []         // last 20 alert records (payload + per-channel results)
+      recent: [],        // last 20 alert records (payload + per-channel results)
+      snoozes: {}        // T4: { [tag]: { dueAt, count, ts, payload } } — one-shot in-flight snoozes
     }
   }
 }
 let state = loadState()
-let writeQueued = false
+let persistTimer = null
 
-/** Serialized-ish persist (single-process writer; atomic tmp+rename like the repo pattern). */
+/**
+ * Debounced atomic persist (tmp+rename, single-process writer). Each call
+ * RE-ARMS the 50ms timer — no boolean flag, so a pending write can never wedge
+ * (e.g. a debounce queued under fake timers and then discarded by
+ * vi.useRealTimers() would otherwise poison every later persist).
+ */
 export function persist() {
-  if (writeQueued) return
-  writeQueued = true
-  setTimeout(() => {
-    writeQueued = false
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => {
+    persistTimer = null
     try {
       const tmp = `${STATE_FILE}.${process.pid}.tmp`
       writeFileSync(tmp, JSON.stringify(state, null, 2))
@@ -185,8 +190,12 @@ const CHANNELS = [
  * Fan an alert out through every configured+enabled channel.
  * @returns record: {ts, kind, assetId, title, results:{channel:"sent"|"skipped"|"failed"|"off"}}
  */
-export async function dispatchAlert({ kind, assetId, title, body, details, venue, windowText, actions, requireInteraction }) {
-  const payload = { kind, assetId, title, body, plainDetails: details, ts: Date.now() }
+export async function dispatchAlert({ kind, assetId, title, body, details, ts, venue, windowText, actions, requireInteraction, snoozed }) {
+  // ts is present-when-provided (T4 re-shows carry the ORIGINAL alert time, REQ-5);
+  // fresh alerts default to now. Same pattern as the payload-v2 fields: never
+  // fabricated, never defaulted for the caller.
+  const now = ts ?? Date.now()
+  const payload = { kind, assetId, title, body, plainDetails: details, ts: now }
   // Payload v2: optional additive fields forwarded verbatim to the channels
   // (webpush body above; webhook intentionally keeps its own fixed shape).
   // Unprovided fields stay absent — unconfigured ≠ zero-filled.
@@ -194,7 +203,14 @@ export async function dispatchAlert({ kind, assetId, title, body, details, venue
   if (windowText !== undefined) payload.windowText = windowText
   if (actions !== undefined) payload.actions = actions
   if (requireInteraction !== undefined) payload.requireInteraction = requireInteraction
-  const record = { ts: new Date().toISOString(), kind, assetId, title, results: {} }
+  // The record is the ledger's evidence source for snooze re-shows (T4), so it
+  // keeps the full snapshot: body + details + venue/windowText when carried,
+  // plus a snoozed:true marker on re-shows. actions/requireInteraction are NOT
+  // recorded — a re-show is never re-snoozeable (REQ-5) and offers no buttons.
+  const record = { ts: new Date(now).toISOString(), kind, assetId, title, body, plainDetails: details, results: {} }
+  if (snoozed) record.snoozed = true
+  if (venue !== undefined) record.venue = venue
+  if (windowText !== undefined) record.windowText = windowText
   for (const ch of CHANNELS) {
     if (!ch.enabled()) { record.results[ch.name] = state.prefs.channels[ch.name] === false ? "off" : "skipped"; continue }
     try {
@@ -218,10 +234,99 @@ export function notifierStatus() {
     prefs: state.prefs,
     subscriptions: state.subscriptions.length,
     recent: state.recent,
+    snoozes: Object.keys(state.snoozes).length,
     channels: CHANNELS.map((c) => ({
       name: c.name,
       configured: c.enabled(),
       userEnabled: state.prefs.channels[c.name] !== false
     }))
   }
+}
+
+// ── snooze ledger (T4, REQ-5) ────────────────────────────────────────────────
+// A notifier-owned persisted ledger, NOT an alertEngine primitive (Decision C):
+// alertEngine has no delay/snooze schedule, and the notifier is the only module
+// with persisted state. A tag is snoozeable at most once; the re-show is never
+// re-snoozeable. No fresh signal evaluation — the re-show replays the stored
+// evidence with its original ts.
+export function snoozeAlert({ tag } = {}) {
+  if (!tag) return { ok: false, error: "tag required" }
+  const assetId = tag.startsWith("picc-") ? tag.slice("picc-".length) : tag
+  // One-shot: an in-flight entry blocks a second snooze of the same tag.
+  if (state.snoozes[tag]) return { ok: false, error: "already snoozed" }
+  const record = state.recent.find((r) => r.assetId === assetId)
+  // Unknown tag → never a fake success. A re-shown alert (snoozed:true) is not
+  // snoozeable even once its ledger entry has been deleted at flush time, and a
+  // record without its body snapshot cannot be faithfully re-shown.
+  if (!record || record.snoozed || typeof record.body !== "string") return { ok: false, error: "unknown tag" }
+  const originalTs = Date.parse(record.ts) || Date.now()
+  state.snoozes[tag] = {
+    dueAt: Date.now() + 600_000, // fixed 10 minutes (REQ-5); no custom durations
+    count: 1,
+    ts: originalTs,              // the ORIGINAL alert time, never the snooze time
+    payload: {
+      kind: record.kind,
+      assetId: record.assetId,
+      title: record.title,
+      body: record.body,
+      details: record.plainDetails,
+      ...(record.venue !== undefined && { venue: record.venue }),
+      ...(record.windowText !== undefined && { windowText: record.windowText })
+    }
+  }
+  persist()
+  return { ok: true }
+}
+
+/**
+ * Re-dispatch every due snooze once. The ledger entry is deleted AFTER the
+ * dispatch resolves so a concurrent snooze POST during the flush still hits
+ * "already snoozed"; after deletion the snoozed:true record blocks re-queues.
+ * @returns number of snoozes flushed (0 = nothing due).
+ */
+export async function flushSnoozes() {
+  const now = Date.now()
+  const due = Object.entries(state.snoozes).filter(([, e]) => e.dueAt <= now)
+  if (due.length === 0) return 0
+  for (const [tag, entry] of due) {
+    try {
+      const p = entry.payload
+      const original = new Date(entry.ts).toLocaleString()
+      await dispatchAlert({
+        kind: p.kind,
+        assetId: p.assetId,
+        title: p.title,
+        body: `${p.body ?? ""}\n⏸ Snoozed ${entry.count}× — re-shown per your snooze (original ${original}).`.trim(),
+        details: p.details,
+        ...(p.venue !== undefined && { venue: p.venue }),
+        ...(p.windowText !== undefined && { windowText: p.windowText }),
+        ts: entry.ts,
+        snoozed: true
+      })
+    } finally {
+      delete state.snoozes[tag] // one-shot: re-shown at most once (REQ-5)
+    }
+  }
+  persist()
+  return due.length
+}
+
+let snoozeTimer = null
+
+/** Start the 30s flush sweep; mirrors startSignalEngine()'s timer+kill-switch shape. */
+export function startSnoozeFlusher(intervalMs = 30_000) {
+  if (snoozeTimer) return
+  if (process.env.PICC_SNOOZE_FLUSHER === "0") {
+    console.log("[picc-notifier] snooze flusher disabled via PICC_SNOOZE_FLUSHER=0")
+    return
+  }
+  snoozeTimer = setInterval(() => {
+    flushSnoozes().catch((err) => console.warn("[picc-notifier] snooze flush error:", err.message))
+  }, intervalMs)
+  if (snoozeTimer.unref) snoozeTimer.unref()
+}
+
+export function stopSnoozeFlusher() {
+  if (snoozeTimer) clearInterval(snoozeTimer)
+  snoozeTimer = null
 }

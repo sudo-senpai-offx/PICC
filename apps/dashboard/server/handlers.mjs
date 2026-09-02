@@ -2506,6 +2506,19 @@ async function _handleApiInner(req, res, url, reqId) {
         writeJson(res, 200, { ok: n.removePushSubscription(body.endpoint), subscriptions: n.listPushSubscriptions() })
         return true
       }
+      // T4 (REQ-5): the SW snooze button POSTs the notification tag. A known
+      // tag queues a one-shot 10-minute re-show; an already-snoozed tag is an
+      // explicit no-op; an unknown tag is a 404 — never a fake success.
+      if (path === "/api/notifications/snooze" && req.method === "POST") {
+        const tag = String(body?.tag ?? "")
+        if (!tag) return writeJson(res, 400, { ok: false, error: "tag required" })
+        const result = n.snoozeAlert({ tag })
+        if (!result.ok) {
+          if (result.error === "already snoozed") return writeJson(res, 200, { ok: false, error: result.error })
+          return writeJson(res, 404, { ok: false, error: result.error })
+        }
+        return writeJson(res, 200, { ok: true })
+      }
       if (path === "/api/notifications/test" && req.method === "POST") {
         const rec = await n.dispatchAlert({
           kind: "TEST",

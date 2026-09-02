@@ -370,6 +370,44 @@ describe("PICC API handlers", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  it("notifications snooze endpoint: 200 on a known tag, no-op on re-snooze, 404 unknown, 400 missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "picc-snooze-test-"))
+    vi.stubEnv("PICC_NOTIFICATION_DATA_DIR", dir)
+    delete process.env.VAPID_PUBLIC_KEY
+    delete process.env.VAPID_PRIVATE_KEY
+    vi.resetModules()
+    const { handleApi: hApi } = await import("../handlers.mjs?snooze-test")
+
+    // Produce a snoozeable alert through the real API surface.
+    const fire = makeRes()
+    await hApi(makeReq("POST", "/api/notifications/test", { assetId: "SNOOZE" }, {}), fire, "/api/notifications/test")
+    expect(fire.status).toBe(200)
+
+    const snooze = makeRes()
+    await hApi(makeReq("POST", "/api/notifications/snooze", { tag: "picc-SNOOZE" }, {}), snooze, "/api/notifications/snooze")
+    expect(snooze.status).toBe(200)
+    expect(snooze.body).toEqual({ ok: true })
+
+    // A tag is snoozeable at most once — the second attempt is an explicit no-op.
+    const again = makeRes()
+    await hApi(makeReq("POST", "/api/notifications/snooze", { tag: "picc-SNOOZE" }, {}), again, "/api/notifications/snooze")
+    expect(again.status).toBe(200)
+    expect(again.body.ok).toBe(false)
+
+    // Unknown tag → 404, never a fake success.
+    const unknown = makeRes()
+    await hApi(makeReq("POST", "/api/notifications/snooze", { tag: "picc-NOPE" }, {}), unknown, "/api/notifications/snooze")
+    expect(unknown.status).toBe(404)
+
+    // Missing tag → 400.
+    const missing = makeRes()
+    await hApi(makeReq("POST", "/api/notifications/snooze", {}, {}), missing, "/api/notifications/snooze")
+    expect(missing.status).toBe(400)
+
+await new Promise((r) => setTimeout(r, 80))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   it("portfolio analytics and cross-venue aggregate are BOTH reachable (no shadowing)", async () => {
     // Regression: two handlers used to share POST /api/trading/portfolio — the
     // analytics one won the dispatch chain and the cross-venue aggregator was

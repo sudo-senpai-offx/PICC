@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -238,5 +238,96 @@ describe("web-push payload v2 (T3)", () => {
     expect(Object.keys(sent).sort()).toEqual(["asset", "body", "kind", "title"])
     expect(sent.actions).toBeUndefined()
     expect(sent.requireInteraction).toBeUndefined()
+  })
+})
+
+describe("snooze ledger (T4, REQ-5)", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    delete process.env.VAPID_PUBLIC_KEY
+    delete process.env.VAPID_PRIVATE_KEY
+    notifier.removePushSubscription("https://push.example/snooze")
+  })
+
+  it("a tag is snoozeable at most once — second snooze is a no-op", async () => {
+    vi.useFakeTimers()
+    await notifier.dispatchAlert({ kind: "PRE_TRADE", assetId: "SNOOZE1", title: "Entry window", body: "above 1.08" })
+    expect(notifier.snoozeAlert({ tag: "picc-SNOOZE1" }).ok).toBe(true)
+    const again = notifier.snoozeAlert({ tag: "picc-SNOOZE1" })
+    expect(again.ok).toBe(false)
+    expect(again.error).toBe("already snoozed")
+    // Unknown tags are a 404-grade refusal, never a fake success.
+    const unknown = notifier.snoozeAlert({ tag: "picc-NOPE" })
+    expect(unknown.ok).toBe(false)
+    expect(unknown.error).toBe("unknown tag")
+    // Consume the entry so the shared in-memory ledger is clean for later tests.
+    vi.advanceTimersByTime(600_000)
+    await notifier.flushSnoozes()
+  })
+
+  it("flush before due does nothing; flush at due re-dispatches through all enabled channels with the honest body line and original ts", async () => {
+    vi.useFakeTimers()
+    process.env.VAPID_PUBLIC_KEY = "test-pub"
+    process.env.VAPID_PRIVATE_KEY = "test-priv"
+    notifier.addPushSubscription({ endpoint: "https://push.example/snooze" })
+    webPushCalls.length = 0
+
+    const first = await notifier.dispatchAlert({
+      kind: "PRE_TRADE",
+      assetId: "SNOOZE2",
+      title: "Entry window",
+      body: "above 1.08",
+      venue: { venueId: "expertoption", tradeUrl: "https://expertoption.com/trading" }
+    })
+    expect(notifier.snoozeAlert({ tag: "picc-SNOOZE2" }).ok).toBe(true)
+
+    // Not due yet — the sweep is a no-op and nothing is re-shown.
+    expect(await notifier.flushSnoozes()).toBe(0)
+    expect(notifier.notifierStatus().recent[0].snoozed).toBeUndefined()
+
+    // 10 minutes later it falls due.
+    vi.advanceTimersByTime(600_000)
+    expect(await notifier.flushSnoozes()).toBe(1)
+
+    const top = notifier.notifierStatus().recent[0]
+    expect(top.snoozed).toBe(true)
+    expect(top.assetId).toBe("SNOOZE2")
+    expect(top.ts).toBe(first.ts) // re-show carries the ORIGINAL ts, never the flush time
+    const original = new Date(first.ts).toLocaleString()
+    expect(top.body).toBe(`above 1.08\n⏸ Snoozed 1× — re-shown per your snooze (original ${original}).`)
+    expect(top.results.inApp).toBe("sent")
+    expect(top.results.webpush).toBe("sent")
+    // Channels were re-driven — the web-push transport received the re-show body.
+    const sent = webPushCalls.at(-1)
+    expect(sent.asset).toBe("SNOOZE2")
+    expect(sent.body).toContain("Snoozed 1×")
+    expect(sent.venue).toEqual({ venueId: "expertoption", tradeUrl: "https://expertoption.com/trading" })
+    // The re-show is never re-snoozeable: the entry is gone AND the record is
+    // marked snoozed, so a stale click cannot re-queue it.
+    const resnooze = notifier.snoozeAlert({ tag: "picc-SNOOZE2" })
+    expect(resnooze.ok).toBe(false)
+    expect(resnooze.error).toBe("unknown tag")
+  })
+})
+
+describe("snooze ledger survives a server restart (T4)", () => {
+  it("persists the in-flight snooze to notifications.json and a fresh module instance honors it", async () => {
+    // Real timers here: we must let the debounced persist() land on disk.
+    await notifier.dispatchAlert({ kind: "PRE_TRADE", assetId: "RESTART1", title: "entry", body: "restart proof" })
+    expect(notifier.snoozeAlert({ tag: "picc-RESTART1" }).ok).toBe(true)
+    await new Promise((r) => setTimeout(r, 80))
+
+    const raw = JSON.parse(readFileSync(join(tmp, "notifications.json"), "utf8"))
+    expect(raw.snoozes["picc-RESTART1"]).toBeTruthy()
+    expect(raw.snoozes["picc-RESTART1"].dueAt).toBeGreaterThan(Date.now())
+    expect(raw.snoozes["picc-RESTART1"].count).toBe(1)
+    expect(raw.snoozes["picc-RESTART1"].payload.body).toBe("restart proof")
+
+    // Simulate restart: a fresh module instance boots from the same state file.
+    vi.resetModules()
+    const restarted = await import("../services/notifier.mjs?restart=1")
+    const again = restarted.snoozeAlert({ tag: "picc-RESTART1" })
+    expect(again.ok).toBe(false) // in-flight one-shot survived the restart
+    expect(again.error).toBe("already snoozed")
   })
 })
