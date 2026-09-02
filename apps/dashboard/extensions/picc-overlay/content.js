@@ -21,6 +21,7 @@
   let checkTimer = null
   let heartbeatTimer = null
   let flushTimer = null
+  let resilienceTimer = null
 
   function isInvalidated(err) {
     return !!err && INVALIDATED.test(String(err?.message ?? err))
@@ -33,6 +34,7 @@
     if (checkTimer) { clearInterval(checkTimer); checkTimer = null }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+    if (resilienceTimer) { clearTimeout(resilienceTimer); resilienceTimer = null }
     window.removeEventListener("message", onMessage)
     window.removeEventListener("visibilitychange", onVisible)
   }
@@ -106,7 +108,14 @@
     })
     if (online && wasOffline) console.info("[picc-sensor] server found via worker probe")
     if (online) flush() // drain anything queued while offline
-    scanVenueSession() // T13: venue-session observation — every probe tick, gated on online inside
+    // NOTE: venue-session observation is NO LONGER driven from here. Cadence is
+    // owned by the background worker — per-STREAM, keyed on that stream's own tab
+    // activity (realtime for an active tab / within its activity window,
+    // intermittent when the activity window lapses, long-period on prolonged
+    // inactivity), so switching the browser's active tab never gate a stream's
+    // sync. This probe stays ONLY server-discovery + flush (+ the venue scan's
+    // resilience timer below). The worker drives scanVenueSession() via the
+    // "venue-scan-now" message it directs at the right tab at the right pace.
   }
 
   // ── Upstream frame bridge ─────────────────────────────────────────────────
@@ -235,8 +244,28 @@
         venueId = String(venue.venueId ?? "").slice(0, 64) || null
         venueName = String(venue.name ?? "").slice(0, 80) || null
       }
-      respond({ action: "sensor-queue-depth", depth: QUEUE.length, observed: true, venueId, venueName })
+      // scannedAt: when this sensor LAST ENTERED a scan, from any driver
+      // (worker cadence ping, visibilitychange, resilience timer). null before
+      // the first scan. Lets the popup (and the E2E harness) tell "the sensor
+      // is scanning on the scheduler's clock" from "it is idle" WITHOUT forcing
+      // a duplicate relay — the capture dedup suppresses re-relays by design.
+      respond({ action: "sensor-queue-depth", depth: QUEUE.length, observed: true, venueId, venueName, scannedAt: lastScanAt || null })
       return false // synchronous reply: close the port, nothing async pending
+    }
+    // Worker-directed venue-session scan (per-stream cadence). The background
+    // worker owns the SYNC SCHEDULE (it alone sees every tab + its activity),
+    // and pings the tab hosting each stream at the pace that stream's tab
+    // activity warrants — realtime / intermittent / long-period. The sensor
+    // here is the dumb executor: run the (still deduped) scan on demand. The
+    // MIN_SCAN_MS throttle keeps redundant pings cheap, and the worker's own
+    // cadence already spaces them — this guards against any double-fire (a
+    // visibilitychange + a worker ping racing in the same instant).
+    if (msg && msg.action === "venue-scan-now") {
+      noteWorkerPing() // the worker IS alive and driving cadence — reset the resilience floor
+      const now = Date.now()
+      if (now - lastScanAt >= MIN_SCAN_MS) scheduleVenueScan()
+      respond({ action: "venue-scan-now", observed: true })
+      return false // synchronous
     }
     return false
   }))
@@ -295,6 +324,20 @@
   let captureConfigAt = 0
   const CAPTURE_CFG_TTL = 5 * 60 * 1000
   const captureSent = {} // venueId -> last relayed token (IN-MEMORY only — never persisted)
+
+  // ── Venue-scan cadence (per-stream, worker-directed) ─────────────────────
+  // The WORKER owns the sync schedule and pings this tab's sensor via
+  // "venue-scan-now" at the pace this STREAM's tab activity warrants. The
+  // sensor side only sets the MINIMUM spacing between scans (dedup still makes
+  // redundant scans no-ops) and a RESILIENCE floor: if the worker ever goes
+  // quiet (dead worker, missed wake, OS suspend), the sensor falls back to a
+  // long-period self-scan so it keeps the server honest without a coordinator.
+  const MIN_SCAN_MS = 12_000            // hard floor between scans from any source
+  const RESILIENCE_SCAN_MS = 300_000    // worker-quiet fallback (long-period)
+  let lastScanAt = 0
+  let lastWorkerPingAt = 0
+  function scheduleVenueScan() { lastScanAt = Date.now(); scanVenueSession() }
+  function noteWorkerPing() { lastWorkerPingAt = Date.now() }
 
   // Anchored host match: `expertoption\.(com|finance)` (as served/built-in)
   // against the bare hostname must be a full trailing label — "evil-expertoption.com"
@@ -492,11 +535,31 @@
   }
   // visibilitychange BUBBLES to window: the listener lives here (window), not
   // document — the "document." sentinel is pinned to readStoredKeys only.
-  function onVisible() { scanVenueSession() }
+  // When THIS tab becomes visible the sensor scans immediately (a return to a
+  // venue tab should re-observe right away) — throttled by the same MIN_SCAN_MS
+  // floor as worker pings so rapid toggles stay cheap.
+  function onVisible() {
+    if (document.visibilityState !== "visible") return
+    const now = Date.now()
+    if (now - lastScanAt >= MIN_SCAN_MS) scheduleVenueScan()
+  }
   window.addEventListener("visibilitychange", onVisible)
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
+  // probeServer: server discovery + frame-drain flush only (venue-scan moved to
+  // the worker cadence). heartbeat: flush relay queue. resilienceTimer: if the
+  // worker has not pinged a scan in a long time (worker gone / OS suspend), the
+  // sensor self-scans at long-period so it never silently stops.
+  function armResilienceScan() {
+    if (resilienceTimer) { clearTimeout(resilienceTimer); resilienceTimer = null }
+    const due = RESILIENCE_SCAN_MS - (Date.now() - lastWorkerPingAt)
+    resilienceTimer = setTimeout(() => {
+      if (Date.now() - lastScanAt >= MIN_SCAN_MS) scheduleVenueScan()
+      armResilienceScan()
+    }, Math.max(MIN_SCAN_MS, due))
+  }
   checkTimer = setInterval(probeServer, 15_000)
   heartbeatTimer = setInterval(() => { if (online) flush() }, 30_000)
+  armResilienceScan()
   probeServer()
 })()

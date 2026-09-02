@@ -11,6 +11,16 @@ const PICC_PORTS = [5173, 3000, 5174, 3001]
 // Chrome enforces a minimum 30 s alarm period; anything below is clamped.
 const HEARTBEAT_MS = 30_000
 
+// Per-stream sync cadence — pure policy in syncPolicy.js (shared with the
+// server-side tests so what ships == what is verified). A stream's cadence is
+// keyed on the activity of the tab that hosts it — NOT on which tab is the
+// browser's globally-active one: switching tabs never stops a stream that was
+// just active (REALTIME for ACTIVITY_WINDOW_MS), then INTERMITTENT, then LONG
+// on prolonged inactivity. The worker's alarm wakes the scheduler even when
+// this service worker sleeps; the sensor's own content timers are a resilience
+// fallback only.
+import { SYNC, cadenceFor } from "./syncPolicy.js"
+
 // ── State ────────────────────────────────────────────────────────────────────
 let serverOnline = false
 let lastServerCheck = 0
@@ -204,9 +214,12 @@ async function refreshHeadlessStatus() {
   }).catch(() => {})
 }
 
-// ── Tab-change telemetry ─────────────────────────────────────────────────────
+// ── Tab-change telemetry + per-stream focus tracking ────────────────────────
+// onActivated tells the cadence scheduler WHICH tab just got focus — that tab's
+// stream becomes realtime immediately, and it STAYS realtime for
+// ACTIVITY_WINDOW_MS even after the user switches away (a stream is only
+// degraded by ITS OWN inactivity, never by another tab being active).
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  if (!serverOnline) return
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId)
     if (tab?.url) {
@@ -215,7 +228,20 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         body: { tabId: activeInfo.tabId, url: tab.url, title: tab.title }
       })
     }
+    // If this tab hosts a venue stream, record the focus moment.
+    const existing = tabVenues.get(activeInfo.tabId)
+    if (existing) existing.lastFocusedAt = Date.now()
   } catch {}
+})
+
+// A tab that navigates to (or off) a venue host changes the stream map.
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" && tab?.url) refreshTabModel()
+})
+
+// A closed tab leaves the model (no zombie pings).
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabVenues.delete(tabId)
 })
 
 // ── Alarms (MV3 service worker lifecycle safe) ───────────────────────────────
@@ -223,6 +249,7 @@ async function ensureAlarms() {
   try {
     const existing = new Set((await chrome.alarms.getAll()).map((a) => a.name))
     if (!existing.has("picc-heartbeat")) chrome.alarms.create("picc-heartbeat", { periodInMinutes: HEARTBEAT_MS / 60000 })
+    if (!existing.has("picc-sync")) chrome.alarms.create("picc-sync", { periodInMinutes: SYNC.TICK_MS / 60000 })
   } catch { /* alarms unavailable */ }
 }
 void ensureAlarms()
@@ -232,6 +259,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     sendHeartbeat()
     refreshHeadlessStatus() // T8: mirror headless-session state for the popup
   }
+  // The sync beat drives the per-stream venue-session scan schedule.
+  if (alarm.name === "picc-sync") syncCadenceStep()
 })
 
 // ── Message handler ──────────────────────────────────────────────────────────
@@ -331,6 +360,92 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   return false
 })
+
+// ── Per-stream tab-activity model + cadence scheduler ────────────────────────
+// The worker is the ONLY context that sees every tab, so it owns the decision
+// of WHICH stream to sync and HOW OFTEN. Sensor content scripts are dumb
+// executors: they run a scan on demand ("venue-scan-now") and self-fallback at
+// long-period only if the worker goes quiet. The model is in-memory and is
+// rebuilt on every sync beat + tab event (MV3 workers sleep; nothing here is
+// authoritative beyond the current beat, which is exactly the honesty we want —
+// a rebuilt model defaults unknown tabs to long-period, never to spam).
+const venueConfigs = new Map()   // hostRe pattern -> venueId
+const tabVenues = new Map()      // tabId -> { venueId, host, url, active, lastFocusedAt, lastSyncAt }
+const VENUE_CFG_TTL = 5 * 60 * 1000
+
+async function ensureVenueConfig() {
+  if (venueConfigs.size && Date.now() - (venueConfigs._at || 0) < VENUE_CFG_TTL) return true
+  const r = await serverFetch("/api/trading/capture-profiles")
+  if (r.ok !== true || !Array.isArray(r.data?.venues)) return venueConfigs.size > 0
+  venueConfigs.clear()
+  venueConfigs._at = Date.now()
+  for (const v of r.data.venues) {
+    if (!v || v.enabled === false || !v.hostRe) continue
+    let re = null
+    try { re = new RegExp(`(?:^|\\.)${v.hostRe}$`, "i") } catch { /* skip */ }
+    if (re) venueConfigs.set(v.venueId, { venueId: v.venueId, hostRe: re })
+  }
+  return venueConfigs.size > 0
+}
+
+function classifyHost(hostname) {
+  for (const cfg of venueConfigs.values()) {
+    if (cfg.hostRe.test(hostname || "")) return cfg.venueId
+  }
+  return null
+}
+
+function refreshTabModel() {
+  return chrome.tabs.query({}).then((tabs) => {
+    const live = new Set()
+    const now = Date.now()
+    for (const tab of tabs) {
+      if (tab?.id == null || !tab.url) continue
+      let u = null
+      try { u = new URL(tab.url) } catch { continue }
+      const venueId = classifyHost(u.hostname)
+      if (!venueId) continue
+      live.add(tab.id)
+      const ex = tabVenues.get(tab.id)
+      if (ex) {
+        ex.url = tab.url
+        ex.active = tab.active === true
+        if (tab.active) ex.lastFocusedAt = now
+      } else {
+        // Unknown focus history on a fresh model → default LONG-inactive so a
+        // stale tab is never hammered; the first real focus flips it realtime.
+        tabVenues.set(tab.id, {
+          venueId,
+          host: u.hostname,
+          url: tab.url,
+          active: tab.active === true,
+          lastFocusedAt: tab.active ? now : now - SYNC.PROLONGED_MS,
+          lastSyncAt: 0
+        })
+      }
+    }
+    for (const id of tabVenues.keys()) { if (!live.has(id)) tabVenues.delete(id) }
+  }).catch(() => {})
+}
+
+// One scheduler beat: for every venue tab, decide this stream's cadence from
+// ITS OWN tab activity and ping its sensor when the tab is due.
+async function syncCadenceStep() {
+  if (!serverOnline && !(await checkServer())) return
+  await ensureVenueConfig()
+  await refreshTabModel()
+  const now = Date.now()
+  for (const [tabId, t] of tabVenues) {
+    // The beat floor: MV3 alarms cannot fire faster than TICK_MS, so even the
+    // realtime tier is capped at the beat. cadenceFor() does the pure policy.
+    const cadence = Math.max(cadenceFor(t, now), SYNC.TICK_MS)
+    if (now - (t.lastSyncAt || 0) >= cadence) {
+      t.lastSyncAt = now
+      chrome.tabs.sendMessage(tabId, { action: "venue-scan-now" })
+        .catch(() => { /* tab without a live sensor context — next beat re-tries */ })
+    }
+  }
+}
 
 // ── Startup: detect server and send initial heartbeat ────────────────────────
 ;(async () => {

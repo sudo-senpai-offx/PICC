@@ -90,14 +90,20 @@ describe("sensor extension integrity", () => {
     ]) {
       expect(src.includes(forbidden), `content.js must not mutate the page DOM via ${forbidden}`).toBe(false)
     }
-    // T13: the ONLY `document.` reference in executable code is document.cookie
-    // inside readStoredKeys — the venue-session scan's single auditable read
-    // (querySelector, document.addEventListener, getElementById, … all fail
-    // this lock). Comments are stripped first so prose may name the API.
+    // T13: the ONLY page-DATA `document.` reads in executable code are the two
+    // auditable ones below: document.cookie inside readStoredKeys — the
+    // venue-session scan's single data read (querySelector, getElementById,
+    // addEventListener, … all fail this lock) — and document.visibilityState,
+    // the sensor's single BROWSER-STATE read used to decide "this venue tab
+    // became visible, re-observe" under the per-stream cadence. Both are pinned
+    // PRESENT here and nothing else may touch the document. That keeps the
+    // sensor's page surface to exactly one data read and one state read.
+    // Comments are stripped first so prose may name the API.
     const codeOnly = src.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "")
     const reads = codeOnly.split("document.")
-    expect(reads.length, "exactly one document. occurrence in executable code").toBe(2)
+    expect(reads.length, "exactly two document. occurrences in executable code").toBe(3)
     expect(reads[1].startsWith("cookie")).toBe(true)
+    expect(reads[2].startsWith("visibilityState")).toBe(true)
     // The ONLY page-global writes are the idempotent load guard and the dead marker.
     expect(src.includes("window.__PICC_SENSOR__ = true")).toBe(true)
   })
@@ -149,10 +155,15 @@ describe("sensor extension integrity", () => {
 
     // Both sender contexts: the popup AND the sensor content scripts message
     // the worker (server-status probe + relay-flush tunnel — T11 2026-08-29).
+    // The worker ALSO messages content scripts via chrome.tabs.sendMessage
+    // (sensor-queue-depth round-trip; venue-scan-now cadence ping) — that send
+    // surface is captured too so the vocabulary stays symmetric.
     const ACTION_RE = /chrome\.runtime\.sendMessage\(\s*\{\s*action:\s*"([^"]+)"/g
+    const TABS_SEND_RE = /chrome\.tabs\.sendMessage\([^)]*\{\s*action:\s*"([^"]+)"/g
     const sends = new Set([
       ...[...popup.matchAll(ACTION_RE)].map((m) => m[1]),
-      ...[...content.matchAll(ACTION_RE)].map((m) => m[1])
+      ...[...content.matchAll(ACTION_RE)].map((m) => m[1]),
+      ...[...background.matchAll(TABS_SEND_RE)].map((m) => m[1])
     ])
     const bgHandlers = new Set(
       [...background.matchAll(/msg\.action\s*===\s*"([^"]+)"/g)].map((m) => m[1])
@@ -174,7 +185,7 @@ describe("sensor extension integrity", () => {
     }
     // The full action vocabulary, pinned — adding an action must touch every side.
     expect([...sends].sort()).toEqual([
-      "capture-profiles", "capture-session", "relay-flush", "sensor-queue-depth", "server-status"
+      "capture-profiles", "capture-session", "relay-flush", "sensor-queue-depth", "server-status", "venue-scan-now"
     ])
   })
 

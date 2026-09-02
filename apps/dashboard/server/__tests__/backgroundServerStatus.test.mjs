@@ -18,10 +18,16 @@ import { describe, expect, it } from "vitest"
 import { readFileSync } from "node:fs"
 import vm from "node:vm"
 import { join, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const EXT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../extensions/picc-overlay")
+// The worker imports the pure cadence-policy module (syncPolicy.js). vm runs
+// SCRIPT, not module, so load the REAL module here and inject its exports as
+// sandbox globals — the same values the extension ships — and strip the import
+// statement from the source before running it in the sandbox.
+const syncPolicy = await import(pathToFileURL(join(EXT_DIR, "syncPolicy.js")).href)
 const SOURCE = readFileSync(join(EXT_DIR, "background.js"), "utf8")
+  .replace(/^import\s+\{[^}]*\}\s+from\s+"\.\/syncPolicy\.js"\s*$/m, "")
 
 /** Resolved 200 with a JSON body shaped like /api/health. */
 const okHealth = { ok: true, version: "test" }
@@ -72,12 +78,16 @@ function makeHarness({ fetchFn = async () => ({ ok: true, json: async () => okHe
     },
     tabs: {
       query: (_q, cb) => cb([]),
-      onActivated: { addListener() {} }
+      onActivated: { addListener() {} },
+      onUpdated: { addListener() {} },
+      onRemoved: { addListener() {} }
     }
   }
 
   const context = vm.createContext({
     chrome,
+    SYNC: syncPolicy.SYNC,
+    cadenceFor: syncPolicy.cadenceFor,
     fetch: (url, init) => fetchFn(url, init),
     AbortController: globalThis.AbortController,
     AbortSignal: globalThis.AbortSignal,
