@@ -185,8 +185,24 @@ describe("sensor extension integrity", () => {
     }
     // The full action vocabulary, pinned — adding an action must touch every side.
     expect([...sends].sort()).toEqual([
-      "capture-profiles", "capture-session", "relay-flush", "sensor-queue-depth", "server-status", "venue-scan-now"
+      "capture-profiles", "capture-session", "open-broker-tab", "relay-flush", "sensor-queue-depth", "server-status", "venue-scan-now"
     ])
+  })
+
+  it("T8 locks the __piccCommand bridge: single-action intake, https-only url, truthful ack", () => {
+    const src = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    // The dashboard (T6) posts commands under __piccCommand and waits for a
+    // __piccCommandAck — without the ack it falls back to a new tab (double-open).
+    expect(src.includes("__piccCommand")).toBe(true)
+    expect(src.includes("__piccCommandAck")).toBe(true)
+    // Single-action whitelist: only open-broker-tab is honored (any script can
+    // forge a marker; unknown actions must be ignored, not acked).
+    expect(src.includes('cmd.action !== "open-broker-tab"')).toBe(true)
+    // The command URL is re-validated as http(s) INSIDE content.js (defense in
+    // depth — the dashboard already validates, but the bridge runs on every page).
+    expect(src.includes("/^https?:\\/\\//i")).toBe(true)
+    // The ack carries venueId + ok so the dashboard settles (or falls back).
+    expect(src.includes("__piccCommandAck: { venueId: clean.venueId, ok")).toBe(true)
   })
 
   it("T13 vault-rule guard: the venue session token is TRANSIENT — never a chrome.storage value", () => {

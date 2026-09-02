@@ -32,13 +32,16 @@ const SOURCE = readFileSync(join(EXT_DIR, "background.js"), "utf8")
 /** Resolved 200 with a JSON body shaped like /api/health. */
 const okHealth = { ok: true, version: "test" }
 
-function makeHarness({ fetchFn = async () => ({ ok: true, json: async () => okHealth }) } = {}) {
+function makeHarness({ fetchFn = async () => ({ ok: true, json: async () => okHealth }) } = {}, tabsOverrides = {}) {
   const state = {
     onMessageListener: null,
     tabsActivated: null,
     storageLocal: new Map(),
     storageSession: new Map(),
-    responses: []
+    responses: [],
+    tabUpdates: [],       // [tabId, props] from open-broker-tab focus
+    tabCreates: [],       // urls from open-broker-tab create
+    windowFocuses: []     // [windowId, props] from open-broker-tab focus
   }
 
   const chrome = {
@@ -77,10 +80,16 @@ function makeHarness({ fetchFn = async () => ({ ok: true, json: async () => okHe
       onAlarm: { addListener() {} }
     },
     tabs: {
-      query: (_q, cb) => cb([]),
+      query: tabsOverrides.query ?? (async () => []),
+      update: async (id, props) => { state.tabUpdates.push([id, props]); return { id } },
+      create: async ({ url }) => { state.tabCreates.push(url); return { id: 99, url } },
+      get: async (id) => ({ id, url: "https://app.expertoption.finance/", title: "" }),
       onActivated: { addListener() {} },
       onUpdated: { addListener() {} },
       onRemoved: { addListener() {} }
+    },
+    windows: {
+      update: async (id, props) => { state.windowFocuses.push([id, props]); return {} }
     }
   }
 
@@ -196,5 +205,80 @@ describe("background worker server-status for the popup (T11 follow-up)", () => 
     expect(evil).toEqual({ error: "untrusted sender" })
 
     expect(fetchCalls).toBe(before) // no POST until a valid, trusted batch arrives
+  })
+
+  it("open-broker-tab: focuses the existing venue tab when classifyHost matches (REQ-10)", async () => {
+    const h = makeHarness({
+      fetchFn: async (url) => {
+        if (String(url).includes("/api/trading/capture-profiles")) {
+          return { ok: true, json: async () => ({ ok: true, venues: [{ venueId: "expertoption", hostRe: "expertoption\\.(com|finance)", enabled: true }] }) }
+        }
+        return { ok: true, json: async () => okHealth }
+      }
+    }, {
+      query: async () => [
+        { id: 11, url: "https://news.example", windowId: 2 },
+        { id: 12, url: "https://app.expertoption.finance/", windowId: 2 }
+      ]
+    })
+    await h.settleBoot()
+    const resp = await h.send(
+      { action: "open-broker-tab", venueId: "expertoption", url: "https://app.expertoption.finance/" },
+      { url: "chrome-extension://picc-test-id/content.js" }
+    )
+    expect(resp).toMatchObject({ ok: true, mode: "focused", tabId: 12 })
+    expect(h.state.tabUpdates).toEqual([[12, { active: true }]])
+    expect(h.state.windowFocuses).toEqual([[2, { focused: true }]])
+    expect(h.state.tabCreates).toEqual([]) // never duplicates an existing tab
+  })
+
+  it("open-broker-tab: creates a new tab when no tab hosts the venue (REQ-10)", async () => {
+    const h = makeHarness({
+      fetchFn: async (url) => {
+        if (String(url).includes("/api/trading/capture-profiles")) {
+          return { ok: true, json: async () => ({ ok: true, venues: [{ venueId: "expertoption", hostRe: "expertoption\\.(com|finance)", enabled: true }] }) }
+        }
+        return { ok: true, json: async () => okHealth }
+      }
+    }, {
+      query: async () => [{ id: 11, url: "https://news.example", windowId: 2 }]
+    })
+    await h.settleBoot()
+    const resp = await h.send(
+      { action: "open-broker-tab", venueId: "expertoption", url: "https://app.expertoption.finance/" },
+      { url: "chrome-extension://picc-test-id/content.js" }
+    )
+    expect(resp).toMatchObject({ ok: true, mode: "created", tabId: 99 })
+    expect(h.state.tabCreates).toEqual(["https://app.expertoption.finance/"])
+    expect(h.state.tabUpdates).toEqual([])
+  })
+
+  it("open-broker-tab: refuses non-http(s) urls and missing venue ids without touching tabs", async () => {
+    const h = makeHarness({}, { query: async () => [{ id: 11, url: "https://app.expertoption.finance/", windowId: 2 }] })
+    await h.settleBoot()
+    const evilJs = await h.send(
+      { action: "open-broker-tab", venueId: "expertoption", url: "javascript:alert(1)" },
+      { url: "chrome-extension://picc-test-id/content.js" }
+    )
+    expect(evilJs.ok).toBe(false)
+    const noVenue = await h.send(
+      { action: "open-broker-tab", url: "https://app.expertoption.finance/" },
+      { url: "chrome-extension://picc-test-id/content.js" }
+    )
+    expect(noVenue.ok).toBe(false)
+    expect(h.state.tabUpdates).toEqual([])
+    expect(h.state.tabCreates).toEqual([])
+  })
+
+  it("open-broker-tab: untrusted senders are rejected", async () => {
+    const h = makeHarness()
+    await h.settleBoot()
+    const resp = await h.send(
+      { action: "open-broker-tab", venueId: "expertoption", url: "https://app.expertoption.finance/" },
+      { url: "https://evil.example" }
+    )
+    expect(resp).toEqual({ error: "untrusted sender" })
+    expect(h.state.tabCreates).toEqual([])
+    expect(h.state.tabUpdates).toEqual([])
   })
 })

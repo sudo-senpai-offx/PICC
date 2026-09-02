@@ -213,12 +213,41 @@
     })
   }
 
-  // inject.js (MAIN world) relays gateway frames here.
+  // ── T8 / REQ-10: __piccCommand bridge (Decision G) ─────────────────────────
+  // The dashboard (T6) posts {__piccCommand:{action:"open-broker-tab", venueId,
+  // url}} to the page; THIS content script (which runs on the dashboard origin
+  // too, matches http(s)://*/*) validates and forwards it to the worker, then
+  // acks the page with {__piccCommandAck:{venueId, ok}}. Shape-validated like
+  // sanitizeUpstreamFrame — any page script can forge postMessage. The ack is
+  // the dashboard's only signal that the extension handled the open (it falls
+  // back to a new tab otherwise — a lost ack double-opens, so an UNRESOLVED
+  // forward acks ok:false, never silence).
+  function sanitizePiccCommand(cmd) {
+    try {
+      if (!cmd || typeof cmd !== "object" || cmd.action !== "open-broker-tab") return null
+      const venueId = typeof cmd.venueId === "string" ? cmd.venueId.slice(0, 64) : ""
+      const url = typeof cmd.url === "string" && /^https?:\/\//i.test(cmd.url) ? cmd.url.slice(0, 2048) : ""
+      if (!venueId || !url) return null
+      return { venueId, url }
+    } catch { return null }
+  }
+
+  function handlePiccCommand(cmd) {
+    const clean = sanitizePiccCommand(cmd)
+    if (!clean) return
+    const ack = (ok) => window.postMessage({ __piccCommandAck: { venueId: clean.venueId, ok } }, "*")
+    const p = chromeGuard(() => chrome.runtime.sendMessage({ action: "open-broker-tab", venueId: clean.venueId, url: clean.url }))
+    if (!p || typeof p.then !== "function") { ack(false); return }
+    p.then((res) => ack(res && res.ok === true)).catch(() => ack(false))
+  }
+
+  // inject.js (MAIN world) relays gateway frames here; T6 posts __piccCommand.
   function onMessage(ev) {
     if (ev.source !== window) return
     const d = ev.data
-    if (!d || !d.__piccEOFrame || !d.frame) return
-    queueFrame(d.frame)
+    if (!d || typeof d !== "object") return
+    if (d.__piccEOFrame && d.frame) queueFrame(d.frame)
+    if (d.__piccCommand) handlePiccCommand(d.__piccCommand)
   }
   window.addEventListener("message", onMessage)
 

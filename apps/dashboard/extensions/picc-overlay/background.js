@@ -358,6 +358,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
+  // T8 / REQ-10 — open-broker-tab (Decision G). The dashboard's deep link posts
+  // a __piccCommand to the page; the dashboard-content-script forwards it here.
+  // Discover-and-open by classifyHost: focus an existing tab hosting the venue,
+  // else create one. No host permission is needed for either (query-all +
+  // hostname classify; tabs.create is permission-free). The command carries
+  // {venueId, url} ONLY — never session material (vault guard).
+  if (msg.action === "open-broker-tab") {
+    openVenueTab(msg, sendResponse)
+    return true
+  }
+
   return false
 })
 
@@ -393,6 +404,40 @@ function classifyHost(hostname) {
     if (cfg.hostRe.test(hostname || "")) return cfg.venueId
   }
   return null
+}
+
+// T8 / REQ-10 — async focus-or-create. The exact discovery pattern of
+// refreshTabModel (query-all + classifyHost) with the venueId match inverted:
+// instead of building the per-stream model, find THE tab whose host the venue
+// already owns and focus it; absent one, create from the (validated) URL.
+async function openVenueTab(msg, sendResponse) {
+  const venueId = typeof msg.venueId === "string" ? msg.venueId.slice(0, 64) : ""
+  const url = typeof msg.url === "string" && /^https?:\/\//i.test(msg.url) ? msg.url.slice(0, 2048) : ""
+  if (!venueId || !url) {
+    sendResponse({ ok: false, error: "invalid open-broker-tab command" })
+    return
+  }
+  await ensureVenueConfig() // classifyHost reads the venue config map (may fetch capture-profiles)
+  try {
+    const tabs = await chrome.tabs.query({})
+    let target = null
+    for (const tab of tabs) {
+      if (tab?.id == null || !tab.url) continue
+      let u = null
+      try { u = new URL(tab.url) } catch { continue }
+      if (classifyHost(u.hostname) === venueId) { target = tab; break }
+    }
+    if (target) {
+      await chrome.tabs.update(target.id, { active: true })
+      if (target.windowId != null) await chrome.windows.update(target.windowId, { focused: true }).catch(() => {})
+      sendResponse({ ok: true, mode: "focused", tabId: target.id })
+    } else {
+      const created = await chrome.tabs.create({ url })
+      sendResponse({ ok: true, mode: "created", tabId: created?.id ?? null })
+    }
+  } catch (err) {
+    sendResponse({ ok: false, error: String(err?.message ?? err) })
+  }
 }
 
 function refreshTabModel() {
