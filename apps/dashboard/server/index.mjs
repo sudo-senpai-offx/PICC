@@ -40,7 +40,10 @@ export function resolveStatic(pathname) {
   return filePath === ROOT || filePath.startsWith(rootWithSep) ? filePath : null
 }
 
-const server = createServer(async (req, res) => {
+// Exported so tests can drive the exact production static path over real HTTP
+// (createServer(requestListener) on an ephemeral port) without booting the
+// full service stack (brokers, signal engine, scheduler).
+export const requestListener = async (req, res) => {
   const url = req.url ?? "/"
   if (req.method === "OPTIONS") {
     writeJson(res, 200, {})
@@ -84,7 +87,9 @@ const server = createServer(async (req, res) => {
       writeJson(res, 500, { error: "dist not built — run `npm run build` first" })
     }
   }
-})
+}
+
+const server = createServer(requestListener)
 
 if (!process.env.PICC_NO_LISTEN) {
   // Root-level error log: emptied + rewritten on every launch, then captures

@@ -1,0 +1,13 @@
+{
+  "name": "PICC | Passive Income Command Center",
+  "short_name": "PICC",
+  "description": "Passive Income Command Center — simulate, plan, and optimize passive income streams with AI assistance.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0d1a",
+  "theme_color": "#0d0d1a",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
