@@ -4,6 +4,12 @@ Status: draft → implementing (user directive 2026-08-31)
 Spec owner: user + executor (big-pickle). Not part of PICC_TRADING_SUITE_UPGRADE.md;
 it is a separate user-authorized workstream that takes priority over T11 for now.
 
+> **Notification channels (2026-09-02):** this document's channel catalog is the
+> **income/stream** catalog (`streamCatalog.ts`), not the alert notifier. The
+> notifier (`notifier.mjs`) ships exactly three channels — **in-app, webpush,
+> webhook** — the email channel was removed (see
+> `PICC_NOTIFICATION_AND_ALERT_UX_v1.md` T9).
+
 ## Problem
 
 1. **Gate re-asks on every restart.** The T9 first-login approval gate

@@ -635,9 +635,9 @@ sections above.
   platform (EO refactor), connector registration, LiveBroker adapter wrapping
   browser bridge, extension platform detection + data relay, session health
   monitoring. Tests: mock DOM, session capture.
-- **L2** — Email delivery: Resend API key configuration, daily digest
+- **L2** — ~~Email delivery: Resend API key configuration, daily digest
   scheduler, email template (HTML + plain-text), confidence filter + rate
-  limiter. Tests: mock Resend, batching, rate limiting.
+  limiter. Tests: mock Resend, batching, rate limiting.~~ **REMOVED 2026-09-02 — email channel removed (see `PICC_NOTIFICATION_AND_ALERT_UX_v1.md` T9).** Historical: the email delivery channel shipped and no longer exists — the notifier now dispatches exactly in-app / webpush / webhook.
 - **L3** — Web-push subscription: `/api/notifications/vapid-public-key`
   endpoint, service worker, "Enable push" button, subscription lifecycle,
   dead subscription cleanup. Tests: subscription storage, key endpoint.
@@ -716,17 +716,24 @@ headless data fetching, the extension also needs to:
 
 ---
 
-## 13. Email delivery setup (Phase L)
+## 13. Email delivery setup (Phase L) — REMOVED 2026-09-02 (email channel removed, T9)
 
 ### 13.1 Current state
 
-The email notification channel in `notifier.mjs` is fully implemented:
+**Historical record.** The email notification channel shipped in `notifier.mjs`:
 - Resend HTTP API integration at `sendEmail()`
 - Channel registered as `{ name: "email", enabled: () => Boolean(RESEND_API_KEY && ALERT_EMAIL_TO), send: sendEmail }`
-- `.env` has `ALERT_EMAIL_TO` and `ALERT_EMAIL_FROM` set
-- **Missing:** `RESEND_API_KEY` — the channel shows "not configured" in the UI
+- `.env` had `ALERT_EMAIL_TO` and `ALERT_EMAIL_FROM` set
+
+**REMOVED 2026-09-02** — the email channel no longer exists (see
+`PICC_NOTIFICATION_AND_ALERT_UX_v1.md` T9). The notifier dispatch row set
+(`CHANNELS`) ships exactly three channels: **in-app, webpush, webhook**.
+Sections §13.2–§13.4 describe the historical design only — do not implement.
 
 ### 13.2 What needs doing
+
+> ~~OBSOLETE — the setup steps below applied to the live email channel and were
+> removed with it on 2026-09-02 (T9). Historical record only.~~
 
 | Step | What | Who |
 |---|---|---|
@@ -755,6 +762,9 @@ The batching logic (§7.3) requires:
    cadence honest — the user knows the system is running).
 
 ### 13.4 Testing
+
+> ~~OBSOLETE — the email test cases below were removed with the channel
+> 2026-09-02 (T9); the suite has no email cases. Historical record only.~~
 
 - Mock Resend API in tests (intercept `fetch` calls to `api.resend.com`)
 - Verify email body contains all qualified trades in correct format
@@ -872,8 +882,8 @@ subscribe. The private key never leaves the server.
 - [ ] Paper engine capabilities corrected
 - [ ] At least 1 trading platform has working headless data fetching via browser bridge
 - [ ] Extension detects active trading platform tab and relays data to server
-- [ ] Resend API key configured, email delivery verified end-to-end
-- [ ] Email batching sends daily digest with all qualified trades
+- ~~[ ] Resend API key configured, email delivery verified end-to-end~~ REMOVED 2026-09-02 (email channel removed, T9)
+- ~~[ ] Email batching sends daily digest with all qualified trades~~ REMOVED 2026-09-02 (email channel removed, T9)
 - [ ] Web-push service worker registered, subscription stored on server
 - [ ] Push notifications deliver to subscribed browser
 - [ ] `/api/notifications/vapid-public-key` endpoint exists and returns key
