@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { SUITE_META } from "@/lib/suites"
 import type { SuiteMeta } from "@/lib/suites"
 import { Card } from "@/components/ui"
@@ -67,7 +68,13 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
 }
 
 export function Suites() {
-  const [activeSuite, setActiveSuite] = useState<string | null>(null)
+  const [searchParams] = useSearchParams()
+  // T6 / REQ-9: a notification deep link (?asset=…&panel=chart[&venue=…]) lands
+  // directly on the trading suite instead of the collapsed card list. The
+  // MarketsSuite landing effect then applies asset/panel/venue.
+  const [activeSuite, setActiveSuite] = useState<string | null>(() =>
+    searchParams.has("asset") || searchParams.has("panel") || searchParams.has("venue") ? "trading" : null
+  )
 
   const toggleSuite = useCallback((id: string) => {
     setActiveSuite((prev) => (prev === id ? null : id))

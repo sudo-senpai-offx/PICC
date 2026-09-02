@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useSearchParams } from "react-router-dom"
+import { openBrokerTab, validateVenueTradeUrl } from "@/lib/brokerLink"
 import { Badge, Button, Card, Field, Input, Select, Spinner, Textarea } from "@/components/ui"
 import { ReadinessPanel } from "@/components/ReadinessPanel"
 import { LiveMarketBoard } from "@/components/LiveMarketBoard"
@@ -103,6 +105,15 @@ function fmtHold(ms: number | null): string {
   return `${sec}s`
 }
 
+/** T6 / Decision E: focus + scroll a flat-stack panel by its data-panel id. */
+function panelAnchor(panel: string): HTMLElement | null {
+  const el = document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)
+  if (!el) return null
+  el.scrollIntoView?.({ behavior: "smooth", block: "start" })
+  el.focus?.()
+  return el
+}
+
 /** Markets & prediction — analytics, decisions, paper trading, signals, watchlist. */
 export function MarketsSuite() {
   const [status, setStatus] = useState<{ paper: PaperOverview; riskPerTradePct: number } | null>(null)
@@ -113,7 +124,9 @@ export function MarketsSuite() {
   const [reloadKey, setReloadKey] = useState(0)
   const [chartAsset, setChartAsset] = useState("EURUSD")
   const [catalog, setCatalog] = useState<CatalogCategory[]>([])
+  const [searchParams] = useSearchParams()
   const lastLoadAt = useRef(0)
+  const lastLandedVenue = useRef<string | null>(null)
   const { snapshot, error: streamError } = useRealtimeSuite()
 
   useEffect(() => {
@@ -151,6 +164,48 @@ export function MarketsSuite() {
 
   const watchedAssets = snapshot?.live?.watched ?? []
 
+  // T6 / REQ-9: /suites?asset=A&panel=chart[&venue=V] landing. Unknown values
+  // degrade to the current view — logged, never thrown, never auto-executed.
+  // The chartAsset fallback is intentionally NOT a dependency: the landing must
+  // run once per deep link, not re-fire on every select change.
+  useEffect(() => {
+    if (!loaded) return
+    const asset = searchParams.get("asset")
+    const panel = searchParams.get("panel")
+    const venue = searchParams.get("venue")
+    if (!asset && panel !== "chart" && !venue) return
+    if (asset) {
+      const known = assetOptionGroups(catalog, watchedAssets)
+        .flatMap((g) => g.options)
+        .some((o) => o.value === asset)
+      if (known) {
+        if (chartAsset !== asset) setChartAsset(asset)
+      } else {
+        console.info(`[suites] deep-link asset "${asset}" is unknown — selection unchanged`)
+      }
+    }
+    if (panel === "chart") panelAnchor("chart")
+    if (venue) {
+      // One landing per venue key — reruns (catalog/realtime churn) must not
+      // re-post the command or re-open the fallback tab.
+      const venueKey = `${venue}|${asset ?? ""}`
+      if (lastLandedVenue.current !== venueKey) {
+        lastLandedVenue.current = venueKey
+        void (async () => {
+          try {
+            const res = await getTradingVenues(asset ?? chartAsset)
+            const tradeUrl = res.ok ? validateVenueTradeUrl(venue, res.venues) : null
+            if (tradeUrl) void openBrokerTab({ venueId: venue, url: tradeUrl })
+            else console.info(`[suites] deep-link venue "${venue}" unresolved or unverified — no tab opened`)
+          } catch {
+            console.info("[suites] deep-link venue resolution failed — no tab opened")
+          }
+        })()
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, catalog, watchedAssets, searchParams])
+
   const refresh = () => setReloadKey((k) => k + 1)
 
   return (
@@ -166,7 +221,7 @@ export function MarketsSuite() {
             demo={snapshot?.demo ?? null}
             liveAccount={snapshot?.live?.account ?? null}
           />
-          <Card className="pad stack">
+          <div className="card pad stack" data-panel="chart" tabIndex={-1}>
             <div className="row-between" style={{ alignItems: "center" }}>
               <h3 style={{ margin: 0 }}>Live Chart</h3>
               <div className="row gap" style={{ alignItems: "center" }}>
@@ -189,7 +244,7 @@ export function MarketsSuite() {
               <SpreadPanel assetId={chartAsset} />
               <PortfolioAggregatePanel paperAvailable={Boolean(status?.paper)} />
             </div>
-          </Card>
+          </div>
           <DataSourcesPanel />
           <ModelMatrixPanel assetId={chartAsset} />
           <MarketIntelPanel />
