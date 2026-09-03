@@ -8,7 +8,7 @@ An AI-assisted **planning** platform for exploring and optimizing passive income
 | :-- | :-- | :-- |
 | `apps/dashboard` | Web dashboard (auth, simulators, trading suite, agents, overlay settings) | React + TypeScript + Vite + Supabase |
 | `apps/dashboard/extensions/picc-overlay` | Browser extension — passive sensor: relays broker feed frames to the local backend (DOM-free, no trading actions) | MV3 vanilla JS (no bundler, load unpacked) |
-| `apps/extension` | **Deprecated** — Plasmo skeleton, no trading features, superseded by picc-overlay | Plasmo (unused) |
+| `apps/extension-archived` | **Archived** (2026-09-03) — Plasmo skeleton, no trading features, superseded by picc-overlay; kept in-tree as a historical demo | Plasmo (unused) |
 | `agents/picc_agents` | Multi-agent research / content / listing / trading / investment crews | CrewAI (Python) |
 | `infra/supabase` | Database schema with Row Level Security | SQL |
 | `infra/n8n` | Orchestration (docker-compose + workflow templates) | n8n |
@@ -18,7 +18,7 @@ An AI-assisted **planning** platform for exploring and optimizing passive income
 1. **Financial Twin Emulator** — enter capital + risk tolerance, run Monte Carlo simulations over historical data, get a projection report. No trades, no money moved.
 2. **Listing Optimizer** — read-only Amazon Seller analysis that suggests listing rewrites the user pastes in themselves.
 3. **Content Studio** — AI-generated blog/YouTube/affiliate content with one-click copy, gated by a human-review toggle.
-4. **Trading Suite** — 8-model price-prediction ensemble (momentum, mean-reversion, trend regression, Monte Carlo, ARIMA, Prophet-style seasonality, LSTM-lite, GARCH-lite) with walk-forward backtested confidence, paper-trading ledger, and optional read-only ExpertOption balance/candles. Decision-support only — it never places real orders.
+4. **Trading Suite** — price-prediction with **two live model brains** (see `docs/ARCHITECTURE.md`): the classic 8-model ensemble (momentum, mean-reversion, trend regression, Monte Carlo, ARIMA, Prophet-style seasonality, LSTM-lite, GARCH-lite) and the 9-model technical fusion. Every prediction and decision is tagged with the `engine` that produced it. Confidence rests on **embargoed walk-forward backtesting** (non-overlapping windows, per-model significance floors — no model moves ensemble weights on fewer than 12 independent windows) and predictions carry a **split-conformal 80/90% move band** when enough residuals exist. Paper-trading ledger + optional read-only ExpertOption balance/candles. Decision-support only — it never places real orders.
 
 ## Quick start
 
@@ -95,7 +95,7 @@ See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for Malaysia PDPA (effective 30 Apr
 | PayPal checkout (server-side capture, individual account) | ✅ (live when keys set) |
 | Manual e-wallet (Touch 'n Go) | ✅ (always available) |
 | BTCPay Server (self-hosted, no KYC) | ✅ (live when keys set) |
-| Vitest unit + integration tests (623+) | ✅ |
+| Vitest unit + integration tests (1,400+, 128 files) | ✅ |
 | Automator — balance collector (Honeygain/Pawns/Traffmonetizer/Repocket) + health alerts + LLM assistant | ✅ |
 | Pi Node (infra/pi-node) — one device, every bandwidth provider | ✅ |
 | Amazon SP-API (read-only competitor data) | ✅ (live when keys set) |
@@ -103,7 +103,9 @@ See [docs/COMPLIANCE.md](docs/COMPLIANCE.md) for Malaysia PDPA (effective 30 Apr
 
 ## Known issues
 
-- `apps/extension/` (Plasmo) is a deprecated skeleton with no trading features — use
-  `apps/dashboard/extensions/picc-overlay/` instead.
-- ExpertOption session token is stored in `server/data/trading-credentials.json` (runtime),
-  not via environment variables. Use `scripts/capture-eo-session.mjs` or the API to capture it.
+- `apps/extension/` (Plasmo) is an **archived** deprecated skeleton with no trading features — the canonical
+  extension is `apps/dashboard/extensions/picc-overlay/`.
+- Secrets (ExpertOption token, broker logins, venue tokens, automator credentials) are stored encrypted at
+  rest under `server/data/*.vault.json` with a key file outside the data dir (see
+  `apps/dashboard/server/services/vault.mjs` and the F-02 entry in `docs/EXPLICIT_AUDIT_LEDGER.md`).
+  Capture an EO session with `scripts/capture-eo-session.mjs` or the API.

@@ -94,7 +94,7 @@ design (Phase 1); all decision/display surfaces live in the web dashboard now.
    reloaded so the sensor comes back without user action (next navigation is the safety net).
 4. Settings persist in `chrome.storage.local` with MV3-safe debounced saves. The legacy suggestion
    contract (`/api/extension/suggest` + `/api/extension/confirm`) remains server-side for the
-   deprecated Plasmo skeleton (`apps/extension/`) only.
+   archived Plasmo demo (`apps/extension-archived/`) only.
 5. **Session capture (T13) — the extension is the PRIMARY headless-capture leg for a venue session
    the user already opened in their own browser** (the deprecated studio-browser leg stays as
    fallback — either present is functional, both is ideal). `content.js` runs on every
@@ -308,7 +308,7 @@ The service worker heartbeats `/api/extension/heartbeat`, forwards navigations v
 `/api/extension/tab-changed`, and probes `/api/health` for dashboard reachability. Settings persist
 in `chrome.storage.local` with MV3-safe debounced saves. The legacy
 `{ suggestions: [{ id, title, body, confidence }], source }` contract (`/api/extension/suggest|confirm`)
-remains available server-side for the deprecated Plasmo skeleton (`apps/extension/`) only.
+remains available server-side for the archived Plasmo demo (`apps/extension-archived/`) only.
 
 ### Agents → backend
 
