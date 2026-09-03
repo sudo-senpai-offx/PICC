@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cadenceFor, cadenceLabel, SYNC } from "../../extensions/picc-overlay/syncPolicy.js"
+import { cadenceFor, cadenceLabel, cadenceMsFor, SYNC } from "../../extensions/picc-overlay/syncPolicy.js"
 
 /**
  * Per-stream sync cadence policy — the pure heart of the extension sync
@@ -49,5 +49,53 @@ describe("cadenceFor — per-stream tab-activity sync policy", () => {
     expect(SYNC.REALTIME_MS).toBeLessThan(SYNC.INTERMITTENT_MS)
     expect(SYNC.INTERMITTENT_MS).toBeLessThan(SYNC.LONG_MS)
     expect(SYNC.TICK_MS).toBeGreaterThanOrEqual(SYNC.REALTIME_MS)
+  })
+})
+
+describe("cadenceMsFor — per-site cadence override (Q5 generalized registry)", () => {
+  const override = {
+    realtimeMs: 10_000,
+    intermittentMs: 60_000,
+    longMs: 120_000,
+    activityWindowMs: 45_000,
+    prolongedMs: 300_000
+  }
+
+  it("matches cadenceFor's tier selection when no override is given", () => {
+    // 5 min is strictly below PROLONGED_MS (10 min) → intermittent tier.
+    const tab = { active: false, lastFocusedAt: now - 5 * 60_000 }
+    expect(cadenceMsFor(tab, now)).toBe(SYNC.INTERMITTENT_MS)
+    expect(cadenceFor(tab, now)).toBe(SYNC.INTERMITTENT_MS)
+  })
+
+  it("applies the override's realtime tier for an active tab", () => {
+    expect(cadenceMsFor({ active: true, lastFocusedAt: now }, now, override)).toBe(10_000)
+  })
+
+  it("stays realtime through the OVERRIDE activity window after focus lapses", () => {
+    // Override window is 45s; 30s after focus must still be realtime per the
+    // override even though the default (60s) would keep it realtime regardless.
+    expect(cadenceMsFor({ active: false, lastFocusedAt: now - 30_000 }, now, override)).toBe(10_000)
+  })
+
+  it("uses the override's intermittent tier once its activity window lapses", () => {
+    expect(cadenceMsFor({ active: false, lastFocusedAt: now - 50_000 }, now, override)).toBe(60_000)
+  })
+
+  it("uses the override's long tier on prolonged inactivity", () => {
+    expect(cadenceMsFor({ active: false, lastFocusedAt: now - 400_000 }, now, override)).toBe(120_000)
+  })
+
+  it("defaults unknown focus history to the override long tier", () => {
+    expect(cadenceMsFor({}, now, override)).toBe(120_000)
+  })
+
+  it("falls back to SYNC defaults per-field when the override omits them", () => {
+    const partial = { realtimeMs: 7_000 }
+    const tab = { active: true, lastFocusedAt: now }
+    // realtimeMs overridden, the rest use the SYNC defaults.
+    expect(cadenceMsFor(tab, now, partial)).toBe(7_000)
+    // 5 min is strictly below PROLONGED_MS → intermittent falls back to SYNC.
+    expect(cadenceMsFor({ active: false, lastFocusedAt: now - 5 * 60_000 }, now, partial)).toBe(SYNC.INTERMITTENT_MS)
   })
 })

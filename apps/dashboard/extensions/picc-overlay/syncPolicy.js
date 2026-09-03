@@ -41,6 +41,30 @@ export function cadenceFor({ active = false, lastFocusedAt = 0 } = {}, now = Dat
 }
 
 /**
+ * Q5 — resolve a stream's sync cadence with an optional per-site override.
+ * Tier selection is identical to cadenceFor (activity window → realtime,
+ * prolonged → intermittent, else long); a connector may override the ms for
+ * each tier and each threshold. Any field the override omits falls back to the
+ * cross-site SYNC policy. Returns the raw tier ms (no beat floor — the worker
+ * applies TICK_MS), keeping this a pure policy resolver like cadenceFor.
+ * @param {{ active?: boolean, lastFocusedAt?: number }} tab activity snapshot
+ * @param {number} now epoch ms
+ * @param {object} [override] { realtimeMs, intermittentMs, longMs, activityWindowMs, prolongedMs }
+ * @returns {number} cadence ms
+ */
+export function cadenceMsFor({ active = false, lastFocusedAt = 0 } = {}, now = Date.now(), override = {}) {
+  const realtimeMs = override.realtimeMs ?? SYNC.REALTIME_MS
+  const intermittentMs = override.intermittentMs ?? SYNC.INTERMITTENT_MS
+  const longMs = override.longMs ?? SYNC.LONG_MS
+  const activityWindowMs = override.activityWindowMs ?? SYNC.ACTIVITY_WINDOW_MS
+  const prolongedMs = override.prolongedMs ?? SYNC.PROLONGED_MS
+  const sinceFocus = now - lastFocusedAt
+  if (active || sinceFocus < activityWindowMs) return realtimeMs
+  if (sinceFocus < prolongedMs) return intermittentMs
+  return longMs
+}
+
+/**
  * Human label for a resolved cadence — realtime / intermittent / long.
  * @param {number} cadence ms
  * @returns {"realtime" | "intermittent" | "long"}

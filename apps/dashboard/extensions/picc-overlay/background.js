@@ -19,7 +19,7 @@ const HEARTBEAT_MS = 30_000
 // on prolonged inactivity. The worker's alarm wakes the scheduler even when
 // this service worker sleeps; the sensor's own content timers are a resilience
 // fallback only.
-import { SYNC, cadenceFor } from "./syncPolicy.js"
+import { SYNC, cadenceFor, cadenceMsFor } from "./syncPolicy.js"
 
 // ── State ────────────────────────────────────────────────────────────────────
 let serverOnline = false
@@ -383,20 +383,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 const venueConfigs = new Map()   // hostRe pattern -> venueId
 const tabVenues = new Map()      // tabId -> { venueId, host, url, active, lastFocusedAt, lastSyncAt }
 const VENUE_CFG_TTL = 5 * 60 * 1000
+const venueCadence = new Map()   // lowercased host -> { slug, cadence } (Q5 generalized registry)
 
 async function ensureVenueConfig() {
-  if (venueConfigs.size && Date.now() - (venueConfigs._at || 0) < VENUE_CFG_TTL) return true
-  const r = await serverFetch("/api/trading/capture-profiles")
-  if (r.ok !== true || !Array.isArray(r.data?.venues)) return venueConfigs.size > 0
+  // Q5: extended to ALSO pull the generalized connector registry snapshot
+  // (origins + per-site cadence). Both sources share one refresh TTL; a failure
+  // on either side only degrades that side — never fabricated or zero-filled.
+  const fresh = venueConfigs.size || venueCadence.size
+  if (fresh && Date.now() - (venueConfigs._at || 0) < VENUE_CFG_TTL) return fresh
+  const [profiles, registry] = await Promise.all([
+    serverFetch("/api/trading/capture-profiles"),
+    serverFetch("/api/connectors?forExtension=1")
+  ])
   venueConfigs.clear()
+  venueCadence.clear()
   venueConfigs._at = Date.now()
-  for (const v of r.data.venues) {
-    if (!v || v.enabled === false || !v.hostRe) continue
-    let re = null
-    try { re = new RegExp(`(?:^|\\.)${v.hostRe}$`, "i") } catch { /* skip */ }
-    if (re) venueConfigs.set(v.venueId, { venueId: v.venueId, hostRe: re })
+  if (profiles.ok === true && Array.isArray(profiles.data?.venues)) {
+    for (const v of profiles.data.venues) {
+      if (!v || v.enabled === false || !v.hostRe) continue
+      let re = null
+      try { re = new RegExp(`(?:^|\\.)${v.hostRe}$`, "i") } catch { /* skip */ }
+      if (re) venueConfigs.set(v.venueId, { venueId: v.venueId, hostRe: re })
+    }
   }
-  return venueConfigs.size > 0
+  const reg = registry.ok === true ? registry.data?.registry : null
+  if (Array.isArray(reg)) {
+    for (const c of reg) {
+      for (const o of (c.origins || [])) {
+        const host = String(o).toLowerCase().replace(/^www\./, "")
+        if (host) venueCadence.set(host, { slug: c.slug, cadence: c.cadence || {} })
+      }
+    }
+  }
+  return venueConfigs.size > 0 || venueCadence.size > 0
 }
 
 function classifyHost(hostname) {
@@ -404,6 +423,20 @@ function classifyHost(hostname) {
     if (cfg.hostRe.test(hostname || "")) return cfg.venueId
   }
   return null
+}
+
+// Q5: per-venue cadence. A host that matches a generalized connector uses that
+// connector's registry `cadence` tier values, min-bounded by the beat floor;
+// the tier selection is identical to the pure cross-site cadenceFor policy
+// (activity window → realtime, prolonged → intermittent, else long). A host
+// with no registry override falls back to cadenceFor unchanged.
+function cadenceForVenue(host, tabState, now) {
+  // Q5: a registry per-site cadence wins when the host matches a generalized
+  // connector; otherwise fall back to the pure cross-site cadenceFor. The beat
+  // floor (TICK_MS) is applied here because the policy resolver is floor-free.
+  const cfg = venueCadence.get(String(host || "").toLowerCase().replace(/^www\./, ""))
+  if (!cfg) return cadenceFor(tabState, now)
+  return Math.max(cadenceMsFor(tabState, now, cfg.cadence || {}), SYNC.TICK_MS)
 }
 
 // T8 / REQ-10 — async focus-or-create. The exact discovery pattern of
@@ -482,8 +515,9 @@ async function syncCadenceStep() {
   const now = Date.now()
   for (const [tabId, t] of tabVenues) {
     // The beat floor: MV3 alarms cannot fire faster than TICK_MS, so even the
-    // realtime tier is capped at the beat. cadenceFor() does the pure policy.
-    const cadence = Math.max(cadenceFor(t, now), SYNC.TICK_MS)
+    // realtime tier is capped at the beat. cadenceForVenue() picks the tier by
+    // the pure policy, then applies any registry per-site cadence override.
+    const cadence = cadenceForVenue(t.host, t, now)
     if (now - (t.lastSyncAt || 0) >= cadence) {
       t.lastSyncAt = now
       chrome.tabs.sendMessage(tabId, { action: "venue-scan-now" })
