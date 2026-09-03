@@ -931,6 +931,53 @@ async function handleExtensionSuggest(body) {
 }
 
 // ---------------------------------------------------------------------
+// Unified income summary (Q5, Task 11)
+// ---------------------------------------------------------------------
+// Server-side aggregation for GET /api/income/overview. Keeps the honesty
+// contract: an unobservable figure is `null`, never a fabricated zero.
+// The server has no per-day earnings time-series, so:
+//   - lifetime / today come from connector snapshots (the authoritative
+//     server-side earnings signal)
+//   - projectedAnnual / cashoutReady / activeCount come from stream rows
+//   - monthly and daily are left empty/null (no series to derive them from)
+function incomeSummaryFromServer(streams, snapshots) {
+  const active = (streams || []).filter((s) => s && s.status === "active")
+  const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null)
+
+  const snapList = (snapshots || []).filter(
+    (s) =>
+      s &&
+      // Only count trustworthy sources: cite staleness/unconfigured/error as
+      // present-but-not-counted (so an error snapshot never lands as a 0 row).
+      (s.status == null || s.status === "ok") &&
+      typeof s.lifetime === "number" &&
+      Number.isFinite(s.lifetime) &&
+      s.lifetime > 0
+  )
+  const lifetime = snapList.reduce((acc, s) => acc + s.lifetime, 0)
+  const today = snapList.reduce((acc, s) => acc + (num(s.today) ?? 0), 0)
+
+  const projectedAnnual = active.reduce((acc, s) => {
+    const d = num(s.estimatedDaily)
+    return d == null ? acc : acc + d * 365
+  }, 0)
+
+  const cashoutReady = active.filter(
+    (s) => num(s.payoutThreshold) > 0 && num(s.balance) != null && s.balance >= s.payoutThreshold
+  )
+
+  return {
+    monthly: null, // no trailing-30d series server-side; unobservable -> null
+    lifetime: snapList.length ? lifetime : null,
+    today: snapList.length ? today : null,
+    activeCount: active.length,
+    projectedAnnual: projectedAnnual || null,
+    cashoutReady,
+    daily: [] // no per-day series server-side; honest empty, not fabricated
+  }
+}
+
+// ---------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------
 
@@ -3193,6 +3240,38 @@ async function _handleApiInner(req, res, url, reqId) {
     const result = await completeGithubOauth({ code, state })
     if (!result.ok) return sendProfilePage(res, 400, result.error, false)
     sendProfilePage(res, 200, `GitHub linked as @${result.username}.`, true)
+    return
+  }
+
+  // -------------------------------------------------------------------
+  // Unified income overview (Q5, Task 11) — one honest surface for the
+  // Income tab: connector earnings snapshots + user streams + holdings.
+  // Per-user scoping mirrors the /api/data rule (handlers.mjs:3233).
+  // -------------------------------------------------------------------
+  if (path === "/api/income/overview" && req.method === "GET") {
+    const userId = await verifyUser(auth)
+    if (!userId) return writeJson(res, 401, { error: "authentication required" })
+    const userRows = (rows) => (rows || []).filter((r) => !r.user_id || r.user_id === userId)
+    const [streams, nftHoldings, depinNodes, financialAccounts, transactions] = await Promise.all([
+      listRows("income_streams"),
+      listRows("nft_holdings"),
+      listRows("depin_nodes"),
+      listRows("financial_accounts"),
+      listRows("transactions")
+    ])
+    const snapshots = (await getLatestSnapshots()) ?? {}
+    writeJson(res, 200, {
+      ok: true,
+      snapshots,
+      streams: userRows(streams),
+      holdings: {
+        nft: userRows(nftHoldings),
+        depin: userRows(depinNodes),
+        financial: userRows(financialAccounts),
+        transactions: userRows(transactions)
+      },
+      summary: incomeSummaryFromServer(userRows(streams), Object.values(snapshots))
+    })
     return
   }
 
