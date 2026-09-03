@@ -97,6 +97,92 @@ export function parkinsonVolatility(candles, { period = 20, annualize = 252 } = 
 }
 
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// Garman-Klass volatility (OHLC, driftless) — folds the full intraday
+// range into the estimate, roughly halving close-close estimator error
+// (F-11). Stricter than Parkinson: needs positive open/close as well as
+// a consistent high/low. Per-bar variance is clamped at zero so a single
+// rounding-blown bar cannot drag the average negative.
+// ---------------------------------------------------------------------
+
+export function garmanKlassVolatility(candles, { period = 20, annualize = 252 } = {}) {
+  if (!Array.isArray(candles) || candles.length < period) {
+    return { daily: null, annual: null }
+  }
+  const recent = candles.slice(-period)
+  const GK2LN2 = 2 * Math.log(2)
+  const terms = []
+  for (const c of recent) {
+    const { open: o, high: h, low: l, close: cl } = c
+    if (![o, h, l, cl].every((v) => Number.isFinite(Number(v)) && Number(v) > 0)) continue
+    if (!(h >= l && h >= o && l <= cl)) continue
+    const hl = Math.log(h / l)
+    const co = Math.log(cl / o)
+    terms.push(Math.max(0, 0.5 * hl * hl - (GK2LN2 - 1) * co * co))
+  }
+  if (terms.length < 5) return { daily: null, annual: null }
+  const avg = terms.reduce((s2, x) => s2 + x, 0) / terms.length
+  const daily = Math.sqrt(avg)
+  const annual = daily * Math.sqrt(annualize)
+  return {
+    daily: Math.round(daily * 10000) / 10000,
+    annual: Math.round(annual * 10000) / 10000,
+    annualPct: Math.round(annual * 10000) / 100 + "%",
+    period: terms.length
+  }
+}
+
+// ---------------------------------------------------------------------
+// Yang-Zhang volatility (OHLC, drift + opening gaps) — the most efficient
+// common estimator: it adds the overnight-gap term that Parkinson and
+// Garman-Klass both miss and stays unbiased under drift. Defined over
+// CONSECUTIVE bars (each open gap needs the prior close), so it demands
+// period+1 candles. (F-11)
+// ---------------------------------------------------------------------
+
+export function yangZhangVolatility(candles, { period = 20, annualize = 252 } = {}) {
+  if (!Array.isArray(candles) || candles.length < period + 1) {
+    return { daily: null, annual: null }
+  }
+  const sampleVar = (xs) => {
+    const f = xs.filter((x) => Number.isFinite(x))
+    if (f.length < 2) return null
+    const m = f.reduce((s2, x) => s2 + x, 0) / f.length
+    return f.reduce((s2, x) => s2 + (x - m) ** 2, 0) / (f.length - 1)
+  }
+  const recent = candles.slice(-(period + 1))
+  const overnight = [] // ln(O_t / C_{t-1})
+  const intraday = [] // ln(C_t / O_t)
+  const rs = [] // Rogers-Satchell term per bar
+  for (let i = 1; i < recent.length; i++) {
+    const p = recent[i - 1]
+    const c = recent[i]
+    const { open: o, high: h, low: l, close: cl } = c
+    if (![o, h, l, cl, p.close].every((v) => Number.isFinite(Number(v)) && Number(v) > 0)) continue
+    if (!(h >= l && h >= o && l <= cl)) continue
+    overnight.push(Math.log(o / p.close))
+    intraday.push(Math.log(cl / o))
+    rs.push(Math.log(h / cl) * Math.log(h / o) + Math.log(l / cl) * Math.log(l / o))
+  }
+  const n = overnight.length
+  if (n < 5) return { daily: null, annual: null }
+  const oVar = sampleVar(overnight)
+  const cVar = sampleVar(intraday)
+  if (oVar == null || cVar == null) return { daily: null, annual: null }
+  const rsMean = rs.reduce((s2, x) => s2 + x, 0) / n
+  const k = 0.34 / (1.34 + (n + 1) / (n - 1))
+  const variance = oVar + k * cVar + (1 - k) * rsMean
+  const daily = variance > 0 ? Math.sqrt(variance) : 0
+  const annual = daily * Math.sqrt(annualize)
+  return {
+    daily: Math.round(daily * 10000) / 10000,
+    annual: Math.round(annual * 10000) / 10000,
+    annualPct: Math.round(annual * 10000) / 100 + "%",
+    period: n
+  }
+}
+
+
 // GARCH(1,1) estimation via maximum-likelihood (simplified)
 // ---------------------------------------------------------------------
 // σ²_t = ω + α * ε²_{t-1} + β * σ²_{t-1}
@@ -315,6 +401,8 @@ export function volatilitySnapshot(candles, { atrPeriod = 14, rvPeriod = 20, gar
     atr: volatilityRegime(candles, { period: atrPeriod }),
     realized: realizedVolatility(closes, { period: rvPeriod, times: candles.map((c) => c.time) }),
     parkinson: parkinsonVolatility(candles, { period: rvPeriod }),
+    garmanKlass: garmanKlassVolatility(candles, { period: rvPeriod }),
+    yangZhang: yangZhangVolatility(candles, { period: rvPeriod }),
     garch: garchEstimate(closes, { period: garchPeriod, forecast: garchForecast }),
     lastPrice: closes[closes.length - 1],
     candleCount: candles.length,

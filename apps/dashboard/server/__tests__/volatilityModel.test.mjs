@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { computeAdaptiveStops } from "../services/trading.mjs"
-import { realizedVolatility } from "../services/volatility.mjs"
+import { garmanKlassVolatility, parkinsonVolatility, realizedVolatility, volatilitySnapshot, yangZhangVolatility } from "../services/volatility.mjs"
 import { optimizeExpiry } from "../services/expiryOptimizer.mjs"
 
 function flatRangeCandles(n, close, halfRange) {
@@ -162,5 +162,76 @@ describe("conservative defaults for insufficient data", () => {
     const rv = realizedVolatility([100, 101, 100, 101], { period: 20 })
     expect(rv.daily).toBeNull()
     expect(rv.annual).toBeNull()
+  })
+})
+
+
+describe("F-11 — OHLC-aware estimators vs close-only std (same sample)", () => {
+  // Mean-reverting path: closes barely move while every bar prints a wide
+  // intraday range. Close-close std sees almost nothing; GK/YZ must see the
+  // range — this is precisely the information the old estimator discarded.
+  function meanRevertingWideRangeCandles(n) {
+    const out = []
+    let close = 100
+    for (let i = 0; i < n; i++) {
+      close = 100 + (i % 2 === 0 ? 0.001 : -0.001)
+      out.push({
+        time: i * 60000,
+        open: close,
+        high: close + 1.5,
+        low: close - 1.5,
+        close
+        })
+    }
+    return out
+  }
+
+  it("GK and YZ capture intraday range that realized (std-only) discards", () => {
+    const candles = meanRevertingWideRangeCandles(60)
+    const closes = candles.map((c) => c.close)
+    const realized = realizedVolatility(closes, { period: 20 })
+    const gk = garmanKlassVolatility(candles, { period: 20 })
+    const yz = yangZhangVolatility(candles, { period: 20 })
+    expect(realized.daily).toBeLessThan(0.0005)
+    expect(gk.daily).toBeGreaterThan(0.01)
+    expect(yz.daily).toBeGreaterThan(0.01)
+    expect(gk.daily).toBeGreaterThan(realized.daily * 10)
+    expect(yz.daily).toBeGreaterThan(realized.daily * 10)
+  })
+
+  it("YZ adds the overnight-gap term that Parkinson (high-low only) misses", () => {
+    // Doji bars with alternating overnight gaps and flat intraday paths:
+    // Parkinson reads zero range, YZ must still see the gap variance.
+    const candles = []
+    let prevClose = 100
+    for (let i = 0; i < 40; i++) {
+      const gap = i % 2 === 0 ? 1.01 : 0.99
+      const open = prevClose * gap
+      candles.push({ time: i * 60000, open, high: open, low: open, close: open })
+      prevClose = open
+    }
+    const p = parkinsonVolatility(candles, { period: 20 })
+    const yz = yangZhangVolatility(candles, { period: 20 })
+    expect(p.daily).toBe(0)
+    expect(yz.daily).toBeGreaterThan(0)
+    expect(yz.daily).toBeGreaterThan(p.daily)
+  })
+
+  it("returns nulls instead of fabricated values when the sample is too short", () => {
+    const short = meanRevertingWideRangeCandles(4)
+    expect(garmanKlassVolatility(short, { period: 20 }).daily).toBeNull()
+    expect(yangZhangVolatility(short, { period: 20 }).daily).toBeNull()
+    expect(garmanKlassVolatility([], { period: 20 }).daily).toBeNull()
+    expect(yangZhangVolatility(null, { period: 20 }).daily).toBeNull()
+  })
+
+  it("volatilitySnapshot now carries GK + YZ alongside realized/Parkinson", () => {
+    const candles = meanRevertingWideRangeCandles(80)
+    const snap = volatilitySnapshot(candles)
+    expect(snap.ok).toBe(true)
+    expect(snap.garmanKlass.daily).toBeGreaterThan(0)
+    expect(snap.yangZhang.daily).toBeGreaterThan(0)
+    expect(snap.realized.daily).toBeDefined()
+    expect(snap.parkinson.daily).toBeDefined()
   })
 })
