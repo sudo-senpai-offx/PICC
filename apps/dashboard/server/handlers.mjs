@@ -4514,6 +4514,34 @@ const BROWSER_ROUTES = {
       return true
     }
     const body = parsed?.body || {}
+
+    // Income-observation branch (Task 5): a config-driven read-only capture
+    // from an income venue — { origin, slug?, frames?, storage? }. Routed by
+    // origin to the matching connector's declarative normalizer, then persisted
+    // as an Earnings snapshot. Honest: an observation with no usable value
+    // reports status "unconfigured" and is NOT fabricated as a zero balance.
+    if (typeof body.origin === "string" && body.origin) {
+      try {
+        const connector = (body.slug && getConnector(body.slug)) || getConnectorByOrigin(body.origin)
+        if (!connector) {
+          writeJson(res, 404, { ok: false, error: `no income adaptor for origin "${body.origin}"` })
+          return true
+        }
+        const snapshot = normalizeExtensionPayload(connector, {
+          origin: body.origin,
+          slug: body.slug,
+          frames: Array.isArray(body.frames) ? body.frames : [],
+          storage: Array.isArray(body.storage) ? body.storage : []
+        })
+        await persistSnapshot(snapshot).catch(() => {})
+        writeJson(res, 200, { ok: true, income: true, slug: connector.slug, status: snapshot.status, snapshot })
+        return true
+      } catch (err) {
+        writeJson(res, 500, { error: String(err?.message ?? err).slice(0, 200) })
+        return true
+      }
+    }
+
     const frames = Array.isArray(body.frames) ? body.frames : (body.frame ? [body.frame] : [])
     if (!frames.length) { writeJson(res, 400, { error: "no frames" }); return true }
     if (frames.length > 200) { writeJson(res, 413, { error: "batch too large" }); return true }

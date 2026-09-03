@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleApi } from "../handlers.mjs"
 import { env } from "../config.mjs"
 import { stopLiveEO } from "../services/liveEO.mjs"
+import { registerConnector, getConnector } from "../services/connectors.mjs"
 
 function makeReq(method, url, body, headers = {}) {
   const raw = body !== undefined ? JSON.stringify(body) : null
@@ -94,6 +95,67 @@ describe("POST /api/extension/ingest", () => {
       // Endpoint shape may vary; the service-level test covers classification.
       expect(status.status).not.toBe(500)
     }
+  })
+})
+
+describe("POST /api/extension/ingest — income branch (Task 5)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no network in tests"))))
+  })
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    await stopLiveEO()
+  })
+
+  it("routes an income observation to a scan-capable connector and persists an Earnings snapshot", async () => {
+    // Register a declarative scan-capable connector (config-driven, like a real
+    // income site). Unique slug + origin so it cannot collide with the static
+    // registry or other tests.
+    registerConnector({
+      slug: "tz-earn",
+      label: "EarnCo (test)",
+      origins: ["earnco.test"],
+      transports: ["browser"],
+      scan: { mode: "wsFrames", wsUrlRe: "earnco\\.test", mapFrame: { balance: ["balance", "credits"], today: ["today"], lifetime: ["total"] } }
+    })
+    const res = await call("POST", "/api/extension/ingest", {
+      origin: "https://earnco.test/dashboard",
+      frames: [{ balance: "12.50", total: "99.99" }]
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(res.body.income).toBe(true)
+    expect(res.body.slug).toBe("tz-earn")
+    expect(res.body.status).toBe("ok")
+    expect(res.body.snapshot.provider).toBe("tz-earn")
+    expect(res.body.snapshot.balance).toBe(12.5)
+    expect(getConnector("tz-earn").scan.mode).toBe("wsFrames")
+  })
+
+  it("keeps income observations honest: no usable value is unconfigured, never zero", async () => {
+    registerConnector({
+      slug: "tz-earn2",
+      label: "EarnCo2 (test)",
+      origins: ["earnco2.test"],
+      transports: ["browser"],
+      scan: { mode: "wsFrames", wsUrlRe: "earnco2\\.test", mapFrame: { balance: ["balance"], lifetime: ["total"] } }
+    })
+    const res = await call("POST", "/api/extension/ingest", {
+      origin: "https://earnco2.test/dashboard",
+      frames: [{ some_unrelated: "x" }]
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.status).toBe("unconfigured")
+    expect(res.body.snapshot.balance).toBeNull()
+    expect(res.body.snapshot.lifetime).toBeNull()
+  })
+
+  it("404s an income observation for an unknown origin", async () => {
+    const res = await call("POST", "/api/extension/ingest", {
+      origin: "https://not-a-registered-site.example/"
+    })
+    expect(res.status).toBe(404)
+    expect(res.body.ok).toBe(false)
   })
 })
 
