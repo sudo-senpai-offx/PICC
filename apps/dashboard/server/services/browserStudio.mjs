@@ -99,19 +99,17 @@ function cleanupFiles(paths) {
 
 // ---------------------------------------------------------------------
 // Credential vault — what the user entrusts to PICC (optional).
+// browser-credentials.json holds venue LOGIN passwords — it is encrypted at
+// rest via services/vault.mjs (legacy plaintext files migrate on first read).
 // ---------------------------------------------------------------------
 async function readVault() {
-  try {
-    return JSON.parse(await readFile(VAULT_FILE, "utf8"))
-  } catch {
-    return {}
-  }
+  return (await import("./vault.mjs")).readSecretJson(VAULT_FILE, {})
 }
 
 async function writeVault(vault) {
   try {
     mkdirSync(DATA_DIR, { recursive: true })
-    await writeFile(VAULT_FILE, JSON.stringify(vault, null, 2), "utf8")
+    await (await import("./vault.mjs")).writeSecretJson(VAULT_FILE, vault)
     return true
   } catch (err) {
     console.warn("[picc-browser] vault write failed:", err.message)

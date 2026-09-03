@@ -76,7 +76,11 @@ describe("credentials endpoints", () => {
     expect(res.body.honeygainToken).not.toBe("sekret-token")
     expect(res.body.pawnsPassword).not.toBe("hunter2")
     expect(res.body.pollIntervalMinutes).toBe(30)
-    const saved = JSON.parse(readFileSync(join(tmp, "automator-credentials.json"), "utf8"))
+    // automator-credentials.json is encrypted at rest (vault) — read it back
+    // through the vault to assert what actually persisted.
+    const { readSecretJson } = await import("../services/vault.mjs")
+    const saved = await readSecretJson(join(tmp, "automator-credentials.json"), null)
+    expect(saved).not.toBeNull()
     expect(saved.honeygainToken).toBe("sekret-token")
     expect(saved.pawnsPassword).toBe("hunter2")
   })
@@ -92,7 +96,9 @@ describe("credentials endpoints", () => {
     await call("POST", "/api/automator/credentials", { honeygainToken: "keep-me" })
     const res = await call("POST", "/api/automator/credentials", { pollIntervalMinutes: 10 })
     expect(res.status).toBe(200)
-    const saved = JSON.parse(readFileSync(join(tmp, "automator-credentials.json"), "utf8"))
+    const { readSecretJson } = await import("../services/vault.mjs")
+    const saved = await readSecretJson(join(tmp, "automator-credentials.json"), null)
+    expect(saved).not.toBeNull()
     expect(saved.honeygainToken).toBe("keep-me")
     expect(saved.pollIntervalMinutes).toBe(10)
   })

@@ -126,6 +126,13 @@ function seedTradingToken(token) {
   return writeFile(CREDS_FILE(), JSON.stringify({ expertoptionToken: token }))
 }
 
+// trading-credentials.json is encrypted at rest (F-02 vault) — read saved
+// state back through the vault, never raw JSON.parse.
+async function readSavedCreds() {
+  const { readSecretJson } = await import("../services/vault.mjs")
+  return readSecretJson(CREDS_FILE(), {})
+}
+
 function eoPage() {
   const p = h.bridges.at(-1).context.pages()[0]
   p.setUrl("https://app.expertoption.com/")
@@ -193,7 +200,7 @@ describe("captureVenue — real EO reference path", () => {
     expect(r.tokenChanged).toBe(true)
     expect(r.reconnectTriggered).toBe(true) // token changed → liveEO restart
     expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
-    const saved = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+    const saved = await readSavedCreds()
     expect(saved.expertoptionToken).toBe(TOKEN_B)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
     await seedVault() // restore for the rest of the suite
@@ -237,7 +244,7 @@ describe("captureVenue — real EO reference path", () => {
     // expertoptionToken (never the captured guest's token).
     let file = null
     try {
-      file = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+      file = await readSavedCreds()
     } catch {
       /* no file written — also fine */
     }
@@ -272,7 +279,7 @@ describe("captureVenue — real EO reference path", () => {
     expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
     // The reference implementation's save is observable on disk and the report
     // body + status surface never carry the token.
-    const saved = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+    const saved = await readSavedCreds()
     expect(saved.expertoptionToken).toBe(TOKEN_B)
     expect(JSON.stringify(r)).not.toContain(TOKEN_A)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
@@ -297,7 +304,7 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
     // No save happened — the token file is absent or carries no expertoptionToken.
     let file = null
     try {
-      file = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+      file = await readSavedCreds()
     } catch {
       /* no file written — also fine */
     }
@@ -323,7 +330,7 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
     expect(r.tokenChanged).toBe(true)
     expect(r.saved).toBe(true)
     expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
-    const saved = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+    const saved = await readSavedCreds()
     expect(saved.expertoptionToken).toBe(TOKEN_B)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
     expect(JSON.stringify(headlessSessionStatus())).not.toContain(TOKEN_B)
@@ -344,7 +351,7 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
     expect(restartLiveEO).not.toHaveBeenCalled()
     let file = null
     try {
-      file = JSON.parse(readFileSync(CREDS_FILE(), "utf8"))
+      file = await readSavedCreds()
     } catch {
       /* no file written — also fine */
     }
@@ -354,6 +361,11 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
 
 describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
   const VENUE_TOKENS_FILE = () => join(tmp, "trading-venue-tokens.json")
+
+  async function readVenueTokens() {
+    const { readSecretJson } = await import("../services/vault.mjs")
+    return readSecretJson(VENUE_TOKENS_FILE(), {})
+  }
 
   function iqPage() {
     const p = h.bridges.at(-1).context.pages()[0]
@@ -407,7 +419,7 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     expect(restartLiveEO).not.toHaveBeenCalled() // storage-scan venues have no live leg
     // The hook's save is observable on disk — in the DEDICATED venue-tokens
     // file, never inside trading-credentials.json (handlers spread that).
-    const saved = JSON.parse(readFileSync(VENUE_TOKENS_FILE(), "utf8"))
+    const saved = await readVenueTokens()
     expect(saved.venueTokens?.iqoption).toBe(TOKEN_B)
     // Token never in the report or the status surface.
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
@@ -423,7 +435,7 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     expect(restartLiveEO).not.toHaveBeenCalled()
     let file = null
     try {
-      file = JSON.parse(readFileSync(VENUE_TOKENS_FILE(), "utf8"))
+      file = await readVenueTokens()
     } catch {
       /* no file written — also fine */
     }
@@ -439,7 +451,7 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     expect(restartLiveEO).not.toHaveBeenCalled()
     let file = null
     try {
-      file = JSON.parse(readFileSync(VENUE_TOKENS_FILE(), "utf8"))
+      file = await readVenueTokens()
     } catch {
       /* no file written — also fine */
     }

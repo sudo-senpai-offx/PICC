@@ -42,7 +42,15 @@ try {
   /* already exists */
 }
 
+// trading-credentials.json (EO live-session token) and
+// trading-venue-tokens.json (captured venue session tokens) are REAL secrets
+// and go through the at-rest vault; ledger/watchlist stay plain JSON.
+const SECRET_FILES = new Set([CREDS_FILE, VENUE_TOKENS_FILE])
+
 async function readJSON(file, fallback) {
+  if (SECRET_FILES.has(file)) {
+    return (await import("./vault.mjs")).readSecretJson(file, fallback)
+  }
   try {
     return JSON.parse(await readFile(file, "utf8"))
   } catch {
@@ -51,6 +59,15 @@ async function readJSON(file, fallback) {
 }
 
 async function writeJSON(file, value) {
+  if (SECRET_FILES.has(file)) {
+    try {
+      await (await import("./vault.mjs")).writeSecretJson(file, value)
+      return true
+    } catch (err) {
+      console.warn(`[picc-trading] vault write failed ${file}:`, err.message)
+      return false
+    }
+  }
   try {
     await writeFile(file, JSON.stringify(value, null, 2), "utf8")
     return true

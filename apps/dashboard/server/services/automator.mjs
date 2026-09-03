@@ -43,7 +43,15 @@ try {
 // ---------------------------------------------------------------------
 // JSON persistence helpers (self-hosted, best-effort)
 // ---------------------------------------------------------------------
+// automator-credentials.json (bandwidth-provider JWTs + logins) is a REAL
+// secret store and goes through the at-rest vault; snapshots/presence stay
+// plain JSON.
+const SECRET_FILES = new Set([CREDS_FILE])
+
 async function readJSON(file, fallback) {
+  if (SECRET_FILES.has(file)) {
+    return (await import("./vault.mjs")).readSecretJson(file, fallback)
+  }
   try {
     return JSON.parse(await readFile(file, "utf8"))
   } catch {
@@ -52,6 +60,15 @@ async function readJSON(file, fallback) {
 }
 
 async function writeJSON(file, value) {
+  if (SECRET_FILES.has(file)) {
+    try {
+      await (await import("./vault.mjs")).writeSecretJson(file, value)
+      return true
+    } catch (err) {
+      console.warn(`[picc-automator] vault write failed ${file}:`, err.message)
+      return false
+    }
+  }
   try {
     await writeFile(file, JSON.stringify(value, null, 2), "utf8")
     return true
