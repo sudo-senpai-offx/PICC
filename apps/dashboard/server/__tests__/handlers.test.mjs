@@ -295,6 +295,44 @@ describe("PICC API handlers", () => {
     }
   })
 
+  it("autodetect proposes (never trusts) an adaptor without writes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "picc-autodetect-"))
+    const token = randomBytes(32).toString("hex")
+    writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
+    writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
+    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    vi.resetModules()
+    const { handleApi: hApi } = await import("../handlers.mjs?autodetect-test")
+
+    const res = makeRes()
+    await hApi(makeReq("POST", "/api/connectors/autodetect", { url: "https://viser.io/app", wsUrls: ["wss://viser.io/gateway"] }, { authorization: `Bearer ${token}` }), res, "/api/connectors/autodetect")
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    const p = res.body.result
+    expect(p).toMatchObject({ tuned: false, confidence: expect.any(Number) })
+    expect(p.confidence).toBeGreaterThan(0)
+    expect(p.proposed.scan.mode).toBe("wsFrames")
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("autodetect matches an already-registered origin, still tuned:false", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "picc-autodetect-"))
+    const token = randomBytes(32).toString("hex")
+    writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
+    writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
+    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    vi.resetModules()
+    const { handleApi: hApi } = await import("../handlers.mjs?autodetect-test2")
+
+    const res = makeRes()
+    await hApi(makeReq("POST", "/api/connectors/autodetect", { url: "https://app.expertoption.finance/x" }, { authorization: `Bearer ${token}` }), res, "/api/connectors/autodetect")
+    expect(res.status).toBe(200)
+    expect(res.body.result.matched).toBe(true)
+    expect(res.body.result.slug).toBe("expertoption")
+    expect(res.body.result.tuned).toBe(false)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   it("trading/venues returns redirect metadata with asset deep-links", async () => {
     const res = makeRes()
     await handleApi(makeReq("GET", "/api/trading/venues?assetId=BTCUSD", undefined, {}), res, "/api/trading/venues?assetId=BTCUSD")

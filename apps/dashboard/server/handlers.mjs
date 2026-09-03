@@ -114,8 +114,12 @@ import {
   openLiveSession,
   subscribeLive,
   closeLiveSession,
-  liveSubscriberCount
+  liveSubscriberCount,
+  snapshotForExtension,
+  normalizeExtensionPayload,
+  getConnectorByOrigin
 } from "./services/connectors.mjs"
+import { fingerprint } from "./services/autodetect.mjs"
 import { browserAvailable, realProfileState, importRealProfile } from "./services/browserBridge.mjs"
 import { accountMetricsForUser, getAccountMetrics, staleFrom } from "./services/accountMetrics.mjs"
 import { listCaptureProfiles, metricsCadenceMs, saveCaptureConfigForUser, captureConfigForUser, headlessSessionStatus, sessionPolicyForUser, saveSessionPolicy, clearSessionPolicy } from "./services/captureProfiles.mjs"
@@ -3780,6 +3784,31 @@ async function _handleApiInner(req, res, url, reqId) {
     } catch (err) {
       console.warn(`[picc] connector ${slug} collect failed:`, err.message)
       writeJson(res, 502, normalizeEarnings({ provider: slug, platform: conn.label, source: conn.transport, status: "error", error: err.message }))
+    }
+    return
+  }
+
+  // Autodetect (Task 3): propose — never trust — an income-site adaptor.
+  // Rate-limited; returns the proposal alone (no write to the registry). A
+  // tuned adaptor is only ever reachable by a human, never by this endpoint.
+  if (path === "/api/connectors/autodetect" && req.method === "POST") {
+    if (!(await verifyUser(auth)) && (await hasUsers())) {
+      return writeJson(res, 401, { error: "authentication required" })
+    }
+    if (rateLimited(`autodetect:${clientIp(req)}`, 10, 60_000)) {
+      return writeJson(res, 429, { error: "too many autodetect calls — try again in a minute" })
+    }
+    try {
+      const proposal = fingerprint({
+        url: body.url,
+        domNodes: Array.isArray(body.dom) ? body.dom : undefined,
+        storageKeys: Array.isArray(body.storageKeys) ? body.storageKeys : undefined,
+        wsUrls: Array.isArray(body.wsUrls) ? body.wsUrls : undefined
+      })
+      writeJson(res, 200, { ok: true, result: proposal })
+    } catch (err) {
+      console.warn("[picc] autodetect failed:", err.message)
+      writeJson(res, 400, { ok: false, error: err.message })
     }
     return
   }
