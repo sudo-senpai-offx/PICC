@@ -262,3 +262,38 @@ describe("sensor extension integrity", () => {
     expect(served.profileKeys).toBe("user|account|profile|auth|session|current|me$|identity")
   })
 
+  it("Q5 parity: the built-in grass wsFrames entry equals the config-driven connector registry (income leg)", async () => {
+    const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    const { getConnector } = await import("../services/connectors.mjs")
+    const grass = getConnector("grass")
+    expect(grass).toBeTruthy()
+    const jsStringValue = (s) => s.replace(/\\\\/g, "\\")
+
+    // The wsFrames connector identity (origin + slug) that the inject sniffer
+    // tags frames with, and the host the sensor scans — pinned equal so the
+    // sensor's built-in fallback cannot drift from the served registry. The
+    // built-in derives its hostRe from the connector's origins; assert the two
+    // stay in lock-step (the sensor's anchor match must cover the served origin).
+    expect(content.includes(`origin: "${grass.origins[0]}"`)).toBe(true)
+    expect(content.includes(`slug: "grass"`)).toBe(true)
+    expect(content.includes("via: \"wsFrames\"")).toBe(true)
+    const hostReMatch = content.match(/hostRe: "([^"]+)"/g) ?? []
+    const grassHostRe = (hostReMatch.find((s) => s.includes("getgrass")) || "").match(/"([^"]+)"/)?.[1]
+    expect(grassHostRe).toBeTruthy()
+    // Collapse the source's `\\` to `\` (the built-in spells \. or \\. — both
+    // evaluate to the same regex source) before compiling the anchor match.
+    const compiledHostRe = jsStringValue(grassHostRe)
+    expect(new RegExp(`(?:^|\\.)${compiledHostRe}$`, "i").test(grass.origins[0])).toBe(true)
+    // mapFrame KEY NAMES (never values) mirror the registry scan.mapFrame.
+    expect(jsStringValue(content).includes(`wsUrlRe: "${grass.scan.wsUrlRe}"`)).toBe(true)
+    for (const key of Object.keys(grass.scan.mapFrame)) {
+      for (const alias of grass.scan.mapFrame[key]) {
+        expect(content.includes(`"${alias}"`), `built-in grass mapFrame keeps ${key}: "${alias}"`).toBe(true)
+      }
+    }
+    // The wsFrames executor must not add any new page-DOM access (pure frame
+    // relay), so the two-pin document. lock still holds.
+    const codeOnly = content.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "")
+    expect(codeOnly.split("document.").length, "exactly two document. occurrences in executable code").toBe(3)
+  })
+})

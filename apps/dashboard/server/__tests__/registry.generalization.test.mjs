@@ -98,3 +98,60 @@ describe("snapshotForExtension (what the extension may see)", () => {
   })
 })
 
+describe("Task 9 — second site registered by CONFIG (grass, config-driven)", () => {
+  const grass = getConnector("grass")
+
+  it("exposes the declarative Q5 surface: origins, cadence, scan, extractors", () => {
+    expect(grass).toBeTruthy()
+    expect(grass.tuned).toBe(false)
+    expect(grass.origins).toEqual(["app.getgrass.io", "getgrass.io"])
+    expect(grass.scan.mode).toBe("wsFrames")
+  })
+
+  it("carries the wsFrames wsUrlRe + mapFrame (key names only, tuned:false)", () => {
+    expect(grass.scan.wsUrlRe).toBe("getgrass\\.(io|app)")
+    expect(Array.isArray(grass.scan.mapFrame.balance)).toBe(true)
+    expect(grass.scan.mapFrame.balance).toContain("credits")
+    expect(grass.scan.mapFrame.lifetime).toContain("total")
+  })
+
+  it("per-site cadence overrides the DEFAULT_CADENCE tier values", () => {
+    expect(grass.cadence.realtimeMs).toBe(20000)
+    expect(grass.cadence.longMs).toBe(600000)
+  })
+
+  it("normalizeExtensionPayload yields ok for a config-matched frame", () => {
+    const r = normalizeExtensionPayload(getConnector("grass"), {
+      origin: "https://app.getgrass.io",
+      slug: "grass",
+      frames: [{ credits: "25.00", todayEarnings: "4.20", totalEarnings: "180.50" }]
+    })
+    expect(r.status).toBe("ok")
+    expect(r.balance).toBe(25)
+    expect(r.today).toBe(4.2)
+    expect(r.lifetime).toBe(180.5)
+  })
+
+  it("normalizeExtensionPayload reports unconfigured (never zero) for a no-match frame", () => {
+    const r = normalizeExtensionPayload(getConnector("grass"), {
+      origin: "https://app.getgrass.io",
+      slug: "grass",
+      frames: [{ something_unrelated: "1" }]
+    })
+    expect(r.status).toBe("unconfigured")
+    expect(r.balance).toBeNull()
+    expect(r.lifetime).toBeNull()
+  })
+
+  it("the extension snapshot exposes grass origins + scan key names, never values", () => {
+    const snap = snapshotForExtension()
+    const g = snap.registry.find((c) => c.slug === "grass")
+    expect(g).toBeTruthy()
+    expect(g.origins).toEqual(["app.getgrass.io", "getgrass.io"])
+    // scan.keys are NAMES, never the values a frame would carry.
+    expect(g.scan.keys).toEqual(expect.arrayContaining(["credits", "earnings"]))
+    expect(g.scan.mapFrame).toBeTruthy()
+    expect(g.url).toBeUndefined()
+    expect(g.extractors).toBeUndefined()
+  })
+})

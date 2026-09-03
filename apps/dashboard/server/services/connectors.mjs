@@ -608,6 +608,56 @@ for (const [slug, label, url] of BANDWIDTH) {
   })
 }
 
+// Grass — the FIRST declarative wsFrames income connector (Q5 config-driven
+// generalization, Task 9). Registered here by config alone: explicit origins,
+// per-site cadence, extractors, and a wsFrames `scan` describing the dashboard
+// gateway's frame key NAMES to read. tuned:false — the wsUrlRe/mapFrame aliases
+// are unverified against a live session and must be tuned per-site before
+// trusting a value. This later registration intentionally supersedes the
+// generic browser-only BANDWIDTH loop entry (Map.set overwrites) so grass is
+// wsFrames-capable while the other bandwidth sites stay browser-only.
+registerConnector({
+  slug: "grass",
+  label: "Grass",
+  category: "bandwidth",
+  transports: ["browser", "ws"],
+  url: "https://app.getgrass.io/",
+  origins: ["app.getgrass.io", "getgrass.io"],
+  tuned: false,
+  defaults: { label: "Grass" },
+  cadence: {
+    realtimeMs: 20000,
+    intermittentMs: 120000,
+    longMs: 600000,
+    activityWindowMs: 90000,
+    prolongedMs: 1200000
+  },
+  extractors: {
+    balance: "[class*='balance'], [class*='credits'], [class*='earnings']",
+    today: "[class*='today'], [class*='daily']",
+    lifetime: "[class*='total'], [class*='lifetime']",
+    payoutThreshold: "[class*='minimum'], [class*='threshold']"
+  },
+  selectors: {
+    balance: "[class*='balance'], [class*='credits'], [class*='earnings']",
+    today: "[class*='today'], [class*='daily']",
+    lifetime: "[class*='total'], [class*='lifetime']",
+    payoutThreshold: "[class*='minimum'], [class*='threshold']"
+  },
+  scan: {
+    mode: "wsFrames",
+    keys: ["credits", "earnings", "payout", "total"],
+    profileKeys: null,
+    wsUrlRe: "getgrass\\.(io|app)",
+    mapFrame: {
+      balance: ["credits", "balance"],
+      today: ["todayEarnings", "today", "earningsToday"],
+      lifetime: ["lifetimeEarnings", "lifetime", "totalEarnings", "total"],
+      payoutThreshold: ["minPayout", "minimumPayout", "threshold"]
+    }
+  }
+})
+
 // NFT marketplaces — floor price / volume from the collection page. Tuned
 // against the live OpenSea homepage (2026): OpenSea's class names are hashed
 // utility classes, so we match by label text via the `text:` selector.
