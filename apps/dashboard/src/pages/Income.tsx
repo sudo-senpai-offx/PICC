@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { createBtcpayInvoice, createEwalletOrder, getHealth } from "@/lib/api"
 import type { HealthInfo } from "@/lib/api"
 import { Card } from "@/components/ui"
-import { CatalogTab } from "@/components/IncomeStreams"
+import { CatalogTab, OverviewTab, StreamsTab } from "@/components/IncomeStreams"
 
 type Channel = "btcpay" | "ewallet"
 
@@ -218,22 +218,28 @@ function ChannelsTab() {
   )
 }
 
-type IncomeTab = "channels" | "catalog"
+type IncomeTab = "overview" | "streams" | "channels" | "catalog"
 
 export function Income() {
-  const [tab, setTab] = useState<IncomeTab>("channels")
+  const [tab, setTab] = useState<IncomeTab>("overview")
 
   return (
     <div className="stack stack-lg">
       <header>
         <h1>Income</h1>
         <p className="muted">
-          Cash flow across all platforms. Track earnings and manage payment channels.
+          Cash flow across all platforms. Track earnings, monitor sources, and manage payment channels.
           Overlay activation is managed via the PICC browser extension.
         </p>
       </header>
 
       <div className="tabs">
+        <button type="button" className={tab === "overview" ? "tab active" : "tab"} onClick={() => setTab("overview")}>
+          📊 Overview
+        </button>
+        <button type="button" className={tab === "streams" ? "tab active" : "tab"} onClick={() => setTab("streams")}>
+          🌊 Streams
+        </button>
         <button type="button" className={tab === "channels" ? "tab active" : "tab"} onClick={() => setTab("channels")}>
           💳 Payment Channels
         </button>
@@ -242,6 +248,8 @@ export function Income() {
         </button>
       </div>
 
+      {tab === "overview" ? <OverviewTab /> : null}
+      {tab === "streams" ? <StreamsTab /> : null}
       {tab === "channels" ? <ChannelsTab /> : null}
       {tab === "catalog" ? <CatalogTab /> : null}
     </div>

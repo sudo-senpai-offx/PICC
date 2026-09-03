@@ -15,25 +15,38 @@ import {
   removeEarning,
   removeStream,
   saveCollectorCredentials,
+  saveStreams,
   streamSummary,
   updateStream,
   upsertPlatformStream
 } from "@/lib/streams"
 import type { IncomeStream, StreamCategory, StreamStatus } from "@/lib/types"
+import {
+  listIncomeStreams,
+  removeIncomeStream,
+  upsertIncomeStream,
+  useIncomeOverview
+} from "@/lib/income"
 
 const CATEGORIES: StreamCategory[] = ["bandwidth", "dividend", "interest", "affiliate", "content", "rental", "p2p", "crypto", "defi", "nft", "agent", "other"]
 
-export { StreamsTab, CatalogTab }
+export { StreamsTab, OverviewTab, CatalogTab }
 
 // ---------------------------------------------------------------------
 // Streams tab
 // ---------------------------------------------------------------------
 function StreamsTab() {
-  const [streams, setStreams] = useState<IncomeStream[]>(getStreams())
+  const [streams, setStreamsState] = useState<IncomeStream[]>(getStreams())
   const [earnings, setEarnings] = useState(getEarnings())
   const [collecting, setCollecting] = useState(false)
   const [collectorMsg, setCollectorMsg] = useState("")
   const collectorsRef = useRef<HTMLDivElement | null>(null)
+  // Server-backed mode: once the income store has migrated and the server is
+  // reachable, stream CRUD goes through /api/data/income_streams. We keep a
+  // local mirror too so the offline/earnings layer (streams.ts) stays coherent.
+  const [serverMode, setServerMode] = useState(false)
+  const serverIdsRef = useRef<string[]>([])
+  const [serverNote, setServerNote] = useState<string | null>(null)
 
   const savedCreds = useMemo(getCollectorCredentials, [])
   const [hgToken, setHgToken] = useState(savedCreds.honeygainToken)
@@ -41,6 +54,55 @@ function StreamsTab() {
   const [cpKey, setCpKey] = useState(savedCreds.cashpilotKey)
 
   const summary = useMemo(() => streamSummary(streams, earnings), [streams, earnings])
+
+  // Prefer the user's server-side streams; fall back to local while a migration
+  // is pending or the server is unreachable (the independence rule).
+  useEffect(() => {
+    let alive = true
+    listIncomeStreams()
+      .then((rows) => {
+        if (!alive) return
+        if (rows) {
+          setStreamsState(rows)
+          serverIdsRef.current = rows.map((r) => r.id)
+          setServerMode(true)
+          setServerNote(null)
+        } else {
+          setServerMode(false)
+          setServerNote("Offline — showing streams from this device")
+        }
+      })
+      .catch(() => {
+        if (alive) {
+          setServerMode(false)
+          setServerNote("Offline — showing streams from this device")
+        }
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // Single write path: update state + the local mirror, then (in server mode)
+  // reconcile the whole list server-side. A server failure degrades to local so
+  // a mutation never blocks on storage it can't reach.
+  const commit = (next: IncomeStream[]) => {
+    setStreamsState(next)
+    saveStreams(next)
+    if (!serverMode) return
+    const gone = serverIdsRef.current.filter((id) => !next.some((s) => s.id === id))
+    Promise.all([
+      ...gone.map((id) => removeIncomeStream(id).catch(() => false)),
+      ...next.map((s) => upsertIncomeStream(s).catch(() => null))
+    ])
+      .then(() => {
+        serverIdsRef.current = next.map((s) => s.id)
+      })
+      .catch(() => {
+        setServerMode(false)
+        setServerNote("Server unreachable — edits now stay on this device")
+      })
+  }
 
   // Push stream data to the server snapshot so the studio overlay can show
   // balances on platforms without a public earner API. Debounced + best-effort.
@@ -59,7 +121,7 @@ function StreamsTab() {
   }, [])
 
   const addFromWizard = (input: Omit<IncomeStream, "id">) => {
-    setStreams(addStream(input))
+    commit(addStream(input))
     setEarnings(getEarnings())
   }
 
@@ -86,7 +148,7 @@ function StreamsTab() {
         note: snap.todayEarnings > 0 ? `Today: ${usd(snap.todayEarnings)}` : undefined,
         lastCollected: new Date().toISOString()
       })
-      setStreams(applyAutoEstimates(next, getEarnings()))
+      commit(applyAutoEstimates(next, getEarnings()))
       if (record) {
         const today = new Date().toISOString().slice(0, 10)
         let all = getEarnings()
@@ -95,7 +157,7 @@ function StreamsTab() {
         }
         if (snap.todayEarnings > 0) all = recordEarning(stream.id, today, snap.todayEarnings, "auto")
         setEarnings(all)
-        setStreams(applyAutoEstimates(getStreams(), all))
+        commit(applyAutoEstimates(getStreams(), all))
       }
       setCollectorMsg(
         `✅ Honeygain synced — balance ${usd(snap.balance)}, lifetime ${usd(snap.lifetimeEarnings)}, ` +
@@ -145,9 +207,9 @@ function StreamsTab() {
           all = recordEarning(stream.id, d.date, d.usd, "auto")
         }
         setEarnings(all)
-        setStreams(applyAutoEstimates(getStreams(), all))
+        commit(applyAutoEstimates(getStreams(), all))
       } else {
-        setStreams(applyAutoEstimates(getStreams(), getEarnings()))
+        commit(applyAutoEstimates(getStreams(), getEarnings()))
       }
       setCollectorMsg(`✅ CashPilot imported — ${snap.breakdown.length} services, aggregate ${usd(snap.summary.total)}`)
     } catch (err) {
@@ -175,13 +237,13 @@ function StreamsTab() {
       url: form.url.trim() || undefined,
       collector: "manual"
     }
-    setStreams(addStream(stream))
+    commit(addStream(stream))
     resetForm()
   }
 
-  const setStatus = (id: string, status: StreamStatus) => setStreams(updateStream(id, { status }))
+  const setStatus = (id: string, status: StreamStatus) => commit(updateStream(id, { status }))
   const del = (id: string) => {
-    setStreams(removeStream(id))
+    commit(removeStream(id))
     setEarnings(getEarnings())
   }
 
@@ -189,6 +251,13 @@ function StreamsTab() {
 
   return (
     <div className="stack">
+      {serverNote ? (
+        <p className="muted small" style={{ color: "var(--muted)" }}>
+          {serverNote}
+        </p>
+      ) : serverMode ? (
+        <p className="muted small">Synced to your server-side income store.</p>
+      ) : null}
       <StreamSetupWizard streams={streams} onAdded={addFromWizard} onSetCollectorsHint={jumpToCollectors} />
       <div className="stat-row">
         <div className="stat">
@@ -383,6 +452,128 @@ function StreamsTab() {
 }
 
 // ---------------------------------------------------------------------
+// Overview tab — unified aggregates + holdings from GET /api/income/overview
+// ---------------------------------------------------------------------
+function OverviewTab() {
+  const { overview, loading } = useIncomeOverview()
+
+  if (loading) return <div className="card"><p className="muted">Loading overview…</p></div>
+  if (!overview) return <div className="card"><p className="muted">Overview unavailable.</p></div>
+
+  const { summary, snapshots, holdings, source } = overview
+  const snapList = Object.values(snapshots)
+  const holdingsCount = holdings.nft.length + holdings.depin.length + holdings.financial.length + holdings.transactions.length
+
+  return (
+    <div className="stack">
+      <p className="muted small">
+        Unified view across connector snapshots and your tracked streams
+        {source === "server" ? " — synced from your server-side income store." : " — offline, showing this device."}
+      </p>
+
+      <div className="stat-row">
+        <div className="stat">
+          <span className="stat-label">Last 30 days</span>
+          <strong>{summary.monthly > 0 ? usd(summary.monthly) : "—"}</strong>
+          <span className="muted">recorded earnings</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Lifetime</span>
+          <strong>{summary.lifetime > 0 ? usd(summary.lifetime) : "—"}</strong>
+          <span className="muted">from snapshots + streams</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Projected /yr</span>
+          <strong>{summary.projectedAnnual > 0 ? usd(summary.projectedAnnual) : "—"}</strong>
+          <span className="muted">{summary.activeCount} active streams</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Today</span>
+          <strong>{summary.today > 0 ? usd(summary.today) : "—"}</strong>
+          <span className="muted">across all sources</span>
+        </div>
+      </div>
+
+      {summary.cashoutReady.length > 0 && (
+        <div className="card" style={{ borderColor: "var(--success)" }}>
+          <h2>💵 Ready to cash out</h2>
+          {summary.cashoutReady.map((s) => (
+            <p key={s.id} className="row">
+              <strong>{s.name}</strong> <span className="muted">balance</span> <strong>{usd(s.balance)}</strong>
+              <span className="muted">threshold</span> <strong>{usd(s.payoutThreshold)}</strong>
+              {s.url ? (
+                <a href={s.url} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">
+                  Withdraw →
+                </a>
+              ) : null}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {snapList.length > 0 && (
+        <div className="card">
+          <h2>Connectors</h2>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr><th>Source</th><th>Balance</th><th>Lifetime</th><th>Today</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                {snapList.map((s) => (
+                  <tr key={s.provider}>
+                    <td><strong>{s.platform ?? s.provider}</strong></td>
+                    <td>{typeof s.balance === "number" ? usd(s.balance) : "—"}</td>
+                    <td>{typeof s.lifetime === "number" ? usd(s.lifetime) : "—"}</td>
+                    <td>{typeof s.today === "number" ? usd(s.today) : "—"}</td>
+                    <td>
+                      {s.status === "error" ? (
+                        <span className="badge" style={{ color: "#b91c1c", fontWeight: 600 }}>⚠ error</span>
+                      ) : s.status === "stale" ? (
+                        <span className="muted">stale</span>
+                      ) : s.status === "unconfigured" ? (
+                        <span className="muted">not configured</span>
+                      ) : (
+                        <span style={{ color: "var(--success)" }}>ok</span>
+                      )}
+                      {s.error ? <span className="muted small" title={s.error}> — {s.error}</span> : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <h2>Holdings</h2>
+        {holdingsCount === 0 ? (
+          <p className="muted">No holdings recorded yet.</p>
+        ) : (
+          <div className="row wrap" style={{ gap: 12 }}>
+            {[
+              { label: "NFT", list: holdings.nft },
+              { label: "DePIN nodes", list: holdings.depin },
+              { label: "Financial accounts", list: holdings.financial },
+              { label: "Transactions", list: holdings.transactions }
+            ].map((g) => (
+              <div key={g.label} className="card" style={{ flex: "1 1 220px" }}>
+                <strong>{g.label}</strong>
+                <div className="muted">{(g.list ?? []).length} record(s)</div>
+                {g.list.slice(0, 5).map((row, i) => (
+                  <div key={i} className="small">{holdingLabel(row, i)}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------
 // Catalog tab
 // ---------------------------------------------------------------------
 function CatalogTab() {
@@ -463,6 +654,11 @@ function CatalogTab() {
       {filter === "trading" ? <TradingSyncSettings /> : null}
     </div>
   )
+}
+
+function holdingLabel(row: Record<string, unknown>, index: number): string {
+  const raw = row.name ?? row.platform ?? row.id ?? (row.provider ?? "")
+  return raw === "" || raw == null ? `#${index + 1}` : String(raw)
 }
 
 function usd(n: number): string {
