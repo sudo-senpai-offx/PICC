@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -171,5 +171,28 @@ describe("data store row isolation", () => {
     const removeAsA = await call("POST", "/api/data/simulations/remove", { id }, authA)
     expect(removeAsA.status).toBe(200)
     expect(removeAsA.body.removed).toBe(true)
+  })
+})
+
+describe("auth store atomicity + permissions", () => {
+  it("writes users/sessions as clean JSON with no leftover tmp files and 0600 on POSIX", async () => {
+    const acc = await createAccount({ email: "atomic@x.com", password: "password123", name: "A" })
+    expect(acc.token).toBeTruthy()
+
+    const users = JSON.parse(readFileSync(join(tmp, "users.json"), "utf8"))
+    expect(users.users.some((u) => u.email === "atomic@x.com")).toBe(true)
+
+    const sessions = JSON.parse(readFileSync(join(tmp, "sessions.json"), "utf8"))
+    expect(Object.keys(sessions.sessions)).toContain(acc.token)
+
+    // Atomic tmp+rename: no partial/tmp artifacts may survive a normal write.
+    const leftovers = readdirSync(tmp).filter((f) => f.includes(".tmp"))
+    expect(leftovers).toEqual([])
+
+    // The store holds password hashes + live bearer tokens — tighten to 0600.
+    if (process.platform !== "win32") {
+      expect(statSync(join(tmp, "users.json")).mode & 0o777).toBe(0o600)
+      expect(statSync(join(tmp, "sessions.json")).mode & 0o777).toBe(0o600)
+    }
   })
 })

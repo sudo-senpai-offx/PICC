@@ -3,7 +3,7 @@
 // passwords). No external identity provider is required.
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { mkdirSync } from "node:fs"
-import { readFile, writeFile } from "node:fs/promises"
+import { chmod, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -41,9 +41,22 @@ async function readJSON(file, fallback) {
   }
 }
 
+// Atomic tmp+rename persist (repo pattern, cf. notifier.mjs) with a 0600
+// mode: users.json/sessions.json hold password hashes and live session
+// bearer tokens — a crash mid-write must never truncate the store, and the
+// files must not be world-readable on POSIX hosts.
 async function writeJSON(file, value) {
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
   try {
-    await writeFile(file, JSON.stringify(value, null, 2), "utf8")
+    await writeFile(tmp, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 })
+    await rename(tmp, file)
+    // rename keeps the tmp inode mode on POSIX; chmod the final path so a
+    // pre-existing world-readable file from an older version is tightened too.
+    try {
+      await chmod(file, 0o600)
+    } catch {
+      /* Windows: mode bits are best-effort */
+    }
     return true
   } catch (err) {
     // ENOENT happens when the data dir was created after import time (tests,
@@ -52,12 +65,28 @@ async function writeJSON(file, value) {
     if (err && err.code === "ENOENT") {
       try {
         mkdirSync(dirname(file), { recursive: true })
-        await writeFile(file, JSON.stringify(value, null, 2), "utf8")
+        await writeFile(tmp, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 })
+        await rename(tmp, file)
+        try {
+          await chmod(file, 0o600)
+        } catch {
+          /* Windows: best-effort */
+        }
         return true
       } catch (retryErr) {
+        try {
+          await import("node:fs/promises").then((fs) => fs.rm(tmp, { force: true }))
+        } catch {
+          /* ignore cleanup failure */
+        }
         console.warn(`[picc-auth] write failed ${file}:`, retryErr.message)
         return false
       }
+    }
+    try {
+      await import("node:fs/promises").then((fs) => fs.rm(tmp, { force: true }))
+    } catch {
+      /* ignore cleanup failure */
     }
     console.warn(`[picc-auth] write failed ${file}:`, err.message)
     return false
