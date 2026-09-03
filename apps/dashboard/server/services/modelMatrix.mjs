@@ -444,6 +444,7 @@ export function computeModelMatrix(candles) {
   return {
     ok: true,
     spot,
+    engine: "9-model-fusion", // F-08: identity of the brain that produced this
     generatedAt: new Date().toISOString(),
     modelsRun: MODELS.length - prunedModels.length,
     pruned: prunedModels,

@@ -1247,6 +1247,8 @@ export async function whyAutopilot({ assetId } = {}) {
     reason: decision.trade ? decision.reason : decision.reason,
     direction: decision.direction ?? null,
     confidence: decision.confidence ?? null,
+    // F-08: which brain produced the direction behind this decision
+    engine: pred?.engine ?? "8-model-classic",
     assetId: config.assetId,
     balance,
     openDeals: sessionRef.deals().length,
