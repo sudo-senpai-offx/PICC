@@ -1,10 +1,17 @@
-﻿name: CI
+name: CI
 
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
+
+# The repo is an npm-workspace root: the single lockfile lives at the repo
+# root (package-lock.json), and apps/dashboard is a workspace. Older versions
+# of this file ran `npm ci` inside apps/dashboard with a
+# cache-dependency-path pointing at a lockfile that does not exist — that job
+# could never install. All installs/audits now run at the root; typecheck,
+# build, test and smoke resolve to the @picc/dashboard workspace.
 
 jobs:
   lint-and-typecheck:
@@ -19,15 +26,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/dashboard/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
-        working-directory: apps/dashboard
         run: npm ci
       - name: TypeScript check
-        working-directory: apps/dashboard
-        run: npx tsc --noEmit
+        run: npm run typecheck
       - name: Build
-        working-directory: apps/dashboard
         run: npm run build
 
   test:
@@ -43,15 +47,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/dashboard/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
-        working-directory: apps/dashboard
         run: npm ci
       - name: Audit gate (fail on high/critical)
-        working-directory: apps/dashboard
         run: npm audit --audit-level=high
       - name: Run tests
-        working-directory: apps/dashboard
         run: npm test
 
   smoke-trading:
@@ -63,12 +64,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/dashboard/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
-        working-directory: apps/dashboard
         run: npm ci
       # Phase 7 exit criterion — repeatable end-to-end smoke: boots the real
       # server and fails loudly if the decision engine never emits.
       - name: Trading E2E smoke probe
-        working-directory: apps/dashboard
-        run: npm run smoke:trading
+        run: npm run smoke:trading --workspace @picc/dashboard
