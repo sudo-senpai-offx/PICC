@@ -4831,12 +4831,38 @@ function readBodyMax(req, maxBytes) {
   })
 }
 
+// Baseline hardening headers applied to every JSON response (F-04). The CSP
+// keeps the SPA self-only for scripts while allowing the real browser
+// surfaces the app uses (Supabase auth via https/wss, extension/dev
+// loopback feeds). frame-ancestors none + X-Frame-Options DENY stop
+// clickjacking of a page that touches payments and broker tokens.
+export const SECURITY_HEADERS = {
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https: wss:",
+    "media-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'"
+  ].join("; "),
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+}
+
 export function writeJson(res, status, payload) {
   const json = JSON.stringify(payload)
   // Origin-specific CORS instead of wildcard — prevents credentialed cross-origin abuse
   const reqOrigin = res.req?.headers?.origin
   const allowedOrigin = reqOrigin && TRUSTED_ORIGINS.includes(reqOrigin) ? reqOrigin : null
   const headers = {
+    ...SECURITY_HEADERS,
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(json)
   }
@@ -4861,6 +4887,7 @@ function sendProfilePage(res, status, message, success) {
 <div style="text-align:center;padding:24px"><h1 style="font-size:48px;margin:0 0 8px">${success ? "&#10003;" : "&#9888;"}</h1>
 <p style="opacity:.85">${safe}</p><p style="opacity:.5;font-size:13px">Redirecting to Profile…</p></div></body></html>`
   res.writeHead(status, {
+    ...SECURITY_HEADERS,
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
     "Content-Length": Buffer.byteLength(html)

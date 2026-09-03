@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { createServer } from "node:http"
+import { createServer, request as httpRequest } from "node:http"
 
 // Prevent the production server from binding a port and point its dist ROOT at
 // a temp dir. PICC_DIST_DIR must be set BEFORE ../index.mjs evaluates (ROOT is
@@ -121,5 +121,61 @@ describe("served round trip through the production requestListener (REQ-1, T1)",
     expect(res.headers.get("content-type")).toBe("image/png")
     const body = Buffer.from(await res.arrayBuffer())
     expect(body.equals(readFileSync(new URL("../../public/icons/icon-192.png", import.meta.url)))).toBe(true)
+  })
+})
+
+describe("security headers on the production server (F-04)", () => {
+  const server = createServer(requestListener)
+
+  afterAll(() => new Promise((resolve) => server.close(resolve)))
+
+  beforeAll(() => new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)))
+
+  const base = () => `http://127.0.0.1:${server.address().port}`
+
+  it("every static response carries CSP, nosniff, XFO, referrer + permissions policy", async () => {
+    const res = await fetch(`${base()}/manifest.json`)
+    expect(res.status).toBe(200)
+    const csp = res.headers.get("content-security-policy")
+    expect(csp).toContain("default-src 'self'")
+    expect(csp).toContain("script-src 'self'")
+    expect(csp).toContain("frame-ancestors 'none'")
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff")
+    expect(res.headers.get("x-frame-options")).toBe("DENY")
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer")
+    expect(res.headers.get("permissions-policy")).toContain("geolocation=()")
+  })
+})
+
+describe("Host allow-list / DNS-rebinding guard (F-05)", () => {
+  const server = createServer(requestListener)
+
+  afterAll(() => new Promise((resolve) => server.close(resolve)))
+
+  beforeAll(() => new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)))
+
+  function rawGet(hostHeader) {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        { host: "127.0.0.1", port: server.address().port, path: "/manifest.json", headers: { Host: hostHeader } },
+        (res) => {
+          res.resume()
+          res.on("end", () => resolve(res.statusCode))
+        }
+      )
+      req.on("error", reject)
+      req.end()
+    })
+  }
+
+  it("accepts loopback Hosts (the only way to reach the bound socket)", async () => {
+    expect(await rawGet("127.0.0.1")).toBe(200)
+    expect(await rawGet(`127.0.0.1:${server.address().port}`)).toBe(200)
+    expect(await rawGet("localhost")).toBe(200)
+  })
+
+  it("rejects a DNS-rebinding Host (attacker.com resolving to 127.0.0.1)", async () => {
+    expect(await rawGet("attacker.example")).toBe(403)
+    expect(await rawGet("attacker.example:443")).toBe(403)
   })
 })

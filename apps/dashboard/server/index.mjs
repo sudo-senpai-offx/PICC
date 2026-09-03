@@ -5,7 +5,7 @@ import { createServer } from "node:http"
 import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize, sep } from "node:path"
 import { fileURLToPath } from "node:url"
-import { isApiRequest, handleApi, writeJson } from "./handlers.mjs"
+import { isApiRequest, handleApi, writeJson, SECURITY_HEADERS } from "./handlers.mjs"
 import { startScheduler, startLivenessMonitor } from "./services/scheduler.mjs"
 import { startLedger } from "./services/accuracyLedger.mjs"
 import { log } from "./logger.mjs"
@@ -40,11 +40,33 @@ export function resolveStatic(pathname) {
   return filePath === ROOT || filePath.startsWith(rootWithSep) ? filePath : null
 }
 
+// DNS-rebinding / Host-header allow-list (F-05): the server binds loopback,
+// but a rebinding attack can make a browser resolve attacker.com -> 127.0.0.1
+// and send Host: attacker.com. Accept only loopback hosts plus an explicit
+// public host when deployed behind a reverse proxy (PICC_PUBLIC_HOST). This
+// closes the Origin-vs-own-Host fallback hole for legacy clients that lack
+// Sec-Fetch-Site.
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"])
+function hostAllowed(hostHeader) {
+  const raw = String(hostHeader ?? "").trim()
+  if (!raw) return true // no Host (HTTP/1.0 clients, health checks) — loopback bind
+  // Strip port and IPv6 brackets: "[::1]:3000" -> "::1", "localhost:3000" -> "localhost"
+  const hostname = raw.replace(/^\[([^\]]+)\].*$/, "$1").split(":")[0].toLowerCase()
+  if (LOCAL_HOSTNAMES.has(hostname)) return true
+  const extra = String(process.env.PICC_PUBLIC_HOST ?? "").trim().toLowerCase().replace(/^https?:\/\//, "")
+  if (extra) return hostname === extra.split(":")[0].toLowerCase() || raw.toLowerCase() === extra
+  return false
+}
+
 // Exported so tests can drive the exact production static path over real HTTP
 // (createServer(requestListener) on an ephemeral port) without booting the
 // full service stack (brokers, signal engine, scheduler).
 export const requestListener = async (req, res) => {
   const url = req.url ?? "/"
+  if (!hostAllowed(req.headers?.host)) {
+    writeJson(res, 403, { error: "untrusted host" })
+    return
+  }
   if (req.method === "OPTIONS") {
     writeJson(res, 200, {})
     return
@@ -74,6 +96,7 @@ export const requestListener = async (req, res) => {
     const body = await readFile(filePath)
     const isHashedAsset = /-[A-Za-z0-9]{8}\.(js|css)$/.test(filePath)
     res.writeHead(200, {
+      ...SECURITY_HEADERS,
       "Content-Type": MIME[extname(filePath)] ?? "application/octet-stream",
       "Cache-Control": isHashedAsset ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate"
     })
@@ -81,7 +104,7 @@ export const requestListener = async (req, res) => {
   } catch {
     try {
       const body = await readFile(join(ROOT, "index.html"))
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+      res.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" })
       res.end(body)
     } catch {
       writeJson(res, 500, { error: "dist not built — run `npm run build` first" })
