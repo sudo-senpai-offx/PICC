@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { scanExtensionSources } from "../../../extension/scripts/check-boundary.mjs"
+import { scanExtensionSources } from "../../../extension-archived/scripts/check-boundary.mjs"
 
 // Slice 7e — the collect/decide boundary (L1). The extension is the
 // DATA-COLLECTION layer; it must never import or reference the dashboard's

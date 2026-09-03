@@ -7,14 +7,14 @@ import {
   extractLivePrice,
   extractBalance,
   extractOpenPositions
-} from "../../../extension/src/selectors/expertoption.ts"
+} from "../../../extension-archived/src/selectors/expertoption.ts"
 import {
   assetKeyFromLabel,
   buildEOProfileFrame,
   buildEOTickFrame,
   captureExpertOptionPage
-} from "../../../extension/src/capture.ts"
-import { probeEOSession } from "../../../extension/src/session.ts"
+} from "../../../extension-archived/src/capture.ts"
+import { probeEOSession } from "../../../extension-archived/src/session.ts"
 
 /** Hand-rolled fake document — no jsdom. `querySelectorAll` ignores the tag
  *  selector and returns every registered element, exactly the surface the
