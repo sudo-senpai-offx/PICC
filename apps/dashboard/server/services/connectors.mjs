@@ -68,13 +68,52 @@ export function normalizeEarnings(r = {}) {
 const registry = new Map()
 
 /**
+ * Per-site cadence default — mirrors the extension's syncPolicy.js constants so
+ * a connector that omits `cadence` inherits the tested cross-site policy.
+ */
+export const DEFAULT_CADENCE = {
+  base: "intermittent",
+  realtimeMs: 15000,
+  intermittentMs: 90000,
+  longMs: 300000,
+  activityWindowMs: 60000,
+  prolongedMs: 600000
+}
+
+const NO_SCAN = { mode: null, keys: [], profileKeys: null, wsUrlRe: null, mapFrame: null }
+
+/**
+ * Derive the extension host-matching origin list for a connector definition:
+ * an explicit `origins` array wins; otherwise fall back to the single hostname
+ * of the legacy `url` (stripping a leading `www.`).
+ */
+export function normalizeOrigins(def) {
+  if (Array.isArray(def?.origins) && def.origins.length) {
+    return def.origins.map((o) => String(o).replace(/^www\./, ""))
+  }
+  if (typeof def?.url === "string" && def.url) {
+    try {
+      const host = new URL(def.url).hostname.replace(/^www\./, "")
+      return [host]
+    } catch {
+      /* not a parseable url — leave origins empty */
+    }
+  }
+  return []
+}
+
+/**
  * @param {object} def
  * @param {string} def.slug
  * @param {string} def.label
  * @param {string} def.category   treasury | trading | bandwidth | depin | nft | defi | ...
  * @param {string[]} def.transports  ['api','ws','browser', ...]
  * @param {string} def.url        dashboard URL the browser transport navigates to
+ * @param {string[]} [def.origins]  host list the extension watches (Q5 declarative)
+ * @param {object} [def.cadence]    per-site cadence override (Q5)
  * @param {object} [def.selectors]  DOM selectors -> { balance, today, lifetime, ... }
+ * @param {object} [def.extractors] declarative alias for selectors (Q5)
+ * @param {object} [def.scan]       declarative read-only capture config (Q5)
  * @param {object} [def.defaults]   fallback earnings values when the DOM is missing
  * @param {(opts)=>Promise<any>} [def.collect]  custom collector; overrides generic browser path
  */
@@ -83,6 +122,11 @@ export function registerConnector(def) {
   registry.set(def.slug, {
     transport: def.transports?.[0] ?? "browser",
     tuned: false, // DOM selectors need per-site verification before trusting
+    // Q5 declarative surface (normalized once at registration):
+    origins: normalizeOrigins(def),
+    cadence: { ...DEFAULT_CADENCE, ...(def.cadence || {}) },
+    extractors: def.extractors ?? def.selectors ?? {},
+    scan: def.scan ?? NO_SCAN,
     ...def
   })
 }
@@ -90,6 +134,107 @@ export function registerConnector(def) {
 export const getConnector = (slug) => registry.get(slug)
 export const listConnectors = () => [...registry.values()]
 export const hasConnector = (slug) => registry.has(slug)
+
+/**
+ * The registry view the extension is allowed to see: origins, per-site cadence,
+ * and the *key names* of any declarative scan — never DOM extractor values,
+ * never secrets, never token-bearing fields. This is what keeps the extension
+ * a read-only, config-driven sensor.
+ */
+/**
+ * Resolve a connector from a page origin (host). Used to route an extension
+ * income observation to its matching adaptor by origin.
+ */
+export function getConnectorByOrigin(origin) {
+  if (!origin) return undefined
+  let host = origin
+  try {
+    host = new URL(origin).hostname
+  } catch {
+    if (typeof origin === "string" && origin.includes("://")) {
+      const m = origin.match(/^[a-z]+:\/\/([^/?#]+)/i)
+      if (m) host = m[1]
+    }
+  }
+  host = String(host).replace(/^www\./, "").toLowerCase()
+  for (const c of listConnectors()) {
+    if ((c.origins || []).some((o) => String(o).toLowerCase().replace(/^www\./, "") === host)) return c
+  }
+  return undefined
+}
+
+export function snapshotForExtension() {
+  const registryView = listConnectors().map((c) => ({
+    slug: c.slug,
+    label: c.label,
+    category: c.category,
+    origins: [...(c.origins || [])],
+    transport: c.transport,
+    cadence: c.cadence,
+    scan: {
+      mode: c.scan?.mode ?? null,
+      keys: Array.isArray(c.scan?.keys) ? c.scan.keys.map((k) => (typeof k === "string" ? k : k?.key)).filter(Boolean) : [],
+      profileKeys: c.scan?.profileKeys ?? null,
+      wsUrlRe: c.scan?.wsUrlRe ?? null,
+      mapFrame: c.scan?.mapFrame ?? null
+    },
+    tuned: c.tuned === true
+  }))
+  return { registry: registryView }
+}
+
+/**
+ * Fold a read-only, config-shaped extension payload (frames/storage) into a
+ * normalized Earnings snapshot via a connector's declarative `scan`. Honest
+ * by construction: no usable frame means `status:"unconfigured"` and null
+ * numerics — never a fabricated zero.
+ *
+ * @param {object} connector
+ * @param {object} payload { origin, slug, frames?:[], storage?:[{key,value}] }
+ */
+export function normalizeExtensionPayload(connector, payload = {}) {
+  const slug = connector?.slug || payload.slug
+  const mapFrame = connector?.scan?.mapFrame || {}
+  const frames = Array.isArray(payload.frames) ? payload.frames : []
+
+  // Pull the first parseable value for each Earnings field across any frame
+  // that carries one of the field's declared aliases.
+  const fields = ["balance", "today", "lifetime", "payoutThreshold", "estimatedDaily"]
+  const values = {}
+  for (const f of fields) {
+    const aliases = Array.isArray(mapFrame[f]) ? mapFrame[f] : (mapFrame[f] ? [mapFrame[f]] : [])
+    let found = false
+    for (const frame of frames) {
+      if (!frame || typeof frame !== "object") continue
+      for (const alias of aliases) {
+        const raw = frame[alias]
+        if (raw == null) continue
+        const n = parseAmount(raw)
+        if (n != null) {
+          values[f] = n
+          found = true
+          break
+        }
+      }
+      if (found) break
+    }
+    if (!found) values[f] = null
+  }
+
+  const sawValue = Object.values(values).some((v) => v != null)
+  return normalizeEarnings({
+    provider: slug,
+    platform: connector?.label ?? slug,
+    source: "extension",
+    status: sawValue ? "ok" : "unconfigured",
+    balance: values.balance,
+    today: values.today,
+    lifetime: values.lifetime,
+    payoutThreshold: values.payoutThreshold,
+    estimatedDaily: values.estimatedDaily,
+    extra: { origin: payload.origin, frameCount: frames.length }
+  })
+}
 
 /**
  * Generic browser-transport collector: opens a persistent bridge session for
