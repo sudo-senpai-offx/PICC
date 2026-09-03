@@ -319,6 +319,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
+  // Q5 — income wsFrames relay (income leg). The content script's wsFrames
+  // executor buffers DECLARATIVE income frames (captured from a configured
+  // venue's gateway WS stream by an inject sniffer, tagged __piccIncomeFrame)
+  // and tunnels them here — this worker context is host-permission exempt, so
+  // it performs the ingest POST on the sensor's behalf (a content-script fetch
+  // to http://localhost from an https venue page dies on CORS + mixed content).
+  // The server's /api/extension/ingest income branch routes on `origin`; the
+  // frames are already sanitized by content.js and re-validated server-side.
+  if (msg.action === "income-frames") {
+    const origin = String(msg.origin ?? "").slice(0, 128)
+    const slug = String(msg.slug ?? "").slice(0, 64)
+    const frames = Array.isArray(msg.frames) ? msg.frames : []
+    if (!origin || !frames.length) { sendResponse({ ok: false, error: "no origin or frames" }); return false }
+    if (frames.length > 200) { sendResponse({ ok: false, error: "batch too large" }); return false } // ingest cap (handlers.mjs:4294)
+    serverFetch("/api/extension/ingest", { method: "POST", body: { origin, slug, frames } })
+      .then((r) => sendResponse({ ok: r.ok === true, status: r.status ?? null, error: r.error ?? null }))
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message ?? err) }))
+    return true
+  }
+
   // T13 — venue-session observation relay (capture leg). Same channel as
   // relay-flush: the content script observes the venue tab's configured keys +
   // storage-tier account profile, tunnels the observation through the worker

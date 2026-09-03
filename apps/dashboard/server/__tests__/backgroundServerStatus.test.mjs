@@ -207,6 +207,54 @@ describe("background worker server-status for the popup (T11 follow-up)", () => 
     expect(fetchCalls).toBe(before) // no POST until a valid, trusted batch arrives
   })
 
+  it("income-frames (Q5): a trusted sensor's income batch is POSTed with origin+slug to ingest", async () => {
+    const posts = []
+    const h = makeHarness({
+      fetchFn: async (url, init) => {
+        if (String(url).includes("/api/extension/ingest")) {
+          posts.push({ url, init })
+          return { ok: true, status: 200, json: async () => ({ ok: true, origin: "app.getgrass.io", slug: "grass", accepted: 1 }) }
+        }
+        return { ok: true, json: async () => okHealth }
+      }
+    })
+    await h.settleBoot()
+    const resp = await h.send(
+      { action: "income-frames", origin: "app.getgrass.io", slug: "grass", frames: [{ ts: 1, credits: "1.5" }] },
+      { id: "picc-test-id" }
+    )
+    expect(resp.ok).toBe(true)
+    expect(resp.status).toBe(200)
+    expect(posts.length).toBe(1)
+    expect(posts[0].url).toContain("/api/extension/ingest")
+    const body = JSON.parse(posts[0].init.body)
+    expect(body.origin).toBe("app.getgrass.io")
+    expect(body.slug).toBe("grass")
+    expect(body.frames).toHaveLength(1)
+  })
+
+  it("income-frames: missing origin, empty/oversized batches and untrusted senders never reach the server", async () => {
+    let fetchCalls = 0
+    const h = makeHarness({ fetchFn: async (url) => { fetchCalls += 1; return { ok: true, json: async () => okHealth } } })
+    await h.settleBoot()
+    const before = fetchCalls
+
+    const noOrigin = await h.send({ action: "income-frames", slug: "grass", frames: [{}] }, { id: "picc-test-id" })
+    expect(noOrigin.ok).toBe(false)
+    expect(noOrigin.error).toBe("no origin or frames")
+
+    const empty = await h.send({ action: "income-frames", origin: "x", frames: [] }, { id: "picc-test-id" })
+    expect(empty.ok).toBe(false)
+
+    const oversize = await h.send({ action: "income-frames", origin: "x", frames: Array(201).fill({}) }, { id: "picc-test-id" })
+    expect(oversize.ok).toBe(false)
+
+    const evil = await h.send({ action: "income-frames", origin: "x", frames: [{}] }, { url: "https://evil.example" })
+    expect(evil).toEqual({ error: "untrusted sender" })
+
+    expect(fetchCalls).toBe(before)
+  })
+
   it("open-broker-tab: focuses the existing venue tab when classifyHost matches (REQ-10)", async () => {
     const h = makeHarness({
       fetchFn: async (url) => {

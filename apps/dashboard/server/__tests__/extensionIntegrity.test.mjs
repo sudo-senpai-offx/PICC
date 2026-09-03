@@ -185,7 +185,7 @@ describe("sensor extension integrity", () => {
     }
     // The full action vocabulary, pinned — adding an action must touch every side.
     expect([...sends].sort()).toEqual([
-      "capture-profiles", "capture-session", "open-broker-tab", "relay-flush", "sensor-queue-depth", "server-status", "venue-scan-now"
+      "capture-profiles", "capture-session", "income-frames", "open-broker-tab", "relay-flush", "sensor-queue-depth", "server-status", "venue-scan-now"
     ])
   })
 
@@ -261,4 +261,4 @@ describe("sensor extension integrity", () => {
     ])
     expect(served.profileKeys).toBe("user|account|profile|auth|session|current|me$|identity")
   })
-})
+
