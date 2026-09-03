@@ -3671,6 +3671,13 @@ async function _handleApiInner(req, res, url, reqId) {
   // Read-only by design: PICC never executes on external platforms.
   // -------------------------------------------------------------------
   if (path === "/api/connectors" && (req.method === "GET" || req.method === "POST")) {
+    // Extension-facing registry snapshot (Task 4): key NAMES only — never
+    // extractor values, teeth, or the user's latest snapshots. This is the
+    // config source the extension broadcasts to income venues (background.js).
+    if (parsed.searchParams.get("forExtension") === "1") {
+      writeJson(res, 200, { ok: true, ...snapshotForExtension() })
+      return
+    }
     const connectors = listConnectors().map((c) => ({
       slug: c.slug,
       label: c.label,

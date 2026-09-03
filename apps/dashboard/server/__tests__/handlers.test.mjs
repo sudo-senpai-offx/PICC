@@ -333,6 +333,20 @@ describe("PICC API handlers", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  it("GET /api/connectors?forExtension=1 returns a safe registry snapshot", async () => {
+    const res = makeRes()
+    await handleApi(makeReq("GET", "/api/connectors?forExtension=1", undefined, {}), res, "/api/connectors?forExtension=1")
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body.registry)).toBe(true)
+    const eo = res.body.registry.find((c) => c.slug === "expertoption")
+    expect(eo).toBeTruthy()
+    expect(eo.origins).toContain("app.expertoption.finance")
+    // extension must never receive teeth/selectors/latest
+    expect(eo.selectors).toBeUndefined()
+    expect(eo.url).toBeUndefined()
+    expect(res.body.latest).toBeUndefined()
+  })
+
   it("trading/venues returns redirect metadata with asset deep-links", async () => {
     const res = makeRes()
     await handleApi(makeReq("GET", "/api/trading/venues?assetId=BTCUSD", undefined, {}), res, "/api/trading/venues?assetId=BTCUSD")
