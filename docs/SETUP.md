@@ -201,7 +201,9 @@ The Trading Suite needs **no keys**: the prediction engine runs on public market
   2. Run `node scripts/capture-eo-session.mjs` — it opens the in-app browser on ExpertOption.
   3. Log in to your demo account once inside that window; the script captures a fresh session token
      (re-capture anytime via `POST /api/browser/capture-session`).
-  4. The token is stored server-side in `server/data/trading-credentials.json`.
+  4. The token is stored server-side, **encrypted at rest** — `server/data/trading-credentials.json`
+     is written through the AES-256-GCM vault (auto-generated `picc-vault.key` beside the store,
+     or `PICC_VAULT_KEY` for deployments), never as plaintext.
   5. Verify via `GET /api/trading/status` — it should show `expertOption.configured: true`.
 
   Until configured, the Trading Suite still works in local/paper mode and labels itself honestly.
