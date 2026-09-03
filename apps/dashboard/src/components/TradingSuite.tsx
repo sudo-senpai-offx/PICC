@@ -95,6 +95,14 @@ function fmtMoney(n: number | null | undefined, currency?: string | null): strin
   return sym + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+/** Price formatter sized by magnitude — FX ticks at 5 decimals, large prices at 0–2. */
+function fmtPrice(n: number | null | undefined): string {
+  if (n == null) return "\u2014"
+  const abs = Math.abs(n)
+  const digits = abs < 1 ? 6 : abs < 10 ? 5 : abs < 1000 ? 2 : 0
+  return n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })
+}
+
 /** Human duration from a millisecond span (e.g. "3m 12s"). */
 function fmtHold(ms: number | null): string {
   if (ms == null) return "—"
@@ -1247,6 +1255,29 @@ function PredictionResultView({ result }: { result: PredictionResult }) {
           <div className="stat-value">{result.sampleSize}</div>
         </div>
       </div>
+      {result.band ? (
+        <div className="grid grid-4">
+          <div>
+            <div className="stat-label muted">90% move band (±)</div>
+            <div className="stat-value">{(result.band.horizonLogMoveP90 * 100).toFixed(1)}%</div>
+          </div>
+          <div>
+            <div className="stat-label muted">80% move band (±)</div>
+            <div className="stat-value">{(result.band.horizonLogMoveP80 * 100).toFixed(1)}%</div>
+          </div>
+          <div>
+            <div className="stat-label muted">90% price window</div>
+            <div className="stat-value">
+              {fmtPrice(result.band.lowerPrice90)} – {fmtPrice(result.band.upperPrice90)}
+            </div>
+          </div>
+          <div>
+            <div className="stat-label muted">Band samples</div>
+            <div className="stat-value">{result.band.sampleSize}</div>
+          </div>
+        </div>
+      ) : null}
+      {result.engine ? <p className="muted small">engine: {result.engine}</p> : null}
       <div className="grid grid-4 muted small">
         <div>momentum {result.models?.momentum?.toFixed(4)}</div>
         <div>mean-rev {result.models?.meanRevert?.toFixed(4)}</div>

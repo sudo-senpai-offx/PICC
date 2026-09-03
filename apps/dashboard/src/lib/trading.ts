@@ -62,6 +62,18 @@ export interface ModelCalls {
   monteCarlo: number
 }
 
+// F-10 — split-conformal band on the h-day |log move|, emitted by the
+// 8-model-classic engine when enough embargoed walk-forward residuals exist.
+export interface ConformalBand {
+  method: "split-conformal"
+  horizonLogMoveP80: number
+  horizonLogMoveP90: number
+  upperPrice90: number
+  lowerPrice90: number
+  sampleSize: number
+  note: string
+}
+
 export interface PredictionResult {
   ok: boolean
   symbol?: string
@@ -72,12 +84,15 @@ export interface PredictionResult {
   direction: "up" | "down" | "flat"
   strength: number
   confidence: number
+  rawConfidence?: number
   hitRate: number | null
   bestModelHitRate: number | null
   agreement: number
   sampleSize: number
   models: ModelCalls
   note: string
+  engine?: string
+  band?: ConformalBand | null
   error?: string
   advisory?: string
   platform?: string

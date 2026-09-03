@@ -28,6 +28,12 @@ import { arimaForecast, holtWintersForecast, lstmLiteForecast, garchForecast } f
 const MODEL_NAMES = ["momentum", "meanRevert", "trend", "monteCarlo", "arima", "prophet", "lstm", "garch"]
 const WEIGHT_FLOOR = 0.06 // minimum weight per model (6%) — lower floor with 8 models
 const WEIGHT_TEMPERATURE = 0.5 // softmax sharpness
+// F-07 — a model needs enough INDEPENDENT walk-forward windows before its hit
+// rate may move ensemble weights at all. With n=12, a Wilson 95% interval on a
+// coin-flip is roughly ±0.28 — below that, "elevated" is indistinguishable
+// from noise, so the model stays neutral at the 50% no-skill baseline.
+const MIN_SIGNAL_SAMPLES = 12
+const MIN_CONFORMAL_SAMPLES = 20 // below this, no honest band can be claimed
 
 function logReturns(closes) {
   const out = []
@@ -71,12 +77,19 @@ function linearSlope(xs) {
  * Compute adaptive ensemble weights from per-model hit rates using
  * temperature-scaled softmax with a floor. Higher-performing models
  * get exponentially more weight, but the floor ensures no model is silenced.
+ *
+ * F-07 significance gate: a model whose hit rate rests on fewer than
+ * MIN_SIGNAL_SAMPLES independent windows (or no backtest at all) is treated
+ * as 50% neutral — its raw rate must not be allowed to inflate a weight on
+ * noise. The floor still guarantees every model keeps a voice.
  */
-function computeWeights(hitRates) {
+function computeWeights(hitRates, counts = {}) {
   const raw = {}
   for (const name of MODEL_NAMES) {
     const rate = hitRates[name]
-    const perf = rate != null ? rate : 0.5 // treat unknown as 50%
+    const n = counts[name] ?? 0
+    const significant = rate != null && n >= MIN_SIGNAL_SAMPLES
+    const perf = significant ? rate : 0.5 // neutral until proven on enough windows
     // Shift so 0.5 is neutral, then apply temperature
     raw[name] = Math.exp((perf - 0.5) / WEIGHT_TEMPERATURE)
   }
@@ -189,16 +202,26 @@ function modelExpectations(closes, h) {
 
 // Walk-forward backtest: for the trailing K windows, predict the next `h` days
 // from each model using only data up to that point, then score the call.
+//
+// F-06 — windows are EMBARGOED, never overlapping: after a window whose test
+// span is [start+1, start+h], the next training cut starts at start+h+2 (one
+// quiet bar between test and the next training set). Overlapping windows
+// shared realized data and let near-identical noise be counted as independent
+// evidence; hit rates now rest on genuinely separate slices.
 export function backtestModels(closes, h, maxWindows = 20) {
   const minObs = Math.max(30, h * 4 + 10)
   const scores = { momentum: [], meanRevert: [], trend: [], monteCarlo: [], arima: [], prophet: [], lstm: [], garch: [] }
   const total = closes.length
-  if (total < minObs + h + 5) return { scores, sampleSize: 0, hitRates: {}, windows: [] }
+  if (total < minObs + h + 5) {
+    return { scores, sampleSize: 0, hitRates: {}, windows: [], counts: {}, residuals: [] }
+  }
 
-  const windows = Math.min(maxWindows, total - minObs - h)
-  const step = Math.max(1, Math.floor(windows / maxWindows))
+  // Non-overlapping walk: each window consumes h test bars (+1 embargo bar).
+  const step = Math.max(1, h + 1)
   let evaluated = 0
   const windowResults = []
+  const residuals = [] // |realized h-day log return| per window (conformal input)
+  const counts = { momentum: 0, meanRevert: 0, trend: 0, monteCarlo: 0, arima: 0, prophet: 0, lstm: 0, garch: 0 }
 
   for (let start = minObs; start + h <= total - 1 && evaluated < maxWindows; start += step) {
     evaluated += 1
@@ -206,11 +229,11 @@ export function backtestModels(closes, h, maxWindows = 20) {
     const exp = modelExpectations(slice, h)
     const future = closes.slice(start + 1, start + 1 + h)
     // The forecast is made from close[start] for an h-step horizon — realized
-    // return must span h steps: log(c[start+h]) − log(c[start]). Using
-    // future[0] measured only h−1 steps, biasing hit-rate scoring.
+    // return must span h steps: log(c[start+h]) − log(c[start]).
     const realized =
       Math.log(Math.max(Number(future[future.length - 1]) || 0, EPS)) -
       Math.log(Math.max(Number(slice[slice.length - 1]) || 0, EPS))
+    residuals.push(Math.abs(realized))
     let windowHits = 0
     let windowModels = 0
     for (const name of Object.keys(scores)) {
@@ -218,20 +241,34 @@ export function backtestModels(closes, h, maxWindows = 20) {
       const dir = Math.abs(call) < EPS ? 0 : call > 0 ? 1 : -1
       const truth = Math.abs(realized) < EPS ? 0 : realized > 0 ? 1 : -1
       if (dir !== 0) {
+        counts[name] += 1
         const hit = dir === truth ? 1 : 0
         scores[name].push(hit)
         windowHits += hit
         windowModels++
       }
     }
-    windowResults.push({ idx: evaluated, hit: windowModels > 0 ? windowHits / windowModels > 0.5 : false })
+    windowResults.push({ idx: evaluated, start, hit: windowModels > 0 ? windowHits / windowModels > 0.5 : false })
   }
 
   const hitRates = {}
   for (const [name, list] of Object.entries(scores)) {
     hitRates[name] = list.length > 0 ? list.reduce((a, b) => a + b, 0) / list.length : null
   }
-  return { scores, sampleSize: evaluated, hitRates, windows: windowResults }
+  return { scores, sampleSize: evaluated, hitRates, windows: windowResults, counts, residuals }
+}
+
+/**
+ * Split-conformal quantile (F-10): the (1−α) empirical quantile of a residual
+ * sample with finite-sample correction, i.e. sorted[ceil((n+1)(1−α))−1].
+ * Distribution-free coverage on the sampled distribution, honest for any
+ * error law — nothing Gaussian assumed.
+ */
+export function conformalQuantile(sortedAsc, alpha = 0.1) {
+  const n = sortedAsc.length
+  if (!n) return null
+  const idx = Math.min(n - 1, Math.max(0, Math.ceil((n + 1) * (1 - alpha)) - 1))
+  return sortedAsc[idx]
 }
 
 export function predictDirection(closes, horizonDays = 3, opts = {}) {
@@ -253,10 +290,11 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
   const vol = exp.vol
   delete exp.vol
 
-  const { hitRates, sampleSize } = backtestModels(clean, h, maxWindows)
+  const { hitRates, sampleSize, counts, residuals } = backtestModels(clean, h, maxWindows)
 
-  // Dynamic ensemble weights from backtest hit rates (EMA-updated per call)
-  const weights = computeWeights(hitRates)
+  // Dynamic ensemble weights from backtest hit rates, gated by significance
+  // (F-07): models under MIN_SIGNAL_SAMPLES windows stay neutral at 50%.
+  const weights = computeWeights(hitRates, counts)
   const weightedValues = MODEL_NAMES.map((name) => (exp[name] || 0) * (weights[name] || 0.25))
   const ensembleScore = weightedValues.reduce((a, b) => a + b, 0)
   const direction = Math.abs(ensembleScore) < EPS ? "flat" : ensembleScore > 0 ? "up" : "down"
@@ -276,7 +314,15 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
     return sum + (rate != null ? rate * (weights[name] || 0.25) : 0)
   }, 0)
   const meanHit = modelRates.length ? weightedHit : null
-  const bestHit = modelRates.length ? Math.max(...modelRates) : null
+  // F-07 — "best model" used to be max over ALL hit rates, which on ~20 tiny
+  // overlapping windows was a selection-bias illusion. Now it is the best rate
+  // among models that cleared the significance floor, or null when none has.
+  const bestHit = MODEL_NAMES.reduce((best, name) => {
+    const rate = hitRates[name]
+    const n = counts[name] ?? 0
+    if (rate == null || n < MIN_SIGNAL_SAMPLES) return best
+    return best == null ? rate : Math.max(best, rate)
+  }, null)
 
   // Shrink toward the no-skill 50% baseline when the sample is thin.
   const shrink = Math.max(0.25, Math.min(1, sampleSize / 20))
@@ -297,14 +343,39 @@ export function predictDirection(closes, horizonDays = 3, opts = {}) {
     ? decayedConfidence(confidencePct, createdAt, h)
     : confidencePct
 
+  // F-10 — honest uncertainty: a distribution-free band on the h-day absolute
+  // log move built from the embargoed walk-forward residuals. Coverage is a
+  // claim about the sampled distribution, never a promise about this trade.
+  const last = Number(clean[clean.length - 1])
+  let band = null
+  if ((residuals?.length ?? 0) >= MIN_CONFORMAL_SAMPLES) {
+    const sorted = [...residuals].sort((a, b) => a - b)
+    const q90 = conformalQuantile(sorted, 0.1)
+    const q80 = conformalQuantile(sorted, 0.2)
+    if (q90 != null) {
+      band = {
+        method: "split-conformal",
+        horizonLogMoveP80: Number(q80.toFixed(6)),
+        horizonLogMoveP90: Number(q90.toFixed(6)),
+        // price bounds around the current close for the 90% level
+        upperPrice90: Number((last * Math.exp(q90)).toFixed(last < 10 ? 6 : 4)),
+        lowerPrice90: Number((last * Math.exp(-q90)).toFixed(last < 10 ? 6 : 4)),
+        sampleSize: residuals.length,
+        note: "h-day |log move| bound from embargoed walk-forward residuals (distribution-free). Covers the SIZE of the move, not its direction — direction confidence is separate."
+      }
+    }
+  }
+
   return {
     ok: true,
-    last: Number(clean[clean.length - 1]),
+    engine: "8-model-classic", // F-08: identity of the brain that produced this
+    last,
     horizonDays: h,
     direction,
     strength: Math.round(strength * 100) / 100,
     confidence: finalConfidence,
     rawConfidence: confidencePct,
+    band,
     weights: Object.fromEntries(MODEL_NAMES.map((n) => [n, Math.round((weights[n] || 0) * 100)])),
     hitRate: meanHit != null ? Math.round(meanHit * 100) : null,
     bestModelHitRate: bestHit != null ? Math.round(bestHit * 100) : null,
