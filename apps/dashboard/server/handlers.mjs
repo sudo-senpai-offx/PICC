@@ -985,6 +985,22 @@ export function isApiRequest(url) {
   return url.startsWith("/api/")
 }
 
+// Whitelist audit (A4, F5): the only timeframes the indicators endpoint can
+// serve HONESTLY are the liveEO watch-period buffers (minute keys as seconds
+// or their short labels) and the daily family. Chart labels with no minute
+// buffer here (4h, 30m, 1wk, ...) used to fall through to a Yahoo DAILY
+// series with only a console warning — reject them outright instead of
+// silently serving the wrong resolution.
+const INDICATOR_TIMEFRAMES = {
+  daily: "daily", "1d": "daily", "86400": "daily",
+  "60": "60", "300": "300", "900": "900", "3600": "3600",
+  "1m": "60", "5m": "300", "15m": "900", "1h": "3600"
+}
+/** Canonicalize an indicators timeframe request key, or null if unsupported. */
+export function canonicalIndicatorTimeframe(raw) {
+  return Object.prototype.hasOwnProperty.call(INDICATOR_TIMEFRAMES, raw) ? INDICATOR_TIMEFRAMES[raw] : null
+}
+
 export async function handleApi(req, res, url) {
   // Request-ID correlation: accept client ID or generate one
   const reqId = req.headers["x-request-id"] || createRequestId()
@@ -1964,7 +1980,9 @@ async function _handleApiInner(req, res, url, reqId) {
   // ── Advanced indicator calculations ──────────────────────────────────────
   if (req.method === "GET" && path === "/api/trading/indicators") {
     const assetId = parsed.searchParams.get("assetId") || "EURUSD"
-    const timeframe = parsed.searchParams.get("timeframe") || "daily"
+    const tfRaw = parsed.searchParams.get("timeframe") || "daily"
+    const timeframe = canonicalIndicatorTimeframe(tfRaw)
+    if (timeframe == null) return writeJson(res, 400, { error: "unsupported timeframe" })
     const count = parsed.searchParams.get("count") || 200
     const safeCount = Math.min(500, Math.max(10, Number(count) || 200))
 
