@@ -11,7 +11,10 @@ import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url))
-const SW = readFileSync(join(__dirname, "..", "..", "public", "sw.js"), "utf8")
+// EOL-agnostic read: the repo has no .gitattributes, so Windows checkouts
+// (autocrlf) deliver sw.js with CRLF while CI/Linux deliver LF. These pins are
+// about code structure, never line endings — normalize before asserting.
+const SW = readFileSync(join(__dirname, "..", "..", "public", "sw.js"), "utf8").replace(/\r\n/g, "\n")
 
 // The exact pre-actions focus-or-open block (old sw.js:42-48). Byte-identical:
 // the T3 requirement is that the actions refactor does not touch this path.

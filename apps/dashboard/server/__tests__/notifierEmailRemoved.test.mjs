@@ -25,7 +25,11 @@ describe("email channel removal persistence tolerance (T9 / REQ-11)", () => {
           minConfidence: 65,
           leadMinutes: 3,
           windowMinutes: 15,
-          channels: { inApp: true, webpush: false, email: true, webhook: false }
+          // webpush defaults ON since the email removal (notifier.mjs defaults);
+          // a user-disabled channel would honestly record "off", not "skipped" —
+          // the email-era fixture must reflect shipped defaults to assert the
+          // disabled-channel semantics it actually targets.
+          channels: { inApp: true, webpush: true, email: true, webhook: false }
         },
         subscriptions: [],
         recent: [],

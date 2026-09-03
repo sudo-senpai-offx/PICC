@@ -21,7 +21,9 @@ if (!process.env.PICC_ENV_LOADED) {
 }
 
 export const env = {
-  port: Number(process.env.PORT ?? 3000),
+  // A missing, empty, non-numeric, or "0" PORT env (e.g. sandboxes that export PORT=0)
+  // must not yield a 0/NaN bind — fall back to the documented default.
+  port: Number(process.env.PORT) || 3000,
   // Cloud LLM providers — free tiers, no credit card needed.
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
