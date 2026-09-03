@@ -49,18 +49,22 @@ function isTrustedSender(sender) {
 // navigation injects a fresh one. Best-effort: reload open broker + dashboard
 // tabs so the sensor comes back without user action. Next-navigation injection
 // is the safety net if this is too aggressive in some Chrome version (R1).
-function resurrectSensorTabs() {
-  chrome.tabs.query({}, (tabs) => {
-    for (const tab of tabs) {
-      if (!tab.id || !tab.url) continue
-      try {
-        const u = new URL(tab.url)
-        const onBroker = /expertoption\.(com|finance)$/.test(u.hostname)
-        const onDashboard = (u.hostname === "localhost" || u.hostname === "127.0.0.1") && [5173, 3000].includes(Number(u.port))
-        if (onBroker || onDashboard) chrome.tabs.reload(tab.id).catch(() => {})
-      } catch { /* about:blank, chrome://, etc. */ }
-    }
-  })
+async function resurrectSensorTabs() {
+  // Q5 Task 8: sensor hosts are config-driven, not EO-only. Refresh the venue
+  // config + generalized registry snapshot first so a registered income origin
+  // (e.g. grass) is recognized too; with the server offline the config maps
+  // stay empty and this degrades to the localhost-dashboard reload only.
+  try { await ensureVenueConfig() } catch { /* offline — degrade gracefully */ }
+  const tabs = await chrome.tabs.query({})
+  for (const tab of tabs) {
+    if (!tab.id || !tab.url) continue
+    try {
+      const u = new URL(tab.url)
+      const onSensor = sensorHostKind(u.hostname) !== null
+      const onDashboard = (u.hostname === "localhost" || u.hostname === "127.0.0.1") && [5173, 3000].includes(Number(u.port))
+      if (onSensor || onDashboard) chrome.tabs.reload(tab.id).catch(() => {})
+    } catch { /* about:blank, chrome://, etc. */ }
+  }
 }
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -445,6 +449,19 @@ function classifyHost(hostname) {
   return null
 }
 
+// Q5 Task 8: a host is a SENSOR target when it is a trading venue
+// (venueConfigs from capture-profiles) OR a registered income-connector origin
+// (venueCadence from the forExtension registry snapshot). Income origins carry
+// no trading venueId — the worker pings their sensor by host and cadenceForVenue
+// applies the connector's own registry cadence.
+function sensorHostKind(hostname) {
+  const venueId = classifyHost(hostname)
+  if (venueId) return { kind: "trading", venueId }
+  const host = String(hostname || "").toLowerCase().replace(/^www\./, "")
+  if (venueCadence.has(host)) return { kind: "income", host }
+  return null
+}
+
 // Q5: per-venue cadence. A host that matches a generalized connector uses that
 // connector's registry `cadence` tier values, min-bounded by the beat floor;
 // the tier selection is identical to the pure cross-site cadenceFor policy
@@ -501,8 +518,10 @@ function refreshTabModel() {
       if (tab?.id == null || !tab.url) continue
       let u = null
       try { u = new URL(tab.url) } catch { continue }
-      const venueId = classifyHost(u.hostname)
-      if (!venueId) continue
+      // Q5 Task 8: model BOTH trading venues and registered income origins — an
+      // income tab (venueId null) still gets the worker's sync beat and cadence.
+      const kind = sensorHostKind(u.hostname)
+      if (!kind) continue
       live.add(tab.id)
       const ex = tabVenues.get(tab.id)
       if (ex) {
@@ -513,7 +532,7 @@ function refreshTabModel() {
         // Unknown focus history on a fresh model → default LONG-inactive so a
         // stale tab is never hammered; the first real focus flips it realtime.
         tabVenues.set(tab.id, {
-          venueId,
+          venueId: kind.venueId ?? null,
           host: u.hostname,
           url: tab.url,
           active: tab.active === true,

@@ -41,15 +41,20 @@ function makeHarness({ fetchFn = async () => ({ ok: true, json: async () => okHe
     responses: [],
     tabUpdates: [],       // [tabId, props] from open-broker-tab focus
     tabCreates: [],       // urls from open-broker-tab create
-    windowFocuses: []     // [windowId, props] from open-broker-tab focus
+    windowFocuses: [],    // [windowId, props] from open-broker-tab focus
+    tabReloads: [],       // tabIds reloaded by resurrectSensorTabs (Q5 Task 8)
+    sentMessages: [],     // [tabId, msg] sent by the worker (Q5 Task 8 beat)
+    installedListener: null,
+    startupListener: null,
+    alarmListener: null
   }
 
   const chrome = {
     runtime: {
       id: "picc-test-id",
       getManifest: () => ({ version: "9.9.9" }),
-      onInstalled: { addListener() {} },
-      onStartup: { addListener() {} },
+      onInstalled: { addListener: (fn) => { state.installedListener = fn } },
+      onStartup: { addListener: (fn) => { state.startupListener = fn } },
       onMessage: {
         addListener: (fn) => { state.onMessageListener = fn }
       }
@@ -77,13 +82,15 @@ function makeHarness({ fetchFn = async () => ({ ok: true, json: async () => okHe
     alarms: {
       getAll: async () => [],
       create: () => {},
-      onAlarm: { addListener() {} }
+      onAlarm: { addListener: (fn) => { state.alarmListener = fn } }
     },
     tabs: {
       query: tabsOverrides.query ?? (async () => []),
       update: async (id, props) => { state.tabUpdates.push([id, props]); return { id } },
       create: async ({ url }) => { state.tabCreates.push(url); return { id: 99, url } },
       get: async (id) => ({ id, url: "https://app.expertoption.finance/", title: "" }),
+      reload: async (id) => { state.tabReloads.push(id); return {} },
+      sendMessage: async (id, msg) => { state.sentMessages.push([id, msg]); return {} },
       onActivated: { addListener() {} },
       onUpdated: { addListener() {} },
       onRemoved: { addListener() {} }
@@ -97,6 +104,7 @@ function makeHarness({ fetchFn = async () => ({ ok: true, json: async () => okHe
     chrome,
     SYNC: syncPolicy.SYNC,
     cadenceFor: syncPolicy.cadenceFor,
+    cadenceMsFor: syncPolicy.cadenceMsFor,
     fetch: (url, init) => fetchFn(url, init),
     AbortController: globalThis.AbortController,
     AbortSignal: globalThis.AbortSignal,
@@ -328,5 +336,71 @@ describe("background worker server-status for the popup (T11 follow-up)", () => 
     expect(resp).toEqual({ error: "untrusted sender" })
     expect(h.state.tabCreates).toEqual([])
     expect(h.state.tabUpdates).toEqual([])
+  })
+
+  // Q5 Task 8 — the worker's sensor-host recognition is config-driven: a
+  // registered income origin (grass) from the forExtension snapshot is treated
+  // as a sensor host alongside the trading venue config — no EO-only regexes.
+  function registryHarness(tabsQuery) {
+    return makeHarness({
+      fetchFn: async (url) => {
+        const s = String(url)
+        if (s.includes("/api/connectors?forExtension=1")) {
+          return {
+            ok: true, status: 200,
+            json: async () => ({
+              ok: true,
+              registry: [
+                { slug: "grass", origins: ["app.getgrass.io", "getgrass.io"], cadence: { realtimeMs: 20000, intermittentMs: 120000, longMs: 600000, activityWindowMs: 90000, prolongedMs: 1200000 } },
+                { slug: "expertoption", origins: ["app.expertoption.finance"], cadence: {} }
+              ]
+            })
+          }
+        }
+        if (s.includes("/api/trading/capture-profiles")) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, venues: [{ venueId: "expertoption", hostRe: "expertoption\\.(com|finance)", enabled: true }] }) }
+        }
+        return { ok: true, status: 200, json: async () => okHealth }
+      }
+    }, { query: tabsQuery })
+  }
+
+  async function until(fn, ms = 2000) {
+    const t0 = Date.now()
+    while (!fn()) {
+      if (Date.now() - t0 > ms) throw new Error("timeout waiting for background worker")
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  }
+
+  it("Task 8: resurrectSensorTabs reloads a registered income-origin tab (grass) alongside trading venues", async () => {
+    const h = registryHarness(async () => [
+      { id: 11, url: "https://app.getgrass.io/dashboard" },
+      { id: 12, url: "https://app.expertoption.finance/" },
+      { id: 13, url: "https://example.com/" }
+    ])
+    await h.settleBoot()
+    h.state.startupListener() // resurrectSensorTabs() — config fetch + reload pass
+    await until(() => h.state.tabReloads.length >= 2)
+    // grass (registry origin) + EO (trading venue config) are reloaded...
+    expect(h.state.tabReloads.sort()).toEqual([11, 12])
+    // ...and an unrelated host is never touched.
+    expect(h.state.tabReloads).not.toContain(13)
+  })
+
+  it("Task 8: a sync beat pings an income-origin sensor tab at its registry cadence", async () => {
+    const h = registryHarness(async () => [
+      { id: 21, url: "https://app.getgrass.io/dashboard", active: true },
+      { id: 22, url: "https://news.example", active: false }
+    ])
+    await h.settleBoot()
+    expect(h.state.alarmListener).toBeTruthy()
+    h.state.alarmListener({ name: "picc-sync" })
+    await until(() => h.state.sentMessages.some(([id]) => id === 21))
+    const pings = h.state.sentMessages.filter(([id]) => id === 21)
+    expect(pings.length).toBeGreaterThan(0)
+    expect(pings[0][1]).toEqual({ action: "venue-scan-now" })
+    // the unrelated tab is never pinged
+    expect(h.state.sentMessages.some(([id]) => id === 22)).toBe(false)
   })
 })
