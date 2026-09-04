@@ -1,0 +1,41 @@
+# PICC repository — secret scan configuration for gitleaks CI gate.
+#
+# Gitleaks catches committed credentials, API keys, and session tokens. The
+# explicit deny rules below guard against the known leaked ExpertOption tokens
+# even if gitleaks' built-in generic rules change in a future version.
+
+# Global allowlist: paths and regexes that are never secrets. When [allowlist]
+# is specified it replaces gitleaks' built-in allowlist, so we include the
+# patterns that are known false positives in this repo.
+[allowlist]
+description = "PICC repo false positives — build artifacts, test fixtures, data dirs"
+paths = [
+  # Dashboard build output
+  'tsconfig\.tsbuildinfo$',
+  # Runtime data directories (not source-controlled secrets)
+  'apps/dashboard/server/data/',
+  # npm lockfiles
+  'package-lock\.json$',
+  # Test fixtures may contain dummy tokens
+  '\.test\.(mjs|ts|tsx)$',
+]
+regexes = [
+  # Monaco editor worker blob (not a secret)
+  'monaco-editor',
+]
+
+# ── Explicit deny: known leaked ExpertOption session tokens ────────────────
+# These WILL be flagged even if gitleaks' generic-api-key rule somehow misses
+# them. Both tokens must be considered compromised and rotated immediately.
+
+[[rules]]
+id = "picc-eo-session-token"
+description = "ExpertOption session token — known leaked in git history. Rotate immediately. Must never be re-committed."
+regex = '''6dc12a98582558c0581c56bdc27f8c8c'''
+tags = ["secret", "credential", "expertoption"]
+
+[[rules]]
+id = "picc-eo-demo-token"
+description = "ExpertOption demo cookie token — known leaked. Rotate if still valid."
+regex = '''b456f4a90adc1fbbf0b557151a0dea2e'''
+tags = ["secret", "credential", "expertoption"]

@@ -14,6 +14,24 @@ on:
 # build, test and smoke resolve to the @picc/dashboard workspace.
 
 jobs:
+  # Secrets gate — runs FIRST and independently so a leaked credential never
+  # reaches the build matrix. Gitleaks scans the whole tree (and the full diff
+  # on PRs) against .gitleaks.toml, which pins the known leaked EO tokens.
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_LICENSE: ""
+        with:
+          fetch-depth: 0
+
   lint-and-typecheck:
     runs-on: ${{ matrix.os }}
     strategy:

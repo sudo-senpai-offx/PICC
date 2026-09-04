@@ -258,7 +258,7 @@ describe("detectLoginState — heuristics", () => {
     const p = page()
     p.setUrl("https://app.expertoption.com/")
     const live = "8b36ae2b603b5975c9695d801f8fa543"
-    const stale = "b456f4a90adc1fbbf0b557151a0dea2e"
+    const stale = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // fake stale mirror for fixture
     p.setEval([
       { source: "cookie", key: "token", value: live, score: 5 },
       { source: "cookie", key: "tokenDemo", value: stale, score: 5 },
