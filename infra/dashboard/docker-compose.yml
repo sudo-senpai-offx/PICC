@@ -14,7 +14,10 @@ services:
     container_name: picc-dashboard
     restart: unless-stopped
     ports:
-      - "${PICC_PORT:-3000}:3000"
+      # Bind to loopback only — PICC is a single-owner self-hosted command
+      # centre; publishing on all interfaces would expose it on the LAN (audit
+      # Fix 7). Set PICC_PORT to change the host port.
+      - "127.0.0.1:${PICC_PORT:-3000}:3000"
     env_file:
       - ../../apps/dashboard/.env
     volumes:
