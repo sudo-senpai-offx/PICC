@@ -266,7 +266,7 @@ export interface SessionPolicyRow {
 }
 
 export function getSessionPolicy(token?: string): Promise<{ ok: boolean; userId: string; venues: Record<string, SessionPolicyRow> }> {
-  return request("/api/trading/session-policy", {}, token)
+  return request("/trading/session-policy", {}, token)
 }
 
 export function setSessionPolicy(
@@ -274,7 +274,7 @@ export function setSessionPolicy(
   decision: SessionPolicyDecision,
   token?: string
 ): Promise<{ ok: boolean; userId: string; venueId: string; decision: SessionPolicyDecision; at: string | null }> {
-  return post("/api/trading/session-policy", { venueId, decision }, token)
+  return post("/trading/session-policy", { venueId, decision }, token)
 }
 
 // ---------------------------------------------------------------------
