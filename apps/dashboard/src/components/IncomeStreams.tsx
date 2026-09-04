@@ -4,6 +4,7 @@ import { postPresence, pushStreamsSnapshot, testHoneygain, syncCashPilot, getSes
 import type { SessionPolicyDecision } from "@/lib/api"
 import { STREAM_CATEGORY_LABELS, CATALOG, BANDWIDTH_APPS, DEPIN_APPS, STORAGE_APPS, COMPUTE_APPS, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS, TRADING_PLATFORM_APPS } from "@/lib/streamCatalog"
 import { StreamSetupWizard } from "@/components/StreamSetupWizard"
+import { HoldingsEditor } from "@/components/HoldingsEditor"
 import {
   addStream,
   applyAutoEstimates,
@@ -455,7 +456,7 @@ function StreamsTab() {
 // Overview tab — unified aggregates + holdings from GET /api/income/overview
 // ---------------------------------------------------------------------
 function OverviewTab() {
-  const { overview, loading } = useIncomeOverview()
+  const { overview, loading, reload } = useIncomeOverview()
 
   if (loading) return <div className="card"><p className="muted">Loading overview…</p></div>
   if (!overview) return <div className="card"><p className="muted">Overview unavailable.</p></div>
@@ -549,7 +550,7 @@ function OverviewTab() {
       <div className="card">
         <h2>Holdings</h2>
         {holdingsCount === 0 ? (
-          <p className="muted">No holdings recorded yet.</p>
+          <p className="muted">No holdings recorded yet — add one below.</p>
         ) : (
           <div className="row wrap" style={{ gap: 12 }}>
             {[
@@ -568,6 +569,7 @@ function OverviewTab() {
             ))}
           </div>
         )}
+        <HoldingsEditor onChange={reload} />
       </div>
     </div>
   )
