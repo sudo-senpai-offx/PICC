@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-09-04 - Finalization wave (audit remediation + UX/a11y + push)
+
+### Security & secrets (audit Fix 1)
+- Deleted six `scripts/probe-eo-*.mjs` files that hard-coded a committed ExpertOption session token (`6dc12a98…`).
+- Added `.gitleaks.toml` (false-positive allowlist + pinned deny rules) and an independent `secrets-scan` gitleaks job in CI that runs before the build matrix.
+- Neutralised the remaining credential-shaped fixture token in `browserStudio.login.test.mjs`.
+- Human steps remain: rotate the live EO session and decide on a history rewrite (see `docs/FINALIZATION_REPORT.md` §6.1).
+
+### Payments & authorization (audit Fixes 2, 3, 5, 6)
+- BTCPay: `createBtcpayInvoice` embeds `{userId, tier}` in invoice metadata and the status read-back restores them — the tier grant branch in `handlers.mjs` is now reachable (was permanently unreachable). New `btcpay.test.mjs`.
+- Stripe portal: client-supplied `customerId` is ignored; the route resolves the authenticated user's own customer server-side (IDOR closure). New `stripePortal.test.mjs`.
+- eWallet: orders are owner-bound (`userId` required); confirmation is owner-scoped with an explicit `selfApprove` flag used only in single-owner demo mode. Extended `ewallet.test.mjs`.
+- `round2` defined + exported in `handlers.mjs` (was a runtime `ReferenceError` on the spread route). New `spreadRoute.test.mjs`.
+
+### Web app & correctness (audit Fix 4)
+- `session-policy` transport no longer double-prefixes `/api` (404 fix). New `sessionPolicy.test.ts`.
+
+### Infrastructure (audit Fix 7)
+- Dashboard and n8n docker-compose ports bound to `127.0.0.1` only.
+
+### Process invocation (audit Fix 8 / CWE-78)
+- `browserBridge.mjs` converted every `execSync("shell string…")` to `execFileSync(cmd, [args])`. New `browserBridge.execFile.test.mjs` source-lock.
+
+### UX & accessibility
+- Skeleton loading placeholders (new `Skeleton` in `ui.tsx` + shimmer CSS) across Account Metrics, Data Sources, Portfolio Aggregate, Session panels.
+- ARIA/combobox/listbox/dialog semantics in CommandPalette, NotificationCenter (real buttons), DockablePreview tabs (keyboard-activable), TopBar/TradingHud toggles.
+- Chart fullscreen toggle (Esc-aware); `prefers-reduced-motion` global kill-switch; compact mobile tier CSS.
+- TradeOrderForm is paper-only (Demo-EO path removed, "simulated · advisory-only" badge) — UI half of the advisory-only posture.
+
+### Tests & hermeticity
+- `tradeJournal.mjs` honors `PICC_JOURNAL_DATA_DIR`; new hermetic tests for tradeJournal, notificationCenter, portfolioAnalytics, riskParity.
+- Full suite: **1,525/1,525 tests (143 files)**; `tsc -b --noEmit` clean.
+
+### Docs & hygiene
+- `docs/FINALIZATION_REPORT.md`: complete change ledger, decisions, remaining-work register, multi-phased blueprint.
+- `docs/AUDIT_REPORT.md`: §8 remediation status closed out (Fixes 1-8 addressed; Fix 10 declined with reason).
+- `docs/EXPLICIT_AUDIT_LEDGER.md`/PRIVACY/SETUP truth-sync from the earlier 2026-09-04 doc batch stands.
+- Gitignore: `*.tsbuildinfo`, `.freebuff/`, `dev_pack_code.py`, `project_tree.txt`; `tsconfig.tsbuildinfo` untracked.
+- `master` pushed to `origin` (Q5 series + F-series + closures + this wave).
+
 ## 2026-08-23 - Hardening session (Phases 0-6)
 
 ### Phase 0 — Dependency + env ground truth
