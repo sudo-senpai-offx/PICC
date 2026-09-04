@@ -1087,6 +1087,30 @@ export function liveEOStats() {
 
 const lastLiveFetch = new Map() // `${assetId}:${period}` -> ts (per-key re-fetch throttle)
 const LIVE_FETCH_MIN_MS = 3000
+export const LIVE_FETCH_TTL_MS = 5 * 60 * 1000 // entries idle past this are useless throttle state
+export const LIVE_FETCH_MAX_KEYS = 256 // hard cap — audit §5.2 unbounded-growth guard
+
+/**
+ * Prune the per-key live-fetch throttle map (audit §5.2): drop entries idle
+ * past LIVE_FETCH_TTL_MS, then enforce LIVE_FETCH_MAX_KEYS by evicting the
+ * oldest keys. Returns the surviving size. Pure — unit-testable.
+ */
+export function pruneLiveFetchMap(
+  map,
+  { now = Date.now(), ttlMs = LIVE_FETCH_TTL_MS, maxKeys = LIVE_FETCH_MAX_KEYS } = {}
+) {
+  if (!(map instanceof Map)) return 0
+  const cutoff = now - ttlMs
+  for (const [k, ts] of map) {
+    if (Number(ts) < cutoff) map.delete(k)
+  }
+  while (map.size > maxKeys) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
+  return map.size
+}
 
 /**
  * On-demand candle fetch for an arbitrary asset. Returns OHLC from the buffer
@@ -1109,6 +1133,9 @@ export async function fetchAssetCandles(assetId, period = 60, count = 120) {
   }
   try {
     lastLiveFetch.set(key, Date.now())
+    // Bound the map: a long-lived server churning through many asset/period
+    // keys must not accumulate throttle state forever (audit §5.2).
+    if (lastLiveFetch.size > LIVE_FETCH_MAX_KEYS) pruneLiveFetchMap(lastLiveFetch)
     const hist = await session.candles(assetId, period, count)
     if (hist?.ohlc?.length) {
       reseedBuffer(assetId, period, hist.ohlc)
