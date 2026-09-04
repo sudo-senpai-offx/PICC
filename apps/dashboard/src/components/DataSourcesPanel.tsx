@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Card } from "@/components/ui"
+import { Card, Skeleton } from "@/components/ui"
 import { getBrokers, type BrokerRow, type LatencyRow } from "@/lib/trading"
 
 // ── Slice B — honest + searchable Data Sources ─────────────────────────────
@@ -85,7 +85,11 @@ export function DataSourcesPanel() {
         </span>
       </div>
       {loading ? (
-        <p className="muted small">Loading source status…</p>
+        <div aria-busy="true" className="skeleton-row">
+          <Skeleton width="100%" />
+          <Skeleton width="90%" />
+          <Skeleton width="55%" />
+        </div>
       ) : (
         <>
           <input

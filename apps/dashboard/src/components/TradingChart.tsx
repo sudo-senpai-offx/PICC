@@ -85,6 +85,22 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   const [autoScroll, setAutoScroll] = useState(true)
   const leavePresent = () => setAutoScroll(false)
   const recenter = () => setAutoScroll(true)
+  // Fullscreen toggle: pins this chart card over the viewport with a taller
+  // canvas. The FS canvas height is captured from the viewport at entry so the
+  // chart actually resizes (CandlestickChart re-applies options on height
+  // change); the toggle or Escape exits.
+  const [fullscreen, setFullscreen] = useState(false)
+  const [fsHeight, setFsHeight] = useState(0)
+  const enterFullscreen = () => { setFsHeight((window.innerHeight || 800) - 116); setFullscreen(true) }
+  const exitFullscreen = () => setFullscreen(false)
+  const toggleFullscreen = () => (fullscreen ? exitFullscreen() : enterFullscreen())
+  useEffect(() => {
+    if (!fullscreen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") exitFullscreen() }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [fullscreen])
+  const chartHeight = fullscreen && fsHeight > 0 ? fsHeight : height
   // Multi-timeframe overlay: a coarser timeframe's close line drawn over the
   // active candle series so the chart itself shows multiple timeframes at once.
   const [showHtf, setShowHtf] = useState(false)
@@ -198,7 +214,15 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   }, [u4faEvents, assetId])
 
   return (
-    <div className="stack" style={{ gap: 6 }}>
+    <div
+      className="stack"
+      style={{
+        gap: 6,
+        ...(fullscreen
+          ? { position: "fixed", inset: 0, zIndex: 9999, background: "var(--bg)", padding: 16, overflow: "auto" }
+          : {})
+      }}
+    >
       <div className="row-between" style={{ alignItems: "center" }}>
         <div className="row gap" style={{ alignItems: "center" }}>
           <strong>{label ?? assetId}</strong>
@@ -240,6 +264,15 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
               ⟳ Recent
             </Button>
           ) : null}
+          <Button
+            variant="ghost"
+            className="btn-sm"
+            onClick={toggleFullscreen}
+            style={{ marginRight: 8 }}
+            title={fullscreen ? "Exit fullscreen (Esc)" : "Expand this chart to fullscreen"}
+          >
+            {fullscreen ? "✕ Exit FS" : "⛶ Fullscreen"}
+          </Button>
           <Button
             variant={showHtf ? "primary" : "ghost"}
             className="btn-sm"
@@ -315,11 +348,11 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
       ) : null}
 
       {loading && !candles.length ? (
-        <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center" }} className="muted">
+        <div style={{ height: chartHeight, display: "flex", alignItems: "center", justifyContent: "center" }} className="muted">
           Loading chart data...
         </div>
       ) : error ? (
-        <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center" }} className="danger-text">
+        <div style={{ height: chartHeight, display: "flex", alignItems: "center", justifyContent: "center" }} className="danger-text">
           {error}
         </div>
       ) : candles.length ? (
@@ -351,7 +384,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
             showMacd={showMacd}
             priceLines={priceLines}
             u4faMarkers={u4faMarkers}
-            height={height}
+            height={chartHeight}
             onCrosshair={crosshair}
             autoScroll={autoScroll}
             onUserScroll={leavePresent}
@@ -364,7 +397,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
         // feed plus no fallback covering this asset/resolution returned NO
         // candles, and the old code rendered a blank canvas. Say WHY instead.
         <div
-          style={{ height, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}
+          style={{ height: chartHeight, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6 }}
           className="muted"
         >
           <span>No data for {label ?? assetId} at {TIMEFRAME_LABELS[activeTf]}</span>

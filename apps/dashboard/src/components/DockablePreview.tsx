@@ -661,6 +661,15 @@ function GroupContainer({
         {docks.map((d) => (
           <div
             key={d.id}
+            role="tab"
+            aria-selected={d.tabActive}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                onTabSelect(groupId, d.id)
+              }
+            }}
             onMouseDown={(e) => { e.stopPropagation(); onTabDragStart(e, d.id) }}
             onClick={(e) => { e.stopPropagation(); onTabSelect(groupId, d.id) }}
             style={{

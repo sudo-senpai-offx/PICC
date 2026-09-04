@@ -143,7 +143,7 @@ export function TradingHud() {
 
   if (collapsed) {
     return (
-      <button className="trading-hud trading-hud-pill" onClick={toggle} title="Expand trading HUD">
+      <button className="trading-hud trading-hud-pill" onClick={toggle} aria-expanded={false} aria-label="Expand trading HUD" title="Expand trading HUD">
         <span className={running ? "hud-dot" : "hud-dot hud-dot-idle"} />
         <strong>PICC DEMO</strong>
         <span className="muted small">{signals} signal{signals === 1 ? "" : "s"}</span>
@@ -172,7 +172,7 @@ export function TradingHud() {
               🌐 Broker
             </button>
           ) : null}
-          <button className="btn btn-ghost btn-sm" onClick={toggle} title="Collapse trading HUD">
+          <button className="btn btn-ghost btn-sm" onClick={toggle} aria-expanded={true} aria-label="Collapse trading HUD" title="Collapse trading HUD">
             ▾
           </button>
         </div>

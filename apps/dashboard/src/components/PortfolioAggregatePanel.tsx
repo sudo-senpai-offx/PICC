@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { Card, Badge, Button } from "@/components/ui"
+import { Card, Badge, Button, Skeleton } from "@/components/ui"
 import { getPortfolioAggregate, type AggregateResult } from "@/lib/trading"
 import { aggregatePanelModel, type AggregateDisplay } from "@/lib/integrationPanels"
 
@@ -56,7 +56,10 @@ export function PortfolioAggregatePanel({ paperAvailable }: { paperAvailable: bo
       {error ? (
         <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
       ) : !model ? (
-        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Loading aggregate…</div>
+        <div aria-busy="true" className="skeleton-row">
+          <Skeleton width="70%" />
+          <Skeleton width="40%" />
+        </div>
       ) : (
         <>
           <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>

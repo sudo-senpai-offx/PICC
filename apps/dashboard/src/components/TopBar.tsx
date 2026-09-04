@@ -26,11 +26,11 @@ export function TopBar({
 
   return (
     <header className="topbar">
-      <button type="button" className="topbar-burger" onClick={onToggleSidebar} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label="Toggle sidebar">
+      <button type="button" className="topbar-burger" onClick={onToggleSidebar} aria-expanded={!collapsed} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
         ☰
       </button>
       <span className="topbar-title">{title}</span>
-      <button type="button" className="topbar-search" onClick={onOpenPalette} title="Command palette">
+      <button type="button" className="topbar-search" onClick={onOpenPalette} aria-label="Open command palette" title="Command palette">
         <span className="topbar-search-icon">⌕</span>
         <span className="topbar-search-text muted">Search, launch, control…</span>
         <kbd className="topbar-kbd">Ctrl K</kbd>

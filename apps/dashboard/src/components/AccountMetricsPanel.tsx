@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { Card, Badge, Button } from "@/components/ui"
+import { Card, Badge, Button, Skeleton } from "@/components/ui"
 import { getAccountMetrics, type AccountMetricsResult } from "@/lib/trading"
 import { metricsPanelModel, type MetricsDisplay } from "@/lib/integrationPanels"
 
@@ -39,7 +39,11 @@ export function AccountMetricsPanel() {
       {error ? (
         <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
       ) : !model ? (
-        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Loading observed metrics…</div>
+        <div aria-busy="true" className="skeleton-row">
+          <Skeleton width="60%" />
+          <Skeleton width="85%" />
+          <Skeleton width="45%" />
+        </div>
       ) : model.observedVenueCount === 0 ? (
         <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", padding: 12 }}>
           No capture observation yet — connect a venue session to record metrics

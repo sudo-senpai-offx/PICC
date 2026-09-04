@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react"
-import { Card } from "@/components/ui"
+import { Card, Skeleton } from "@/components/ui"
 import { getTradingSessions, type SessionInfo } from "@/lib/trading"
 
 function SessionBar({ session, utcHour }: { session: SessionInfo["schedule"]["schedule"][0]; utcHour: number }) {
@@ -122,7 +122,11 @@ export function SessionPanel() {
       )}
 
       {loading && !data && (
-        <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", padding: 12 }}>Loading...</div>
+        <div aria-busy="true" className="skeleton-row" style={{ padding: 12, alignItems: "center" }}>
+          <Skeleton width="70%" />
+          <Skeleton width="90%" />
+          <Skeleton width="40%" />
+        </div>
       )}
     </Card>
   )

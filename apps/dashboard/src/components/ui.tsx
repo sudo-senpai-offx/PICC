@@ -108,3 +108,28 @@ export function Spinner({ label = "Working…" }: { label?: string }) {
     </div>
   )
 }
+
+/**
+ * Loading placeholder block. Render these (grouped, with aria-busy on the
+ * surrounding container) instead of a single line of "Loading…" text so the
+ * panel keeps its shape while data is in-flight.
+ */
+export function Skeleton({
+  width = "100%",
+  height = 14,
+  style,
+  className
+}: {
+  width?: number | string
+  height?: number | string
+  style?: CSSProperties
+  className?: string
+}) {
+  return (
+    <span
+      className={cn("skeleton", className)}
+      aria-hidden
+      style={{ width, height, ...style }}
+    />
+  )
+}

@@ -158,6 +158,9 @@ export function NotificationCenter() {
     <div ref={panelRef} style={{ position: "relative" }}>
       <button
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-haspopup="true"
+        aria-label="Notifications"
         style={{
           position: "relative", background: "none", border: "none", cursor: "pointer",
           padding: "4px 6px", borderRadius: 4, color: "var(--text-muted)", fontSize: 16
@@ -249,13 +252,18 @@ export function NotificationCenter() {
                   </div>
                 ))}
                 {notifications.map((n) => (
-                <div
+                <button
                   key={n.id}
+                  type="button"
                   onClick={() => markRead(n.id)}
+                  aria-label={`${n.symbol} alert: ${CONDITION_LABELS[n.condition] || n.condition} ${n.value}. Mark as read.`}
                   style={{
+                    display: "block", width: "100%", textAlign: "left",
                     padding: "8px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer",
                     background: n.read ? "transparent" : "#6c63ff11",
-                    borderLeft: n.read ? "3px solid transparent" : "3px solid var(--accent)"
+                    borderLeft: n.read ? "3px solid transparent" : "3px solid var(--accent)",
+                    borderRight: "none", borderTop: "none", borderRadius: 0,
+                    color: "inherit", fontSize: "inherit", fontFamily: "inherit"
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
@@ -267,7 +275,7 @@ export function NotificationCenter() {
                     {" "}(now {n.price.toFixed(4)})
                   </div>
                   {n.message && <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 2 }}>{n.message}</div>}
-                </div>
+                </button>
               ))}
               </>
             )}

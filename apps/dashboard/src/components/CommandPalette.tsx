@@ -141,13 +141,18 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   return (
     <div className="palette-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="palette" role="dialog" aria-modal="true">
+      <div className="palette" role="dialog" aria-modal="true" aria-label="Command palette">
         <div className="palette-input-row">
           <span className="palette-caret">⌕</span>
           <input
             ref={inputRef}
             className="palette-input"
             placeholder="Type to navigate, launch an app, control the browser…"
+            role="combobox"
+            aria-expanded={true}
+            aria-controls="palette-list"
+            aria-label="Search commands"
+            aria-activedescendant={visible[active] ? `palette-opt-${visible[active].id}` : undefined}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value)
@@ -171,14 +176,17 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           />
           <kbd className="palette-kbd">Esc</kbd>
         </div>
-        <div className="palette-list">
+        <div className="palette-list" role="listbox" id="palette-list" aria-label="Commands">
           {visible.length === 0 ? (
             <div className="palette-empty muted">No matches for “{query}” — try a page, feature, or income app.</div>
           ) : (
             visible.map((it, idx) => (
               <button
                 key={it.id}
+                id={`palette-opt-${it.id}`}
                 type="button"
+                role="option"
+                aria-selected={idx === active}
                 className={idx === active ? "palette-item active" : "palette-item"}
                 onMouseEnter={() => setActive(idx)}
                 onClick={() => runAt(idx)}
