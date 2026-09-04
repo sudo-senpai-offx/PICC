@@ -20,7 +20,7 @@ function authHeaders() {
   }
 }
 
-export async function createBtcpayInvoice({ amount, currency = "USD", description = "PICC payment" }) {
+export async function createBtcpayInvoice({ amount, currency = "USD", description = "PICC payment", userId, tier }) {
   if (!hasBtcpay()) throw new Error("BTCPay Server not configured")
   const value = Number(amount)
   if (!Number.isFinite(value) || value <= 0) throw new Error("amount must be a positive number")
@@ -32,7 +32,7 @@ export async function createBtcpayInvoice({ amount, currency = "USD", descriptio
       body: JSON.stringify({
         currency: String(currency).toUpperCase(),
         amount: String(value),
-        metadata: { description: String(description) },
+        metadata: { description: String(description), userId, tier },
         checkout: {
           requiresRefundEmail: false,
           redirectAutomatically: false
@@ -43,7 +43,7 @@ export async function createBtcpayInvoice({ amount, currency = "USD", descriptio
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(`btcpay invoice failed: ${res.status} ${data.message ?? ""}`)
   const checkoutLink = data.checkoutLink ?? data.url
-  return { id: data.id, checkoutLink, url: checkoutLink }
+  return { id: data.id, checkoutLink, url: checkoutLink, userId, tier }
 }
 
 /** Check an invoice's status on the BTCPay server (authoritative, no webhooks needed). */
@@ -55,7 +55,11 @@ export async function btcpayInvoiceStatus(invoiceId) {
   )
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(`btcpay status failed: ${res.status} ${data.message ?? ""}`)
-  return { status: data.status, amount: data.amount }
+  // Metadata is echoed by BTCPay on the invoice; the grant check keyed on
+  // userId/tier needs these to survive the round-trip.
+  const meta = data.metadata ?? {}
+  const tier = meta.tier === "pro" || meta.tier === "business" ? meta.tier : null
+  return { status: data.status, amount: data.amount, userId: meta.userId ?? null, tier }
 }
 
 /**

@@ -69,9 +69,18 @@ async function saveOrders() {
   }
 }
 
-export async function createEwalletOrder({ ewallet = "tng", amount, currency, description = "PICC payment" }) {
+export async function createEwalletOrder({
+  ewallet = "tng",
+  amount,
+  currency,
+  description = "PICC payment",
+  userId
+}) {
   const info = WALLETS[ewallet]
   if (!info) throw new Error(`unsupported eWallet: ${ewallet} (use ${WALLET_IDS.join(", ")})`)
+  if (userId == null || String(userId).trim() === "") {
+    throw new Error("userId is required — eWallet orders must carry an owner for the PICC ledger")
+  }
   const value = Number(amount)
   if (!Number.isFinite(value) || value <= 0) throw new Error("amount must be a positive number")
   const currencyCode = String(currency || info.currency).toUpperCase()
@@ -82,6 +91,7 @@ export async function createEwalletOrder({ ewallet = "tng", amount, currency, de
 
   const order = {
     id: randomUUID(),
+    userId,
     ewallet,
     reference: referenceFor(),
     amount: value,
@@ -106,11 +116,27 @@ export async function createEwalletOrder({ ewallet = "tng", amount, currency, de
   }
 }
 
-/** Customer confirms they sent the money. Marks the order as paid (self-serve). */
-export async function submitEwalletOrder({ orderId, confirmRef }) {
+/**
+ * Confirms an eWallet order as paid (self-serve income flow).
+ * The order can only be confirmed by its OWNER (actorUserId must match the
+ * order's owner). An explicit `selfApprove` flag is additionally required for
+ * contexts that skip real-money verification — kept behind an explicit opt-in
+ * (admin/demo) so a stray caller can never weld an order to "confirmed".
+ */
+export async function submitEwalletOrder({ orderId, confirmRef, actorUserId = null, selfApprove = false }) {
   const all = await loadOrders()
   const order = all[orderId]
   if (!order) throw new Error("order not found")
+  if (order.userId != null) {
+    const owner = order.userId === actorUserId
+    if (!owner && !selfApprove) {
+      throw new Error("order not found")
+    }
+  } else if (!selfApprove) {
+    // Legacy orders without a bound owner can only be confirmed via an
+    // explicit self-approve (admin/demo) path, never by an arbitrary caller.
+    throw new Error("order not found")
+  }
   if (order.status === "confirmed") return { ok: true, reference: order.reference, already: true }
   const ref = String(confirmRef ?? "").trim()
   if (!ref) throw new Error("confirmation reference is required")
@@ -121,8 +147,16 @@ export async function submitEwalletOrder({ orderId, confirmRef }) {
   }
   order.status = "confirmed"
   order.confirmed_at = new Date().toISOString()
+  order.confirmed_by = actorUserId || null
+  order.self_approved = Boolean(selfApprove)
   all[order.id] = order
   orders = all
   await saveOrders()
   return { ok: true, reference: order.reference, already: false }
+}
+
+/** Read one order by id (owner-scoped). Returns null when absent. */
+export async function getEwalletOrder(orderId) {
+  const all = await loadOrders()
+  return all[orderId] ?? null
 }

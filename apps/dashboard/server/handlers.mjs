@@ -54,7 +54,7 @@ import {
   completeGithubOauth
 } from "./services/profile.mjs"
 import { isTable, listRows, appendRow, upsertRow, removeRow } from "./services/localstore.mjs"
-import { syncSubscription } from "./services/supabase.mjs"
+import { syncSubscription, admin } from "./services/supabase.mjs"
 import { runMonteCarlo } from "./monteCarlo.mjs"
 import { log, createRequestId, bindRequest, unbindRequest, recordRequest, getMetrics, prometheusMetrics } from "./logger.mjs"
 import {
@@ -192,6 +192,33 @@ function platformOf(url) {
 
 function validTier(tier) {
   return tier === "pro" || tier === "business" ? tier : null
+}
+
+/** Round to 2 decimal places (guards non-finite input like our peers). Exported for tests. */
+export function round2(v) {
+  return v == null || !Number.isFinite(v) ? null : Math.round(v * 100) / 100
+}
+
+/**
+ * Resolve the Stripe customer tied to a user WITHOUT trusting any
+ * client-supplied value. Reads the profile's stripe_customer_id from the
+ * Supabase `profiles` table (admin mode) or the local `billing` store.
+ * Returns null when the user has no Stripe customer on file.
+ */
+async function stripeCustomerForUser(userId) {
+  if (admin && env.supabaseUrl && env.supabaseServiceKey) {
+    const { data, error } = await admin
+      .from("profiles")
+      .select("stripe_customer_id")
+      .eq("id", userId)
+      .maybeSingle()
+    if (error) return null
+    return data?.stripe_customer_id ?? null
+  }
+  // Local mode: stripe_customer_id is written by syncSubscription.
+  const rows = await listRows("billing")
+  const row = rows.find((b) => b.user_id === userId)
+  return row?.stripe_customer_id ?? null
 }
 
 function withTimeout(promise, ms) {
@@ -3616,8 +3643,10 @@ async function _handleApiInner(req, res, url, reqId) {
     if (!hasStripe()) return writeJson(res, 503, { error: "Stripe not configured" })
     const userId = await verifyUser(auth)
     if (!userId) return writeJson(res, 401, { error: "authentication required" })
-    const { customerId } = body
-    if (!customerId) return writeJson(res, 400, { error: "customerId required" })
+    // Security: never trust a client-supplied customerId. Open the portal for
+    // the authenticated user's OWN Stripe customer only (OWASP API1 / IDOR).
+    const customerId = await stripeCustomerForUser(userId)
+    if (!customerId) return writeJson(res, 400, { error: "no Stripe customer on file for this account" })
     try {
       const session = await createPortalSession(customerId)
       writeJson(res, 200, { url: session.url })
@@ -3687,6 +3716,11 @@ async function _handleApiInner(req, res, url, reqId) {
 
   if (path === "/api/billing/ewallet/order" && req.method === "POST") {
     if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "authentication required" })
+    // Bind the order to an owner. In the single-owner first-run (no accounts
+    // configured yet) the local operator is the implicit owner; once accounts
+    // exist the order must carry the authenticated user's id (audit Fix 6).
+    const userId = (await verifyUser(auth)) || (!(await hasUsers()) ? "local-owner" : null)
+    if (!userId) return writeJson(res, 401, { error: "authentication required" })
     const ewallet = String(body.ewallet ?? "tng").toLowerCase()
     if (!walletInfo(ewallet)) return writeJson(res, 400, { error: `unsupported eWallet (use ${WALLET_IDS.join(", ")})` })
     try {
@@ -3694,7 +3728,8 @@ async function _handleApiInner(req, res, url, reqId) {
         ewallet,
         amount: body.amount,
         currency: body.currency,
-        description: body.description
+        description: body.description,
+        userId
       })
       writeJson(res, 200, result)
     } catch (err) {
@@ -3707,10 +3742,16 @@ async function _handleApiInner(req, res, url, reqId) {
   if (path === "/api/billing/ewallet/submit" && req.method === "POST") {
     // Confirms a payment order — same auth bar as /api/billing/ewallet/order.
     if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "authentication required" })
+    const actorUserId = (await verifyUser(auth)) || (!(await hasUsers()) ? "local-owner" : null)
+    if (!actorUserId) return writeJson(res, 401, { error: "authentication required" })
+    // Self-approve is only allowed in the single-owner admin/demo mode (no
+    // real accounts configured). Once real accounts exist, only the order's
+    // OWNER may confirm it — never an arbitrary caller (audit Fix 6).
+    const selfApprove = !(await hasUsers())
     const { orderId, confirmRef } = body
     if (!orderId) return writeJson(res, 400, { error: "orderId required" })
     try {
-      const result = await submitEwalletOrder({ orderId, confirmRef })
+      const result = await submitEwalletOrder({ orderId, confirmRef, actorUserId, selfApprove })
       writeJson(res, 200, result)
     } catch (err) {
       console.error("[picc] ewallet submit failed:", err.message)
@@ -3722,11 +3763,18 @@ async function _handleApiInner(req, res, url, reqId) {
   if (path === "/api/btcpay/invoice" && req.method === "POST") {
     if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "authentication required" })
     if (!hasBtcpay()) return writeJson(res, 503, { error: "BTCPay Server not configured" })
+    const userId = await verifyUser(auth)
+    if (!userId) return writeJson(res, 401, { error: "authentication required" })
+    // Tier is optional on the body; mirror the other grant paths and default
+    // to "pro" so a body with no tier still grants a working subscription.
+    const tier = validTier(body.tier) ?? "pro"
     try {
       const result = await createBtcpayInvoice({
         amount: body.amount,
         currency: body.currency,
-        description: body.description
+        description: body.description,
+        userId,
+        tier
       })
       writeJson(res, 200, result)
     } catch (err) {
