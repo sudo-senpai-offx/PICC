@@ -15,6 +15,11 @@ const log = createLogger("picc-live-ccxt")
 
 const BUFFER_CAP = 400 // per pair/timeframe, same order as liveEO buffers
 
+// Liveness gate (audit §5.3): the scheduler polls exchanges every 15s, so a
+// buffer that hasn't been written in six polls has a dead feed — "connected"
+// must never be inferred from a mere list-length check alone.
+export const CCXT_STALE_MS = 90_000
+
 // `${exchange}:${symbol}:${tfSec}` -> buffer record
 const buffers = new Map()
 // `${exchange}:${symbol}` -> { price, ts }
@@ -249,13 +254,37 @@ export function pairPeriods(exchange, symbol) {
 }
 
 /**
+ * Honest feed status over the CCXT buffers (audit §5.3): "connected" only
+ * while at least one buffer received a write recently. A stale/empty-but-open
+ * connection must not keep claiming liveness. Pure — unit-testable.
+ */
+export function ccxtFeedStatus({ hasAssets, maxUpdatedAt, now = Date.now(), staleMs = CCXT_STALE_MS } = {}) {
+  if (!hasAssets) return "idle"
+  const updated = Number(maxUpdatedAt)
+  if (!Number.isFinite(updated) || updated <= 0) return "stale"
+  return now - updated < staleMs ? "connected" : "stale"
+}
+
+/** Live status over the CURRENT buffers (liveness-gated, audit §5.3). */
+export function ccxtStatus(now = Date.now()) {
+  let hasAssets = false
+  let newestWrite = 0
+  for (const buf of buffers.values()) {
+    hasAssets = true
+    if (buf.updatedAt > newestWrite) newestWrite = buf.updatedAt
+  }
+  return ccxtFeedStatus({ hasAssets, maxUpdatedAt: newestWrite, now })
+}
+
+/**
  * liveEOData()-shaped snapshot of everything CCXT has collected:
  * assets[].periods is keyed in SECONDS (60/300/900/3600…) exactly like EO's,
  * so confluenceRead/quickMtfCheck work unchanged.
  */
-export function liveCCXTData() {
+export function liveCCXTData({ now = Date.now() } = {}) {
   const byPair = new Map()
   const latestBuf = new Map() // pairKey -> most recently updated buffer
+  let newestWrite = 0
   for (const buf of buffers.values()) {
     const key = pairKey(buf.exchange, buf.symbol)
     if (!byPair.has(key)) {
@@ -277,6 +306,7 @@ export function liveCCXTData() {
     asset.indicators[buf.tfSec] = buf.indicators
     asset.updatedAt = Math.max(asset.updatedAt, buf.updatedAt)
     if (!latestBuf.has(key) || buf.updatedAt >= latestBuf.get(key).updatedAt) latestBuf.set(key, buf)
+    if (buf.updatedAt > newestWrite) newestWrite = buf.updatedAt
   }
   const assets = [...byPair.values()].map((a) => {
     const freshest = latestBuf.get(a.id)
@@ -287,14 +317,14 @@ export function liveCCXTData() {
     }
   })
   return {
-    status: assets.length ? "connected" : "idle",
+    status: ccxtFeedStatus({ hasAssets: assets.length > 0, maxUpdatedAt: newestWrite, now }),
     mode: "live",
     source: "ccxt",
     account: null,
     viewed: null,
     watching: assets.map((a) => ({ id: a.id, name: a.name, type: a.type })),
     assets,
-    ts: Date.now()
+    ts: now
   }
 }
 
@@ -309,7 +339,12 @@ export function mergeCCXTAssets(data) {
   if (!ccxtAssets.length) return base
   return {
     ...base,
-    status: base.status === "connected" || base.status === "connecting" ? base.status : ccxtAssets.length ? "connected" : base.status,
+    // When the primary (EO/studio) feed is live it owns the status; otherwise
+    // the honest CCXT liveness state stands — "connected" only while fresh.
+    status:
+      base.status === "connected" || base.status === "connecting"
+        ? base.status
+        : ccxtStatus(),
     assets: [...(Array.isArray(base.assets) ? base.assets : []), ...ccxtAssets]
   }
 }
