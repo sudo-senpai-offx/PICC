@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url"
 import { getHistory } from "./yahoo.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = join(__dirname, "..", "data")
+const DATA_DIR =
+  process.env.PICC_WATCHLIST_DATA_DIR || join(__dirname, "..", "data")
 const WATCHLISTS_FILE = join(DATA_DIR, "watchlists.json")
 
 let watchlists = []

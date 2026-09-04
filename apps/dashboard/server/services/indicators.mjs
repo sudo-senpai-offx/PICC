@@ -416,12 +416,15 @@ export function rsi(closes, period = 14) {
       if (!seedOk || seed.length < p) continue
       avgGain = seed.reduce((s, d) => s + Math.max(d, 0), 0) / p
       avgLoss = seed.reduce((s, d) => s + Math.max(-d, 0), 0) / p
-      out[i] = 100 - 100 / (1 + (avgLoss > 0 ? avgGain / avgLoss : Infinity))
+      // A perfectly flat window (no gains AND no losses) is NEUTRAL, not
+      // 100 — mirror the modelMatrix.rsi guard (slice-5d hardening).
+      out[i] = avgGain === 0 && avgLoss === 0 ? 50 : 100 - 100 / (1 + (avgLoss > 0 ? avgGain / avgLoss : Infinity))
       continue
     }
     avgGain = (avgGain * (p - 1) + gain) / p
     avgLoss = (avgLoss * (p - 1) + loss) / p
-    out[i] = 100 - 100 / (1 + (avgLoss > 0 ? avgGain / avgLoss : Infinity))
+    // Flat-window neutrality (see seed branch above).
+    out[i] = avgGain === 0 && avgLoss === 0 ? 50 : 100 - 100 / (1 + (avgLoss > 0 ? avgGain / avgLoss : Infinity))
   }
   return out
 }

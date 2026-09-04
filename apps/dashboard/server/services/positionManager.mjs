@@ -173,14 +173,21 @@ export async function portfolioRiskCheck({ symbol, amount, maxNotional = 50000, 
 
   const inst = agg.byInstrument[sym]
   const instSize = (inst?.totalSize ?? 0) + addSize
-  if (agg.totals.notional + addSize > 0 && instSize / (agg.totals.notional + addSize) > 0.5) {
+  // Concentration only means something once exposure EXISTS — a lone first
+  // trade is trivially 100% concentrated in itself (slice-5d finding).
+  if (agg.totals.notional > 0 && instSize / (agg.totals.notional + addSize) > 0.5) {
     warnings.push(`${Math.round((instSize / (agg.totals.notional + addSize)) * 100)}% of open notional concentrated in ${sym}`)
   }
 
-  for (const v of agg.venues) {
-    const share = (v.totalSize + (v.venue === "paper" ? addSize : 0)) / Math.max(1, newNotional)
-    if (share > maxSingleVenueShare) {
-      warnings.push(`venue ${v.venue} holds ${Math.round(share * 100)}% of exposure (> ${maxSingleVenueShare * 100}% cap)`)
+  // Venue-concentration only means something once exposure EXISTS: a first
+  // trade on an empty book is by definition 100% on one venue (slice-5d
+  // finding — it must not warn on the very first paper trade).
+  if (agg.totals.notional > 0) {
+    for (const v of agg.venues) {
+      const share = (v.totalSize + (v.venue === "paper" ? addSize : 0)) / Math.max(1, newNotional)
+      if (share > maxSingleVenueShare) {
+        warnings.push(`venue ${v.venue} holds ${Math.round(share * 100)}% of exposure (> ${maxSingleVenueShare * 100}% cap)`)
+      }
     }
   }
 
