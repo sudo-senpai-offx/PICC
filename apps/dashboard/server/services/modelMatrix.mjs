@@ -40,6 +40,20 @@ function ema(values, period) {
   return e
 }
 
+/** Full EMA run — out[i] = EMA(period) over values[0..i], null until warmup. */
+function emaSeries(values, period) {
+  if (!Array.isArray(values) || values.length < period) return values.map(() => null)
+  const k = 2 / (period + 1)
+  const out = new Array(values.length).fill(null)
+  let e = values.slice(0, period).reduce((s, v) => s + v, 0) / period
+  out[period - 1] = e
+  for (let i = period; i < values.length; i++) {
+    e = values[i] * k + e * (1 - k)
+    out[i] = e
+  }
+  return out
+}
+
 function rsi(closes, period = 14) {
   if (closes.length < period + 1) return null
   let gains = 0
@@ -137,14 +151,19 @@ function modelBreakout(candles) {
   const atr = atrFrom(candles.slice(-30), 14) ?? range / 10
   const edge = close > hi ? close - hi : close < lo ? lo - close : 0
   const breakoutStrength = atr > 0 ? Math.min(1, edge / (atr * 0.5)) : 0
-  const dir = pos > 0.85 ? "up" : pos < 0.15 ? "down" : pos >= 0.5 ? "up" : "down"
+  // Mid-band neutrality (audit §5.4): inside 0.40–0.60 the channel position
+  // carries no directional edge — a range-bound market votes flat, never a
+  // coin-flip up/down. The 0.15/0.85 tails stay breakout-fresh; the shoulders
+  // keep the mild positional tilt without mid-band noise.
+  const dir =
+    pos > 0.85 ? "up" : pos < 0.15 ? "down" : pos >= 0.6 ? "up" : pos <= 0.4 ? "down" : "flat"
   const confidence = Math.round(38 + breakoutStrength * 45 + Math.abs(pos - 0.5) * 40)
   return {
     name: "Donchian Breakout",
     short: "breakout",
     direction: dir,
-    confidence: Math.min(92, confidence),
-    note: `channel pos ${(pos * 100).toFixed(0)}%${edge > 0 ? " · breakout!" : ""}`
+    confidence: Math.min(92, dir === "flat" ? Math.max(35, confidence) : confidence),
+    note: `channel pos ${(pos * 100).toFixed(0)}%${edge > 0 ? " · breakout!" : dir === "flat" ? " · mid-band" : ""}`
   }
 }
 
@@ -152,16 +171,19 @@ function modelBreakout(candles) {
 function modelMacd(candles) {
   const closes = toCloses(candles)
   if (closes.length < 40) return null
-  const e12 = ema(closes, 12)
-  const e26 = ema(closes, 26)
-  if (e12 == null || e26 == null) return null
-  // Approximate the signal line as EMA9 of recent MACD values.
+  // MACD series computed in ONE O(n) pass over the closes (audit §5.5): a full
+  // EMA12/EMA26 run, differenced. The old per-end slice recompute was quadratic
+  // and re-derived identical prefix values on every iteration.
+  const e12run = emaSeries(closes, 12)
+  const e26run = emaSeries(closes, 26)
   const macdSeries = []
-  for (let end = 26; end <= closes.length; end++) {
-    const f = ema(closes.slice(0, end), 12)
-    const s = ema(closes.slice(0, end), 26)
+  for (let i = 25; i < closes.length; i++) {
+    const f = e12run[i]
+    const s = e26run[i]
     if (f != null && s != null) macdSeries.push(f - s)
   }
+  if (!macdSeries.length) return null
+  // Approximate the signal line as EMA9 of the MACD values.
   const signal = ema(macdSeries, 9)
   const macd = macdSeries[macdSeries.length - 1]
   if (signal == null || !Number.isFinite(macd)) return null

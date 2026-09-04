@@ -224,3 +224,77 @@ describe("model matrix (multiplexing consensus)", () => {
     expect(after).toBeGreaterThan(50) // eroded toward, never below, chance
   })
 })
+
+/** Range-bound series pinned mid-channel (Donchian hi 101 / lo 99, close 100). */
+function rangeBound(n) {
+  const rows = []
+  for (let i = 0; i < n; i++) {
+    rows.push({ time: 1700000000 + i * 60, open: 100, high: 101, low: 99, close: 100 })
+  }
+  return rows
+}
+
+/** Deterministic non-trivial series (oscillation + drift) for MACD equivalence. */
+function wavy(n) {
+  const rows = []
+  for (let i = 0; i < n; i++) {
+    const price = 100 + 4 * Math.sin(i / 6) + i * 0.02
+    rows.push({
+      time: 1700000000 + i * 60,
+      open: price - 0.05,
+      high: price + 0.4,
+      low: price - 0.4,
+      close: price
+    })
+  }
+  return rows
+}
+
+/** The ORIGINAL O(n²) MACD implementation — reference the O(n) rewrite must match. */
+function referenceMacdHist(closes) {
+  const emaOf = (values, period) => {
+    if (!Array.isArray(values) || values.length < period) return null
+    const k = 2 / (period + 1)
+    let e = values.slice(0, period).reduce((s, v) => s + v, 0) / period
+    for (let i = period; i < values.length; i++) e = values[i] * k + e * (1 - k)
+    return e
+  }
+  const macdSeries = []
+  for (let end = 26; end <= closes.length; end++) {
+    const f = emaOf(closes.slice(0, end), 12)
+    const s = emaOf(closes.slice(0, end), 26)
+    if (f != null && s != null) macdSeries.push(f - s)
+  }
+  const signal = emaOf(macdSeries, 9)
+  const macd = macdSeries[macdSeries.length - 1]
+  if (signal == null || !Number.isFinite(macd)) return null
+  return macd - signal
+}
+
+describe("audit §5.4/§5.5 — breakout neutrality + O(n) MACD", () => {
+  it("breakout votes flat mid-channel instead of a coin-flip direction", () => {
+    const out = computeModelMatrix(rangeBound(80))
+    const b = out.votes.find((v) => v.short === "breakout")
+    expect(b.direction).toBe("flat")
+    expect(b.note).toContain("mid-band")
+    expect(b.confidence).toBeLessThan(40)
+  }, 20000)
+
+  it("breakout still fires directionally at the channel tails", () => {
+    const up = computeModelMatrix(synth(120, 0.3)).votes.find((v) => v.short === "breakout")
+    const down = computeModelMatrix(synth(120, -0.3)).votes.find((v) => v.short === "breakout")
+    expect(up.direction).toBe("up")
+    expect(down.direction).toBe("down")
+  }, 20000)
+
+  it("O(n) MACD reproduces the quadratic implementation exactly", () => {
+    const candles = wavy(90)
+    const closes = candles.map((c) => Number(c.close))
+    const refHist = referenceMacdHist(closes)
+    const out = computeModelMatrix(candles)
+    const v = out.votes.find((x) => x.short === "macd")
+    expect(v.direction).toBe(refHist > 0 ? "up" : refHist < 0 ? "down" : "flat")
+    const normRef = (refHist / closes[closes.length - 1]) * 100
+    expect(v.note).toBe(`hist ${normRef.toFixed(4)}%`)
+  }, 20000)
+})
