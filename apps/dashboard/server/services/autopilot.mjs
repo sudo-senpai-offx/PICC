@@ -18,7 +18,7 @@ import { proAnalyzeCandles } from "./proanalysis.mjs"
 import { metricsFrom } from "./analytics.mjs"
 import { appendRow, localStore } from "./localstore.mjs"
 import { chatText, llmConfigured } from "./llm.mjs"
-import { volatilityPositionSize, realizedVolatility } from "./volatility.mjs"
+import { volatilityPositionSize, realizedVolatility, annualizedVolatility } from "./volatility.mjs"
 import { quickMtfCheck } from "./multiTimeframe.mjs"
 import { getBrokerData, getBrokerStats } from "./brokers/index.mjs"
 import { detectRegime } from "./regimeDetection.mjs"
@@ -759,7 +759,10 @@ async function defaultAmount(balance, riskPct, closes, times) {
   // Volatility-adjusted sizing: use GARCH/realized vol to scale position inversely
   if (Array.isArray(closes) && closes.length >= 30) {
     try {
-      const rv = realizedVolatility(closes, { period: 20, times })
+      // Estimator-chooser seam (R6): close-only input resolves to close-close
+      // realized volatility today; if OHLC ever reaches this seam the F-11
+      // Yang-Zhang / Garman-Klass estimators take over automatically.
+      const rv = annualizedVolatility(closes, { period: 20, times })
       const currentVol = rv.annual || 0.30
       const sizing = volatilityPositionSize({
         capital: balance,

@@ -68,6 +68,29 @@ export function getHealth(token?: string): Promise<HealthInfo> {
   return request<HealthInfo>("/health", {}, token)
 }
 
+export interface CorrelationPair {
+  asset1: string
+  asset2: string
+  correlation: number
+}
+
+export interface CorrelationResult {
+  ok: boolean
+  symbols: string[]
+  matrix: number[][]
+  pairs: CorrelationPair[]
+  highlyCorrelated: CorrelationPair[]
+  diversificationScore: number
+}
+
+/**
+ * Correlation screen over held/watchlist instruments (R6). Symbols optional —
+ * the server defaults to the trading watchlist and fetches 3mo Yahoo history.
+ */
+export function tradingCorrelation(symbols?: string[]): Promise<CorrelationResult> {
+  return post<CorrelationResult>("/trading/correlation", symbols && symbols.length ? { symbols } : {})
+}
+
 export interface EwalletOrderResult {
   orderId: string
   reference: string

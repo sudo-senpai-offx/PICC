@@ -182,6 +182,44 @@ export function yangZhangVolatility(candles, { period = 20, annualize = 252 } = 
   }
 }
 
+// ---------------------------------------------------------------------
+// Estimator chooser (R6 — live-wire F-11 estimators into risk consumers)
+// ---------------------------------------------------------------------
+
+/**
+ * Pick the most efficient volatility estimator the data actually supports,
+ * so live risk consumers (autopilot sizing, risk-parity) upgrade
+ * automatically wherever OHLC reaches them and stay on close-close when only
+ * prices do:
+ *
+ *   o/h/l/c candles → Yang-Zhang (most efficient; overnight gaps included)
+ *   h/l/c candles   → Garman-Klass (driftless intraday)
+ *   h/l only        → Parkinson
+ *   closes/anything else → realized (close-to-close) volatility
+ */
+export function annualizedVolatility(data, { period = 20, annualize = 252, times = null } = {}) {
+  const asCandles = Array.isArray(data) && data.length && typeof data[0] === "object" && data[0] !== null
+  if (asCandles) {
+    const sample = data[0]
+    const has = (k) => Number.isFinite(Number(sample[k])) && Number(sample[k]) > 0
+    if (has("open") && has("high") && has("low") && has("close")) {
+      const yz = yangZhangVolatility(data, { period, annualize })
+      if (yz?.annual != null) return { ...yz, method: "yang-zhang" }
+    }
+    if (has("high") && has("low") && has("close")) {
+      const gk = garmanKlassVolatility(data, { period, annualize })
+      if (gk?.annual != null) return { ...gk, method: "garman-klass" }
+    }
+    if (has("high") && has("low")) {
+      const pk = parkinsonVolatility(data, { period, annualize })
+      if (pk?.annual != null) return { ...pk, method: "parkinson" }
+    }
+    const closes = data.map((c) => Number(c.close)).filter((v) => Number.isFinite(v))
+    return { ...realizedVolatility(closes, { period, annualize, times }), method: "close-close" }
+  }
+  return { ...realizedVolatility(data, { period, annualize, times }), method: "close-close" }
+}
+
 
 // GARCH(1,1) estimation via maximum-likelihood (simplified)
 // ---------------------------------------------------------------------

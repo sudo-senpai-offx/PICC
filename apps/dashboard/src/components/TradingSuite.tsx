@@ -12,6 +12,7 @@ import { TradingChart } from "@/components/TradingChart"
 import { DataSourcesPanel } from "@/components/DataSourcesPanel"
 import { SpreadPanel } from "@/components/SpreadPanel"
 import { PortfolioAggregatePanel } from "@/components/PortfolioAggregatePanel"
+import { CorrelationScreen } from "@/components/CorrelationScreen"
 import { AccountMetricsPanel } from "@/components/AccountMetricsPanel"
 import { CapabilitiesPanel } from "@/components/CapabilitiesPanel"
 import { BacktestPanel } from "@/components/BacktestPanel"
@@ -253,6 +254,7 @@ export function MarketsSuite() {
             <div className="grid">
               <SpreadPanel assetId={chartAsset} />
               <PortfolioAggregatePanel paperAvailable={Boolean(status?.paper)} />
+              <CorrelationScreen />
             </div>
           </div>
           <DataSourcesPanel />
