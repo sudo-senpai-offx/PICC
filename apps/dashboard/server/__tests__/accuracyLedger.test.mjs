@@ -7,6 +7,7 @@ import {
   ledgerStats,
   backtestGates,
   resetLedger,
+  sampleEntryPrice,
   MAX_PENDING_MS
 } from "../services/accuracyLedger.mjs"
 
@@ -141,5 +142,48 @@ describe("accuracy ledger", () => {
     const row = bt.rows.find((r) => r.key === "60")
     expect(row?.engine.n).toBe(3)
     expect(typeof row?.demo.n).toBe("number")
+  })
+})
+
+describe("accuracy ledger — entry sampling without look-ahead (audit §5.6)", () => {
+  const candles = [
+    { time: 1700000000, close: 100 },
+    { time: 1700000060, close: 101 },
+    { time: 1700000120, close: 102 },
+    { time: 1700000180, close: 103 } // newest — a post-signal close
+  ]
+
+  test("an explicit signal-time price wins over buffer sampling", () => {
+    expect(sampleEntryPrice(candles, { at: Date.now(), price: 99.5 })).toEqual({
+      price: 99.5,
+      candleTime: null
+    })
+  })
+
+  test("without an explicit price it anchors to the newest candle at-or-before the decision ts", () => {
+    // Decision fired during the 101 candle — the 102/103 closes printed AFTER
+    // the signal and must never leak into the entry price.
+    const at = 1700000090_000 // 90s after epoch → mid-way through the 101 bar (ms)
+    expect(sampleEntryPrice(candles, { at })).toEqual({ price: 101, candleTime: 1700000060 })
+  })
+
+  test("non-finite/zero explicit prices fall back to signal-time sampling", () => {
+    // Invalid preferred prices are ignored — the buffer at/before `at` stands.
+    expect(sampleEntryPrice(candles, { price: 0, at: 1700000000_000 }).price).toBe(100)
+    expect(sampleEntryPrice(candles, { price: NaN, at: 1700000120_000 }).price).toBe(102)
+  })
+
+  test("empty or missing input yields no price, never a throw", () => {
+    expect(sampleEntryPrice([], { at: Date.now() })).toEqual({ price: null, candleTime: null })
+    expect(sampleEntryPrice(null, { at: Date.now() }).price).toBeNull()
+    expect(sampleEntryPrice(undefined).price).toBeNull()
+    // A decision ts before any candle exists must not sample the future series.
+    expect(sampleEntryPrice(candles, { at: 1 }).price).toBeNull()
+  })
+
+  test("recordDecision stores an explicit d.price as the entry price", () => {
+    const entry = recordDecision({ ...trade, price: 123.45 })
+    expect(entry.entryPrice).toBe(123.45)
+    expect(entry.entryCandleTime).toBeNull()
   })
 })

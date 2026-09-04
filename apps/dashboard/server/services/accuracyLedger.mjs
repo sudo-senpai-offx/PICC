@@ -55,13 +55,42 @@ export function recordDecision(d) {
     resolvedAt: null
   }
   // Sample the entry price from the live 60s buffer if available (best-effort).
+  // Anchored to the decision's own timestamp so a late re-log can never
+  // capture a post-signal close (audit §5.6 look-ahead guard).
   const data = getBrokerData()
   const asset = (data?.assets ?? []).find((a) => a.id === d.assetId || a.name === d.asset)
   const candles = asset?.periods?.[60] ?? []
-  if (candles.length) entry.entryPrice = Number(candles[candles.length - 1].close ?? null)
+  const sampled = sampleEntryPrice(candles, { at: d.ts ?? now, price: d.price })
+  entry.entryPrice = sampled.price
+  entry.entryCandleTime = sampled.candleTime
   entries.push(entry)
   if (entries.length > LEDGER_CAP) entries = entries.slice(entries.length - LEDGER_CAP)
   return entry
+}
+
+/**
+ * Sample the entry price for a decision WITHOUT look-ahead (audit §5.6).
+ *
+ * The authoritative price is an explicit signal-time fill (`price`) when the
+ * caller has one. Otherwise the newest candle whose bar opened at-or-before the
+ * decision's own timestamp is used — a decision re-logged late (queued loop,
+ * clock skew) must never pick up a close that printed AFTER the signal fired.
+ *
+ * @param {Array} candles OHLC rows with numeric `.time` (unix SECONDS) + `.close`
+ * @param {{at?: number, price?: number|null}} opts `at` = decision ts (ms)
+ * @returns {{price: number|null, candleTime: number|null}}
+ */
+export function sampleEntryPrice(candles, { at = Date.now(), price = null } = {}) {
+  const preferred = Number(price)
+  if (Number.isFinite(preferred) && preferred > 0) return { price: preferred, candleTime: null }
+  const atSec = Math.floor(Number(at) / 1000)
+  if (!Number.isFinite(atSec) || atSec <= 0) return { price: null, candleTime: null }
+  const eligible = (Array.isArray(candles) ? candles : []).filter(
+    (c) => c && Number.isFinite(Number(c.close)) && Number(c.close) > 0 && Number(c.time) <= atSec
+  )
+  if (!eligible.length) return { price: null, candleTime: null }
+  const last = eligible[eligible.length - 1]
+  return { price: Number(last.close), candleTime: Number(last.time) }
 }
 
 /**
