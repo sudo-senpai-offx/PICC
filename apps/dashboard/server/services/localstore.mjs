@@ -3,7 +3,7 @@
 // Supabase now lives in server/data/<table>.json, fully self-hosted.
 import { randomBytes } from "node:crypto"
 import { mkdirSync } from "node:fs"
-import { readFile, writeFile } from "node:fs/promises"
+import { readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -140,29 +140,76 @@ export async function removeRow(table, id) {
  * Simple synchronous-style local JSON store for services that need an
  * in-memory cache with periodic persistence. Reads once on first access,
  * writes on explicit .write(). The file lives at DATA_DIR/<name>.json.
+ *
+ * Audit §5.7 hardening: the initial load and every write run on ONE promise
+ * chain per store, so (a) a write can never land before the file's own data
+ * has been read (previously a fire-and-forget load could clobber newer
+ * in-memory state with a stale file after the fact) and (b) writes are
+ * atomic tmp+rename — a crash mid-write leaves the previous file intact,
+ * never a truncated JSON. `.ready` resolves once the initial load settled.
  */
 const storeCache = new Map()
 export function localStore(name, defaults = {}) {
   if (storeCache.has(name)) return storeCache.get(name)
   const store = { data: JSON.parse(JSON.stringify(defaults)), _dirty: false }
-  // Fire-and-forget initial load (file may not exist yet — that's fine)
   const file = join(DATA_DIR, `${name}.json`)
-  readFile(file, "utf8")
+
+  let ready
+  store.ready = new Promise((resolve) => {
+    ready = resolve
+  })
+  // Per-store serialized op chain: load first, then writes strictly in order.
+  // If the caller writes BEFORE the initial load settles, its in-memory state
+  // is authoritative and the file's older contents must not clobber it — the
+  // audit §5.7 load race. Otherwise the persisted object merges under defaults.
+  let preWrite = false
+  let loadSettled = false
+  let chain = readFile(file, "utf8")
     .then((raw) => {
-      const parsed = JSON.parse(raw)
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        store.data = { ...defaults, ...parsed }
+      let parsed = null
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        parsed = null // corrupt file → defaults (never crash on bad JSON)
+      }
+      if (!preWrite && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        store.data = { ...store.data, ...parsed }
       }
     })
-    .catch(() => { /* file doesn't exist yet or is corrupt — use defaults */ })
-  store.write = () => {
+    .catch(() => { /* file doesn't exist yet — defaults stand */ })
+    .finally(() => {
+      loadSettled = true
+      ready?.()
+    })
+
+  async function persist() {
+    const snapshot = JSON.stringify(store.data, null, 2)
+    const tmp = `${file}.tmp`
     try {
-      writeFile(file, JSON.stringify(store.data, null, 2), "utf8").catch((err) => {
-        console.warn(`[picc-localstore] localStore write failed ${name}:`, err.message)
-      })
+      await writeFile(tmp, snapshot, "utf8")
+      await rename(tmp, file)
     } catch (err) {
-      console.warn(`[picc-localstore] localStore write failed ${name}:`, err.message)
+      if (err && err.code === "ENOENT") {
+        // Data dir created after import time (tests / fresh machine): ensure it
+        // exists and retry once instead of silently dropping the write.
+        try {
+          mkdirSync(dirname(file), { recursive: true })
+          await writeFile(tmp, snapshot, "utf8")
+          await rename(tmp, file)
+        } catch (retryErr) {
+          console.warn(`[picc-localstore] localStore write failed ${name}:`, retryErr.message)
+        }
+      } else {
+        console.warn(`[picc-localstore] localStore write failed ${name}:`, err.message)
+      }
     }
+  }
+
+  store.write = () => {
+    if (!loadSettled) preWrite = true
+    chain = chain.then(persist).catch((err) => {
+      console.warn(`[picc-localstore] localStore write failed ${name}:`, err.message)
+    })
   }
   storeCache.set(name, store)
   return store
