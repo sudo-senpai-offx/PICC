@@ -92,15 +92,80 @@ describe("localStore (audit §5.7 hardening)", () => {
   test("writes are atomic — no .tmp residue, final file is valid JSON of the last snapshot", async () => {
     const { localStore } = await freshModule()
     const s = localStore("counter", { n: 0 })
+    let lastWrite
     for (let i = 1; i <= 5; i++) {
       s.data.n = i
-      s.write()
+      lastWrite = s.write() // burst the queue, then drain it — deterministic on Windows
     }
-    await waitForFile(join(dir, "counter.json"), (t) => t.includes('"n": 5'))
+    await lastWrite
     const files = await readdir(dir)
     expect(files.some((f) => f.endsWith(".tmp"))).toBe(false)
     const raw = JSON.parse(await readFile(join(dir, "counter.json"), "utf8"))
     expect(raw.n).toBe(5)
+  })
+
+  test("rename EPERM (Windows destination lock) is retried — no residue, last snapshot wins", async () => {
+    const d = await mkdtemp(join(tmpdir(), "picc-localstore-lock-"))
+    dir = d
+    process.env.PICC_DATA_DIR = d
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const real = await importOriginal()
+      let fails = 2 // simulate a reader holding the destination open, then clearing
+      return {
+        ...real,
+        rename: async (from, to) => {
+          if (fails > 0) {
+            fails--
+            const e = new Error("EPERM: operation not permitted")
+            e.code = "EPERM"
+            throw e
+          }
+          return real.rename(from, to)
+        }
+      }
+    })
+    vi.resetModules()
+    const { localStore } = await import("../services/localstore.mjs")
+    const s = localStore("locked", { n: 0 })
+    await s.ready
+    s.data.n = 7
+    s.write()
+    await waitForFile(join(d, "locked.json"), (t) => t.includes('"n": 7'))
+    const files = await readdir(d)
+    expect(files.some((f) => f.endsWith(".tmp"))).toBe(false)
+    const raw = JSON.parse(await readFile(join(d, "locked.json"), "utf8"))
+    expect(raw.n).toBe(7)
+    vi.doUnmock("node:fs/promises")
+  })
+
+  test("rename permanently locked → direct-write fallback — data is never silently lost", async () => {
+    const d = await mkdtemp(join(tmpdir(), "picc-localstore-lock2-"))
+    dir = d
+    process.env.PICC_DATA_DIR = d
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const real = await importOriginal()
+      return {
+        ...real,
+        rename: async () => {
+          const e = new Error("EPERM: operation not permitted")
+          e.code = "EPERM"
+          throw e
+        }
+      }
+    })
+    vi.resetModules()
+    const { localStore } = await import("../services/localstore.mjs")
+    const s = localStore("alwayslocked", { n: 0 })
+    await s.ready
+    s.data.n = 9
+    s.write()
+    // Even with rename failing forever, the snapshot must still reach disk.
+    await waitForFile(join(d, "alwayslocked.json"), (t) => t.includes('"n": 9'))
+    const raw = JSON.parse(await readFile(join(d, "alwayslocked.json"), "utf8"))
+    expect(raw.n).toBe(9)
+    const files = await readdir(d)
+    expect(files.some((f) => f.endsWith(".tmp"))).toBe(false)
+    vi.doUnmock("node:fs/promises")
   })
 
   test("localStore instance is cached per name (same object, same data)", async () => {

@@ -3,7 +3,7 @@
 // Supabase now lives in server/data/<table>.json, fully self-hosted.
 import { randomBytes } from "node:crypto"
 import { mkdirSync } from "node:fs"
-import { readFile, rename, writeFile } from "node:fs/promises"
+import { readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -182,12 +182,44 @@ export function localStore(name, defaults = {}) {
       ready?.()
     })
 
+  /**
+   * tmp+rename is atomic on POSIX but on Windows rename() fails with EPERM (or
+   * occasionally EACCES) while the destination file is held open by a concurrent
+   * reader — the pollers in tests, listRows, or antivirus scanners. A plain
+   * tmp+rename would then silently DROP the latest snapshot. Retry the rename a
+   * bounded number of times (the lock is transient); if it never clears, fall
+   * back to a direct write so data is never lost — only the crash-atomicity
+   * guarantee, which Windows itself cannot provide while the file is locked.
+   * Either way the tmp file is cleaned up.
+   */
+  async function renameWithRetry(tmp, file, snapshot, attempts = 25, delayMs = 20) {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        await rename(tmp, file)
+        return
+      } catch (err) {
+        if (err && (err.code === "EPERM" || err.code === "EACCES")) {
+          await new Promise((r) => setTimeout(r, delayMs))
+          continue
+        }
+        throw err // not a lock — surface it
+      }
+    }
+    console.warn(`[picc-localstore] rename lock never cleared for ${file}; writing directly`)
+    await writeFile(file, snapshot, "utf8").catch((err) => {
+      // Unlink can also race a lock; ignore, next write reuses the same path.
+      rm(tmp, { force: true }).catch(() => {})
+      throw err
+    })
+    await rm(tmp, { force: true }).catch(() => {})
+  }
+
   async function persist() {
     const snapshot = JSON.stringify(store.data, null, 2)
     const tmp = `${file}.tmp`
     try {
       await writeFile(tmp, snapshot, "utf8")
-      await rename(tmp, file)
+      await renameWithRetry(tmp, file, snapshot)
     } catch (err) {
       if (err && err.code === "ENOENT") {
         // Data dir created after import time (tests / fresh machine): ensure it
@@ -195,7 +227,7 @@ export function localStore(name, defaults = {}) {
         try {
           mkdirSync(dirname(file), { recursive: true })
           await writeFile(tmp, snapshot, "utf8")
-          await rename(tmp, file)
+          await renameWithRetry(tmp, file, snapshot)
         } catch (retryErr) {
           console.warn(`[picc-localstore] localStore write failed ${name}:`, retryErr.message)
         }
@@ -210,6 +242,10 @@ export function localStore(name, defaults = {}) {
     chain = chain.then(persist).catch((err) => {
       console.warn(`[picc-localstore] localStore write failed ${name}:`, err.message)
     })
+    // Returns the tail of the op chain, so callers that need durability can
+    // `await store.write()` and know the snapshot (incl. any rename retries)
+    // actually reached disk before continuing.
+    return chain
   }
   storeCache.set(name, store)
   return store
