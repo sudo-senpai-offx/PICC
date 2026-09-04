@@ -6,6 +6,11 @@ const SEARCH_URL = "https://google.serper.dev/search"
 const NEWS_URL = "https://google.serper.dev/news"
 const SHOPPING_URL = "https://google.serper.dev/shopping"
 
+// Serper.dev rejection statuses that point at the API key itself rather than the
+// query. 400 is what Serper returns for a missing/invalid/expired X-API-KEY on a
+// POST. 401/403 are auth/plan problems; 429 is a plan quota/rate limit.
+const KEY_OR_QUOTA_STATUSES = new Set([400, 401, 403, 429])
+
 async function call(url, query, num = 5) {
   if (!env.serperApiKey) return null
   const res = await fetch(url, {
@@ -17,7 +22,25 @@ async function call(url, query, num = 5) {
     body: JSON.stringify({ q: query, num }),
     signal: AbortSignal.timeout(15000)
   })
-  if (!res.ok) throw new Error(`Serper ${res.status}`)
+  if (!res.ok) {
+    // Attribute the failure to the credential/plan BEFORE blaming the query.
+    // A 400/401/403/429 on Serper means the X-API-KEY is missing, invalid,
+    // expired, out of quota, or above the plan's rate limit — an external
+    // account issue that cannot be fixed in code. Surface the endpoint + status
+    // + hint so the operator knows to check SERPER_API_KEY, not the request.
+    const endpoint = new URL(url).pathname.split("/").pop()
+    let detail = ""
+    try {
+      const body = await res.json().catch(() => null)
+      detail = (body?.message ?? body?.error ?? "") ? ` — ${body?.message ?? body?.error}` : ""
+    } catch {
+      /* non-JSON body; leave detail empty */
+    }
+    const hint = KEY_OR_QUOTA_STATUSES.has(res.status)
+      ? " (check SERPER_API_KEY: missing/invalid/expired key, out of quota, or rate-limited)"
+      : ""
+    throw new Error(`Serper ${endpoint} ${res.status}${detail}${hint}`)
+  }
   const json = await res.json()
   return json
 }

@@ -330,17 +330,27 @@ export function historyCandlesFrom(payload) {
   const groups = Array.isArray(payload?.candles) ? payload.candles : []
   for (const group of groups) {
     const batches = Array.isArray(group?.periods) ? group.periods : []
+    // A batch carries N candle rows under one batch timestamp. Without per-row
+    // times, stamping every row with the batch time collapses a full history
+    // into a single bar once it is de-duplicated by time upstream (the chart's
+    // sanitizeSeries keys on candle.time). Space the rows out by the group's
+    // timeframe, anchoring the newest row at the batch time and stepping older
+    // rows back by tf, so each candle keeps a distinct time.
+    const groupTf = Number(group?.tf) || 0
     for (const batch of batches) {
       if (!Array.isArray(batch)) continue
       const [time, rows] = batch
       if (!Array.isArray(rows)) continue
-      for (const row of rows) {
+      const batchTime = Number(time) || 0
+      const step = groupTf > 0 ? groupTf : 0
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
         if (!Array.isArray(row)) continue
         const close = Number(row[3] ?? row[2])
         if (!Number.isFinite(close) || close <= 0) continue
         closes.push(close)
         ohlc.push({
-          time: Number(time) || 0,
+          time: step > 0 ? batchTime - (rows.length - 1 - i) * step : batchTime,
           open: Number(row[0]) || 0,
           high: Number(row[1]) || 0,
           low: Number(row[2]) || 0,

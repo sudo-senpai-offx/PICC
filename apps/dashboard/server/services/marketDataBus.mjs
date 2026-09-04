@@ -290,3 +290,80 @@ export async function listAvailableSources(assetId, { timeframe = 60 } = {}) {
       }
     })
 }
+
+// ── Cross-source verification (aggregate trust) ─────────────────────────────
+// "Same data across multiple sources is trusted." getBestCandles returns the
+// single best source (winner-priority fan-in). This WRAPPER additionally
+// samples every other broker that serves the SAME resolution and tags each
+// primary bar verified:true only when at least one independent sibling puts
+// the same bucket at a close within tolerance — i.e. ≥2 independent sources
+// agree. Single-source bars stay visible but are explicitly unverified, so no
+// single-source bias is ever presented as aggregate truth. Verification NEVER
+// changes OHLC or appends bars — it only adds honest provenance tags.
+//
+// Additive response keys (existing keys/order untouched):
+//   verifySources  — number of INDEPENDENT sibling brokers that served the same
+//                    resolution (primary counts as one, so ≥1 sibling ⇒ ≥2
+//                    independent sources on the bucket)
+//   verifiedCount  — how many returned bars are tagged verified:true
+//   verifiedRatio  — verifiedCount / returned bars (0..1)
+//   per-bar: verified:boolean, sources:[slugs]
+//
+// Honesty: a failing/declining sibling is dropped (primary stands), never
+// fabricated. When the user PINNED a single source, verification is skipped
+// (they asked for one lens — never relabel it as cross-source agreement).
+const CLOSE_AGREEMENT_TOLERANCE = 0.005 // ±0.5% relative on close
+const MAX_VERIFY_SIBLINGS = 2           // bound secondary fetches (Yahoo rate budget)
+
+async function fetchSiblingBars(broker, id, servedTf, count) {
+  try {
+    const served = broker.resolveTimeframe(servedTf)
+    if (served === null || served === undefined || served !== servedTf) return null
+    const candles = await timed(broker.slug, async () => broker.getCandles(id, { timeframe: servedTf, count }))
+    if (!Array.isArray(candles) || !candles.length) return null
+    return candles
+  } catch { return null }
+}
+
+export async function getCrossSourceCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null, source = "auto" } = {}) {
+  const base = await getBestCandles(assetId, { timeframe, count, ensureWatch, source })
+  const zero = { verifySources: 0, verifiedCount: 0, verifiedRatio: 0 }
+  if (!base?.candles?.length) return { ...base, ...zero }
+  // Pinned single-source lens — verification is intentionally skipped.
+  if (typeof source === "string" && source !== "" && source !== "auto") return { ...base, ...zero }
+
+  const servedTf = base.timeframe
+  const primarySlug = base.source
+  // Exact server-time buckets (the same convention withHistoryBackfill uses).
+  const byBucket = new Map()
+  for (const c of base.candles) {
+    if (c == null || c.time == null) continue
+    byBucket.set(c.time, [])
+  }
+
+  let verifySources = 0
+  const { getActiveBrokers } = await registry()
+  const siblings = getActiveBrokers().filter((b) => b.slug !== primarySlug)
+  for (const broker of siblings.slice(0, MAX_VERIFY_SIBLINGS)) {
+    const bars = await fetchSiblingBars(broker, assetId, servedTf, count)
+    if (!bars) continue
+    verifySources++
+    for (const b of bars) {
+      if (b == null || b.time == null || !Number.isFinite(b.close)) continue
+      const arr = byBucket.get(b.time)
+      if (arr) arr.push({ slug: broker.slug, close: b.close })
+    }
+  }
+
+  let verifiedCount = 0
+  const candles = base.candles.map((c) => {
+    if (!Number.isFinite(c.close)) return { ...c, verified: false, sources: [primarySlug] }
+    const siblings = byBucket.get(c.time) ?? []
+    const agreeing = siblings.filter((s) => Math.abs(s.close - c.close) <= CLOSE_AGREEMENT_TOLERANCE * Math.max(Math.abs(c.close), 1e-9))
+    const verified = agreeing.length >= 1 // primary + ≥1 sibling = ≥2 sources
+    if (verified) verifiedCount++
+    return { ...c, verified, sources: [primarySlug, ...agreeing.map((s) => s.slug)] }
+  })
+  const verifiedRatio = candles.length > 0 ? Math.round((verifiedCount / candles.length) * 1000) / 1000 : 0
+  return { ...base, candles, verifySources, verifiedCount, verifiedRatio }
+}

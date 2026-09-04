@@ -7,6 +7,7 @@ import {
   assetsFrom,
   candlesFrom,
   liveCandlesFrom,
+  historyCandlesFrom,
   expirationShift,
   buyPayload,
   fingerprintKey,
@@ -342,5 +343,78 @@ describe("settlementsFrom", () => {
 
   it("ignores settlements for unknown deals", () => {
     expect(settlementsFrom({ deals: [{ id: "nope", status: "win" }] }, active)).toEqual([])
+  })
+})
+
+describe("historyCandlesFrom (per-row timestamps)", () => {
+  it("gives every row in a multi-row batch a distinct time spaced by the timeframe", () => {
+    // One batch, many candles — the v45 `assetHistoryCandles` shape. Without
+    // per-row times, all rows share the batch timestamp and any upstream
+    // time-keyed de-dupe collapses the history to a single bar.
+    const out = historyCandlesFrom({
+      candles: [
+        {
+          tf: 300,
+          periods: [
+            [1_000_000, [
+              [1, 2, 0.5, 1.5],
+              [1.6, 2.1, 1.4, 1.9],
+              [2, 2.2, 1.7, 2.1]
+            ]]
+          ]
+        }
+      ]
+    })
+    expect(out.ohlc.length).toBe(3)
+    const times = out.ohlc.map((c) => c.time)
+    // Newest (last) row anchored at the batch time; older rows step back by tf.
+    expect(new Set(times).size).toBe(3)
+    expect(times[2]).toBe(1_000_000)
+    expect(times[1]).toBe(1_000_000 - 300)
+    expect(times[0]).toBe(1_000_000 - 600)
+    // OHLC values survive per row.
+    expect(out.ohlc[0].close).toBe(1.5)
+    expect(out.ohlc[2].close).toBe(2.1)
+  })
+
+  it("keeps the exact time for a single-row batch (no regression)", () => {
+    const out = historyCandlesFrom({
+      candles: [
+        {
+          tf: 300,
+          periods: [[1_000_000, [[2, 2.2, 1.7, 2.1]]]]
+        }
+      ]
+    })
+    expect(out.ohlc.length).toBe(1)
+    expect(out.ohlc[0].time).toBe(1_000_000)
+    expect(out.ohlc[0].close).toBe(2.1)
+  })
+
+  it("falls back to the batch time when the timeframe is unknown", () => {
+    const out = historyCandlesFrom({
+      candles: [
+        {
+          // no tf — cannot determine spacing, so rows keep the batch time
+          periods: [[1_000_000, [[1, 2, 0.5, 1.5], [1.5, 2, 1, 1.8]]]]
+        }
+      ]
+    })
+    expect(out.ohlc.length).toBe(2)
+    expect(out.ohlc[0].time).toBe(1_000_000)
+    expect(out.ohlc[1].time).toBe(1_000_000)
+  })
+
+  it("counts closes alongside the normalized ohlc", () => {
+    const out = historyCandlesFrom({
+      candles: [
+        {
+          tf: 60,
+          periods: [[2_000_000, [[1, 2, 0.5, 1.5], [1.5, 2, 1, 1.8]]]]
+        }
+      ]
+    })
+    expect(out.closes).toEqual([1.5, 1.8])
+    expect(out.count).toBe(2)
   })
 })

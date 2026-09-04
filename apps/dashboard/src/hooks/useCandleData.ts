@@ -85,6 +85,12 @@ interface UseCandleDataResult {
   resolvedTimeframe: number | null
   /** True when the SERVER served a different resolution than requested. */
   resolved: boolean
+  /** Number of independent sibling brokers the server consulted (verify mode). */
+  verifySources: number
+  /** How many of the returned bars the server tagged verified:true. */
+  verifiedCount: number
+  /** verifiedCount / returned bars (0..1). 0 when nothing cross-verified. */
+  verifiedRatio: number
 }
 
 const BASE = "/api"
@@ -104,16 +110,22 @@ interface CandleResponse {
   requestedTimeframe?: number
   /** True when the served resolution differs from the requested one. */
   resolved?: boolean
+  /** Number of independent sibling brokers that served the same (verified) data. */
+  verifySources?: number
+  /** How many of the returned bars are tagged verified:true. */
+  verifiedCount?: number
+  /** verifiedCount / returned bars (0..1). */
+  verifiedRatio?: number
 }
 
-export async function fetchCandles(assetId: string, timeframe: Timeframe, count: number, source: string = "auto"): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean; availableSources: AvailableSource[] }> {
+export async function fetchCandles(assetId: string, timeframe: Timeframe, count: number, source: string = "auto", verify: boolean = false): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean; availableSources: AvailableSource[]; verifySources: number; verifiedCount: number; verifiedRatio: number }> {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
   const res = await fetch(`${BASE}/trading/candles`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ assetId, timeframe, count, source })
+    body: JSON.stringify({ assetId, timeframe, count, source, verify })
   })
   if (!res.ok) {
     const j = await res.json().catch(() => null) as { error?: string } | null
@@ -136,7 +148,7 @@ export async function fetchCandles(assetId: string, timeframe: Timeframe, count:
   const served = typeof data.timeframe === "number" && data.timeframe > 0
     ? data.timeframe
     : (data.candles[0]?.timeframe ?? timeframe)
-  return { rows, source: data.source ?? null, feed: data.feed ?? null, resolvedTimeframe: served, resolved: data.resolved === true || served !== timeframe, availableSources: data.availableSources ?? [] }
+  return { rows, source: data.source ?? null, feed: data.feed ?? null, resolvedTimeframe: served, resolved: data.resolved === true || served !== timeframe, availableSources: data.availableSources ?? [], verifySources: data.verifySources ?? 0, verifiedCount: data.verifiedCount ?? 0, verifiedRatio: data.verifiedRatio ?? 0 }
 }
 
 function computeEma(candles: CandleDatum[], period: number): EmaDatum[] {
@@ -250,6 +262,12 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
   const [feed, setFeed] = useState<string | null>(null)
   const [resolvedTimeframe, setResolvedTimeframe] = useState<number | null>(null)
   const [resolved, setResolved] = useState(false)
+  // Cross-source verification tags (server `verify:true` mode). Zero by default
+  // — honest (unconfigured ≠ verified), so the chart can show a neutral/absent
+  // badge until the server actually reports an agreement.
+  const [verifySources, setVerifySources] = useState(0)
+  const [verifiedCount, setVerifiedCount] = useState(0)
+  const [verifiedRatio, setVerifiedRatio] = useState(0)
   const candlesRef = useRef<CandleDatum[]>([])
 
   // Allow a PARENT to drive the timeframe (Slice C — multi-timeframe). When the
@@ -267,8 +285,8 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
     let alive = true
     setLoading(true)
     setError(null)
-    fetchCandles(assetId, timeframe, count, pinned)
-      .then(({ rows, source: src, feed: fd, resolvedTimeframe: rtf, resolved: isResolved, availableSources: avail }) => {
+    fetchCandles(assetId, timeframe, count, pinned, true)
+      .then(({ rows, source: src, feed: fd, resolvedTimeframe: rtf, resolved: isResolved, availableSources: avail, verifySources, verifiedCount, verifiedRatio }) => {
         if (!alive) return
         candlesRef.current = rows
         setCandles(rows)
@@ -277,6 +295,9 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
         setResolvedTimeframe(rtf)
         setResolved(isResolved)
         setAvailableSources(avail.length ? avail : [])
+        setVerifySources(verifySources)
+        setVerifiedCount(verifiedCount)
+        setVerifiedRatio(verifiedRatio)
         if (rows.length > 0) setLastPrice(rows[rows.length - 1].close)
         setLoading(false)
       })
@@ -376,6 +397,6 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
     bbUpper: bb.upper, bbMid: bb.mid, bbLower: bb.lower,
     rsiLine,
     macdLine: macdSeries.line, macdSignal: macdSeries.signal, macdHist: macdSeries.hist,
-    loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source: served, pinnedSource: pinned, availableSources, setSource: handleSetSource, feed, resolvedTimeframe, resolved
+    loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source: served, pinnedSource: pinned, availableSources, setSource: handleSetSource, feed, resolvedTimeframe, resolved, verifySources, verifiedCount, verifiedRatio
   }
 }

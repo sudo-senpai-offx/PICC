@@ -1966,17 +1966,22 @@ async function _handleApiInner(req, res, url, reqId) {
       // Unified fan-in: EO push buffers → live EO fetch → CCXT aggregates →
       // Yahoo daily fallback. Source + staleness tagged for honest labeling.
       // A pinned `source` overrides the fan-in to view one specific lens.
-      const { getBestCandles, listAvailableSources } = await import("./services/marketDataBus.mjs")
+      const { getBestCandles, listAvailableSources, getCrossSourceCandles } = await import("./services/marketDataBus.mjs")
       const { ensureWatchingAsset, feedProvenance } = await import("./services/liveEO.mjs")
+      // Opt-in cross-source verification (verify:true): wraps the fan-in and
+      // tags each bar with how many INDEPENDENT sources agree on it (aggregate
+      // trust — "same data across multiple sources is trusted"). Off by default
+      // so the standard fan-in shape and cost stay unchanged for other callers.
+      const fetchCandles = body?.verify === true ? getCrossSourceCandles : getBestCandles
       const [out, availableSources] = await Promise.all([
-        getBestCandles(assetId, { timeframe, count, ensureWatch: ensureWatchingAsset, source }),
+        fetchCandles(assetId, { timeframe, count, ensureWatch: ensureWatchingAsset, source }),
         listAvailableSources(assetId, { timeframe })
       ])
       // Leg-level provenance when the live EO leg served: extension frames vs
       // headless studio frames (mirrors dataSources.collectSourceStatuses).
       const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : null
       if (!out.candles.length) {
-        return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources })
+        return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources, verifySources: 0, verifiedCount: 0, verifiedRatio: 0 })
       }
       writeJson(res, 200, {
         ok: true,
@@ -1995,7 +2000,11 @@ async function _handleApiInner(req, res, url, reqId) {
         historyDepth: out.historyDepth ?? out.candles.length,
         backfilled: out.backfilled ?? 0,
         historySpanMs: out.historySpanMs ?? 0,
-        historySource: out.historySource ?? null
+        historySource: out.historySource ?? null,
+        // Cross-source verification tags (additive; zero when verify not requested):
+        verifySources: out.verifySources ?? 0,
+        verifiedCount: out.verifiedCount ?? 0,
+        verifiedRatio: out.verifiedRatio ?? 0
       })
     } catch (err) {
       throttledWarn(`[picc] candles failed for ${assetId}: ${err.message}`)

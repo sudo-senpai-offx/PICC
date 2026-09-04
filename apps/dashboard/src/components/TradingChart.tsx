@@ -37,7 +37,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
     sma20, bbUpper, bbMid, bbLower, rsiLine, macdLine, macdSignal, macdHist,
-    loading, error, streamError, lastPrice, timeframe: activeTf, setTimeframe, source, pinnedSource, availableSources, setSource, feed, resolvedTimeframe, resolved
+    loading, error, streamError, lastPrice, timeframe: activeTf, setTimeframe, source, pinnedSource, availableSources, setSource, feed, resolvedTimeframe, resolved, verifySources, verifiedCount, verifiedRatio
   } = useCandleData({ assetId, timeframe: timeframe ?? 300, count: 2000 }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
   // Slice C — when the parent controls the timeframe, its change wins; the
   // hook's own state stays in sync via the initialTf effect in useCandleData.
@@ -120,7 +120,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
     let alive = true
     setHtfLine([])
     const overlayTf = activeTf < 3600 ? 14400 : activeTf < 86400 ? 86400 : 604800
-    fetchCandles(assetId, overlayTf, 400)
+    fetchCandles(assetId, overlayTf, 400, "auto", true)
       .then(({ rows }) => {
         if (!alive) return
         setHtfLine(rows.map((r) => ({ time: r.time, value: r.close })))
@@ -241,6 +241,18 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
               : sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
           {/* T6 — show when the user pinned a specific source (not "auto"). */}
           {pinnedSource !== "auto" ? <span title={`Pinned to source: ${sourceLabel} — fetch from this broker only`}><Badge tone="muted">Source: {sourceLabel}</Badge></span> : null}
+          {/* Cross-source verification (server `verify:true`). Honest: a badge
+              only appears when the server actually consulted siblings. Verified
+              = independent sources AGREED on the same bars; "no agreement" says
+              the check ran but the data disagreed (never fabricated). Absent =
+              no cross-check was available — NOT "verified". */}
+          {verifySources > 0 && verifiedRatio > 0 ? (
+            <Badge tone="success">
+              ✓ cross-verified ({verifySources} {verifySources === 1 ? "source" : "sources"})
+            </Badge>
+          ) : verifySources > 0 && verifiedCount === 0 ? (
+            <Badge tone="warn">cross-checked · no agreement</Badge>
+          ) : null}
           {streamError ? <Badge tone="warn">stream offline — retrying</Badge> : null}
           {latestU4fa ? (
             <span
