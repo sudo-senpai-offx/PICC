@@ -223,32 +223,26 @@ Each item names its canonical tracker. Verified-open today; re-confirm before ex
 
 ### 6.2 Engineering backlog (agent-executable, ordered)
 
-- **R4 — Audit agent-reported findings (§5.2–5.8 of `docs/AUDIT_REPORT.md`, all UNVERIFIED —
-  re-confirm lines first):** `liveEO.mjs` unbounded `lastLiveFetch` Map (size cap/TTL); `liveCCXT.mjs`
-  false "connected" staleness (heartbeat/last-message gate); `modelMatrix.mjs` breakout no neutral
-  band; `modelMacd` O(n²) EMA recompute; `accuracyLedger.mjs` look-ahead entry/exit fallback
-  (use signal-time candle); `localstore.mjs` load race + non-atomic write; `correlation.mjs` dead
-  `portVar`.
-- **R5 — NEXT_WAVE generalization slices still open** (`docs/specs/NEXT_WAVE_generalization.md`):
-  Slice 1 asset-catalog forex+equities aliases; Slice 2 12-value timeframes + broker-agnostic label
-  purge (re-verify what the T-series already landed before starting — the spec predates it); Slice 3
-  surface `dataBusStats()` latency on broker rows ("—" when no samples); Slice 5d stretch coverage
-  (`alertEngine`, `liveCCXT`, `positionManager`, `watchlist`, `volatility`, `dataSources`,
-  `indicators`, `orderFlow`, `tradingSessions`); Slice 7f later-venue extension selectors; plus the
-  spec's cross-slice Definition-of-Done checks (each slice = its own commit, regression gate = suite
-  never shrinks).
-- **R6 — Strategy-program wave** (scheduled in the ledger F8/F-11 rows): live-wire the new
-  Garman-Klass/Yang-Zhang estimators into autopilot/risk-parity consumers (estimators + same-sample
-  tests already landed `e1ab756`); portfolio card + correlation-screened portfolio in the suite
-  consuming `/api/trading/portfolio`.
-- **R7 — Finance Tracker** (`docs/PICC_FULL_SCOPE.md` Part 2): backend tables + RLS already exist
-  (`financial_accounts`, `transactions`); 100% of the gap is frontend — rewrite `src/lib/finance.ts`
-  against `/api/data/*`, ship Accounts/Transactions CRUD, computed net worth, and auto-sync the
-  trading-suite balance as one account. Part 2b (Firefly III sync) is a later phase. Part 3 (Wave-1
-  executor) is **superseded** — dead-letter per NEXT_WAVE §2.1; do not resurrect.
-- **R8 — Q5 follow-ups:** the income-generalization design/requirements spec set may hold
-  post-Task-13 stretch items; re-read `PICC_INCOME_GENERALIZATION_{requirements,design,checklist}_v1.md`
-  when the strategy-program wave starts and fold any remaining income items in.
+- **R4 — Audit agent-reported findings (§5.2–5.8 of `docs/AUDIT_REPORT.md`) — ✅ DONE 2026-09-04.**
+  All seven were re-verified line-by-line, fixed, and regression-locked (look-ahead entry/exit →
+  signal-time candle; localstore serialized chain + atomic writes; liveCCXT last-message staleness
+  gate; liveEO throttle-map cap/eviction; modelMatrix breakout neutral band; modelMacd O(n) EMA;
+  correlation dead `portVar` removed). Each closed in `AUDIT_REPORT.md` §5 with code + test refs.
+- **R5 — NEXT_WAVE generalization slices — ✅ DONE 2026-09-04.** Slices 1/2/3 verified already
+  landed in the T/Q5 waves; Slice 5d coverage completed for all 10 named services (hermetic, no
+  network); Slice 7f (Binance/Bybit extension selectors) remains **open as a small stretch** — no
+  second-site decision has been made (user-gated, per Q5 Task 14 flag).
+- **R6 — Strategy-program wave — ✅ DONE 2026-09-04.** `annualizedVolatility` estimator chooser
+  (GK/YZ/std) wired into the autopilot sizing consumer; `CorrelationScreen` in the suite consuming
+  `/api/trading/correlation` (portfolio card + pre-trade risk check already live).
+- **R7 — Finance Tracker — ✅ DONE 2026-09-04** (`docs/PICC_FULL_SCOPE.md` Part 2a checklist
+  ticked): `finance.ts` rewrite + Accounts/Transactions CRUD (Profile → Finance tracker) +
+  computed net worth (assets − liabilities, fixed-rate FX labelled approximate) + auto-synced
+  paper-trading account; Dashboard hero fallback removed. Part 2b (Firefly III sync) remains a
+  later phase; Part 3 (Wave-1 executor) stays dead-lettered per NEXT_WAVE §2.1.
+- **R8 — Q5 follow-ups — ✅ DONE 2026-09-04.** Re-read the income spec set: Tasks 14–15 are
+  user gates (unchanged); the one open agent item, REQ-C's holdings write side, landed as
+  `HoldingsEditor` (add/delete for `nft_holdings`/`depin_nodes` on the Income Overview tab).
 - **R9 — Periodic re-verification** (cheap, do alongside any future work): full suite green, `tsc`
   clean, gitleaks gate passing, ledger-vs-spec-vs-code truth (code wins; fix the doc, per ledger
   rules of the road).
@@ -275,38 +269,31 @@ Audit Fixes 1–8 + secret purge + gitleaks CI gate; UI/a11y pass; hermetic cove
 ledger/spec/PRIVACY/SETUP truth-sync; scratch-hygiene; full suite + typecheck green; pushed.
 **Acceptance:** §2 ledger + §3 commit log above; suite 1,525 green; origin/master updated.
 
-### Phase 1 — Owner verification & human gates *(NEXT — you)*
+### Phase 1 — Owner verification & human gates *(NEXT — you; unchanged)*
 Launch the app and verify (R2), approve Q5 flag items (R3), rotate the EO session (R1a), decide on
 history rewrite (R1b).
 **Acceptance:** your sign-off on the Q5 checklist items 115–116 and this report's §6.1.
 
-### Phase 2 — Close the audit's evidence gaps *(agent; ~1–2 sessions)*
-R4 findings (§6.2) — each becomes a small fix commit with its own test after re-verifying the
-claimed lines (they are agent-reported, not independently confirmed). Priority: `accuracyLedger`
-look-ahead bias, `localstore` atomicity, `liveCCXT` staleness.
-**Acceptance:** each item CLOSED in `docs/AUDIT_REPORT.md` §5 with a code/test reference; suite
-green throughout.
+### Phase 2 — Close the audit's evidence gaps *(✅ EXECUTED 2026-09-04 — uncommitted edits for review)*
+R4 findings (§6.2) — all seven re-verified, fixed, regression-locked, and closed in `AUDIT_REPORT.md` §5.
+**Acceptance met:** each item CLOSED with a code/test reference; suite green throughout (1,620).
 
-### Phase 3 — NEXT_WAVE generalization slices *(agent; the strategy-program wave, per ledger)*
-R5 in spec order: Slice 1 catalog aliases → Slice 3 latency surfacing → Slice 2 label/timeframe
-purge (re-verify state first) → Slice 5d coverage → Slice 7f venues. Fold in R6 (live Garman-Klass/
-Yang-Zhang wiring + portfolio card + correlation screening) as the same wave's trading half.
-**Acceptance:** each slice lands as its own commit; NEXT_WAVE checkboxes ticked with tests; suite
-never shrinks.
+### Phase 3 — NEXT_WAVE generalization slices *(✅ EXECUTED 2026-09-04)*
+Slices 1/2/3 verified landed; Slice 5d coverage complete for all 10 named services; R6 GK/YZ wiring
++ correlation screen landed. **Remaining:** Slice 7f (Binance/Bybit extension selectors) — small
+stretch, user-gated on a second-site decision.
 
-### Phase 4 — Finance Tracker *(agent; the biggest open product gap)*
-R7 (PICC_FULL_SCOPE Part 2): `finance.ts` rewrite + Accounts/Transactions CRUD + computed net worth
-+ trading-balance auto-sync account; remove the dashboard's temporary paper-balance fallback once
-live. Firefly III sync (2b) only after the MVP has been used.
-**Acceptance:** end-to-end account → transaction → net-worth flow over `/api/data/*` with tests;
-feature demoed to owner.
+### Phase 4 — Finance Tracker *(✅ EXECUTED 2026-09-04)*
+R7 complete: `finance.ts` rewrite + Accounts/Transactions CRUD + computed net worth + auto-synced
+paper-trading account; Dashboard hero fallback removed; Part-2a checklist ticked.
+**Remaining:** Firefly III sync (2b) only after the MVP has been used; **demo to owner pending**
+(Phase 1 launch-verify).
 
-### Phase 5 — Income & strategy deepening *(agent, then owner review)*
-R8 income follow-ups; F-11 estimator consumers in live risk tooling; any
-Q5-adjacent multi-source income connectors that the registry architecture makes cheap; revisit
-`TRADING_MULTIPLATFORM_ROADMAP.md` §6 only under the redirect-not-execute boundary.
-**Acceptance:** features demoed + owner-verified before the next push (Q5 spec rule: no push before
-launch-verify).
+### Phase 5 — Income & strategy deepening *(✅ EXECUTED 2026-09-04 — agent half; owner review pending)*
+R8 complete (REQ-C holdings write side); F-11 estimator consumers wired into live risk tooling.
+**Remaining:** Slice 7f second-site selectors and any new income connectors stay behind the Q5
+user gates (Task 14); `TRADING_MULTIPLATFORM_ROADMAP.md` §6 only under the redirect-not-execute
+boundary (unchanged).
 
 ### Standing gates for every phase
 - A fix lands in its own commit referencing its finding id (audit spec REQ-4); no doc-only closure

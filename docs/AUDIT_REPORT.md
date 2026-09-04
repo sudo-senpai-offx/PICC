@@ -136,26 +136,40 @@ These are the highest-impact concrete bugs. All verified at the cited lines of `
 - `handlers.mjs:2684` (arbitrage/spread route) references `round2` with **no declaration or import anywhere** (verified). Reaching this route throws `ReferenceError: round2 is not defined` at runtime.
 - Fix: define `round2` (e.g., `Math.round(x*100)/100`) at module scope or inline. No test covers this route — add one.
 
-### 5.2 [agent-reported, not reverified] — `liveEO.mjs:1088` unbounded `lastLiveFetch` Map
-- Per-subscription last-fetch timestamp Map grows without eviction → slow leak over a long-lived server. Low severity; suggest a size cap/TTL prune.
+### 5.2 ✓ re-verified 2026-09-04 + ADDRESSED — `liveEO.mjs` unbounded `lastLiveFetch` Map
+- **Re-verified:** the per-key re-fetch throttle map grew without eviction.
+- **Fix:** `pruneLiveFetchMap` (exported, pure) drops entries idle past `LIVE_FETCH_TTL_MS` (5 min) and enforces a `LIVE_FETCH_MAX_KEYS` (256) hard cap, evicting oldest-first; `fetchAssetCandles` prunes when over cap.
+- **Locked by:** `server/__tests__/liveEO.fetchThrottle.test.mjs` (TTL eviction, cap eviction oldest-first, non-Map safety).
 
-### 5.3 [agent-reported] — `liveCCXT.mjs:290` false "connected" staleness
-- Reachability is inferred from a list-length check only; a stale/empty-but-open connection can report `connected`. Suggest a heartbeat/last-message timestamp gate.
+### 5.3 ✓ re-verified 2026-09-04 + ADDRESSED — `liveCCXT.mjs` false "connected" staleness
+- **Re-verified:** `liveCCXTData()` inferred `"connected"` from `assets.length` alone.
+- **Fix:** liveness gate `ccxtFeedStatus`/`ccxtStatus` — `"connected"` only while some buffer was written within `CCXT_STALE_MS` (90 s, six 15 s scheduler polls); older buffers report `"stale"` (data stays readable); `mergeCCXTAssets` only lets a live primary feed override it.
+- **Locked by:** `server/__tests__/liveCCXT.staleness.test.mjs` (idle / fresh-connected / stale-after-window / pure-gate boundary).
 
-### 5.4 [agent-reported] — `modelMatrix.mjs:140` `modelBreakout` has no flat state
-- Directional vote fires at `pos >= 0.5` with no mid-band neutral band → noisy calls when price is range-bound.
+### 5.4 ✓ re-verified 2026-09-04 + ADDRESSED — `modelMatrix.mjs` `modelBreakout` has no flat state
+- **Re-verified:** mid-channel position (0.5±) voted a coin-flip up/down.
+- **Fix:** neutral mid-band — flat in 0.40–0.60 of the Donchian channel; tails (>0.85 / <0.15) and shoulders unchanged.
+- **Locked by:** `server/__tests__/modelMatrix.test.mjs` (mid-band → flat + note, tails still directional).
 
-### 5.5 [agent-reported] — `modelMatrix.mjs:160-164` O(n²) EMA recompute
-- `modelMacd` recomputes full EMA series per step on longer windows; fine for current inputs, quadratic under scale.
+### 5.5 ✓ re-verified 2026-09-04 + ADDRESSED — `modelMatrix.mjs` O(n²) EMA recompute
+- **Re-verified:** `modelMacd` recomputed full-slice EMAs per `end`.
+- **Fix:** one O(n) pass via `emaSeries` (full EMA12/26 runs, differenced) — same warmup seed, bit-for-bit identical output.
+- **Locked by:** `server/__tests__/modelMatrix.test.mjs` equivalence test against the original quadratic implementation.
 
-### 5.6 [agent-reported] — `accuracyLedger.mjs:93` entry/exit price falls back to newest candle
-- When no explicit fill price, defaults to the latest candle — a mild **look-ahead** bias in accuracy accounting. Use the candle at signal time, not the latest.
+### 5.6 ✓ re-verified 2026-09-04 + ADDRESSED — `accuracyLedger.mjs` entry price look-ahead
+- **Re-verified:** `recordDecision` sampled the newest (possibly forming) buffer candle regardless of when the decision was logged.
+- **Fix:** new pure `sampleEntryPrice(candles, {at, price})` — an explicit signal-time `d.price` wins; otherwise the newest candle whose bar time is ≤ the decision's own `ts` (a late re-log can never capture a post-signal close). Entry records `entryCandleTime`.
+- **Locked by:** `server/__tests__/accuracyLedger.test.mjs` (explicit price wins, `ts`-anchoring, invalid-price fallback, empty input).
 
-### 5.7 [agent-reported] — `localstore.mjs:150-160` fire-and-forget load race + non-atomic write
-- Concurrent reads during an in-flight load can observe partial state; writes are not atomic (no tmp+rename). Low severity at current scale.
+### 5.7 ✓ re-verified 2026-09-04 + ADDRESSED — `localstore.mjs` load race + non-atomic write
+- **Re-verified:** fire-and-forget initial load could clobber newer in-memory state; writes were plain `writeFile`.
+- **Fix:** every store runs one promise chain — load settles before any write; a write issued before load resolves marks the store pre-written (file contents no longer merge over caller state); writes are atomic tmp+rename with ENOENT mkdir retry; corrupt JSON falls back to defaults; `store.ready` exposed.
+- **Locked by:** `server/__tests__/localstore.test.mjs` (persist/reload, pre-load write wins, corrupt file, atomic no-`.tmp`-residue, per-name caching).
 
-### 5.8 [agent-reported] — `correlation.mjs:144-149` dead `portVar`
-- Unused variable — harmless dead code.
+### 5.8 ✓ re-verified 2026-09-04 + ADDRESSED — `correlation.mjs` dead `portVar`
+- **Re-verified:** unused portfolio-variance accumulation inside `diversificationScore`.
+- **Fix:** dead block removed (score math unchanged).
+- **Locked by:** `server/__tests__/correlation.test.mjs` (matrix/`highlyCorrelated`, score values for ±1-correlated and degenerate inputs).
 
 ---
 
@@ -216,6 +230,13 @@ These are the highest-impact concrete bugs. All verified at the cited lines of `
 - **Fix 10 (extension lockfile) — DECLINED with reason (2026-09-04).** `apps/dashboard/extensions/picc-overlay/` is a zero-dependency, no-build MV3 extension: there is nothing to lock and `npm audit` would be vacuous. Revisit only if the extension gains dependencies.
 - **Suite at closure:** **1,525/1,525 tests (143 files)**; `npx tsc -b --noEmit` exit 0. Full wave ledger: `docs/FINALIZATION_REPORT.md`.
 
+**Strategy-program wave (2026-09-04, Phases 2–5, uncommitted working-tree edits for owner review):**
+- **§5.2–5.8 findings — all CLOSED with fixes + regression tests** (see §5 for per-finding code/test references): `accuracyLedger` look-ahead entry/exit (signal-time candle), `localstore` load-race + non-atomic write (serialized chain + atomic rename), `liveCCXT` false-connected staleness (last-message age gate), `liveEO` unbounded throttle map (size cap + eviction), `modelMatrix` breakout neutral band + `modelMacd` O(n) EMA, `correlation` dead `portVar` removal.
+- **NEXT_WAVE slice 5d — DONE** (coverage for all 10 named services, hermetic, no network) and **R6 — DONE** (GK/YZ estimator chooser wired into autopilot sizing; correlation screen in the suite).
+- **Finance Tracker (R7 / PICC_FULL_SCOPE Part 2a) — DONE**: `finance.ts` rewrite + Accounts/Transactions CRUD + computed net worth + auto-synced paper-trading account; Dashboard hero fallback removed.
+- **Income REQ-C write side (R8) — DONE**: `HoldingsEditor` add/delete for `nft_holdings`/`depin_nodes` on the Income Overview tab.
+- **Suite at wave end:** **1,620/1,620 tests (160 files)**; `npx tsc -b --noEmit` exit 0. Ledger F8/F-11 rows closed; NEXT_WAVE 5d + PICC_FULL_SCOPE Part-2a checklists ticked; CHANGELOG wave entry added.
+
 ---
 
 ## 9. External research notes (2026)
@@ -228,8 +249,7 @@ These are the highest-impact concrete bugs. All verified at the cited lines of `
 
 ## 10. What was NOT verified (honest gaps)
 
-The following came from subsystem explore agents during the parallel audit and were **not** independently re-run by me. Treat the exact line numbers as "around here"; every one merits a 2-minute confirmation before acting:
-- `liveEO.mjs:1088` Map leak, `liveCCXT.mjs:290` staleness, `modelMatrix.mjs:140/160`, `accuracyLedger.mjs:93` look-ahead, `localstore.mjs:150`, `correlation.mjs:144` — §5.2–5.8.
+The following came from subsystem explore agents during the parallel audit and were **not** independently re-run by me at audit time. **Since closed (2026-09-04 sweep):** every §5.2–5.8 finding was re-verified line-by-line, fixed, and regression-locked before closure — see §5 for code + test references.
 
 Also not reverified (requires a running stack): live EO real-market feed (needs human re-login), the two standing open user items (extension empty inspection console, and no visible "Send test" button) — both remain **uninvestigated** as the audit superseded them.
 

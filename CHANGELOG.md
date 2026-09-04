@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-09-04 - Strategy-program & finance wave (Phases 2–5)
+
+### Phase 2 — Audit defect fixes (R4; AUDIT_REPORT §5.2–5.8, all re-verified then fixed)
+- `accuracyLedger.mjs`: entry/exit fallback now uses the **signal-time candle** (no look-ahead). Regression tests in `accuracyLedger.test.mjs`.
+- `localstore.mjs`: serialized load-then-write op chain + atomic tmp+rename persist (a write can never land before the initial load; a crash never leaves truncated JSON). New `localstore.test.mjs`.
+- `liveCCXT.mjs`: feed liveness gated by last-message age (`CCXT_STALENESS_MS`) — a silent feed reports `stale`, never fake "connected". New `liveCCXT.staleness.test.mjs`.
+- `liveEO.mjs`: `lastLiveFetch` throttle map is size-capped (`EO_FETCH_THROTTLE_MAX`, evicts oldest) — no unbounded growth. New `liveEO.fetchThrottle.test.mjs`.
+- `modelMatrix.mjs`: breakout adds a neutral band (no signal until |Δ| clears the band) — zero-signal assets no longer vote direction; `modelMacd` EMA recompute is O(n) not O(n²). Extended `modelMatrix.test.mjs`.
+- `correlation.mjs`: removed dead `portVar`. New `correlation.test.mjs`.
+
+### Phase 3 — NEXT_WAVE coverage + R6 live wiring
+- Coverage for 9 previously-untested services: `orderFlow`, `dataSources`, `tradingSessions`, `watchlist`, `positionManager`, `indicators`, `volatility`, `scheduler` (all hermetic, no network) + `liveCCXT`/`liveEO` above; `indicators.mjs` flat-RSI returns 50 not 100; `positionManager.mjs` venue-concentration warning no longer false-positives on a first-ever trade.
+- R6: `annualizedVolatility` estimator chooser (Garman-Klass / Yang-Zhang / std) exported from `volatility.mjs` and wired into the autopilot sizing consumer; **CorrelationScreen** added to the trading suite (top pairs by |corr|, diversification score, honest "—" states; consumes `/api/trading/correlation`).
+
+### Phase 4 — Finance Tracker (R7; PICC_FULL_SCOPE Part 2a — the biggest product gap)
+- `src/lib/finance.ts` rewritten: localStorage read-only stub → real CRUD over `/api/data/financial_accounts` + `/api/data/transactions` (per-user rows preserved server-side).
+- New `FinanceTracker` on Profile: accounts CRUD (name/type/currency/starting balance), per-account transactions CRUD (category/tags/date), running balance = starting + sum(transactions).
+- Net worth is **computed** (assets − liabilities, per-currency + fixed-rate USD conversion, labelled approximate FX) — the dead manual-snapshot concept is gone.
+- Trading suite wired in as one auto-synced account (`synced` paper-trading account tracking the paper engine's live cash); Dashboard hero's temporary paper-balance fallback **removed** — hero shows the computed net worth.
+
+### Phase 5 — Income follow-ups (R8 / REQ-C)
+- New `HoldingsEditor` on the Income → Overview tab: server-backed add/delete for `nft_holdings` + `depin_nodes` (the missing write side of REQ-C's holdings view; view already existed).
+
+### Verification
+- Full suite: **1,620/1,620 tests green**; `npx tsc -b --noEmit` exit 0.
+- Ledger/spec truth-sync: F-11 + F8 rows closed with wiring; NEXT_WAVE 5d ticked; PICC_FULL_SCOPE Part-2a checklist ticked.
+- Human gates still open (unchanged): rotate the leaked EO session, decide on history rewrite, launch-verify the app, approve Q5 flag items.
+
+---
+
 ## 2026-09-04 - Finalization wave (audit remediation + UX/a11y + push)
 
 ### Security & secrets (audit Fix 1)

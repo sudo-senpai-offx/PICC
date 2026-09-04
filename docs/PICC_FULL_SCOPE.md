@@ -133,12 +133,12 @@ here because "everything" should include it and its own checklist hasn't been st
 ## Master checklist (flat)
 
 - [x] Patch applied: paper adapter shape fix + paper/overview route + Dashboard fallback
-- [ ] `finance.ts` rewritten against `financial_accounts`/`transactions` via `localdata.ts`
-- [ ] Accounts CRUD UI shipped
-- [ ] Transactions CRUD UI shipped
-- [ ] Net worth computed from real account balances, not manually snapshotted
-- [ ] Trading suite balance(s) wired in as a real account, auto-synced
-- [ ] Dashboard.tsx's temporary paper-balance fallback removed once the above exists
+- [x] `finance.ts` rewritten against `financial_accounts`/`transactions` via `localdata.ts` (2026-09-04 — lib + FinanceTracker + tests)
+- [x] Accounts CRUD UI shipped (Profile → Finance tracker)
+- [x] Transactions CRUD UI shipped (per-account, category/tags/date)
+- [x] Net worth computed from real account balances, not manually snapshotted (assets − liabilities, per-currency + fixed-rate USD conversion)
+- [x] Trading suite balance(s) wired in as a real account, auto-synced (`synced` paper-trading account tracking `getPaperOverview().cash`)
+- [x] Dashboard.tsx's temporary paper-balance fallback removed once the above exists (hero now reads the computed finance-tracker net worth)
 - [ ] (Later) Firefly III sync connector
 - [ ] Wave 1 executor contract + paper/expertoption adapters + registry choke point
 - [ ] Product decision made on autonomous execution vs. manual-only, post-Wave-1
