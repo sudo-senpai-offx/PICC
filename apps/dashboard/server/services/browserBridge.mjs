@@ -13,7 +13,7 @@
 //
 // The bridge is read-only by contract: it never clicks buy/withdraw. The
 // PICC overlay it injects only displays metrics and suggestions.
-import { execSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import { cpSync, mkdirSync, writeFileSync, unlinkSync, existsSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -47,7 +47,9 @@ function regExecutable(app) {
   ]
   for (const key of keys) {
     try {
-      const out = execSync(`reg query "${key}" /ve`, { encoding: "utf8", windowsHide: true, timeout: 3000, stdio: ["ignore", "pipe", "ignore"] })
+      // execFileSync (argument array) — never a shell string, so the registry
+      // key cannot be interpreted as shell syntax (CWE-78).
+      const out = execFileSync("reg", ["query", key, "/ve"], { encoding: "utf8", windowsHide: true, timeout: 3000, stdio: ["ignore", "pipe", "ignore"] })
       const m = out.match(/REG_SZ\s+(.+)/)
       const path = m?.[1]?.trim()
       if (path && /\.exe$/i.test(path)) return path
@@ -128,13 +130,14 @@ function isProfileLockError(msg) {
 function killProfileProcesses(userDataDir) {
   const needle = String(userDataDir)
   if (process.platform !== "win32") {
-    // macOS/Linux: pgrep -f matches against the full command line.
+    // macOS/Linux: pgrep -f matches against the full command line. Argument
+    // array avoids shell interpretation of a crafted path (CWE-78).
     let killed = 0
     try {
-      const out = execSync(`pgrep -f "${needle}"`, { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim()
+      const out = execFileSync("pgrep", ["-f", needle], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim()
       for (const id of out.split(/\s+/).map(Number).filter(Boolean)) {
         try {
-          execSync(`kill -9 ${id}`, { stdio: "ignore" })
+          execFileSync("kill", ["-9", String(id)], { stdio: "ignore" })
           killed++
         } catch {
           /* already gone */
@@ -150,7 +153,7 @@ function killProfileProcesses(userDataDir) {
   writeFileSync(ps1, 'param([string]$Needle)\nGet-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*$Needle*" } | ForEach-Object { $_.ProcessId }\n')
   let killed = 0
   try {
-    const out = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${ps1}" "${needle}"`, {
+    const out = execFileSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1, needle], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 10_000,
@@ -158,7 +161,7 @@ function killProfileProcesses(userDataDir) {
     }).trim()
     for (const id of out.split(/\s+/).map(Number).filter(Boolean)) {
       try {
-        execSync(`taskkill /PID ${id} /T /F`, { windowsHide: true, stdio: "ignore" })
+        execFileSync("taskkill", ["/PID", String(id), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
         killed++
       } catch {
         /* already gone */
@@ -197,7 +200,7 @@ function osTimezone() {
 function osLocale() {
   if (process.platform === "win32") {
     try {
-      const out = execSync('reg query "HKCU\\Control Panel\\International\\nLocaleName" /ve', {
+      const out = execFileSync("reg", ["query", "HKCU\\Control Panel\\International\\nLocaleName", "/ve"], {
         encoding: "utf8",
         windowsHide: true,
         timeout: 3000,
@@ -221,8 +224,9 @@ function osLocale() {
 function osViewport() {
   if (process.platform !== "win32") return { ...DEFAULT_VIEWPORT }
   try {
-    const out = execSync(
-      'powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.ToString()"',
+    const out = execFileSync(
+      "powershell",
+      ["-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.ToString()"],
       { encoding: "utf8", windowsHide: true, timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }
     )
     const m = out.match(/Width=(\d+)[,}].*Height=(\d+)/s)
