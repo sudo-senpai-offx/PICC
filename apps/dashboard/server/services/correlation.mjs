@@ -140,13 +140,6 @@ export function diversificationScore(weights, corrMatrix) {
   if (sumW <= 0) return 0
   const nw = w.map((x) => x / sumW)
 
-  // Portfolio variance with correlations
-  let portVar = 0
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      portVar += nw[i] * nw[j] * (corrMatrix[i]?.[j] ?? (i === j ? 1 : 0))
-    }
-  }
   // Average pairwise correlation (excl diagonal)
   let sumCorr = 0, count = 0
   for (let i = 0; i < n; i++) {
