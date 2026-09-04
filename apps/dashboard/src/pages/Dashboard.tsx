@@ -5,7 +5,7 @@ import { useUser } from "@/hooks/useAuth"
 import { getHealth, getBtcpayStatus, getExtensionStatus } from "@/lib/api"
 import { listData } from "@/lib/localdata"
 import type { AgentLog, SimulationRow } from "@/lib/types"
-import { getHoldings, getSnapshots } from "@/lib/finance"
+import { formatMoney, listAccounts, listTransactions, netWorthTotals, syncTradingAccount } from "@/lib/finance"
 import { getPaperOverview } from "@/lib/trading"
 import { getStreams, getEarnings, streamSummary } from "@/lib/streams"
 import { CryptoMarkets } from "@/components/CryptoMarkets"
@@ -95,7 +95,7 @@ export function Dashboard() {
   const [sims, setSims] = useState<SimulationRow[]>([])
   const [logs, setLogs] = useState<AgentLog[]>([])
   const [loading, setLoading] = useState(true)
-  const [paperBalance, setPaperBalance] = useState<number | null>(null)
+  const [netWorth, setNetWorth] = useState<{ usdTotal: number; byCurrency: Record<string, number>; accountCount: number } | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -113,44 +113,40 @@ export function Dashboard() {
   }, [user])
 
   useEffect(() => {
-    // The net-worth hero card below has no manual-entry UI anywhere in the
-    // app yet, so getSnapshots() is permanently empty for every user — this
-    // was showing a dead "—" forever, even for someone actively trading.
-    // Until a real holdings tracker exists, fall back to the one number PICC
-    // already knows for certain: the paper engine's live cash balance.
-    getPaperOverview()
-      .then((ov) => setPaperBalance(ov.ok ? ov.cash : null))
-      .catch(() => setPaperBalance(null))
-  }, [])
+    // PICC_FULL_SCOPE Part 2a: net worth is computed from the real finance
+    // tracker (accounts + transactions over /api/data/*), with the paper
+    // trading balance wired in as one auto-synced account. No more dead
+    // snapshots or temporary fallbacks.
+    if (!user) return
+    let cancelled = false
+    Promise.all([listAccounts(), listTransactions(), getPaperOverview()])
+      .then(async ([accs, txs, ov]) => {
+        const synced = await syncTradingAccount(accs, ov.ok ? ov.cash : null)
+        if (cancelled) return
+        const { usdTotal, byCurrency } = netWorthTotals(synced, txs)
+        setNetWorth({ usdTotal, byCurrency, accountCount: synced.length })
+      })
+      .catch(() => {
+        if (!cancelled) setNetWorth(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user])
 
   const money = (n: unknown) =>
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(n) || 0)
 
-  const snapshots = getSnapshots()
-  const lastSnap = snapshots[snapshots.length - 1] ?? null
-  const prevSnap = snapshots[snapshots.length - 2] ?? null
-  const netWorth = lastSnap
-    ? `MYR ${Math.round(lastSnap.total).toLocaleString("en-US")}`
-    : paperBalance != null
-      ? money(paperBalance)
-      : getHoldings().length > 0
-        ? "Add a holding"
-        : "—"
-  const netWorthIsLiveFallback = !lastSnap && paperBalance != null
-  const deltaPct = lastSnap && prevSnap && prevSnap.total ? ((lastSnap.total - prevSnap.total) / prevSnap.total) * 100 : null
+  const netWorthHasValue = netWorth !== null && (netWorth.usdTotal !== 0 || Object.keys(netWorth.byCurrency).length > 0)
+  const netWorthDisplay = netWorthHasValue && netWorth ? formatMoney(netWorth.usdTotal) : "—"
+  const netWorthNote =
+    netWorth === null
+      ? "Finance tracker unavailable — start the backend, then add accounts on the Profile page."
+      : netWorth.accountCount === 0
+        ? "No accounts yet — add one on the Profile page → Finance tracker."
+        : `computed from ${netWorth.accountCount} live account${netWorth.accountCount === 1 ? "" : "s"}`
   const summary = streamSummary(getStreams(), getEarnings())
   const incomeMonthly = summary.monthly ? `$${Math.round(summary.monthly).toLocaleString("en-US")}/mo` : "—"
-
-  const sparkPoints = (() => {
-    if (snapshots.length < 2) return ""
-    const totals = snapshots.map((s) => s.total)
-    const min = Math.min(...totals)
-    const max = Math.max(...totals)
-    const range = max - min || 1
-    return totals
-      .map((t, i) => `${(i / (totals.length - 1)) * 100},${100 - ((t - min) / range) * 100}`)
-      .join(" ")
-  })()
 
   const quickActions = [
     { icon: "📊", label: "Financial Twin", hint: "Monte Carlo projection", onClick: () => navigate("/simulator") },
@@ -173,37 +169,26 @@ export function Dashboard() {
       <Card className="hero-card">
             <div className="row space-between wrap">
               <div className="stack">
-                <div className="metric-label">
-                  {netWorthIsLiveFallback ? "Paper trading balance · live" : "Net worth · last snapshot"}
-                </div>
-                <div className="hero-value">{netWorth}</div>
-                {netWorthIsLiveFallback ? (
-                  <div className="muted small">
-                    Not full net worth — holdings tracking isn't built yet, this is only your simulated trading balance.
-                  </div>
-                ) : null}
+                <div className="metric-label">Net worth · computed from live accounts</div>
+                <div className="hero-value">{netWorthDisplay}</div>
+                <div className="muted small">{netWorthNote}</div>
                 <div className="row wrap" style={{ gap: 8 }}>
-                  {deltaPct != null ? (
-                    <Badge tone={deltaPct >= 0 ? "success" : "danger"}>
-                      {deltaPct >= 0 ? "▲" : "▼"} {Math.abs(deltaPct).toFixed(1)}% vs prior snapshot
+                  {netWorth && netWorth.accountCount > 0 ? (
+                    <Badge tone="success">
+                      ● {netWorth.accountCount} account{netWorth.accountCount === 1 ? "" : "s"} tracked
                     </Badge>
                   ) : (
-                    <Badge tone="muted">No prior snapshot</Badge>
+                    <Badge tone="muted">Finance tracker</Badge>
                   )}
                   <span className="muted small">
                     {incomeMonthly} passive · {summary.activeCount} active stream{summary.activeCount === 1 ? "" : "s"}
-                    {lastSnap ? ` · snapshot ${new Date(lastSnap.date).toLocaleDateString()}` : ""}
                   </span>
                 </div>
               </div>
               <div className="hero-spark-wrap">
-                {sparkPoints ? (
-                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="hero-spark" aria-hidden>
-                    <polyline points={sparkPoints} fill="none" stroke="var(--accent)" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
-                  </svg>
-                ) : (
-                  <div className="hero-spark-empty muted small">Snapshot history will chart here</div>
-                )}
+                <div className="hero-spark-empty muted small">
+                  Net worth is computed live — manage accounts & transactions on the Profile page
+                </div>
               </div>
             </div>
           </Card>

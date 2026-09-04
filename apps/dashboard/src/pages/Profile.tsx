@@ -8,6 +8,7 @@ import {
   saveProfileName,
 } from "@/lib/api"
 import type { HealthInfo } from "@/lib/api"
+import { FinanceTracker } from "@/components/FinanceTracker"
 
 type Notice = { kind: "ok" | "warn" | "err"; text: string } | null
 
@@ -120,6 +121,9 @@ export function Profile() {
       <button style={{ marginTop: 16 }} onClick={signOut}>
         Sign out
       </button>
+
+      {/* PICC_FULL_SCOPE Part 2a — real finance tracker over /api/data/* */}
+      <FinanceTracker />
     </div>
   )
 }
