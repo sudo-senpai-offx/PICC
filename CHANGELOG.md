@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-09-05 — Command Centre Web slice 5: first live execution leg (bandwidth payout claims)
+
+Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
+spec doc, which is ticked for this slice). Bandwidth:browser is `gray` in the approved 5C truth
+table → COPILOT / power `proposals` → the human-approved claims path (AUTOPILOT stays CCXT slice 6).
+
+- **L1 execution seam** — `commandCentre/commandCentreExecution.mjs`: proposal builder (power
+  `proposals`, fresh `consentBy` = acting human's uid, auto-rendered rationale 5F from observed
+  payout data, durable idempotency key 5G `bandwidth:claim:<platform>:<payoutRef>` where the ref
+  is the payout_ready row's day — scheduler rows carry no txn ref, the day IS the identity);
+  `executeProposal` runs the FULL 10-gate `evaluateGate` chain and only a pass reaches the
+  injected `executor` (venue-touching step: interventions workflow runner in production, fixture
+  stub in CI). Every outcome audited (5A): `safety-gate:allow` / `safety-gate:deny` /
+  `execution:executed` / `execution:failed`. A deny NEVER calls the executor; an executor throw is
+  caught and audited failed — never a partial-success claim. Per-site in-flight counts feed the
+  envelope cell (5D).
+- **Sidecar power-aware gating** — `safetySidecar.mjs`: proposals now carry `power`
+  (`none|proposals|liveDemo|live`) + `consentBy`. Gate 4: live/liveDemo need a STANDING opt-in,
+  `proposals` only FRESH non-blank `consentBy` (denied at per-site-opt-in with the consent-≠-
+  opt-in reason); legacy no-`power` proposals keep the exact old isLive+optIn semantics. Gate 7:
+  forbidden → liveDemo/proposals on demoOnly templates only; gray → proposals only; sanctioned →
+  live/proposals (liveDemo denied); power `none` denied outright. Allow audit events record
+  power+consentBy.
+- **API** — `GET /api/command-centre/claims` (lists scheduler `payout_ready` rows joined with an
+  honest claimed/ready status from the durable audit trail — the same 5G chain) and
+  `POST /api/command-centre/execute` (validates platform/balance/threshold/claimWorkflowId →
+  400; builds OBSERVED gate state — killSwitch from the runtime store, breakers from cross-site
+  halts, `staleFeeds` from the presence heartbeat with a 10-min cadence (no observed browser
+  node = cannot prove fresh = deny, 5E), `concurrentUnits` from the execution seam, `dayLossPct`
+  0 (claims surface has no market-loss axis) — then `claimPayout` with executor =
+  `interventions.runWorkflow({ workflowId, tabId, approval: "manual" })`, which throws an honest
+  BROWSER_CLOSED when the browser is closed → audited `execution:failed`). Overview composition
+  now takes OBSERVED `feeds` + `execution` inputs: bandwidth fresh-data/envelope/rationale cells
+  flip from not-wired to observed, the row gains `executionLeg`, and the opt-in note grows the
+  consent-≠-opt-in sentence.
+- **Panel** — `CommandCentrePanel.tsx` bandwidth stream gains the payout-claims block: scheduler
+  payout_ready rows with claimed/ready badges, a claim-workflow-id input, and an "Approve &
+  claim" button whose click is FRESH per-action human consent POSTed to `/api/command-centre/
+  execute`; the honest outcome (executed / failed / blocked) renders back on the card.
+- **Tests** — 13 new sidecar power tests (46 total), 14 execution seam tests, 8 new overview/
+  claims/execute API tests (17 total), 3 execute-route happy-path tests with a fixture executor
+  (`vi.mock` on `interventions.runWorkflow`), 2 new panel tests (6 total). Suite 1,770 → 1,810
+  across 173 files; typecheck clean.
+- Tracked in spec §slice-5 (Landed 2026-09-05); `PICC.md` §3.2/§3.3/§11/§11.1 L6/§11.3 wording
+  updated, §4 count 104 → 105 (1 new service module). The happy path against a REAL browser
+  (manual live verify) remains an owner-run step; CI proves the honest BROWSER_CLOSED failure and
+  the full gate chain instead. Next: slice 6 — CCXT live execution.
+
 ## 2026-09-05 — Command Centre Web slice 4: Command Centre surface (runtime kill switch, overview API, panel)
 
 Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the

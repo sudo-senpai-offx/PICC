@@ -106,7 +106,18 @@ function staleNames(staleFeeds) {
  * Evaluate one action proposal against the sidecar gate. Pure-ish: reads
  * module state (day halt, takeover, idempotency keys) and the injected inputs.
  *
- * proposal = { action, live (bool), exposureUsd, rationale, idempotencyKey }
+ * proposal = { action, live (bool), power (none|proposals|liveDemo|live),
+ *              consentBy (fresh per-action human identity, proposals leg),
+ *              exposureUsd, rationale, idempotencyKey }
+ *   - `power` mirrors the mode engine's EXECUTION_POWER. When present, the
+ *     opt-in gate (4) and ToS gate (7) interpret it:
+ *       live      → unattended; requires a STANDING per-site opt-in
+ *       liveDemo  → unattended demo; standing opt-in on demo surfaces
+ *       proposals → human-approved per-action leg; requires fresh consentBy
+ *                   (consent is per-action consent — explicitly NOT an
+ *                   automation opt-in, slice 4 contract)
+ *       none      → nothing to gate or run
+ *   - Legacy proposals WITHOUT `power` keep today's exact live/demo semantics.
  * state    = { killSwitch, optIn, breakers:{}, staleFeeds, concurrentUnits,
  *              dayLossPct (cumulative today, cross-site) }
  * template = the site's policy-graph template (envelope + permission)
@@ -122,7 +133,16 @@ export function evaluateGate({ template, proposal, state = {}, audit = null }) {
   }
   const allow = (reason) => {
     if (audit) {
-      audit({ site, kind: "safety-gate:allow", data: { action: proposal?.action ?? null, idempotencyKey: proposal?.idempotencyKey ?? null } })
+      audit({
+        site,
+        kind: "safety-gate:allow",
+        data: {
+          action: proposal?.action ?? null,
+          idempotencyKey: proposal?.idempotencyKey ?? null,
+          power: proposal?.power ?? null,
+          consentBy: proposal?.consentBy ?? null
+        }
+      })
     }
     return { allow: true, blockedBy: null, reason }
   }
@@ -132,6 +152,9 @@ export function evaluateGate({ template, proposal, state = {}, audit = null }) {
 
   const action = proposal.action ?? "unknown"
   const isLive = proposal.live !== false
+  const power = ["none", "proposals", "liveDemo", "live"].includes(proposal.power) ? proposal.power : null
+  const hasFreshConsent =
+    typeof proposal.consentBy === "string" && proposal.consentBy.trim().length > 0
 
   // ── 1. kill switch ────────────────────────────────────────────────────────
   // Two inputs, one switch: the explicit per-call state argument AND the wired
@@ -162,7 +185,22 @@ export function evaluateGate({ template, proposal, state = {}, audit = null }) {
   }
 
   // ── 4. per-site opt-in ────────────────────────────────────────────────────
-  if (isLive && state.optIn !== true) return block("per-site-opt-in", `live ${action} requires per-site opt-in`)
+  // Power-aware (slice 5): the unattended legs (live / liveDemo) require a
+  // STANDING per-site opt-in; the human-approved proposals leg passes on fresh
+  // per-action consent (consentBy) — which is explicitly NOT an automation
+  // opt-in (slice 4 decision) and can never unlock the unattended legs.
+  if (power === "live" || power === "liveDemo") {
+    if (state.optIn !== true) return block("per-site-opt-in", `live ${action} requires per-site opt-in`)
+  } else if (power === "proposals") {
+    if (!hasFreshConsent) {
+      return block(
+        "per-site-opt-in",
+        `${action} requires fresh per-action human consent (consentBy) — consent is per-action, NOT an automation opt-in`
+      )
+    }
+  } else if (isLive && state.optIn !== true) {
+    return block("per-site-opt-in", `live ${action} requires per-site opt-in`)
+  }
 
   // ── 5. hard breakers ──────────────────────────────────────────────────────
   const breakers = state.breakers ?? {}
@@ -176,7 +214,30 @@ export function evaluateGate({ template, proposal, state = {}, audit = null }) {
 
   // ── 7. ToS-survival (5C) ──────────────────────────────────────────────────
   const permission = template.automationPermission
-  if (permission === "forbidden") {
+  if (power === "none") {
+    return block("toS-survival", `action declares zero execution power — nothing to gate or run`)
+  }
+  if (power) {
+    // Power-aware permission matrix (slice 5). The legacy live/demo checks
+    // below apply only to proposals without a `power` field.
+    if (permission === "forbidden") {
+      if (power === "liveDemo" && template.demoOnly === true) {
+        /* recorded exception: demo autopilot surface on the demo-only template */
+      } else if (power === "proposals" && template.demoOnly === true) {
+        /* recorded exception: demo proposals are still the demo surface */
+      } else {
+        return block("toS-survival", `venue forbids automation (5C) — ${action} denied`)
+      }
+    } else if (permission === "gray") {
+      if (power !== "proposals") {
+        return block("toS-survival", `gray venue: proposals only, never live execution (5C)`)
+      }
+    } else if (permission === "sanctioned") {
+      if (power === "liveDemo") {
+        return block("toS-survival", "liveDemo not permitted on a non-demo site")
+      }
+    }
+  } else if (permission === "forbidden") {
     // Demo surface on a demoOnly template is the recorded exception (ExpertOption
     // truth-table row); anything else on a forbidden venue is denied outright.
     if (!isLive && template.demoOnly === true) {
@@ -184,11 +245,9 @@ export function evaluateGate({ template, proposal, state = {}, audit = null }) {
     } else {
       return block("toS-survival", `venue forbids automation (5C) — ${action} denied`)
     }
-  }
-  if (permission === "gray" && isLive) {
+  } else if (permission === "gray" && isLive) {
     return block("toS-survival", `gray venue: proposals only, never live execution (5C)`)
-  }
-  if (!isLive && template.demoOnly !== true) {
+  } else if (!isLive && template.demoOnly !== true) {
     return block("toS-survival", `demo surface not permitted on this site (template.demoOnly is false)`)
   }
 

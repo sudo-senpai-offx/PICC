@@ -138,9 +138,15 @@ import {
 import { anyKillActive, killSwitchState, setKillSwitch } from "./services/commandCentre/commandCentreRuntime.mjs"
 import { readAudit } from "./services/commandCentre/auditTrail.mjs"
 import { composeCommandCentreOverview } from "./services/commandCentre/commandCentreOverview.mjs"
+import { claimIdempotencyKey, claimPayout, executionStatus } from "./services/commandCentre/commandCentreExecution.mjs"
+import { dayKeyOf } from "./services/u4faRisk.mjs"
 
 wireKillSwitchReader(() => anyKillActive())
 wireAuditReader(() => readAudit())
+// Slice 5 — bandwidth 5E: the presence heartbeat is the mandatory browser-
+// uptime feed for the claim leg. A node we have not seen in this window cannot
+// be proven fresh, so claims are denied (conservative deny, never "probably up").
+const PRESENCE_STALE_MIN = 10
 import {
   studioStatus,
   openStudio,
@@ -1565,6 +1571,39 @@ async function _handleApiInner(req, res, url, reqId) {
         ? { record: rec, stale: staleFrom({ record: rec, cadenceMs: metricsCadenceMs(site) ?? 5 * 60 * 1000 }) }
         : null
     }
+    // Slice 5 — bandwidth mandatory-feed freshness observed from the presence
+    // heartbeat, and the currently-executable claim leg, both fed to the
+    // composition so the rail reports what is actually wired (never a silent OK).
+    const presence = await presenceStatus()
+    const bwDevices = Object.values(presence?.devices ?? {})
+    const bwMaxMin = bwDevices.length ? Math.max(...bwDevices.map((d) => d.minutesAgo ?? Infinity)) : Infinity
+    const feeds = {
+      "bandwidth:browser":
+        bwMaxMin <= PRESENCE_STALE_MIN
+          ? []
+          : [
+              {
+                name: "presence-heartbeat",
+                ageSec: Number.isFinite(bwMaxMin) ? bwMaxMin * 60 : Infinity,
+                maxAgeSec: PRESENCE_STALE_MIN * 60
+              }
+            ]
+    }
+    const lastBandwidthClaimAt = readAudit()
+      .filter((e) => e.kind === "execution:executed" && String(e.data?.action ?? "").startsWith("bandwidth:"))
+      .map((e) => e.at ?? null)
+      .filter(Boolean)
+      .sort()
+      .at(-1)
+    const executionNow = executionStatus()
+    const execution = {
+      "bandwidth:browser": {
+        action: "bandwidth:payout-claim",
+        power: "proposals",
+        inFlight: executionNow["bandwidth:browser"]?.inFlight ?? 0,
+        lastExecutedAt: lastBandwidthClaimAt ?? null
+      }
+    }
     writeJson(
       res,
       200,
@@ -1574,6 +1613,8 @@ async function _handleApiInner(req, res, url, reqId) {
         haltState: crossSiteHaltState(),
         takeover: takeoverState(),
         killState: killSwitchState(),
+        feeds,
+        execution,
         stream: stream || undefined,
         now: Date.now()
       })
@@ -1601,6 +1642,118 @@ async function _handleApiInner(req, res, url, reqId) {
     }
     const result = setKillSwitch(scope, kill)
     writeJson(res, 200, { ok: result.ok, userId, scope, kill, state: killSwitchState() })
+    return
+  }
+
+  // ---- Command Centre slice 5: the first LIVE execution leg (bandwidth
+  // payout claims, human-approved per action). Everything here reads the SAME
+  // observed state the enforcement layer reads: kill switch from the runtime
+  // store (plus the wired reader), breakers from the sidecar's cross-site
+  // halt, freshness from the presence heartbeat, concurrency from the
+  // execution seam. The venue-touching step is the interventions workflow
+  // engine — the executor seam is fixture-stubbed in tests, and the claim
+  // fails honestly (audited) when the browser is closed.
+
+  // GET lists the payout_ready observations (scheduler wrote them from
+  // automator status: balance >= payoutThreshold) joined with an honest
+  // claimed/ready status from the durable audit trail.
+  if (path === "/api/command-centre/claims" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const rows = await listRows("agent_logs")
+    const audits = readAudit()
+    const executedKeys = new Set(
+      audits.filter((e) => e.kind === "execution:executed").map((e) => e.data?.idempotencyKey)
+    )
+    const claims = rows
+      .filter((r) => r?.kind === "payout_ready")
+      .map((r) => {
+        const day = String(r.created_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)
+        const key = claimIdempotencyKey({ platform: r.platform, payoutRef: day })
+        return {
+          platform: r.platform,
+          balance: r.balance,
+          payoutThreshold: r.payoutThreshold,
+          notedAt: r.created_at ?? null,
+          ref: day,
+          idempotencyKey: key,
+          status: executedKeys.has(key) ? "claimed" : "ready",
+          note: r.note ?? null
+        }
+      })
+    writeJson(res, 200, { ok: true, at: new Date().toISOString(), claims })
+    return
+  }
+
+  // POST runs the FULL 10-gate chain (evaluateGate) and — only on a pass —
+  // hands the approved claim to the workflow engine. The acting human's uid IS
+  // the fresh per-action consent; recorded, never called an opt-in.
+  if (path === "/api/command-centre/execute" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const platform = String(body?.platform ?? "").trim()
+    const balance = Number(body?.balance)
+    const threshold = Number(body?.threshold)
+    const payoutRef = String(body?.ref ?? new Date().toISOString().slice(0, 10)).slice(0, 10)
+    const claimWorkflowId = String(body?.claimWorkflowId ?? "").trim()
+    const tabId = body?.tabId != null ? Number(body.tabId) : null
+    if (!platform) return writeJson(res, 400, { ok: false, error: "platform is required" })
+    if (!Number.isFinite(balance) || !Number.isFinite(threshold)) {
+      return writeJson(res, 400, { ok: false, error: "balance and threshold must be finite numbers" })
+    }
+    if (!claimWorkflowId) {
+      return writeJson(
+        res,
+        400,
+        { ok: false, error: "claimWorkflowId is required — save a payout-claim workflow in Workflows and pass its id (the workflow engine is the venue-touching leg)" }
+      )
+    }
+
+    const halt = crossSiteHaltState()
+    const haltToday = halt && halt.dayKey === dayKeyOf(Date.now())
+    const presence = await presenceStatus()
+    const devices = Object.values(presence?.devices ?? {})
+    const maxMinutes = devices.length ? Math.max(...devices.map((d) => d.minutesAgo ?? Infinity)) : Infinity
+    const staleFeeds =
+      maxMinutes <= PRESENCE_STALE_MIN
+        ? []
+        : [
+            {
+              name: "presence-heartbeat",
+              ageSec: Number.isFinite(maxMinutes) ? maxMinutes * 60 : Infinity,
+              maxAgeSec: PRESENCE_STALE_MIN * 60
+            }
+          ]
+
+    const result = await claimPayout({
+      platform,
+      balance,
+      threshold,
+      payoutRef,
+      consentBy,
+      state: {
+        killSwitch: anyKillActive(),
+        optIn: false, // claims leg: per-action consent, not a standing opt-in
+        breakers: {
+          dailyLossHalted: haltToday && halt.breaker === "dailyLoss",
+          regimeHalted: haltToday && (halt.breaker === "regime" || halt.breaker === "regimeHalted"),
+          siteCapped: false // no site-cap observation source yet — never claimed
+        },
+        staleFeeds,
+        concurrentUnits: executionStatus()["bandwidth:browser"]?.inFlight ?? 0,
+        dayLossPct: 0, // claims surface: no market loss axis (catalog maxDailyLossPct null)
+        claimWorkflowId,
+        tabId
+      },
+      executor: async () => interventions.runWorkflow({ workflowId: claimWorkflowId, tabId, approval: "manual" })
+    })
+    writeJson(res, 200, {
+      ok: result.ok,
+      platform,
+      consentBy,
+      gate: result.gate,
+      execution: result.execution,
+      state: killSwitchState()
+    })
     return
   }
 

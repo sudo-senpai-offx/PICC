@@ -390,6 +390,44 @@ CI; live-venue behavior is a manual verify step, not a unit test.
    tests + 4 TSX panel tests; first-live executive wiring deferred to slice 5 by design. Suite
    1,744 → 1,770; typecheck clean.
 5. Execution: bandwidth auto-claim (first live) — fixture-tested, manual live verify.
+   **Landed 2026-09-05** — the first LIVE execution leg, force-fit by the approved 5C truth
+   table (bandwidth:browser is `gray` → COPILOT → execution power `proposals` → the approved
+   human-claims path, never unattended AUTOPILOT — that stays CCXT slice 6):
+   `commandCentre/commandCentreExecution.mjs` (L1 seam — pure orchestrator: proposal built with
+   power `proposals`, fresh `consentBy` = the acting human's uid, auto-rendered rationale (5F)
+   from observed payout data, durable idempotency key (5G) `bandwidth:claim:<platform>:<ref>`
+   where `<ref>` is the payout_ready row's day — scheduler rows carry no txn ref, so the day IS
+   the identity; `executeProposal` runs the FULL `evaluateGate` chain and only a pass reaches the
+   injected `executor` (the interventions workflow runner in production, fixture stub in CI —
+   venue-touching code is never exercised live in the suite; every outcome audited (5A):
+   safety-gate allow/deny + execution executed/failed; deny never calls the executor; an executor
+   throw is caught and audited `execution:failed`, never a partial-success claim; in-flight
+   per-site counts feed the envelope cell), `claimPayout` = the bandwidth claim leg
+   (`proposals`, consentBy, `bandwidth:payout-claim`)), sidecar power-aware gating
+   (`safetySidecar.mjs`: proposal gains `power` `none|proposals|liveDemo|live` + `consentBy`;
+   gate 4: live/liveDemo need standing `optIn`, proposals needs fresh non-blank `consentBy`
+   (denied at per-site-opt-in with the consent-≠-opt-in reason), no-`power` legacy proposals
+   keep the exact old isLive+optIn semantics; gate 7: forbidden→liveDemo/proposals only on
+   demoOnly templates, gray→proposals only, sanctioned→live/proposals (liveDemo denied),
+   `none` denied outright; allow audit events carry power+consentBy), handlers wiring (`GET
+   /api/command-centre/claims` lists `payout_ready` rows joined with honest claimed/ready status
+   from the durable audit trail; `POST /api/command-centre/execute` validates platform/balance/
+   threshold/claimWorkflowId, builds observed state — killSwitch from the runtime store, breakers
+   from cross-site halts, `staleFeeds` from the presence heartbeat (10-min cadence, 5E: no
+   observed browser node = cannot prove fresh = deny), `concurrentUnits` from the execution seam,
+   `dayLossPct` 0 (claims surface has no market-loss axis), `claimWorkflowId` + `tabId` — and runs
+   `claimPayout` with executor = `interventions.runWorkflow({ workflowId, tabId, approval:
+   "manual" })` (throws honest BROWSER_CLOSED → audited failed)); overview composition now takes
+   OBSERVED `feeds` + `execution` (bandwidth fresh-data/envelope/rationale cells flip from
+   not-wired to observed; `executionLeg` row field; opt-in note grows the consent-≠-opt-in
+   sentence); frontend `CommandCentrePanel.tsx` gains the bandwidth claims block (scheduler
+   payout_ready list with claimed/ready badges + a claim-workflow-id input + "Approve & claim"
+   button that POSTs the fresh human approval and renders the honest outcome). 13 sidecar power
+   tests (46 total) + 14 execution seam tests + 8 overview/claims/execute API tests + 3
+   execute-route happy-path tests (fixture executor via `vi.mock`) + 2 panel tests. Suite
+   1,770 → 1,810, now 173 files; typecheck clean. Live verify (a real payout claim against a
+   running browser) is a manual step the owner runs — the honest BROWSER_CLOSED path is proven
+   in CI instead.
 6. Execution: CCXT live — fixture-tested, security-review, manual live verify on smallest envelope.
 7. ExpertOption ExpertBot pattern (demo) + expansion docs/checklist.
    **Slice 7 is not the end** — the web expands to remaining platforms one-by-one via the catalog;

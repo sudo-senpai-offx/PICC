@@ -35,6 +35,14 @@ const VALID_STREAMS = ["trading", "bandwidth"]
  * haltState:    safetySidecar.crossSiteHaltState() (null when none)
  * takeover:     safetySidecar.takeoverState() (null when none)
  * killState:    commandCentreRuntime.killSwitchState()
+ * feeds:        { [site]: [{ name, ageSec, maxAgeSec }] } — OBSERVED mandatory-
+ *               feed staleness (slice 5: bandwidth presence heartbeat). Sites
+ *               absent from the map keep the capture-profile freshness logic.
+ * execution:    { [site]: { action, power, inFlight, lastExecutedAt } } — the
+ *               currently-executable slice-5 leg per site (bandwidth claims).
+ *               A site with a leg has its envelope (5D) + rationale (5F) cells
+ *               + opt-in note composed from OBSERVED execution state; sites
+ *               without one stay "not-wired" (never a silent OK).
  * stream:       optional "trading" | "bandwidth" — filters the rows
  */
 export function composeCommandCentreOverview({
@@ -44,6 +52,8 @@ export function composeCommandCentreOverview({
   haltState = null,
   takeover = null,
   killState = { global: false, sites: {} },
+  feeds = {},
+  execution = {},
   stream,
   now = Date.now()
 } = {}) {
@@ -79,6 +89,16 @@ export function composeCommandCentreOverview({
               }
             ]
           : []
+      const siteFeeds = Array.isArray(feeds[site]) ? feeds[site] : []
+      // A site whose mandatory feeds are DECLARED (even when the array is
+      // empty = everything within cadence) is wired to observed feed state —
+      // an absent key is the not-wired case.
+      const feedsDeclared = Array.isArray(feeds[site])
+      const siteStaleFeeds = siteFeeds.filter(
+        (f) => f && typeof f.ageSec === "number" && typeof f.maxAgeSec === "number" && f.ageSec > f.maxAgeSec
+      )
+      const leg = execution[site] ?? null
+      const env = template.envelope ?? {}
 
       // Real engine, conservative observed inputs:
       //   workability 0 — no deterministic scorer is wired yet, so the honest
@@ -89,7 +109,7 @@ export function composeCommandCentreOverview({
         killSwitch: siteKilled(site),
         optIn: false,
         breakers,
-        staleFeeds: staleFeed,
+        staleFeeds: [...staleFeed, ...siteStaleFeeds],
         workability: 0,
         deliberation: null,
         advisory: null,
@@ -126,7 +146,9 @@ export function composeCommandCentreOverview({
             return {
               gate: name,
               status: "not-decided",
-              note: "automation opt-in is a DECISION, not an approval — the sync-approval verdict is NOT an opt-in, and none has ever been granted"
+              note: leg
+                ? `automation opt-in is a DECISION, not an approval — none has ever been granted. The ${leg.power} leg (${leg.action}) executes only on FRESH per-action human consent (consentBy), which is explicitly NOT an automation opt-in`
+                : "automation opt-in is a DECISION, not an approval — the sync-approval verdict is NOT an opt-in, and none has ever been granted"
             }
           case "hard-breakers": {
             const trips = []
@@ -139,6 +161,19 @@ export function composeCommandCentreOverview({
             }
           }
           case "fresh-data": {
+            // Slice 5: bandwidth's mandatory feed (presence heartbeat) is
+            // OBSERVED — a site with a DECLARED feeds entry reports its real
+            // staleness; an empty declared array means within cadence.
+            if (feedsDeclared) {
+              if (siteStaleFeeds.length > 0) {
+                return {
+                  gate: name,
+                  status: "block",
+                  note: `stale mandatory feed(s): ${siteStaleFeeds.map((f) => f.name).join(", ")} — observed at overview time (5E)`
+                }
+              }
+              return { gate: name, status: "pass", note: "mandatory feeds within cadence (observed at overview time)" }
+            }
             if (!capture) {
               return {
                 gate: name,
@@ -175,9 +210,32 @@ export function composeCommandCentreOverview({
             }
             return { gate: name, status: "pass", note: "sanctioned venue (5C truth table)" }
           }
-          case "envelope-within-ceiling":
-          case "rationale-renderable":
+          case "envelope-within-ceiling": {
+            if (leg) {
+              const cap = env.maxConcurrent
+              const atCap = cap != null && leg.inFlight >= cap
+              return {
+                gate: name,
+                status: atCap ? "block" : "pass",
+                note: atCap
+                  ? `${leg.inFlight} in-flight ${leg.power} units at the ${cap} concurrent ceiling (5D)`
+                  : `${leg.power} leg observed: ${leg.inFlight} in-flight of ${cap ?? "n/a"} concurrent ceiling — claims-only surface, no market exposure (5D)`
+              }
+            }
             return { gate: name, status: "not-wired", note: NOT_WIRED }
+          }
+          case "rationale-renderable": {
+            if (leg) {
+              return {
+                gate: name,
+                status: "pass",
+                note: leg.action === "bandwidth:payout-claim"
+                  ? "every claim auto-renders its why/what/how from observed payout data + the acting human's consent (5F)"
+                  : "rationale is rendered from observed inputs before any execution (5F)"
+              }
+            }
+            return { gate: name, status: "not-wired", note: NOT_WIRED }
+          }
           case "idempotent":
             return {
               gate: name,
@@ -213,6 +271,15 @@ export function composeCommandCentreOverview({
           active: false,
           note: template.demoOnly ? "demo surface reported by the ExpertBot runtime — finishes slice 7" : null
         },
+        executionLeg: leg
+          ? {
+              leg: leg.power,
+              action: leg.action,
+              inFlight: leg.inFlight ?? 0,
+              lastExecutedAt: leg.lastExecutedAt ?? null,
+              consent: "per-action human consent (consentBy) — NOT an automation opt-in"
+            }
+          : null,
         metrics: metricsRow?.record
           ? { source: "observed", venueId: site, observedAt: metricsRow.record.observedAt, stale: metricsRow.stale }
           : capture

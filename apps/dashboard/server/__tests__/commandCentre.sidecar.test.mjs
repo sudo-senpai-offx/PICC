@@ -389,3 +389,142 @@ describe("Command Centre — Safety Sidecar: wired kill-switch reader (the enfor
     expect(r.allow).toBe(true)
   })
 })
+
+describe("Command Centre — Safety Sidecar: execution power (slice 5 approved-claim leg)", () => {
+  // bandwidth:browser is gray (5C) → COPILOT only. The claim executes on FRESH
+  // per-action human consent (consentBy), which is NOT an automation opt-in.
+  function claimProposal(overrides = {}) {
+    return greenProposal({
+      action: "bandwidth:payout-claim",
+      power: "proposals",
+      consentBy: "usr_claim_01",
+      exposureUsd: 25,
+      idempotencyKey: "bandwidth:claim:traffmonetizer:2026-09-05-aabbcc",
+      ...overrides
+    })
+  }
+
+  test("gray venue + proposals power with fresh human consent passes the FULL gate (approved-claim leg)", () => {
+    const r = evaluateGate({ template: bandwidth(), proposal: claimProposal(), state: greenState({ optIn: false }), audit: auditCollector() })
+    expect(r.allow).toBe(true)
+    expect(r.reason).toContain("gate passed")
+  })
+
+  test("proposals leg WITHOUT consent is denied at opt-in — consent is required, and is NOT an opt-in", () => {
+    const r = evaluateGate({
+      template: bandwidth(),
+      proposal: claimProposal({ consentBy: undefined }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("per-site-opt-in")
+    expect(r.reason).toContain("consent")
+  })
+
+  test("gray venue + live power is denied even WITH a standing opt-in — proposals only (5C)", () => {
+    const r = evaluateGate({
+      template: bandwidth(),
+      proposal: claimProposal({ power: "live" }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("toS-survival")
+    expect(r.reason).toContain("proposals only")
+  })
+
+  test("gray venue + liveDemo power is denied (no demo surface on a gray site)", () => {
+    const r = evaluateGate({
+      template: bandwidth(),
+      proposal: claimProposal({ power: "liveDemo" }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("toS-survival")
+  })
+
+  test("sanctioned + live power passes with a standing opt-in (the ccxt leg, slice 6 pattern)", () => {
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal({ power: "live" }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(true)
+  })
+
+  test("sanctioned + live power WITHOUT a standing opt-in is denied at per-site-opt-in", () => {
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal({ power: "live" }),
+      state: greenState({ optIn: false })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("per-site-opt-in")
+  })
+
+  test("forbidden venue + liveDemo on a demoOnly template passes (the recorded demo exception)", () => {
+    const r = evaluateGate({
+      template: expertoption(),
+      proposal: greenProposal({ action: "eo:demo-trade", power: "liveDemo" }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(true)
+  })
+
+  test("forbidden venue + proposals on a demoOnly template passes (demo proposals are the demo surface)", () => {
+    const r = evaluateGate({
+      template: expertoption(),
+      proposal: greenProposal({ action: "eo:demo-trade", power: "proposals", consentBy: "usr_demo_01" }),
+      state: greenState({ optIn: false })
+    })
+    expect(r.allow).toBe(true)
+  })
+
+  test("forbidden venue + live power is denied (5C truth table)", () => {
+    const r = evaluateGate({
+      template: expertoption(),
+      proposal: greenProposal({ action: "eo:live-trade", power: "live" }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("toS-survival")
+  })
+
+  test("sanctioned site with liveDemo power is denied (demo surface only on demo sites)", () => {
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal({ power: "liveDemo" }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("toS-survival")
+  })
+
+  test("an action declaring zero execution power is denied — nothing to gate or run", () => {
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal({ power: "none" }),
+      state: greenState({ optIn: true })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("toS-survival")
+    expect(r.reason).toContain("zero execution power")
+  })
+
+  test("the allow audit event records the power + the consent identity (5A separation intact)", () => {
+    evaluateGate({ template: bandwidth(), proposal: claimProposal(), state: greenState({ optIn: false }), audit: auditCollector() })
+    expect(auditEvents).toHaveLength(1)
+    expect(auditEvents[0].kind).toBe("safety-gate:allow")
+    expect(auditEvents[0].data.power).toBe("proposals")
+    expect(auditEvents[0].data.consentBy).toBe("usr_claim_01")
+  })
+
+  test("legacy proposals (no power field) keep today's exact semantics", () => {
+    // gray + legacy live → proposals-only deny (unchanged)
+    const grayLive = evaluateGate({ template: bandwidth(), proposal: greenProposal(), state: greenState() })
+    expect(grayLive.allow).toBe(false)
+    expect(grayLive.blockedBy).toBe("toS-survival")
+    // sanctioned legacy live + opt-in → allow (unchanged)
+    const ccxtLive = evaluateGate({ template: ccxt(), proposal: greenProposal(), state: greenState() })
+    expect(ccxtLive.allow).toBe(true)
+  })
+})

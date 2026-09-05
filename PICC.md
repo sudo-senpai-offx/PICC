@@ -111,7 +111,7 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                         │   Serper (live news/search)
                                                         │   Payments: PayPal | Touch 'n Go |
                                                         │     BTCPay | Stripe (owner's wallet)
-                                                        │   104 service modules · 100+ routes
+                                                        │   105 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
 Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
 External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
@@ -120,10 +120,11 @@ External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never exe
 - **Frontend** `apps/dashboard` — React + TypeScript + Vite + Supabase; dark theme; Dashboard |
   Simulator | Trading | Streams | Agents | Opportunities | Income | Profile | Settings | Login.
 - **Backend** `apps/dashboard/server` — Node ESM, no framework; `handlers.mjs` (~100+ routes) +
-  96 → 104 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 10 this phase —
+  96 → 105 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 11 this phase —
   `agentRoster`/`policyGraphCatalog`/`policyGraphValidator` from slice 1, `modeEngine`/
   `auditTrail`/`safetySidecar` from slice 2, `deliberation`/`metalearning` from slice 3,
-  `commandCentreRuntime`/`commandCentreOverview` from slice 4);
+  `commandCentreRuntime`/`commandCentreOverview` from slice 4, `commandCentreExecution` from
+  slice 5);
   same-origin `/api/*` (Vite
   middleware dev, `server/index.mjs` prod).
 - **External providers** — Yahoo (5y history, drift & vol), CoinGecko (crypto), LLM (honest
@@ -142,7 +143,7 @@ Twin `/api/twin/run` · Listing `/api/listing/analyze` · Content `/api/content/
 realtime, spread, portfolio, session-policy, capture-session, capture-config, headless-status,
 account-metrics, health, ledger/stats, walk-forward, export, correlation, indicators, brokers,
 feed-mode, paper/overview, models/explain) · Command Centre `/api/command-centre/overview|
-kill-switch` · Billing `/api/stripe/*`, `/api/paypal/*`,
+kill-switch|claims|execute` · Billing `/api/stripe/*`, `/api/paypal/*`,
 `/api/billing/ewallet/*`, `/api/btcpay/*` · Automator `/api/automator/status|health|assist` ·
 Connectors `/api/connectors`, `/api/connectors/:slug/collect|history|stream` · Browser
 `/api/browser/capture-session|metrics` · Data `/api/data/financial_accounts|transactions` ·
@@ -440,10 +441,12 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 ## §11 Command Centre Web — Design of Record (spec committed `018025b`, absorbed here)
 
 **Status: ready-for-agent (living spec — continuously improved through implementation); §11.5
-slices tracked in the spec doc.** Slices 1–4 (catalog + validator + roster registry; mode engine +
+slices tracked in the spec doc.** Slices 1–5 (catalog + validator + roster registry; mode engine +
 safety sidecar + audit trail; deliberation layer + metalearning tuners; Command Centre surface —
 per-stream command cards, 10-gate safety rail, real engine verdicts, kill-switch UI wired to the
-runtime store) landed as part of this
+runtime store; slice 5: the FIRST live execution leg — bandwidth payout claims run the full
+10-gate rail and execute on FRESH per-action human consent (consentBy), never a standing
+opt-in) landed as part of this
 repo's current phase — see §21 Open work. The
 approved architecture for the risk-backed autopilot/copilot command surface. Approach C:
 policy-graph + blackboard deliberation + Mode Engine + safety sidecar, with metalearning and
@@ -458,6 +461,12 @@ self-improvement baked in.
   and write the SAME runtime store the enforcement layer consults (a throwing reader denies; an
   unreadable store boots fail-safe). Every cell is observed state or an explicit "not-wired —
   arrives with execution (slice 5+)" label; sync-approval is NOT an automation opt-in.
+  Slice 5: the bandwidth card grows the OBSERVED claims leg (`executionLeg`) — fresh-data
+  from the presence heartbeat (10-min cadence), envelope from in-flight execution counts,
+  rationale observed (5F) — and the bloodstream surface is a payout-claims block: scheduler
+  `payout_ready` rows with honest claimed/ready badges, and an "Approve & claim" button whose
+  click is FRESH per-action human consent (consentBy) sent to `/api/command-centre/execute`;
+  the outcome (executed / failed / blocked) renders back on the card exactly as observed.
 - **L5 Mode Engine** — per-site risk-backed verdict over exactly five modes:
   `BLOCKED` (executionPower `none`) | `HOLD` (`none`) | `COPILOT` (`proposals`) |
   `AUTOPILOT_DEMO` (`liveDemo`) | `AUTOPILOT` (`live`); deterministic 7-step fixed decision
@@ -501,7 +510,12 @@ power separation · **5B** interrupt/takeover · **5C** credential/ToS-survival 
 exposure ceiling · **5E** stale-data forced downgrade (never trade on stale input) · **5F**
 rationale-before-act (no action without a stated reason) · **5G** idempotency (no double-fill) ·
 **5H** LLM downgrade-only (an LLM can downgrade an action, never upgrade past deterministic
-bounds).
+bounds). Slice 5 adds power-aware gating in the sidecar: every proposal carries `power`
+(`none|proposals|liveDemo|live`) + `consentBy`; gate 4 requires a STANDING opt-in for
+live/liveDemo but only FRESH per-action consent for `proposals` (consent ≠ automation opt-in),
+and gate 7 restricts by catalog stance (forbidden→demo-only templates, gray→proposals only,
+sanctioned→live/proposals, `none` denied). The claims leg is `proposals`-powered and executes
+only on fresh consentBy; AUTOPILOT (`live`) remains CCXT slice 6 — no standing opt-in exists.
 
 ### 11.4 First real-money slice (user decision)
 

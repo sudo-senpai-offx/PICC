@@ -1585,6 +1585,15 @@ export interface CommandCentreSite {
     deliberation: unknown
   }
   demo: { demoOnly: boolean; active: boolean; note: string | null }
+  // slice 5: the OBSERVED claims leg per site (bandwidth) — null when the site
+  // has no live execution leg wired yet (never fabricated)
+  executionLeg?: {
+    leg: string
+    action: string
+    inFlight: number
+    lastExecutedAt: string | null
+    consent: string
+  } | null
   metrics: {
     source: "observed" | "not-observed" | "not-wired"
     venueId?: string
@@ -1625,6 +1634,49 @@ export function setCommandCentreKillSwitch(
   state: { global: boolean; sites: Record<string, boolean> }
 }> {
   return post(`/command-centre/kill-switch`, { scope, kill }, token)
+}
+
+// ---- Slice 5: the bandwidth payout-claim leg. The server lists scheduler
+// payout_ready observations joined with an honest claimed/ready status from
+// the durable audit trail; executing a claim is a HUMAN per-action approval
+// (consentBy) that runs the full gate chain BEFORE the venue step.
+export interface CommandCentreClaim {
+  platform: string
+  balance: number
+  payoutThreshold: number
+  notedAt: string | null
+  ref: string
+  idempotencyKey: string
+  status: "ready" | "claimed"
+  note: string | null
+}
+
+export function getCommandCentreClaims(token?: string): Promise<{
+  ok: boolean
+  at: string
+  claims: CommandCentreClaim[]
+}> {
+  return request<{ ok: boolean; at: string; claims: CommandCentreClaim[] }>("/command-centre/claims", {}, token)
+}
+
+export function executeCommandCentreClaim(
+  body: {
+    platform: string
+    balance: number
+    threshold: number
+    ref?: string
+    claimWorkflowId: string
+    tabId?: number
+  },
+  token?: string
+): Promise<{
+  ok: boolean
+  platform: string
+  consentBy: string
+  gate: { allow: boolean; blockedBy: string | null }
+  execution: { status: "executed" | "failed"; idempotencyKey?: string; error?: string } | null
+}> {
+  return post(`/command-centre/execute`, body, token)
 }
 
 // ---------------------------------------------------------------------
