@@ -7,17 +7,21 @@
 //   3. stale-data (5E)                          → forced HOLD with feeds named
 //   4. ToS-survival (5C, automationPermission)  → forbidden=BLOCKED, gray=COPILOT
 //   5. automation-workability (deterministic)   → below floor = COPILOT at most
-//   6. deliberation evidence (edge-trust weighted) — slice 3; slice 2 emits
-//      an honest "not-yet-available" (+ no mode change) rather than faking one
+//   6. deliberation evidence (edge-trust weighted, slice 3): absent = honest
+//      "not-yet-available"; non-converged = conservative cap at COPILOT with
+//      the LLM/advisory leg EXCLUDED; converged = bounded ±0.1 workability
+//      modulation that can only lower, never raise above the gates above
 //   7. LLM/advisory input                       → DOWNGRADE-ONLY (5H): an advisory
 //      can push a mode down, never up; an upgrade attempt is rejected + audited;
-//      advisory outage leaves the deterministic verdict untouched.
+//      advisory outage leaves the deterministic verdict untouched; a
+//      non-converged board excludes the advisory leg entirely.
 //
 // Pure function of inputs — no I/O, no timers. The verdict is the *cap* the
 // engine assigns to the site; actual execution additionally passes the Safety
 // Sidecar pre-action gate (slice 2, same phase).
 
 import { templateForSite } from "./policyGraphCatalog.mjs"
+import { MAX_WORKABILITY_SHIFT } from "./deliberation.mjs"
 
 export const MODES = Object.freeze(["BLOCKED", "HOLD", "COPILOT", "AUTOPILOT_DEMO", "AUTOPILOT"])
 
@@ -134,18 +138,44 @@ export function renderVerdict(siteOrTemplate, inputs = {}) {
     )
   }
 
-  // ── 6. deliberation evidence (slice 3) ────────────────────────────────────
+  // ── 6. deliberation evidence (edge-trust weighted, slice 3) ─────────────
   const deliberation = inputs.deliberation ?? null
+  let advisoryExcluded = false
   if (deliberation === null) {
-    reasons.push("deliberation evidence not yet available (slice 3) — deterministic-only verdict")
+    reasons.push("deliberation evidence not yet available — deterministic-only verdict (slice 2)")
+  } else if (deliberation.convergence === "non-converged") {
+    // Conservative deterministic-only verdict: the board never settled within
+    // its bounded loop, so automation stays at proposals; the LLM/advisory leg
+    // is excluded entirely (step 7) — PICC never executes on a board that
+    // admits it could not converge.
+    mode = cap(mode, "COPILOT")
+    advisoryExcluded = true
+    reasons.push(
+      `deliberation non-converged after ${deliberation.roundsUsed ?? "?"} rounds — conservative deterministic-only verdict, LLM excluded`
+    )
   } else {
-    // Slice 3 wires the convergence detector here; evidence may adjust the
-    // verdict, but never above what the deterministic gates have allowed.
-    reasons.push(`deliberation evidence considered (mode unchanged in slice 2)`)
+    // Converged: bounded, signed evidence modulation. The board's directional
+    // surface shifts effective workability by at most ±0.1; the shift can only
+    // downgrade further (never raise above what the deterministic gates allowed).
+    const surface =
+      typeof deliberation.surface === "number" && Number.isFinite(deliberation.surface)
+        ? deliberation.surface
+        : 0
+    const shift = Math.max(-MAX_WORKABILITY_SHIFT, Math.min(MAX_WORKABILITY_SHIFT, surface))
+    const effectiveWorkability = Math.min(1, Math.max(0, workability + shift))
+    if (effectiveWorkability < AUTOPILOT_WORKABILITY_FLOOR) {
+      mode = cap(mode, "COPILOT")
+      reasons.push(
+        `deliberation evidence reduces effective workability to ${effectiveWorkability.toFixed(3)} — below floor ${AUTOPILOT_WORKABILITY_FLOOR} (converged, surface ${surface.toFixed(3)})`
+      )
+    }
+    reasons.push(
+      `deliberation converged in ${deliberation.roundsUsed ?? "?"} round(s), surface ${surface.toFixed(3)} — bounded ±${MAX_WORKABILITY_SHIFT} evidence adjustment`
+    )
   }
 
   // ── 7. LLM/advisory input — downgrade-only (5H) ───────────────────────────
-  const advisory = inputs.advisory
+  const advisory = advisoryExcluded ? null : inputs.advisory
   if (advisory && typeof advisory.direction === "string") {
     if (advisory.direction === "down") {
       const lowered = DOWNGRADE_TO[mode] ?? mode
@@ -170,6 +200,9 @@ export function renderVerdict(siteOrTemplate, inputs = {}) {
   } else if (inputs.advisoryUnavailable === true) {
     reasons.push("LLM/advisory unavailable — deterministic verdict unchanged (5H)")
   }
+  if (advisoryExcluded) {
+    reasons.push("advisory input excluded — non-converged deliberation (5H conservative verdict)")
+  }
 
   // ── demo vs live layer ─────────────────────────────────────────────────────
   const demoAllowed = template.demoOnly === true
@@ -179,6 +212,14 @@ export function renderVerdict(siteOrTemplate, inputs = {}) {
     reasons.push("demo autopilot active on this site (AUTOPILOT(demo), paper surface)")
   }
 
+  // Deliberation breadcrumbs (the findings that mattered) lead, then wired-in
+  // breadcrumbs; deduped by agentId — nothing invented, order = importance.
+  const deliberationCrumbs = deliberation?.breadcrumbs ?? []
+  const wiredCrumbs = Array.isArray(inputs.breadcrumbs) ? inputs.breadcrumbs : []
+  const merged = [...deliberationCrumbs, ...wiredCrumbs].filter(
+    (c, i, all) => all.findIndex((x) => x.agentId === c?.agentId) === i
+  )
+
   return {
     ok: true,
     site: template.site,
@@ -186,7 +227,7 @@ export function renderVerdict(siteOrTemplate, inputs = {}) {
     executionPower: EXECUTION_POWER[mode],
     demoAllowed,
     reason: reasons,
-    breadcrumbs: Array.isArray(inputs.breadcrumbs) ? inputs.breadcrumbs : [],
+    breadcrumbs: merged,
     deliberation: deliberation === null ? "not-yet-available" : deliberation,
     audit
   }

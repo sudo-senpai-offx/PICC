@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-09-05 — Command Centre Web slice 3: deliberation layer + metalearning tuners
+
+Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
+spec doc, which is ticked for this slice).
+
+- **L4 blackboard** — `commandCentre/deliberation.mjs`: `deliberate({graph, decisionNode, findings,
+  maxRounds, convergenceDelta, edgeTrust})`. Hop distance = BFS from the decision node over
+  reversed edges, so findings land one round per hop traveled; the surface is a weighted
+  directional average (neutral sides excluded from both numerator and denominator); convergence is
+  round-over-round movement < `convergenceDelta` (early-stop), while exhausting `maxRounds` with
+  movement still ≥ delta reports honest `non-converged` (divergence cutoff — never a fabricated
+  consensus). Unlanded findings (no edge path into the decision node) are surfaced with a reason,
+  never dropped. Edge trust multiplies into path trust via the injected `edgeTrust(edgeId)` seam
+  (catalog `trust` × metalearning), and `strongestPath` is the max product over simple paths.
+  Exports `DEFAULT_MAX_ROUNDS` / `DEFAULT_CONVERGENCE_DELTA` from the catalog `DEFAULT_LOOP`
+  (3 / 0.05) and `MAX_WORKABILITY_SHIFT` (0.1).
+- **P-METALEARNING tuner** — `commandCentre/metalearning.mjs`: outcome-gated edge trust.
+  `applyOutcome` requires `settled` (an unsettled outcome mutates nothing and is rejected),
+  applies hit ×1.05 / miss ×0.95 / push ×1.0, clamps to [0.2, 3.0], rounds to 4 decimals, and
+  returns the 5A-style before/after audit event; `revertLastOutcome` undoes the last applied
+  outcome; `setTrust` is discovery-time tuning only (also clamped, separately audited, never
+  reverted by an outcome revert). The **export whitelist is the floor-proof**: the module exposes
+  calibration knobs and nothing else — no envelope, breaker, or audit toggle is reachable (enforced
+  by test).
+- **L5 wiring** — `modeEngine.mjs` slots 6/7: a real deliberation object is optional (absent →
+  "not-yet-available" reason); a `non-converged` board caps the mode at COPILOT and **excludes the
+  advisory/LLM leg entirely** (deterministic-only verdict, reason surfaced); a converged board
+  modulates workability by the bounded ±0.1 `MAX_WORKABILITY_SHIFT` **downwards only** — it can
+  lower a mode, never raise one above the gates; deliberation breadcrumbs merge with wired
+  breadcrumbs, deduped by agentId.
+- **Tests** — 32 hermetic cases across `server/__tests__/commandCentre.{deliberation,
+  modeEngine.slice3,metalearning}.test.mjs`: hop-2 timing proven with a late opposing voice moving
+  the surface (same-sign contributions cannot move a weighted average), divergence cutoff via the
+  bandwidth 2-round board, DEFAULT_LOOP vs per-node overrides, unlanded surfaced, P-GROUNDING
+  source/cutoff passthrough, trust seam scaling (0.5 × 0.5 = 0.25), strongest-path on an N:N web,
+  clamp/compounding/revert/setTrust semantics, export whitelist, and the full mode-engine matrix
+  (absent marker, converged keeps AUTOPILOT, non-converged caps + excludes advisory, downgrade
+  advisory stays COPILOT, breadcrumb merge/dedupe/empty).
+- Verification: full suite **1,744/1,744 green** (168 files, was 1,712); `npx tsc -b --noEmit` 0.
+- Tracked in spec §slice-3 (Landed 2026-09-05); `PICC.md` §4 count 99 → 102, §11 status slice 1–3,
+  §11.1 L4 + P-METALEARNING wording updated. Next: slice 4 — Command Centre surface (per-stream
+  command card, safety rail, mode verdict, kill-switch UI).
+
 ## 2026-09-05 — Command Centre Web slice 2: mode engine + safety sidecar + audit trail
 
 Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the

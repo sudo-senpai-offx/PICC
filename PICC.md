@@ -111,7 +111,7 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                         │   Serper (live news/search)
                                                         │   Payments: PayPal | Touch 'n Go |
                                                         │     BTCPay | Stripe (owner's wallet)
-                                                        │   99 service modules · 100+ routes
+                                                        │   102 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
 Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
 External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
@@ -120,9 +120,10 @@ External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never exe
 - **Frontend** `apps/dashboard` — React + TypeScript + Vite + Supabase; dark theme; Dashboard |
   Simulator | Trading | Streams | Agents | Opportunities | Income | Profile | Settings | Login.
 - **Backend** `apps/dashboard/server` — Node ESM, no framework; `handlers.mjs` (~100+ routes) +
-  96 → 99 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 6 this phase —
+  96 → 102 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 8 this phase —
   `agentRoster`/`policyGraphCatalog`/`policyGraphValidator` from slice 1, `modeEngine`/
-  `auditTrail`/`safetySidecar` from slice 2); same-origin `/api/*` (Vite
+  `auditTrail`/`safetySidecar` from slice 2, `deliberation`/`metalearning` from slice 3);
+  same-origin `/api/*` (Vite
   middleware dev, `server/index.mjs` prod).
 - **External providers** — Yahoo (5y history, drift & vol), CoinGecko (crypto), LLM (honest
   failover; all-down → local engine), Serper (news/search), payments (4 paths).
@@ -437,8 +438,9 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 ## §11 Command Centre Web — Design of Record (spec committed `018025b`, absorbed here)
 
 **Status: ready-for-agent (living spec — continuously improved through implementation); §11.5
-slices tracked in the spec doc.** Slices 1–2 (catalog + validator + roster registry; mode engine +
-safety sidecar + audit trail) landed as part of this repo's current phase — see §21 Open work. The
+slices tracked in the spec doc.** Slices 1–3 (catalog + validator + roster registry; mode engine +
+safety sidecar + audit trail; deliberation layer + metalearning tuners) landed as part of this
+repo's current phase — see §21 Open work. The
 approved architecture for the risk-backed autopilot/copilot command surface. Approach C:
 policy-graph + blackboard deliberation + Mode Engine + safety sidecar, with metalearning and
 self-improvement baked in.
@@ -454,7 +456,13 @@ self-improvement baked in.
   input (5H) is **downgrade-only** — it can lower the mode, and can never raise it; an advisory
   outage leaves the deterministic verdict identical.
 - **L4 Deliberation** — blackboard with bounded loops (maxRounds 3 default, convergenceDelta
-  0.05); divergence/convergence/looping flows; 1:1 / 1:N / N:N / N:1 edges.
+  0.05); divergence/convergence/looping flows; 1:1 / 1:N / N:N / N:1 edges. Evidence lands per
+  hop-round (BFS distance from the decision node over reversed edges); the surface is a weighted
+  directional average (neutral sides excluded from numerator AND denominator); convergence is
+  movement < delta, exhaustion of maxRounds while still swinging is an honest `non-converged`
+  divergence cutoff; unlanded findings are surfaced, never dropped; edge trust from the catalog
+  multiplies with the P-METALEARNING seam. A non-converged board never executes — the mode engine
+  caps it at COPILOT with the advisory/LLM leg excluded and the reason surfaced.
 - **L3 Agent Roster** — named specialty agents (news/sentiment, technical, fundamentals, whale,
   risk manager) with surfaced findings + sources + staleness (the "350 AI bots" observability
   answer).

@@ -346,7 +346,23 @@ CI; live-venue behavior is a manual verify step, not a unit test.
    `server/__tests__/commandCentre.{modeEngine,sidecar,auditTrail}.test.mjs`; suite 1,653 → 1,712;
    typecheck clean.
 3. Deliberation layer (blackboard, bounded loops, convergence detector, non-converged handling;
-   P-EVOLUTION/P-SELF-IMPROVEMENT/P-METALEARNING tuners, outcome-gated, floor-proof).
+    P-EVOLUTION/P-SELF-IMPROVEMENT/P-METALEARNING tuners, outcome-gated, floor-proof).
+    **Landed 2026-09-05** — `commandCentre/deliberation.mjs` (blackboard engine: BFS hop distance
+    from the decision node over reversed edges; findings land per hop-round; weighted directional
+    surface with neutral sides excluded from numerator AND denominator; convergence = movement <
+    `convergenceDelta` early-stop, `maxRounds` exhausted while still moving → honest
+    `non-converged` divergence cutoff; unlanded findings surfaced, never dropped; edge-trust seam
+    `edgeTrust(edgeId)` multiplies into path trust; `strongestPath` = max product over simple
+    paths; MAX_WORKABILITY_SHIFT 0.1; DEFAULT_LOOP 3/0.05), `commandCentre/metalearning.mjs`
+    (outcome-gated edge-trust tuner: `applyOutcome` requires `settled`, hit ×1.05 / miss ×0.95 /
+    push ×1.0, clamps [0.2, 3.0], before/after audit event via `_audit`, `revertLastOutcome`,
+    discovery-time `setTrust` separately audited; export whitelist = floor-proof — no envelope /
+    breaker / audit knob reachable), mode engine slot 6 + 7 wired (deliberation optional; absent →
+    "not-yet-available"; non-converged → capped at COPILOT with advisory/LLM leg EXCLUDED; converged
+    → bounded ±0.1 workability modulation that can only lower; advisory `null` when excluded with
+    the reason surfaced; breadcrumbs merged, deduped by agentId). 32 hermetic tests in
+    `server/__tests__/commandCentre.{deliberation,modeEngine.slice3,metalearning}.test.mjs`; suite
+    1,712 → 1,744; typecheck clean.
 4. Command Centre surface (per-stream command card, safety rail, mode verdict, kill-switch UI).
 5. Execution: bandwidth auto-claim (first live) — fixture-tested, manual live verify.
 6. Execution: CCXT live — fixture-tested, security-review, manual live verify on smallest envelope.
