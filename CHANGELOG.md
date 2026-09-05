@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-05 — Command Centre Web slice 1: policy-graph catalog + validator + roster registry
+
+Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
+spec doc, which is ticked for this slice).
+
+- **L2 catalog** — `server/services/commandCentre/policyGraphCatalog.mjs`: **"site = template"**
+  with the 5C truth table as three shipped templates — `trading:ccxt` (sanctioned, $10 / 2
+  concurrent / −5% envelope) · `bandwidth:browser` (gray, claims-only — honest null capital
+  fields) · `expertoption` (forbidden + demoOnly, the unregulated-venue row).
+- **L3 roster** — `commandCentre/agentRoster.mjs`: 13 agents, one task each (P-SPECIFICITY), each
+  grounded in existing service modules (P-GROUNDING); `whale_onchain` is a declared-but-planned
+  seam, surfaced as planned, never silently ready.
+- **Validator** — `commandCentre/policyGraphValidator.mjs`: rejects purposeless/dangling/untyped
+  edges (P-PURPOSE), duplicate ids + duplicate tasks (P-SPECIFICITY), unbounded/nonsense loops
+  (P-BOUNDED-LOOPS), permission-vs-mode violations (5C: forbidden ⇒ demo|blocked, gray ⇒
+  copilot|demo|blocked), insane envelope bounds (5D). Collects **all** violations in one pass.
+- **Tests** — 31 hermetic cases in `server/__tests__/commandCentre.test.mjs` incl. a shipped-
+  catalog-is-clean guard and module-existence checks against `server/services/`.
+- Verification: full suite **1,653/1,653 green** (162 files, was 1,622); `npx tsc -b --noEmit` 0.
+- Tracked in spec §slice-1 (Landed 2026-09-05). Next: slice 2 — mode engine + safety sidecar.
+
 ## 2026-09-05 — Doc consolidation → two-doc end-state; Command Centre Web begins
 
 ### Docs (repo end-state)
@@ -23,7 +44,7 @@
 
 ### Next
 - **Command Centre Web** (spec `docs/specs/COMMAND_CENTRE_WEB_SPEC.md`, ready-for-agent): slice 1
-  onwards, per the spec's living methodology.
+  landed (see the slice-1 entry above); slice 2 onwards per the spec's living methodology.
 
 ## 2026-09-04 - Strategy-program & finance wave (Phases 2–5)
 

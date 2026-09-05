@@ -111,7 +111,7 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                         │   Serper (live news/search)
                                                         │   Payments: PayPal | Touch 'n Go |
                                                         │     BTCPay | Stripe (owner's wallet)
-                                                        │   93 service modules · 100+ routes
+                                                        │   96 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
 Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
 External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
@@ -120,7 +120,8 @@ External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never exe
 - **Frontend** `apps/dashboard` — React + TypeScript + Vite + Supabase; dark theme; Dashboard |
   Simulator | Trading | Streams | Agents | Opportunities | Income | Profile | Settings | Login.
 - **Backend** `apps/dashboard/server` — Node ESM, no framework; `handlers.mjs` (~100+ routes) +
-  93 services; same-origin `/api/*` (Vite middleware dev, `server/index.mjs` prod).
+  96 services (87 top-level + 6 `brokers/` + 3 `commandCentre/`); same-origin `/api/*` (Vite
+  middleware dev, `server/index.mjs` prod).
 - **External providers** — Yahoo (5y history, drift & vol), CoinGecko (crypto), LLM (honest
   failover; all-down → local engine), Serper (news/search), payments (4 paths).
 - **Optional CrewAI microservice** `agents/picc_agents` — FastAPI :8000; crews: Research | Content |
@@ -433,7 +434,9 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 
 ## §11 Command Centre Web — Design of Record (spec committed `018025b`, absorbed here)
 
-**Status: ready-for-agent (living spec — continuously improved through implementation).** The
+**Status: ready-for-agent (living spec — continuously improved through implementation); §11.5
+slices tracked in the spec doc.** Slice 1 (catalog + validator + roster registry) landed as part
+of this repo's current phase — see §21 Open work. The
 approved architecture for the risk-backed autopilot/copilot command surface. Approach C:
 policy-graph + blackboard deliberation + Mode Engine + safety sidecar, with metalearning and
 self-improvement baked in.
@@ -483,13 +486,21 @@ bounds).
 - **Envelope:** max $10 single exposure · max 2 concurrent live units · −5% daily loss.
   Raiseable via config **only within the floor**.
 
-### 11.5 Rollout slices
+### 11.5 Rollout slices (tracked in the spec doc — exact slice table below)
 
-1. Command Centre skeleton + observability surfaces · 2. Policy-graph catalog + per-site
-  permissions · 3. Mode Engine + deliberation blackboard · 4. Agent roster surfacing · 5. L1
-  execution + idempotent primitives · 6. Safety sidecar + hard breakers + append-only audit ·
-  7. First real-money tie-in (CCXT + bandwidth auto-claim) within the envelope. **Slice 7 is not
-  the end** — expandable one-by-one via the catalog.
+Define the *final* slice breakdown from `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` —
+**implementation status is tracked there, not restated here (single source of truth):**
+
+1. Catalog + validator + roster registry (P-PURPOSE/P-SPECIFICITY/P-BOUNDED-LOOPS; trading +
+   bandwidth templates; agent mapping onto existing suites) · 2. Mode engine + safety sidecar
+   (deterministic; outage-of-LLM downgrade-only proven; audit events) · 3. Deliberation layer
+   (blackboard, bounded loops, convergence detector, non-converged handling; P-EVOLUTION /
+   P-SELF-IMPROVEMENT / P-METALEARNING tuners, outcome-gated, floor-proof) · 4. Command Centre
+   surface (per-stream command card, safety rail, mode verdict, kill-switch UI) · 5. Execution:
+   bandwidth auto-claim (first live) — fixture-tested, manual live verify · 6. Execution: CCXT
+   live — fixture-tested, security-review, manual live verify on smallest envelope · 7.
+   ExpertOption ExpertBot pattern (demo) + expansion docs/checklist. **Slice 7 is not the end** —
+   expandable one-by-one via the catalog.
 
 ### 11.6 Living methodology (applies to all future work)
 

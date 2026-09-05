@@ -321,7 +321,13 @@ CI; live-venue behavior is a manual verify step, not a unit test.
 
 **Rollout slices (each independently verifiable, full suite + typecheck green each):**
 1. Catalog + validator + roster registry (P-PURPOSE/P-SPECIFICITY/P-BOUNDED-LOOPS; trading +
-   bandwidth templates; agent mapping onto existing services).
+   bandwidth templates; agent mapping onto existing services). **Landed 2026-09-05** —
+   `commandCentre/agentRoster.mjs` (13 registry agents: 9 trading incl. the declared-built
+   `whale_onchain` seam, 4 bandwidth), `commandCentre/policyGraphCatalog.mjs` (3 site templates:
+   trading:ccxt sanctioned · bandwidth:browser gray · expertoption forbidden/demo — the 5C truth
+   table), `commandCentre/policyGraphValidator.mjs` (P-PURPOSE / P-SPECIFICITY / P-BOUNDED-LOOPS /
+   5C / 5D, collects ALL violations in one pass). 31 hermetic tests in
+   `server/__tests__/commandCentre.test.mjs`; suite 1,622 → 1,653; typecheck clean.
 2. Mode engine + safety sidecar (deterministic; outage-of-LLM downgrade-only proven; audit events).
 3. Deliberation layer (blackboard, bounded loops, convergence detector, non-converged handling;
    P-EVOLUTION/P-SELF-IMPROVEMENT/P-METALEARNING tuners, outcome-gated, floor-proof).
