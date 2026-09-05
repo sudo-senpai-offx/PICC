@@ -111,7 +111,7 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                         │   Serper (live news/search)
                                                         │   Payments: PayPal | Touch 'n Go |
                                                         │     BTCPay | Stripe (owner's wallet)
-                                                        │   96 service modules · 100+ routes
+                                                        │   99 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
 Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
 External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
@@ -120,7 +120,9 @@ External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never exe
 - **Frontend** `apps/dashboard` — React + TypeScript + Vite + Supabase; dark theme; Dashboard |
   Simulator | Trading | Streams | Agents | Opportunities | Income | Profile | Settings | Login.
 - **Backend** `apps/dashboard/server` — Node ESM, no framework; `handlers.mjs` (~100+ routes) +
-  96 services (87 top-level + 6 `brokers/` + 3 `commandCentre/`); same-origin `/api/*` (Vite
+  96 → 99 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 6 this phase —
+  `agentRoster`/`policyGraphCatalog`/`policyGraphValidator` from slice 1, `modeEngine`/
+  `auditTrail`/`safetySidecar` from slice 2); same-origin `/api/*` (Vite
   middleware dev, `server/index.mjs` prod).
 - **External providers** — Yahoo (5y history, drift & vol), CoinGecko (crypto), LLM (honest
   failover; all-down → local engine), Serper (news/search), payments (4 paths).
@@ -435,8 +437,8 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 ## §11 Command Centre Web — Design of Record (spec committed `018025b`, absorbed here)
 
 **Status: ready-for-agent (living spec — continuously improved through implementation); §11.5
-slices tracked in the spec doc.** Slice 1 (catalog + validator + roster registry) landed as part
-of this repo's current phase — see §21 Open work. The
+slices tracked in the spec doc.** Slices 1–2 (catalog + validator + roster registry; mode engine +
+safety sidecar + audit trail) landed as part of this repo's current phase — see §21 Open work. The
 approved architecture for the risk-backed autopilot/copilot command surface. Approach C:
 policy-graph + blackboard deliberation + Mode Engine + safety sidecar, with metalearning and
 self-improvement baked in.
@@ -444,8 +446,13 @@ self-improvement baked in.
 ### 11.1 Layered design (L6 → L0)
 
 - **L6 UI** — Command Centre Web surface (observability + risk-backed gating).
-- **L5 Mode Engine** — per-site risk-backed decision: `autopilot` | `copilot` | `assist` |
-  `off` (default `off`), chosen by site risk, never by convenience.
+- **L5 Mode Engine** — per-site risk-backed verdict over exactly five modes:
+  `BLOCKED` (executionPower `none`) | `HOLD` (`none`) | `COPILOT` (`proposals`) |
+  `AUTOPILOT_DEMO` (`liveDemo`) | `AUTOPILOT` (`live`); deterministic 7-step fixed decision
+  order (kill switch → opt-in → breakers → freshness/HOLD → 5C truth table → workability →
+  deliberation → advisory), chosen by site risk, never by convenience. Advisory/supervisory
+  input (5H) is **downgrade-only** — it can lower the mode, and can never raise it; an advisory
+  outage leaves the deterministic verdict identical.
 - **L4 Deliberation** — blackboard with bounded loops (maxRounds 3 default, convergenceDelta
   0.05); divergence/convergence/looping flows; 1:1 / 1:N / N:N / N:1 edges.
 - **L3 Agent Roster** — named specialty agents (news/sentiment, technical, fundamentals, whale,

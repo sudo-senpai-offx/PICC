@@ -329,6 +329,22 @@ CI; live-venue behavior is a manual verify step, not a unit test.
    5C / 5D, collects ALL violations in one pass). 31 hermetic tests in
    `server/__tests__/commandCentre.test.mjs`; suite 1,622 → 1,653; typecheck clean.
 2. Mode engine + safety sidecar (deterministic; outage-of-LLM downgrade-only proven; audit events).
+   **Landed 2026-09-05** — `commandCentre/modeEngine.mjs` (5 modes BLOCKED|HOLD|COPILOT|
+   AUTOPILOT_DEMO|AUTOPILOT, 7-step fixed verdict order: kill switch → opt-in → breakers → 5E
+   staleness (forced HOLD) → 5C truth table → workability floor → deliberation (declared
+   "not-yet-available" until slice 3) → advisory; 5H is downgrade-only, upgrade attempts audited +
+   rejected, LLM outage leaves the deterministic verdict identical), `commandCentre/auditTrail.mjs`
+   (append-only hash-chained JSONL under `PICC_COMMAND_CENTRE_DATA_DIR`; no update/delete API;
+   canonical recursive-sorted-keys hashing — an array-replacer serialization that drops `data` keys
+   was caught by the tamper test and replaced; memory-backed under vitest without the env var),
+   `commandCentre/safetySidecar.mjs` (10-step pre-action gate order as the enforced contract:
+   kill-switch → cross-site-day-halt → human-takeover 5B → per-site-opt-in → hard-breakers →
+   fresh-data 5E → toS-survival 5C → envelope-within-ceiling 5D → rationale-renderable 5F →
+   idempotent 5G; cross-site breaker halt day-scoped via `dayKeyOf`; idempotency verified in-memory +
+   durable through the audit trail with fail-safe deny when the reader throws; every decision —
+   allow and deny — is audited (5A), never muted by loosening the envelope). 59 hermetic tests in
+   `server/__tests__/commandCentre.{modeEngine,sidecar,auditTrail}.test.mjs`; suite 1,653 → 1,712;
+   typecheck clean.
 3. Deliberation layer (blackboard, bounded loops, convergence detector, non-converged handling;
    P-EVOLUTION/P-SELF-IMPROVEMENT/P-METALEARNING tuners, outcome-gated, floor-proof).
 4. Command Centre surface (per-stream command card, safety rail, mode verdict, kill-switch UI).

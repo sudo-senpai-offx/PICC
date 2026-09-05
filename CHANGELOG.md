@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-05 — Command Centre Web slice 2: mode engine + safety sidecar + audit trail
+
+Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
+spec doc, which is ticked for this slice).
+
+- **L5 mode engine** — `commandCentre/modeEngine.mjs`: exactly five modes `BLOCKED | HOLD |
+  COPILOT | AUTOPILOT_DEMO | AUTOPILOT` with their honest `executionPower` (`none/none/proposals/
+  liveDemo/live`); verdict = a fixed 7-step decision order (kill switch → opt-in → named breakers
+  → 5E staleness (forced HOLD) → 5C truth table → workability floor 0.5 → deliberation, declared
+  "not-yet-available" until slice 3 → advisory). **5H is downgrade-only:** the advisory input can
+  lower the mode but can never raise it — upgrade attempts are audited and rejected, and an
+  advisory outage leaves the deterministic verdict bit-for-bit identical (proven by test).
+- **5A audit trail** — `commandCentre/auditTrail.mjs`: append-only, hash-chained (sha-256 over
+  recursively-key-sorted canonical JSON) JSONL under `PICC_COMMAND_CENTRE_DATA_DIR`; no update/
+  delete API; `verifyAudit()` walks the chain and names the first broken entry. The canonical
+  serializer deliberately avoids an array-replacer `JSON.stringify` — that silently drops every
+  nested `data` key (tamper-blind chain), which the tamper test caught and fixed. Memory-backed
+  (no disk) under vitest without the env var; boots from disk otherwise.
+- **L0 safety sidecar** — `commandCentre/safetySidecar.mjs`: the pre-action gate order is enforced
+  as a 10-step contract (kill-switch → cross-site-day-halt → human-takeover 5B → per-site-opt-in →
+  hard-breakers → fresh-data 5E → toS-survival 5C → envelope-within-ceiling 5D →
+  rationale-renderable 5F → idempotent 5G). A breaker trip on ANY site halts every site for the
+  UTC day (`dayKeyOf`), day-scoped so the next day re-opens. 5G idempotency is checked in-memory
+  AND durable through the audit trail when a reader is wired — reader throws → conservative deny.
+  Every decision, allow and deny, is audited (5A); loosening the envelope never mutes the recorded
+  why.
+- **Tests** — 59 hermetic cases across `server/__tests__/commandCentre.{modeEngine,sidecar,
+  auditTrail}.test.mjs`: verdict matrix (gate × mode, gray/forbidden truth tables, demo surfaces),
+  5H proofs, gate-order contract, double-claim race, cross-site trip + rollover, tamper-evidence,
+  disk persistence via a tmp `PICC_COMMAND_CENTRE_DATA_DIR`.
+- Verification: full suite **1,712/1,712 green** (165 files, was 1,653); `npx tsc -b --noEmit` 0.
+- Tracked in spec §slice-2 (Landed 2026-09-05); `PICC.md` §4 count 96 → 99 and §11.1 stale mode
+  vocabulary (`autopilot|copilot|assist|off`) replaced with the five spec modes + 5H downgrade-only.
+  Next: slice 3 — deliberation layer.
+
 ## 2026-09-05 — Command Centre Web slice 1: policy-graph catalog + validator + roster registry
 
 Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
