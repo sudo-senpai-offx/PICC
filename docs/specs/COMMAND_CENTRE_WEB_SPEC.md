@@ -364,6 +364,31 @@ CI; live-venue behavior is a manual verify step, not a unit test.
     `server/__tests__/commandCentre.{deliberation,modeEngine.slice3,metalearning}.test.mjs`; suite
     1,712 → 1,744; typecheck clean.
 4. Command Centre surface (per-stream command card, safety rail, mode verdict, kill-switch UI).
+   **Landed 2026-09-05** — `commandCentre/commandCentreRuntime.mjs` (kill-switch store: global +
+   per-site switches, persisted under `PICC_COMMAND_CENTRE_DATA_DIR` as `command-centre-runtime.json`,
+   every transition audited (5A) with site/kind/data shape, explicit clears recorded as off switches
+   (never forgotten), an UNREADABLE store boots conservatively with the GLOBAL KILL ON — fail-safe
+   deny, `siteKilled` global-dominates), `commandCentre/commandCentreOverview.mjs` (PURE composition:
+   every cell is OBSERVED state or an explicit "not-wired — arrives with execution (slice 5+)" label,
+   never a silent OK; verdicts come from the REAL engine `renderVerdict` over observed inputs —
+   killSwitch from the runtime store, breakers from the sidecar's recorded cross-site halt (breaker
+   names mapped: dailyLoss → dailyLossHalted, regime/regimeHalted → regimeHalted), fresh-data from
+   capture-profile rows + computed account-metrics staleness, workability conservatively 0 (no
+   scorer wired — caps at COPILOT, never an invented number that could raise a verdict),
+   deliberation null (engine reports "not-yet-available"), optIn false with not-decided label —
+   sync-approval is explicitly NOT an opt-in; 10-gate rail in GATE_ORDER with pass/block/restricted/
+   mechanism-on/not-wired/not-decided vocabulary), sidecar seam `wireKillSwitchReader(readFn)`
+   (gate 1 = state argument OR reader; a throwing reader reads as KILL — cannot prove OFF, so deny),
+   handlers wiring (`GET /api/command-centre/overview` per-site rows + optional `?stream=` filter,
+   `POST /api/command-centre/kill-switch` sanitized against catalog ids + "global", both
+   authenticated; handlers wire `wireKillSwitchReader(() => anyKillActive())` +
+   `wireAuditReader(() => readAudit())` at import so the panel toggle and the gate read ONE switch
+   and 5G survives restarts), frontend `src/components/CommandCentrePanel.tsx` (one shared
+   component, `stream` prop, mounted as "Command Centre" tab on BOTH trading and bandwidth suite
+   details; per-site command cards + global kill header + full rail, not-wired rendered as not-wired).
+   22 server tests in `commandCentre.{runtime,overviewApi}.test.mjs` (9 + 9) + 4 sidecar reader
+   tests + 4 TSX panel tests; first-live executive wiring deferred to slice 5 by design. Suite
+   1,744 → 1,770; typecheck clean.
 5. Execution: bandwidth auto-claim (first live) — fixture-tested, manual live verify.
 6. Execution: CCXT live — fixture-tested, security-review, manual live verify on smallest envelope.
 7. ExpertOption ExpertBot pattern (demo) + expansion docs/checklist.

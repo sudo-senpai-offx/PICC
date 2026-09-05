@@ -6,6 +6,7 @@ import { Card } from "@/components/ui"
 import { MarketsSuite } from "@/components/TradingSuite"
 import { AutomatorPanel } from "@/components/AutomatorPanel"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
+import { CommandCentrePanel } from "@/components/CommandCentrePanel"
 
 const SUITE_CATEGORIES = Object.values(SUITE_META) as SuiteMeta[]
 
@@ -18,6 +19,17 @@ const SUITE_FEATURE_BADGES: Record<string, string[]> = {
   bandwidth: ["Automator", "Connectors"]
 }
 
+// Command Centre (slice 4): ONE shared component mounted per stream — same
+// panel, stream-filtered rows. Named wrappers so the tab identity is stable
+// across renders (an inline arrow would remount the panel on every Suites
+// re-render).
+function TradingCommandCentre() {
+  return <CommandCentrePanel stream="trading" />
+}
+function BandwidthCommandCentre() {
+  return <CommandCentrePanel stream="bandwidth" />
+}
+
 const SUITE_DETAIL_COMPONENTS: Record<string, { label: string; Component: React.FC }[]> = {
   // The trading suite's expanded view hosts the market/prediction panel only.
   // Autopilot (demo-broker paper trading) lives as its own tab on the
@@ -25,11 +37,13 @@ const SUITE_DETAIL_COMPONENTS: Record<string, { label: string; Component: React.
   // Removed the duplicate "Autopilot" tab here 2026-09-02 to de-duplicate the
   // entry point (see Simulator.tsx).
   trading: [
-    { label: "Markets & Prediction", Component: MarketsSuite }
+    { label: "Markets & Prediction", Component: MarketsSuite },
+    { label: "Command Centre", Component: TradingCommandCentre }
   ],
   bandwidth: [
     { label: "Automator", Component: AutomatorPanel },
-    { label: "Connectors", Component: ConnectorsPanel }
+    { label: "Connectors", Component: ConnectorsPanel },
+    { label: "Command Centre", Component: BandwidthCommandCentre }
   ]
 }
 

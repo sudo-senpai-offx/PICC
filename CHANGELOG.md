@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-09-05 — Command Centre Web slice 4: Command Centre surface (runtime kill switch, overview API, panel)
+
+Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
+spec doc, which is ticked for this slice).
+
+- **Runtime kill-switch store** — `commandCentre/commandCentreRuntime.mjs`: global + per-site
+  switches, persisted under `PICC_COMMAND_CENTRE_DATA_DIR` as `command-centre-runtime.json`;
+  every transition (set/clear/global-raise) is audited (5A) with site/kind/data shape; an
+  explicit human clear is RECORDED as an off switch (never forgotten); an unreadable store file
+  boots conservatively with the GLOBAL KILL ON — fail-safe deny; `siteKilled` consults the reader
+  chain first (state argument OR wired reader), global dominates.
+- **Pure overview composition** — `commandCentre/commandCentreOverview.mjs`: every cell is
+  OBSERVED state or an explicit "not-wired — arrives with execution (slice 5+)" label — never a
+  silent OK. Verdicts come from the REAL engine `renderVerdict` over observed inputs: kill switch
+  from the runtime store, breakers from the sidecar's recorded cross-site halt (breaker names
+  mapped: dailyLoss → dailyLossHalted, regime/regimeHalted → regimeHalted), fresh-data from
+  capture-profile rows + computed account-metrics staleness, workability conservatively 0 (no
+  scorer wired — caps at COPILOT; never an invented number that could raise a verdict),
+  deliberation null (engine reports "not-yet-available"), optIn false with a not-decided label —
+  sync-approval is explicitly NOT an opt-in. The 10-gate rail renders in GATE_ORDER with the
+  pass/block/restricted/mechanism-on/not-wired/not-decided vocabulary.
+- **Sidecar reader seam** — `wireKillSwitchReader(readFn)`: gate 1 = state argument OR reader; a
+  throwing reader reads as KILL (cannot prove OFF, so deny); unwiring (null) restores state-only.
+- **API** — `GET /api/command-centre/overview` (per-site rows from observed state + optional
+  `?stream=` filter, authenticated) and `POST /api/command-centre/kill-switch` (scope sanitized
+  against catalog ids + "global", kill must be boolean, else 400; echoes the resulting state).
+  Handlers wire `wireKillSwitchReader(() => anyKillActive())` + `wireAuditReader(() => readAudit())`
+  at import — the panel toggle and the enforcement gate read ONE switch, and 5G durability
+  survives restarts.
+- **Panel** — `src/components/CommandCentrePanel.tsx`: ONE shared component, `stream` prop,
+  mounted as a "Command Centre" tab on BOTH trading and bandwidth suite details. Per-site command
+  cards + global kill header + full rail; not-wired rendered as not-wired, never as OK.
+- **Tests** — 9 runtime store tests, 9 overview+kill-switch API tests, 4 sidecar reader tests,
+  4 TSX panel tests (stubbed fetch). Suite 1,744 → 1,770; typecheck clean.
+- Tracked in spec §slice-4 (Landed 2026-09-05); `PICC.md` §3.2/§3.3/§11.1 L6/§11.3 wording
+  updated, §4 count 102 → 104 (2 new service modules). First-live executive wiring (break-by-
+  pattern detectors, capture rows for ccxt/bandwidth, deliberation feed) is deferred to slice 5
+  by design — the surface labels those honestly. Next: slice 5 — execution (slice 4's not-wired
+  cells arrive with it).
+
 ## 2026-09-05 — Command Centre Web slice 3: deliberation layer + metalearning tuners
 
 Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the

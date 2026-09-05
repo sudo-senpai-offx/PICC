@@ -111,7 +111,7 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                         │   Serper (live news/search)
                                                         │   Payments: PayPal | Touch 'n Go |
                                                         │     BTCPay | Stripe (owner's wallet)
-                                                        │   102 service modules · 100+ routes
+                                                        │   104 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
 Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
 External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
@@ -120,9 +120,10 @@ External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never exe
 - **Frontend** `apps/dashboard` — React + TypeScript + Vite + Supabase; dark theme; Dashboard |
   Simulator | Trading | Streams | Agents | Opportunities | Income | Profile | Settings | Login.
 - **Backend** `apps/dashboard/server` — Node ESM, no framework; `handlers.mjs` (~100+ routes) +
-  96 → 102 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 8 this phase —
+  96 → 104 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 10 this phase —
   `agentRoster`/`policyGraphCatalog`/`policyGraphValidator` from slice 1, `modeEngine`/
-  `auditTrail`/`safetySidecar` from slice 2, `deliberation`/`metalearning` from slice 3);
+  `auditTrail`/`safetySidecar` from slice 2, `deliberation`/`metalearning` from slice 3,
+  `commandCentreRuntime`/`commandCentreOverview` from slice 4);
   same-origin `/api/*` (Vite
   middleware dev, `server/index.mjs` prod).
 - **External providers** — Yahoo (5y history, drift & vol), CoinGecko (crypto), LLM (honest
@@ -140,7 +141,8 @@ Twin `/api/twin/run` · Listing `/api/listing/analyze` · Content `/api/content/
 `/api/trading/*` (predict, paper, autopilot, decisions, assist, status, readiness, candles,
 realtime, spread, portfolio, session-policy, capture-session, capture-config, headless-status,
 account-metrics, health, ledger/stats, walk-forward, export, correlation, indicators, brokers,
-feed-mode, paper/overview, models/explain) · Billing `/api/stripe/*`, `/api/paypal/*`,
+feed-mode, paper/overview, models/explain) · Command Centre `/api/command-centre/overview|
+kill-switch` · Billing `/api/stripe/*`, `/api/paypal/*`,
 `/api/billing/ewallet/*`, `/api/btcpay/*` · Automator `/api/automator/status|health|assist` ·
 Connectors `/api/connectors`, `/api/connectors/:slug/collect|history|stream` · Browser
 `/api/browser/capture-session|metrics` · Data `/api/data/financial_accounts|transactions` ·
@@ -438,8 +440,10 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 ## §11 Command Centre Web — Design of Record (spec committed `018025b`, absorbed here)
 
 **Status: ready-for-agent (living spec — continuously improved through implementation); §11.5
-slices tracked in the spec doc.** Slices 1–3 (catalog + validator + roster registry; mode engine +
-safety sidecar + audit trail; deliberation layer + metalearning tuners) landed as part of this
+slices tracked in the spec doc.** Slices 1–4 (catalog + validator + roster registry; mode engine +
+safety sidecar + audit trail; deliberation layer + metalearning tuners; Command Centre surface —
+per-stream command cards, 10-gate safety rail, real engine verdicts, kill-switch UI wired to the
+runtime store) landed as part of this
 repo's current phase — see §21 Open work. The
 approved architecture for the risk-backed autopilot/copilot command surface. Approach C:
 policy-graph + blackboard deliberation + Mode Engine + safety sidecar, with metalearning and
@@ -447,7 +451,13 @@ self-improvement baked in.
 
 ### 11.1 Layered design (L6 → L0)
 
-- **L6 UI** — Command Centre Web surface (observability + risk-backed gating).
+- **L6 UI** — Command Centre Web surface (observability + risk-backed gating). Slice 4: one
+  shared `CommandCentrePanel.tsx` mounted per stream (trading + bandwidth) — per-site command
+  cards with the REAL engine verdict (`renderVerdict` over observed inputs only), a full 10-gate
+  safety rail in the sidecar's gate order, and a kill-switch header + per-site toggles that read
+  and write the SAME runtime store the enforcement layer consults (a throwing reader denies; an
+  unreadable store boots fail-safe). Every cell is observed state or an explicit "not-wired —
+  arrives with execution (slice 5+)" label; sync-approval is NOT an automation opt-in.
 - **L5 Mode Engine** — per-site risk-backed verdict over exactly five modes:
   `BLOCKED` (executionPower `none`) | `HOLD` (`none`) | `COPILOT` (`proposals`) |
   `AUTOPILOT_DEMO` (`liveDemo`) | `AUTOPILOT` (`live`); deterministic 7-step fixed decision
@@ -484,7 +494,9 @@ convergence tuning; can never touch the floor or in-flight execution).
 
 ### 11.3 Safety floor (approved 1–4 + 5A–5H)
 
-Global kill-switch · per-site opt-in · hard breakers · full append-only audit · **5A** execution-
+Global kill-switch (runtime store `commandCentreRuntime.mjs`: global dominates per-site; every
+flip audited 5A; an unreadable store file boots with the GLOBAL KILL ON — fail-safe deny) ·
+per-site opt-in · hard breakers · full append-only audit · **5A** execution-
 power separation · **5B** interrupt/takeover · **5C** credential/ToS-survival · **5D** hard
 exposure ceiling · **5E** stale-data forced downgrade (never trade on stale input) · **5F**
 rationale-before-act (no action without a stated reason) · **5G** idempotency (no double-fill) ·

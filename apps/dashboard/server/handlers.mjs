@@ -123,6 +123,24 @@ import { fingerprint } from "./services/autodetect.mjs"
 import { browserAvailable, realProfileState, importRealProfile } from "./services/browserBridge.mjs"
 import { accountMetricsForUser, getAccountMetrics, staleFrom } from "./services/accountMetrics.mjs"
 import { listCaptureProfiles, metricsCadenceMs, saveCaptureConfigForUser, captureConfigForUser, headlessSessionStatus, sessionPolicyForUser, saveSessionPolicy, clearSessionPolicy } from "./services/captureProfiles.mjs"
+// Command Centre (slice 4) — the surface must read the SAME observed state the
+// enforcement layer reads, so the overview + kill-switch handlers wire the
+// sidecar's readers to the runtime store + audit trail at import time: a kill
+// shown on a card IS the switch evaluateGate consults; a 5G duplicate check
+// survives restarts through the same audit chain the panel reports on.
+import { policyGraphSites } from "./services/commandCentre/policyGraphCatalog.mjs"
+import {
+  crossSiteHaltState,
+  takeoverState,
+  wireAuditReader,
+  wireKillSwitchReader
+} from "./services/commandCentre/safetySidecar.mjs"
+import { anyKillActive, killSwitchState, setKillSwitch } from "./services/commandCentre/commandCentreRuntime.mjs"
+import { readAudit } from "./services/commandCentre/auditTrail.mjs"
+import { composeCommandCentreOverview } from "./services/commandCentre/commandCentreOverview.mjs"
+
+wireKillSwitchReader(() => anyKillActive())
+wireAuditReader(() => readAudit())
 import {
   studioStatus,
   openStudio,
@@ -1527,6 +1545,62 @@ async function _handleApiInner(req, res, url, reqId) {
       }
     }
     writeJson(res, 200, { ok: true, userId, at: new Date().toISOString(), venues: rows })
+    return
+  }
+
+  // Command Centre (slice 4) — per-site overview + the runtime kill switch.
+  // Every cell of the overview is OBSERVED state or an explicit "not-wired"
+  // label (composeCommandCentreOverview enforces that contract); the mode
+  // verdict is the real engine's renderVerdict over those observed inputs. The
+  // kill switch shown here IS the store the sidecar gate reads — one switch.
+  if (path === "/api/command-centre/overview" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    const stream = String(parsed.searchParams.get("stream") ?? "").toLowerCase()
+    const metricsAll = accountMetricsForUser(userId)
+    const metrics = {}
+    for (const site of policyGraphSites()) {
+      const rec = metricsAll[site]
+      metrics[site] = rec
+        ? { record: rec, stale: staleFrom({ record: rec, cadenceMs: metricsCadenceMs(site) ?? 5 * 60 * 1000 }) }
+        : null
+    }
+    writeJson(
+      res,
+      200,
+      composeCommandCentreOverview({
+        metrics,
+        captureStatus: headlessSessionStatus(),
+        haltState: crossSiteHaltState(),
+        takeover: takeoverState(),
+        killState: killSwitchState(),
+        stream: stream || undefined,
+        now: Date.now()
+      })
+    )
+    return
+  }
+
+  // POST toggles the runtime kill switch — scope is a catalog site id or
+  // "global" (both sides sanitized; anything else is a 400). Every transition
+  // is audited by the store itself; the response echoes the resulting state so
+  // the panel can re-render from what actually happened.
+  if (path === "/api/command-centre/kill-switch" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    const scope = String(body?.scope ?? "").trim()
+    const kill = body?.kill
+    const validScopes = new Set(["global", ...policyGraphSites()])
+    if (!validScopes.has(scope)) {
+      writeJson(res, 400, { ok: false, error: `unknown scope: expected ${[...validScopes].join(" | ")}` })
+      return
+    }
+    if (typeof kill !== "boolean") {
+      writeJson(res, 400, { ok: false, error: "kill must be a boolean" })
+      return
+    }
+    const result = setKillSwitch(scope, kill)
+    writeJson(res, 200, { ok: result.ok, userId, scope, kill, state: killSwitchState() })
     return
   }
 

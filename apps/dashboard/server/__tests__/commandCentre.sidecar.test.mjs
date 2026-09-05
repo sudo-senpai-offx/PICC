@@ -9,7 +9,8 @@ import {
   humanTakeover,
   noteBreakerTrip,
   takeoverState,
-  wireAuditReader
+  wireAuditReader,
+  wireKillSwitchReader
 } from "../services/commandCentre/safetySidecar.mjs"
 import { templateForSite } from "../services/commandCentre/policyGraphCatalog.mjs"
 import { dayKeyOf } from "../services/u4faRisk.mjs"
@@ -52,6 +53,7 @@ function auditCollector() {
 beforeEach(() => {
   _resetSidecarState()
   wireAuditReader(null)
+  wireKillSwitchReader(null)
   auditEvents = []
 })
 
@@ -338,5 +340,52 @@ describe("Command Centre — Safety Sidecar: cross-site halt state", () => {
     noteBreakerTrip("trading:ccxt", "regimeHalted")
     _resetSidecarState()
     expect(crossSiteHaltState()).toBeNull()
+  })
+})
+
+describe("Command Centre — Safety Sidecar: wired kill-switch reader (the enforcement seam)", () => {
+  test("the reader's kill is enforced even when the per-call state says off — one switch, two reads", () => {
+    wireKillSwitchReader(() => true)
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal(),
+      state: greenState({ killSwitch: false })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("kill-switch")
+  })
+
+  test("a throwing reader reads as KILL — cannot prove it is off, so it is denied (fail-safe)", () => {
+    wireKillSwitchReader(() => {
+      throw new Error("store unreadable")
+    })
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal(),
+      state: greenState({ killSwitch: false })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("kill-switch")
+  })
+
+  test("a reader reporting no kill leaves the explicit state argument authoritative", () => {
+    wireKillSwitchReader(() => false)
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal(),
+      state: greenState({ killSwitch: false })
+    })
+    expect(r.allow).toBe(true)
+  })
+
+  test("unwiring the reader restores state-only behavior", () => {
+    wireKillSwitchReader(() => true)
+    wireKillSwitchReader(null)
+    const r = evaluateGate({
+      template: ccxt(),
+      proposal: greenProposal(),
+      state: greenState({ killSwitch: false })
+    })
+    expect(r.allow).toBe(true)
   })
 })

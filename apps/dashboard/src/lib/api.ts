@@ -1556,7 +1556,80 @@ export function getBountyBoards(token?: string): Promise<BountyBoardsResult> {
   return request<BountyBoardsResult>("/opportunities/bounties", {}, token)
 }
 
-// ── Extension status ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------
+// Command Centre (slice 4) — per-site command cards + the runtime kill
+// switch. The server composes every row from OBSERVED state (or an explicit
+// "not-wired" label); this client only ever renders what the server reports.
+// ---------------------------------------------------------------------
+export type CommandCentreMode = "BLOCKED" | "HOLD" | "COPILOT" | "AUTOPILOT_DEMO" | "AUTOPILOT"
+export type CommandCentreGateStatus = "pass" | "block" | "restricted" | "mechanism-on" | "not-wired" | "not-decided"
+
+export interface CommandCentreGate {
+  gate: string
+  status: CommandCentreGateStatus
+  note: string
+}
+
+export interface CommandCentreSite {
+  site: string
+  stream: "trading" | "bandwidth"
+  venue: string
+  mode: CommandCentreMode
+  executionPower: string
+  reasons: string[]
+  inputs: {
+    killSwitch: boolean
+    optIn: { status: string; note: string }
+    workability: { value: number | null; note: string }
+    // "not-yet-available" today; an evidence object once slice 5+ wires it
+    deliberation: unknown
+  }
+  demo: { demoOnly: boolean; active: boolean; note: string | null }
+  metrics: {
+    source: "observed" | "not-observed" | "not-wired"
+    venueId?: string
+    observedAt?: string
+    stale?: boolean
+    note?: string
+  }
+  gates: CommandCentreGate[]
+}
+
+export interface CommandCentreOverview {
+  ok: boolean
+  at: string
+  stream: string
+  killSwitch: { global: boolean; sites: Record<string, boolean> }
+  sites: CommandCentreSite[]
+}
+
+export function getCommandCentreOverview(
+  stream?: "trading" | "bandwidth",
+  token?: string
+): Promise<CommandCentreOverview> {
+  return request<CommandCentreOverview>(
+    stream ? `/command-centre/overview?stream=${stream}` : "/command-centre/overview",
+    {},
+    token
+  )
+}
+
+export function setCommandCentreKillSwitch(
+  scope: string,
+  kill: boolean,
+  token?: string
+): Promise<{
+  ok: boolean
+  scope: string
+  kill: boolean
+  state: { global: boolean; sites: Record<string, boolean> }
+}> {
+  return post(`/command-centre/kill-switch`, { scope, kill }, token)
+}
+
+// ---------------------------------------------------------------------
+// Extension status
+// ---------------------------------------------------------------------
 export interface ExtensionStatus {
   installed: boolean
   lastSeen: number | null

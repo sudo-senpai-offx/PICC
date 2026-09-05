@@ -49,10 +49,20 @@ let globalHalt = null // { dayKey, site, breaker }
 let takeover = null // { at }
 const idempotencyKeys = new Set()
 
+// Kill-switch reader: production wiring points this at the Command Centre
+// runtime store (commandCentreRuntime.anyKillActive) so the UI toggle and the
+// enforcement gate read the SAME switch — a kill shown on the card is a kill
+// enforced here. A reader that throws reads as KILL (fail-safe deny).
+let killSwitchReader = null
+export function wireKillSwitchReader(readFn) {
+  killSwitchReader = typeof readFn === "function" ? readFn : null
+}
+
 /** Test seam only. */
 export function _resetSidecarState() {
   globalHalt = null
   takeover = null
+  killSwitchReader = null
   idempotencyKeys.clear()
 }
 
@@ -124,7 +134,19 @@ export function evaluateGate({ template, proposal, state = {}, audit = null }) {
   const isLive = proposal.live !== false
 
   // ── 1. kill switch ────────────────────────────────────────────────────────
-  if (state.killSwitch === true) return block("kill-switch", `global kill switch is ON — ${action} denied`)
+  // Two inputs, one switch: the explicit per-call state argument AND the wired
+  // reader (the runtime store). Either ON → deny; a throwing reader → deny.
+  let readerKill = false
+  if (killSwitchReader) {
+    try {
+      readerKill = killSwitchReader() === true
+    } catch {
+      readerKill = true // cannot read the switch → cannot prove it is off → deny
+    }
+  }
+  if (state.killSwitch === true || readerKill) {
+    return block("kill-switch", `global kill switch is ON — ${action} denied`)
+  }
 
   // ── 2. cross-site day halt ────────────────────────────────────────────────
   if (globalHalt && globalHalt.dayKey === dayKeyOf(state.now ?? Date.now())) {
