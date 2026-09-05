@@ -4,7 +4,6 @@ mode: subagent
 permission:
   edit:
     "docs/specs/**": allow
-    "docs/PROMPT_PATTERNS.md": allow
   bash:
     "git log *": allow
     "git diff *": allow
@@ -20,8 +19,8 @@ without talking to you again.
 ## Loop (one action per iteration)
 
 1. **Analyze** the request against the current repo state — read code, grep for
-   existing seams, check `docs/TRADING_MULTIPLATFORM_ROADMAP.md` and
-   `docs/PROMPT_PATTERNS.md` before proposing anything new.
+   existing seams, check `PICC.md` (§16 roadmaps, §10 specs registry, §21 patterns)
+   before proposing anything new.
 2. **Select one research action** (read a file, run a scoped grep, check a test).
    Wait for its observation before choosing the next.
 3. **Iterate** until you can answer: what exists, what's missing, where the seam is,

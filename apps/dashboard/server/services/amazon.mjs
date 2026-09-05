@@ -4,7 +4,7 @@
 // credentials are configured, and an honest `source: "unconfigured"` result
 // otherwise — never fake data.
 //
-// Credentials (see docs/SETUP.md):
+// Credentials (see PICC.md §18):
 //   SP_AMAZON_CLIENT_ID / SP_AMAZON_CLIENT_SECRET  — LWA application (Seller Central → Develop Apps)
 //   SP_AMAZON_REFRESH_TOKEN                         — generated during app authorization
 //   SP_AMAZON_ACCESS_KEY / SP_AMAZON_SECRET_KEY     — IAM user/role keys for AWS SigV4

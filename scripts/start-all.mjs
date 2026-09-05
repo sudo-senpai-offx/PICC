@@ -76,7 +76,7 @@ if (agentsUrl) {
   line(
     "CrewAI agents",
     agentsProbe.ok,
-    `${agentsUrl} · ${agentsProbe.ok ? "online" : "not responding"}${agentsVenv ? "" : " · venv not found (see docs/SETUP.md §7)"}`
+    `${agentsUrl} · ${agentsProbe.ok ? "online" : "not responding"}${agentsVenv ? "" : " · venv not found (see PICC.md §18)"}`
   )
 } else {
   line("CrewAI agents", null, "PICC_AGENTS_URL not set in apps/dashboard/.env")

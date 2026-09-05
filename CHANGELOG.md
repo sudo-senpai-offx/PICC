@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-05 — Doc consolidation → two-doc end-state; Command Centre Web begins
+
+### Docs (repo end-state)
+- `README.md` + `PICC.md` (new, exhaustive, living) are now the project's **only** docs. The legacy
+  `docs/` corpus (24 files: architecture, audit reports, roadmaps, research, setup, runbook,
+  known-issues, full-scope, prompt-patterns) was absorbed into `PICC.md` and **retired** —
+  `docs/specs/` (16 spec files) stays as of record, `PRIVACY.md` stays until legal review.
+- Code/agent references repointed at `PICC.md` (§18 setup, §16 roadmaps, §21 patterns): `amazon.mjs`
+  header comment, `scripts/start-all.mjs` CrewAI probe line, `.opencode/agents/picc-planner.md`.
+- Historical changelog entries referencing absorbed docs are left as written (history of record).
+
+### Fix
+- `localstore.mjs`: Windows EPERM on `rename(tmp, file)` while the destination is open
+  (test pollers, listRows, antivirus) was silently dropping the latest snapshot + leaving `.tmp`
+  residue — POSIX-only green masked it. Bounded EPERM/EACCES rename retry → direct-write fallback,
+  tmp cleaned either way; `store.write()` returns the op-chain so durability can be awaited.
+  Regression tests: EPERM-retry + permanent-lock fallback. Commit `0d88992`.
+
+### Verification
+- Full suite: **1,622/1,622 tests green** (161 files); `npx tsc -b --noEmit` exit 0.
+
+### Next
+- **Command Centre Web** (spec `docs/specs/COMMAND_CENTRE_WEB_SPEC.md`, ready-for-agent): slice 1
+  onwards, per the spec's living methodology.
+
 ## 2026-09-04 - Strategy-program & finance wave (Phases 2–5)
 
 ### Phase 2 — Audit defect fixes (R4; AUDIT_REPORT §5.2–5.8, all re-verified then fixed)
