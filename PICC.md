@@ -100,6 +100,15 @@ regression tests, commit `0d88992`)**.
 always performs the final action on the external platform. "Neither the dashboard, the extension,
 nor the agents can place orders, publish, or buy anything."
 
+**Approved carve-out — Command Centre slice 6 (§11.4/§11.5).** `ccxtOrdering` is the ONE
+deliberate exception to that rule, and the ONLY `createOrder` caller in the process
+(`ccxtConnector`'s read-only guard keeps every other module amputated). It exists solely to carry
+the sanctioned `trading:ccxt` execution leg: the acting human's fresh per-action click is the
+consent (carrier A — PICC places), the default remains carrier B (the human places, PICC verifies
+read-only), orders are LIMIT-only and spot-only, never larger than the $10 envelope ceiling (the
+seam REFUSES over-cap independently of the gate — it never silently shrinks), and there is still
+no withdraw/transfer/leverage/cancel code path anywhere.
+
 ### 3.2 Layers
 
 ```
@@ -111,7 +120,7 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                         │   Serper (live news/search)
                                                         │   Payments: PayPal | Touch 'n Go |
                                                         │     BTCPay | Stripe (owner's wallet)
-                                                        │   105 service modules · 100+ routes
+                                                        │   107 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
 Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
 External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
@@ -120,11 +129,11 @@ External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never exe
 - **Frontend** `apps/dashboard` — React + TypeScript + Vite + Supabase; dark theme; Dashboard |
   Simulator | Trading | Streams | Agents | Opportunities | Income | Profile | Settings | Login.
 - **Backend** `apps/dashboard/server` — Node ESM, no framework; `handlers.mjs` (~100+ routes) +
-  96 → 105 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 11 this phase —
+  96 → 107 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 11 this phase —
   `agentRoster`/`policyGraphCatalog`/`policyGraphValidator` from slice 1, `modeEngine`/
   `auditTrail`/`safetySidecar` from slice 2, `deliberation`/`metalearning` from slice 3,
   `commandCentreRuntime`/`commandCentreOverview` from slice 4, `commandCentreExecution` from
-  slice 5);
+  slice 5, `ccxtOrdering` + `ccxtExecution` from slice 6);
   same-origin `/api/*` (Vite
   middleware dev, `server/index.mjs` prod).
 - **External providers** — Yahoo (5y history, drift & vol), CoinGecko (crypto), LLM (honest
@@ -143,7 +152,8 @@ Twin `/api/twin/run` · Listing `/api/listing/analyze` · Content `/api/content/
 realtime, spread, portfolio, session-policy, capture-session, capture-config, headless-status,
 account-metrics, health, ledger/stats, walk-forward, export, correlation, indicators, brokers,
 feed-mode, paper/overview, models/explain) · Command Centre `/api/command-centre/overview|
-kill-switch|claims|execute` · Billing `/api/stripe/*`, `/api/paypal/*`,
+kill-switch|claims|execute|orders` (orders family: GET list · POST propose · POST execute ·
+POST verify) · Billing `/api/stripe/*`, `/api/paypal/*`,
 `/api/billing/ewallet/*`, `/api/btcpay/*` · Automator `/api/automator/status|health|assist` ·
 Connectors `/api/connectors`, `/api/connectors/:slug/collect|history|stream` · Browser
 `/api/browser/capture-session|metrics` · Data `/api/data/financial_accounts|transactions` ·
@@ -488,7 +498,11 @@ self-improvement baked in.
 - **L2 Policy-Graph Catalog** — **"site = template"**; `automationPermission` =
   `sanctioned | gray | forbidden` is **per-site, not per-stream**.
 - **L1 Execution** — the engine that maps a sanctioned site's sanctioned actions onto
-  deterministic, idempotent primitives.
+  deterministic, idempotent primitives. One proposal rail, TWO carriers (slice 6):
+  **carrier A** — PICC places the order on the acting human's fresh per-action click
+  (envelope-capped, limit-only, spot-only; sanctioned `trading:ccxt` only, after the FULL
+  10-gate chain at click time); **carrier B — the default** — the human places it on the
+  exchange herself, PICC verifies the fill READ-ONLY, never fabricating an unobservable one.
 - **L0 Safety Sidecar — unbreachable.** Global kill-switch; per-site opt-in; hard breakers
   (daily-loss cap, consecutive-loss pause, regime-shift pause, site risk cap — **never
   disableable via config**); full append-only audit.
@@ -524,8 +538,9 @@ only on fresh consentBy; AUTOPILOT (`live`) remains CCXT slice 6 — no standing
 - **ExpertOption stays demo** + ExpertBot pattern now; live deferred (connector not robust,
   unofficial WS protocol, unregulated venue — recorded in the venue truth-table §8.6, never
   hidden).
-- **Envelope:** max $10 single exposure · max 2 concurrent live units · −5% daily loss.
-  Raiseable via config **only within the floor**.
+- **Envelope = the financial minimizer:** max $10 single exposure · max 2 concurrent live units ·
+  −5% daily loss. The envelope is PICC's tightest, deterministic bound — it may never exceed it,
+  and it is raiseable via config **only within the floor**.
 
 ### 11.5 Rollout slices (tracked in the spec doc — exact slice table below)
 

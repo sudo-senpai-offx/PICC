@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-09-05 — Command Centre Web slice 6: first live CCXT execution leg (trading:ccxt orders)
+
+Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
+spec doc, which is ticked for this slice). The sanctioned `trading:ccxt` leg lands as ONE proposal
+rail with TWO carriers sharing ONE gate+envelope: carrier B (the human places, PICC verifies
+read-only) is the default; carrier A (PICC executes) runs only on the acting human's FRESH
+per-action click and is the ONLY path that ever reaches `createOrder`.
+
+- **Ordering seam** — `ccxtOrdering.mjs`: the process's ONE deliberate `createOrder` exception
+  (the `ccxtConnector` read-only guard stays amputated for every other module), documented in
+  code; env-only credentials (`PICC_CCXT_APIKEY|SECRET|PASSWORD_<EX>` + sandbox flags), never
+  logged / never in responses / never in the audit; spot-only, limit-only, `enableRateLimit`;
+  independently REFUSES any order over the $10 hard notional cap (defense-in-depth — no silent
+  shrink); keyless `fetchReferencePrice`, read-only `verifyCcxtFill`, wallet `observeCcxtEquity`
+  with a persisted per-UTC-day baseline; no withdraw/transfer/leverage/cancel path.
+- **Order leg** — `commandCentre/ccxtExecution.mjs`: `proposeCcxtOrder` runs the FULL 10-gate
+  chain over a stretch-clamped proposal (power `proposals`, fresh `consentBy`, 5F rationale) and
+  records it durably as `proposal:created`; deterministic 5G key PAIR — proposal key
+  `ccxt:order:<ex>:<clientOrderId>` at propose, execution key `<key>:exec` at the FIRST execute,
+  so a re-click is denied at gate 10 and the venue is reached exactly once even under concurrent
+  clicks; `executeCcxtOrder` (carrier A) re-runs the FULL chain on FRESH observations at click
+  time then reaches the venue through the injected executor; `verifyCcxtOrder` (carrier B)
+  verifies READ-ONLY → `ccxt-verify:filled|unobserved`, never a fabricated fill;
+  `proposalOrdersFromAudit` lists open/executed/failed/verified-filled/verify-unobserved.
+- **API** — `GET|POST /api/command-centre/orders`, `POST /api/command-centre/orders/execute`,
+  `POST /api/command-centre/orders/verify` (all authenticated). Execute/verify REPLAY the order
+  from the durable proposal by `clientOrderId` (unknown → 404), never the request body; the
+  approved limit is sanity-checked against the FRESH market (5E) and refused BEFORE the venue as
+  `blockedBeforeVenue` when it would pay/receive worse than the market just showed. Overview:
+  `feeds["trading:ccxt"]` appears only once an equity observation exists (absent = not-wired,
+  never a silent OK), the row gains the ccxt execution leg, and the envelope note is genericized
+  across exposure-capped sites.
+- **Panel** — `CommandCentrePanel.tsx` Orders block on the trading stream: proposal form, open
+  rows carrying BOTH carriers ("Execute via PICC" + "I placed it — verify"), settled rows, honest
+  result/error rendering; `api.ts` order types + get/propose/execute/verify calls.
+- **Tests** — 19 ccxtOrdering seam tests, 22 ccxtExecution leg tests, 13 orders API route tests,
+  1 new overview test (seeded equity), 3 panel tests. Suite 1,810 → 1,868 across 176 files;
+  typecheck clean; mandated security-review verdict CLEAN (synchronous gate-10 registration
+  closes the double-fire race; the seam re-enforces the envelope; no secrets in logs/trail/
+  responses).
+- Tracked in spec §slice-6 (Landed 2026-09-05); `PICC.md` §3.1 carve-out added, §3.2 105 → 107
+  (2 new service modules), §3.3 orders routes, §11.1 L1 carrier vocabulary, §11.4 envelope =
+  financial minimizer. Live verify (a real limit order on the smallest envelope) remains an
+  owner-run step; CI proves the gate chain, refusal paths and exactly-once venue semantics with
+  fixtures instead.
+
 ## 2026-09-05 — Command Centre Web slice 5: first live execution leg (bandwidth payout claims)
 
 Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the

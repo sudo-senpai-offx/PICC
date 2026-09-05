@@ -121,16 +121,52 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     expect(ccxt.inputs.workability.note).toContain("not-wired")
     const optIn = ccxt.gates.find((g) => g.gate === "per-site-opt-in")
     expect(optIn.status).toBe("not-decided")
+    // Slice 6: the ccxt order leg is wired UNCONDITIONALLY — its envelope cell is
+    // observed (0 in-flight of the 2-concurrent ceiling; $10 per-action cap), not
+    // "arrives with execution" any more.
     const envelope = ccxt.gates.find((g) => g.gate === "envelope-within-ceiling")
-    expect(envelope.status).toBe("not-wired")
-    expect(envelope.note).toContain("arrives with execution")
-    // no capture profile for the policy-graph sites → fresh-data not-wired
+    expect(envelope.status).toBe("pass")
+    expect(envelope.note).toContain("market exposure capped at $10 per action (5D)")
+    expect(ccxt.executionLeg).toMatchObject({
+      leg: "proposals",
+      action: "ccxt:spot-order",
+      inFlight: 0,
+      lastExecutedAt: null
+    })
+    // NO equity observation has ever happened → the mandatory 5E feed is
+    // UNDECLARED → fresh-data honest not-wired (the seam decides, never us)
     const fresh = ccxt.gates.find((g) => g.gate === "fresh-data")
     expect(fresh.status).toBe("not-wired")
     // expertoption has a capture profile (idle) → observable, not not-wired
     const eo = res.body.sites.find((r) => r.site === "expertoption")
     expect(eo.gates.find((g) => g.gate === "fresh-data").status).toBe("pass")
     expect(eo.metrics.source).toBe("not-observed")
+  })
+
+  it("the FIRST equity observation wires ccxt fresh-data: within cadence → pass, floor-mode unchanged", async () => {
+    // Seed the seam's persisted equity store (the same file observeCcxtEquity
+    // writes) and reboot handlers so the overview reads the OBSERVED feed.
+    // A fresh observation is by definition within CCXT_EQUITY_STALE_MS.
+    writeFileSync(
+      join(dir, "ccxt-equity.json"),
+      JSON.stringify({
+        binance: {
+          exchange: "binance",
+          dayKey: new Date().toISOString().slice(0, 10),
+          at: new Date().toISOString(),
+          equityUsd: 100,
+          dayStartEquityUsd: 100
+        }
+      })
+    )
+    vi.resetModules()
+    handleApi = (await import("../handlers.mjs")).handleApi
+    const res = await call(handleApi, "GET", "/api/command-centre/overview")
+    const ccxt = res.body.sites.find((r) => r.site === "trading:ccxt")
+    const fresh = ccxt.gates.find((g) => g.gate === "fresh-data")
+    expect(fresh.status).toBe("pass")
+    expect(fresh.note).toContain("within cadence")
+    expect(ccxt.mode).toBe("COPILOT")
   })
 
   it("no fabricated execution power: workability 0 feeds a real COPILOT cap — verdict matches the engine", async () => {

@@ -1679,6 +1679,74 @@ export function executeCommandCentreClaim(
   return post(`/command-centre/execute`, body, token)
 }
 
+// ---- Slice 6: the CCXT order rail (trading:ccxt). One proposal rail, TWO
+// carriers: carrier A ("Execute via PICC") runs the full gate at click time and
+// only then reaches the venue; carrier B ("I placed it — verify") verifies the
+// fill read-only. The rail client only renders what the server reports.
+export type CommandCentreOrderStatus = "open" | "executed" | "failed" | "verified-filled" | "verify-unobserved"
+
+export interface CommandCentreOrder {
+  clientOrderId: string
+  idempotencyKey: string
+  exchange: string
+  symbol: string
+  side: "buy" | "sell"
+  amount: number
+  price: number
+  notionalUsd: number
+  clamped: boolean
+  rationale: string
+  status: CommandCentreOrderStatus
+  proposedBy: string | null
+  proposedAt: string | null
+}
+
+export interface CommandCentreGateDecision {
+  allow: boolean
+  blockedBy: string | null
+  reason?: string | null
+}
+
+export function getCommandCentreOrders(token?: string): Promise<{ ok: boolean; at: string; orders: CommandCentreOrder[] }> {
+  return request<{ ok: boolean; at: string; orders: CommandCentreOrder[] }>("/command-centre/orders", {}, token)
+}
+
+export function proposeCommandCentreOrder(
+  body: { exchange: string; symbol: string; side: "buy" | "sell"; amount: number; price: number },
+  token?: string
+): Promise<{
+  ok: boolean
+  consentBy: string
+  gate: CommandCentreGateDecision
+  order: { exchange: string; symbol: string; side: "buy" | "sell"; amount: number; price: number; notionalUsd: number; clamped: boolean }
+  idempotencyKey: string
+  clientOrderId: string
+  at: string
+}> {
+  return post(`/command-centre/orders`, body, token)
+}
+
+export function executeCommandCentreOrder(
+  body: { clientOrderId: string },
+  token?: string
+): Promise<{
+  ok: boolean
+  consentBy: string
+  blockedBeforeVenue?: boolean
+  gate: CommandCentreGateDecision
+  execution: { status: "executed" | "failed"; idempotencyKey?: string; error?: string } | null
+  state: { global: boolean; sites: Record<string, boolean> }
+}> {
+  return post(`/command-centre/orders/execute`, body, token)
+}
+
+export function verifyCommandCentreOrder(
+  body: { clientOrderId: string; orderId: string },
+  token?: string
+): Promise<{ ok: boolean; consentBy: string; kind: string; clientOrderId: string; at: string }> {
+  return post(`/command-centre/orders/verify`, body, token)
+}
+
 // ---------------------------------------------------------------------
 // Extension status
 // ---------------------------------------------------------------------

@@ -429,6 +429,53 @@ CI; live-venue behavior is a manual verify step, not a unit test.
    running browser) is a manual step the owner runs — the honest BROWSER_CLOSED path is proven
    in CI instead.
 6. Execution: CCXT live — fixture-tested, security-review, manual live verify on smallest envelope.
+   **Landed 2026-09-05** — the sanctioned `trading:ccxt` execution leg, owner-approved as ONE
+   proposal rail with TWO carriers sharing ONE gate+envelope (carrier B — "I placed it, PICC
+   verifies" — is the default; carrier A — "PICC executes" — runs only on the acting human's FRESH
+   per-action click and is the ONLY path that reaches `createOrder`):
+   `ccxtOrdering.mjs` (the deliberate createOrder-exception seam — the process's ONLY
+   `createOrder` caller while `ccxtConnector`'s read-only guard stays amputated for every other
+   module; env-only credentials `PICC_CCXT_APIKEY|SECRET|PASSWORD_<EX>` + `PICC_CCXT_SANDBOX_<EX>`
+   (+ global `PICC_CCXT_SANDBOX=1`), never logged / never in responses / never in the audit; spot-
+   only defaultType, `enableRateLimit`, sandbox-mode first, limit-only; independently REFUSES any
+   order whose limit-notional exceeds the $10 hard cap — defense-in-depth, never a silent shrink;
+   read-only `verifyCcxtFill` / keyless `fetchReferencePrice` / wallet `observeCcxtEquity` with a
+   persisted per-UTC-day baseline so a restart never resets today's loss window; `ccxtEquityLast-
+   Observed` drives the overview feed; NO withdraw/transfer/leverage/cancel path anywhere),
+   `commandCentre/ccxtExecution.mjs` (the order leg mirroring the slice-5 claim leg —
+   `proposeCcxtOrder` runs the FULL 10-gate chain over a stretch-clamped proposal (power
+   `proposals`, fresh `consentBy`, auto-rendered rationale 5F, exposure ≤ $10) and records it
+   durably as `proposal:created`; the 5G key PAIR is deterministic — proposal key
+   `ccxt:order:<ex>:<clientOrderId>` registered at propose, execution key `<key>:exec` registered
+   at the FIRST execute so a re-click is denied at gate 10 and the venue is reached exactly once
+   even under concurrent clicks (registration is synchronous inside `evaluateGate`, before any
+   await); `executeCcxtOrder` (carrier A) re-runs the FULL chain at click time over FRESH
+   observations then hands the venue step to the injected executor (`placeCcxtOrder` in prod,
+   fixture in CI); `verifyCcxtOrder` (carrier B) verifies READ-ONLY and records
+   `ccxt-verify:filled|unobserved` — never a fabricated fill; `proposalOrdersFromAudit` lists the
+   durable proposals with honest open/executed/failed/verified-filled/verify-unobserved status),
+   handlers wiring (four authenticated routes: `GET|POST /api/command-centre/orders`,
+   `POST /api/command-centre/orders/execute`, `POST /api/command-centre/orders/verify` — execute/
+   verify REPLAY exchange/symbol/side/amount/price from the durable proposal by `clientOrderId`
+   (unknown → 404), never re-trusted from the request body; `observeCcxtRailState` assembles the
+   gate inputs at request time — kill switch, breakers from the cross-site halt, FRESH equity
+   (failure → `staleFeeds` with ageSec ∞ → 5E deny), concurrency from the execution seam, fresh
+   reference price; the approved limit is sanity-checked against the fresh market (5E: BUY limit
+   ≥ ref×1.01 / SELL limit ≤ ref×0.99 → refused BEFORE the venue as a gate-shaped
+   `blockedBeforeVenue` deny, never sent); overview wiring — `feeds["trading:ccxt"]` appears only
+   once an equity observation exists (absent key = not-wired, never a silent OK), the row gains
+   the ccxt execution leg, and the envelope note is genericized across exposure-capped sites),
+   frontend (`CommandCentrePanel.tsx` Orders block on the trading stream: proposal form with
+   aria-labels, open rows carrying BOTH carriers — "Execute via PICC" (A) and a venue-order-id
+   input + "I placed it — verify" (B) — settled rows, honest result/error rendering; `api.ts`
+   order types + get/propose/execute/verify calls). 19 ccxtOrdering seam tests + 22 ccxtExecution
+   leg tests + 13 orders API route tests (ccxtOrdering vi.mocked) + 1 new overview test (seeded
+   equity → fresh-data pass) + 3 panel tests. Suite 1,810 → 1,868 across 176 files; typecheck
+   clean; mandated security-review verdict CLEAN (gate-10 synchronous registration closes the
+   double-fire race; envelope re-enforced at the seam; no secrets in logs/trail/responses).
+   Live verify (a real limit order on smallest envelope against configured keys) is a manual
+   owner-run step — CI proves the full gate chain, the refusal paths, and exactly-once venue
+   semantics with fixtures instead.
 7. ExpertOption ExpertBot pattern (demo) + expansion docs/checklist.
    **Slice 7 is not the end** — the web expands to remaining platforms one-by-one via the catalog;
    the methodology (below) continues beyond slice 7 indefinitely.

@@ -318,3 +318,183 @@ describe("CommandCentrePanel (slice 5 claims leg)", () => {
     m.unmount()
   })
 })
+
+// ---- slice 6: the CCXT order rail (trading stream). ONE proposal, TWO carriers.
+// Proposing only runs the gate + records the durable proposal (no venue touch);
+// each carrier POST is a FRESH human action that the server gates again at click
+// time against fresh observations. The panel renders exactly what the server
+// answered — blocked/failed states are shown as blocked/failed, never as OK.
+describe("CommandCentrePanel (slice 6 order rail)", () => {
+  const tradingSite = {
+    ...overview.sites[0],
+    mode: "COPILOT" as const,
+    executionPower: "proposals",
+    executionLeg: {
+      leg: "proposals",
+      action: "ccxt:spot-order",
+      inFlight: 0,
+      lastExecutedAt: null,
+      consent: "per-action human consent (consentBy) — NOT an automation opt-in"
+    },
+    gates: overview.sites[0].gates.map((g) =>
+      g.gate === "envelope-within-ceiling" || g.gate === "rationale-renderable"
+        ? { ...g, status: "pass" as const }
+        : g
+    )
+  }
+
+  const openOrder = {
+    clientOrderId: "picc-ord-1",
+    idempotencyKey: "ccxt:order:binance:picc-ord-1",
+    exchange: "binance",
+    symbol: "BTC/USDT",
+    side: "buy" as const,
+    amount: 0.01,
+    price: 1000,
+    notionalUsd: 10,
+    clamped: false,
+    rationale: "CCXT BUY BTC/USDT limit 0.01 @ 1000 (~$10 within the $10 envelope) — human-approved per-action.",
+    status: "open" as const,
+    proposedBy: "default",
+    proposedAt: "2026-09-05T00:00:00.000Z"
+  }
+
+  it("propose gate-checks ONLY (no venue): POSTs the order, records the proposal, renders the open row with both carriers", async () => {
+    const posts: { path: string; body: Record<string, unknown> }[] = []
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST" && String(path).includes("/command-centre/orders")) {
+        posts.push({ path: String(path), body: JSON.parse(String(init.body)) as Record<string, unknown> })
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            consentBy: "default",
+            gate: { allow: true, blockedBy: null },
+            order: { exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 1000, notionalUsd: 10, clamped: false },
+            idempotencyKey: "ccxt:order:binance:picc-ord-1",
+            clientOrderId: "picc-ord-1",
+            at: "2026-09-05T00:00:01.000Z"
+          })
+        } as unknown as Response
+      }
+      if (String(path).includes("/command-centre/orders")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, at: "2026-09-05T00:00:02.000Z", orders: posts.length > 0 ? [openOrder] : [] })
+        } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => ({ ...overview, sites: [tradingSite] }) } as unknown as Response
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const m = mount(<CommandCentrePanel stream="trading" />)
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+    expect(m.host.textContent).toContain("CCXT orders (trading)")
+
+    const gateBtn = m.host.querySelector('button[aria-label="gate this order"]') as HTMLButtonElement
+    expect(gateBtn).toBeTruthy()
+    gateBtn.click()
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+
+    expect(posts).toHaveLength(1)
+    expect(posts[0].body).toEqual({ exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 1000 })
+    const after = m.host.textContent ?? ""
+    expect(after).toContain("proposal recorded as picc-ord-1")
+    expect(after).toContain("open")
+    expect(after).toContain("buy BTC/USDT")
+    expect(after).toContain("Execute via PICC")
+    expect(after).toContain("I placed it — verify")
+    m.unmount()
+  })
+
+  it("Execute via PICC is a fresh approval: the venue refusal state renders honestly on the card", async () => {
+    const posts: { path: string; body: Record<string, unknown> }[] = []
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST" && String(path).includes("/command-centre/orders/execute")) {
+        posts.push({ path: String(path), body: JSON.parse(String(init.body)) as Record<string, unknown> })
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: false,
+            consentBy: "default",
+            blockedBeforeVenue: true,
+            gate: { allow: false, blockedBy: "fresh-data", reason: "BUY limit 1000 is 5.3% ABOVE the fresh reference 950 — it would pay more than the market just showed (5E)" },
+            execution: null,
+            state: { global: false, sites: {} }
+          })
+        } as unknown as Response
+      }
+      if (String(path).includes("/command-centre/orders")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, at: "2026-09-05T00:00:02.000Z", orders: [openOrder] })
+        } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => ({ ...overview, sites: [tradingSite] }) } as unknown as Response
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const m = mount(<CommandCentrePanel stream="trading" />)
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+    const execute = m.host.querySelector('button[aria-label="execute via picc picc-ord-1"]') as HTMLButtonElement
+    expect(execute).toBeTruthy()
+    execute.click()
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+
+    expect(posts).toEqual([{ path: "/api/command-centre/orders/execute", body: { clientOrderId: "picc-ord-1" } }])
+    const after = m.host.textContent ?? ""
+    expect(after).toContain("refused before the venue: BUY limit 1000 is 5.3% ABOVE the fresh reference")
+    expect(after).toContain("open") // the proposal is untouched — the card never fabricates success
+    m.unmount()
+  })
+
+  it("carrier B: the human places the order, the panel verifies the fill read-only via the venue order id", async () => {
+    const posts: { path: string; body: Record<string, unknown> }[] = []
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST" && String(path).includes("/command-centre/orders/verify")) {
+        posts.push({ path: String(path), body: JSON.parse(String(init.body)) as Record<string, unknown> })
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, consentBy: "default", kind: "ccxt-verify:filled", clientOrderId: "picc-ord-1", at: "2026-09-05T00:00:03.000Z" })
+        } as unknown as Response
+      }
+      if (String(path).includes("/command-centre/orders")) {
+        const settled = posts.length > 0 ? [{ ...openOrder, status: "verified-filled" as const }] : [openOrder]
+        return { ok: true, status: 200, json: async () => ({ ok: true, at: "2026-09-05T00:00:02.000Z", orders: settled }) } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => ({ ...overview, sites: [tradingSite] }) } as unknown as Response
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const m = mount(<CommandCentrePanel stream="trading" />)
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+    const input = m.host.querySelector('input[aria-label="venue order id for picc-ord-1"]') as HTMLInputElement
+    expect(input).toBeTruthy()
+    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
+    valueSetter?.call(input, "venue-314")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+    flushSync(() => {})
+
+    const verify = m.host.querySelector('button[aria-label="verify fill picc-ord-1"]') as HTMLButtonElement
+    expect(verify.disabled).toBe(false)
+    verify.click()
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+
+    expect(posts).toEqual([{ path: "/api/command-centre/orders/verify", body: { clientOrderId: "picc-ord-1", orderId: "venue-314" } }])
+    const after = m.host.textContent ?? ""
+    expect(after).toContain("fill verified read-only against the venue")
+    expect(after).toContain("verified-filled")
+    m.unmount()
+  })
+})

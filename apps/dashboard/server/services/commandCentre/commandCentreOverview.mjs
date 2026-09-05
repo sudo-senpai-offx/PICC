@@ -214,12 +214,16 @@ export function composeCommandCentreOverview({
             if (leg) {
               const cap = env.maxConcurrent
               const atCap = cap != null && leg.inFlight >= cap
+              const passNote =
+                env.maxExposureUsd != null
+                  ? `${leg.power} leg observed: ${leg.inFlight} in-flight of ${cap ?? "n/a"} concurrent ceiling; market exposure capped at $${env.maxExposureUsd} per action (5D)`
+                  : `${leg.power} leg observed: ${leg.inFlight} in-flight of ${cap ?? "n/a"} concurrent ceiling — claims-only surface, no market exposure (5D)`
               return {
                 gate: name,
                 status: atCap ? "block" : "pass",
                 note: atCap
                   ? `${leg.inFlight} in-flight ${leg.power} units at the ${cap} concurrent ceiling (5D)`
-                  : `${leg.power} leg observed: ${leg.inFlight} in-flight of ${cap ?? "n/a"} concurrent ceiling — claims-only surface, no market exposure (5D)`
+                  : passNote
               }
             }
             return { gate: name, status: "not-wired", note: NOT_WIRED }

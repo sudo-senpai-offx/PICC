@@ -139,6 +139,23 @@ import { anyKillActive, killSwitchState, setKillSwitch } from "./services/comman
 import { readAudit } from "./services/commandCentre/auditTrail.mjs"
 import { composeCommandCentreOverview } from "./services/commandCentre/commandCentreOverview.mjs"
 import { claimIdempotencyKey, claimPayout, executionStatus } from "./services/commandCentre/commandCentreExecution.mjs"
+import {
+  CCXT_ORDER_ACTION,
+  CCXT_SITE,
+  proposeCcxtOrder,
+  executeCcxtOrder,
+  verifyCcxtOrder,
+  proposalOrdersFromAudit,
+  limitPriceSanity
+} from "./services/commandCentre/ccxtExecution.mjs"
+import {
+  CCXT_EQUITY_STALE_MS,
+  ccxtEquityLastObserved,
+  observeCcxtEquity,
+  fetchReferencePrice,
+  placeCcxtOrder,
+  verifyCcxtFill
+} from "./services/ccxtOrdering.mjs"
 import { dayKeyOf } from "./services/u4faRisk.mjs"
 
 wireKillSwitchReader(() => anyKillActive())
@@ -1595,6 +1612,23 @@ async function _handleApiInner(req, res, url, reqId) {
       .filter(Boolean)
       .sort()
       .at(-1)
+    // Slice 6 — trading:ccxt: the equity observation is the site's mandatory
+    // 5E feed (fresh = an observation exists and is within CCXT_EQUITY_STALE_MS).
+    // No observation EVER → the feeds key stays ABSENT → the overview reports
+    // fresh-data as not-wired (never a silent OK). The execution leg reflects
+    // the order rail: in-flight from the seam, lastExecutedAt from the audit.
+    const ccxtEquity = ccxtEquityLastObserved()
+    if (ccxtEquity) {
+      feeds["trading:ccxt"] = [
+        { name: "ccxt-equity", ageSec: ccxtEquity.ageSec, maxAgeSec: CCXT_EQUITY_STALE_MS / 1000 }
+      ]
+    }
+    const lastCcxtOrderAt = readAudit()
+      .filter((e) => e.kind === "execution:executed" && String(e.data?.action ?? "").startsWith("ccxt:"))
+      .map((e) => e.at ?? null)
+      .filter(Boolean)
+      .sort()
+      .at(-1)
     const executionNow = executionStatus()
     const execution = {
       "bandwidth:browser": {
@@ -1602,6 +1636,12 @@ async function _handleApiInner(req, res, url, reqId) {
         power: "proposals",
         inFlight: executionNow["bandwidth:browser"]?.inFlight ?? 0,
         lastExecutedAt: lastBandwidthClaimAt ?? null
+      },
+      [CCXT_SITE]: {
+        action: CCXT_ORDER_ACTION,
+        power: "proposals",
+        inFlight: executionNow[CCXT_SITE]?.inFlight ?? 0,
+        lastExecutedAt: lastCcxtOrderAt ?? null
       }
     }
     writeJson(
@@ -1753,6 +1793,197 @@ async function _handleApiInner(req, res, url, reqId) {
       gate: result.gate,
       execution: result.execution,
       state: killSwitchState()
+    })
+    return
+  }
+
+  // ---- Command Centre slice 6: CCXT order rail (trading:ccxt), one proposal
+  // rail with TWO carriers. Propose runs the FULL 10-gate chain over a clamp-
+  // sized, consent-bound order and records the durable proposal; carrier A
+  // ("Execute via PICC") re-runs the FULL chain at click time with FRESH
+  // observations (equity, reference price) and only then reaches the venue
+  // through the ccxtOrdering seam — the ONLY createOrder caller in the process;
+  // carrier B ("I placed it — verify") verifies the fill READ-ONLY. Order
+  // parameters at execute/verify are REPLAYED from the durable proposal, never
+  // re-trusted from the request body.
+
+  // The slice-6 rail state is read at request time from the same stores the
+  // enforcement layer reads: kill switch via the wired reader, breakers from
+  // the cross-site halt, equity freshness + day P/L from a FRESH balance
+  // observation, concurrency from the execution seam, and the reference price
+  // from a fresh keyless ticker. Nothing is assumed; failures are honest.
+  async function observeCcxtRailState({ exchange, symbol }) {
+    const halt = crossSiteHaltState()
+    const haltToday = halt && halt.dayKey === dayKeyOf(Date.now())
+    const equity = await observeCcxtEquity({ exchange })
+    const reference = await fetchReferencePrice({ exchange, symbol })
+    const staleFeeds = []
+    if (!equity.ok) {
+      staleFeeds.push({ name: "ccxt-equity", ageSec: Number.POSITIVE_INFINITY, maxAgeSec: CCXT_EQUITY_STALE_MS / 1000 })
+    }
+    return {
+      killSwitch: anyKillActive(),
+      optIn: false, // proposals power: fresh per-action consent, never a standing opt-in
+      breakers: {
+        dailyLossHalted: haltToday && halt.breaker === "dailyLoss",
+        regimeHalted: haltToday && (halt.breaker === "regime" || halt.breaker === "regimeHalted"),
+        siteCapped: false
+      },
+      staleFeeds,
+      concurrentUnits: executionStatus()[CCXT_SITE]?.inFlight ?? 0,
+      dayLossPct: equity.ok ? equity.dayLossPct : null,
+      equityUsd: equity.ok ? equity.equityUsd : null,
+      referencePrice: reference?.price ?? null,
+      equity: equity.ok ? equity : null
+    }
+  }
+
+  function proposalForClientOrderId(clientOrderId) {
+    return readAudit().find(
+      (e) => e.kind === "proposal:created" && String(e.data?.clientOrderId ?? "") === String(clientOrderId ?? "")
+    )
+  }
+
+  // GET lists the durable proposals (proposal:created audit rows) joined with
+  // their honest state: open / executed / failed / verified-filled /
+  // verify-unobserved, newest first.
+  if (path === "/api/command-centre/orders" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    writeJson(res, 200, { ok: true, at: new Date().toISOString(), orders: proposalOrdersFromAudit(readAudit()) })
+    return
+  }
+
+  // POST proposes a CCXT order. The server generates the idempotency identity
+  // (clientOrderId), clamps the notional to the envelope, renders the rationale
+  // and runs the FULL gate. No venue is touched here — the proposal decides
+  // WHAT could be executed, and it exists so BOTH carriers act on ONE reality.
+  if (path === "/api/command-centre/orders" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const exchange = String(body?.exchange ?? "").trim().toLowerCase()
+    const symbol = String(body?.symbol ?? "").trim().toUpperCase()
+    const side = String(body?.side ?? "").trim().toLowerCase()
+    const amount = Number(body?.amount)
+    const price = Number(body?.price)
+    if (!exchange || !/^[a-z0-9_-]+$/.test(exchange)) {
+      return writeJson(res, 400, { ok: false, error: "exchange is required (ccxt exchange id)" })
+    }
+    if (!symbol || !symbol.includes("/")) {
+      return writeJson(res, 400, { ok: false, error: "symbol is required (ccxt BASE/QUOTE, e.g. BTC/USDT)" })
+    }
+    if (side !== "buy" && side !== "sell") {
+      return writeJson(res, 400, { ok: false, error: "side must be buy or sell" })
+    }
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(price) || price <= 0) {
+      return writeJson(res, 400, { ok: false, error: "amount and price must be finite positive numbers" })
+    }
+
+    const state = await observeCcxtRailState({ exchange, symbol })
+    const result = await proposeCcxtOrder({ exchange, symbol, side, amount, price, consentBy, state })
+    writeJson(res, 200, {
+      ok: result.ok,
+      consentBy,
+      gate: result.gate,
+      order: result.order,
+      idempotencyKey: result.idempotencyKey,
+      clientOrderId: result.clientOrderId,
+      at: new Date().toISOString()
+    })
+    return
+  }
+
+  // POST /execute — carrier A: the acting human's click IS the fresh per-action
+  // consent. The order is REPLAYED from the durable proposal, the full chain
+  // re-runs over FRESH observations (equity at click time, reference price,
+  // kill state) and the approved limit is sanity-checked against the market;
+  // only a pass reaches placeCcxtOrder (limit-only, hard-capped, env keys).
+  if (path === "/api/command-centre/orders/execute" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const clientOrderId = String(body?.clientOrderId ?? "").trim()
+    if (!clientOrderId) {
+      return writeJson(res, 400, { ok: false, error: "clientOrderId is required — execute the exact proposal the rail recorded" })
+    }
+    const proposal = proposalForClientOrderId(clientOrderId)
+    if (!proposal) {
+      return writeJson(res, 404, { ok: false, error: `unknown proposal ${clientOrderId} — nothing durable to execute` })
+    }
+    const { exchange, symbol, side, amount, price } = proposal.data
+
+    const state = await observeCcxtRailState({ exchange, symbol })
+    const sanity = limitPriceSanity({ side, limitPrice: price, referencePrice: state.referencePrice })
+    if (!sanity.ok) {
+      // The approved limit is no longer defensible against the fresh market —
+      // refused BEFORE the venue, reported as a gate-shaped fresh-data deny (5E).
+      return writeJson(res, 200, {
+        ok: false,
+        blockedBeforeVenue: true,
+        consentBy,
+        gate: { allow: false, blockedBy: "fresh-data", reason: sanity.reason },
+        execution: null,
+        state: killSwitchState()
+      })
+    }
+
+    const result = await executeCcxtOrder({
+      exchange,
+      symbol,
+      side,
+      amount,
+      price,
+      clientOrderId,
+      consentBy,
+      state,
+      executor: async () =>
+        placeCcxtOrder({
+          exchange,
+          symbol,
+          side: proposal.data.side,
+          amount: proposal.data.amount,
+          price: proposal.data.price,
+          clientOrderId
+        })
+    })
+    writeJson(res, 200, {
+      ok: result.ok,
+      consentBy,
+      gate: result.gate,
+      execution: result.execution,
+      state: killSwitchState()
+    })
+    return
+  }
+
+  // POST /verify — carrier B: the human performed the venue step on the
+  // exchange (same proposal, same idempotencyKey). The fill is verified
+  // READ-ONLY against the venue and the honest result is recorded; an
+  // unobservable venue is recorded as unobserved, never a fabricated fill.
+  if (path === "/api/command-centre/orders/verify" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const clientOrderId = String(body?.clientOrderId ?? "").trim()
+    const venueOrderId = String(body?.orderId ?? "").trim()
+    if (!clientOrderId || !venueOrderId) {
+      return writeJson(res, 400, { ok: false, error: "clientOrderId and orderId (the venue's order id) are required" })
+    }
+    const proposal = proposalForClientOrderId(clientOrderId)
+    if (!proposal) {
+      return writeJson(res, 404, { ok: false, error: `unknown proposal ${clientOrderId} — nothing to verify` })
+    }
+    const { exchange, symbol } = proposal.data
+    const result = await verifyCcxtOrder({
+      exchange,
+      symbol,
+      orderId: venueOrderId,
+      clientOrderId,
+      verify: (v) => verifyCcxtFill({ exchange, symbol, orderId: v.orderId })
+    })
+    writeJson(res, 200, {
+      ok: result.ok,
+      consentBy,
+      kind: result.kind,
+      clientOrderId: result.clientOrderId,
+      at: new Date().toISOString()
     })
     return
   }
