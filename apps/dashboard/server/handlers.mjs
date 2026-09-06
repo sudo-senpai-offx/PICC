@@ -137,6 +137,7 @@ import {
 } from "./services/commandCentre/safetySidecar.mjs"
 import { anyKillActive, killSwitchState, setKillSwitch } from "./services/commandCentre/commandCentreRuntime.mjs"
 import { readAudit } from "./services/commandCentre/auditTrail.mjs"
+import { listSegments } from "./services/bandwidthSuite/segments.mjs"
 import { composeCommandCentreOverview } from "./services/commandCentre/commandCentreOverview.mjs"
 import { claimIdempotencyKey, claimPayout, executionStatus } from "./services/commandCentre/commandCentreExecution.mjs"
 import {
@@ -3532,6 +3533,18 @@ async function _handleApiInner(req, res, url, reqId) {
       result.calibration = getCalibrationSummary()
     } catch { result.calibration = { error: "failed" } }
     writeJson(res, 200, result)
+    return true
+  }
+
+  // Bandwidth suite M1 — read-only registry surface so the running app can
+  // verify the declared IP segments (one provider per segment, per the honest
+  // contract). Registration/assignment are config actions, kept off the API in
+  // M1; the segments file is the source of what this reports.
+  if (path === "/api/bandwidth/segments" && req.method === "GET") {
+    if (!(await verifyUser(auth)) && (await hasUsers())) {
+      return writeJson(res, 401, { error: "authentication required" })
+    }
+    writeJson(res, 200, { segments: listSegments() })
     return true
   }
 
