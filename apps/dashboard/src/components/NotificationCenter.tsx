@@ -39,7 +39,12 @@ export function NotificationCenter() {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [approvals, setApprovals] = useState<InterventionProposal[]>([])
   const [open, setOpen] = useState(false)
-  const [lastCheck, setLastCheck] = useState(0)
+  // Poll watermark, NOT render state: keeping it in useState churns the
+  // checkAlerts callback identity on every poll (setLastCheck -> dep change ->
+  // effect re-run -> immediate refetch), turning the 10s poll into an
+  // unthrottled self-perpetuating request stream. A ref keeps the callback
+  // stable so the interval survives.
+  const lastCheckRef = useRef(0)
   const panelRef = useRef<HTMLDivElement>(null)
   // T8 — the SAME shared web-push hook as the suite card: permission request +
   // subscription happen together here (the bell no longer asks for permission
@@ -84,7 +89,7 @@ export function NotificationCenter() {
       const data = await res.json()
       if (!data.ok) return
       const alerts = data.alerts ?? []
-      const triggered = alerts.filter((a: any) => a.status === "triggered" && a.triggeredAt && a.triggeredAt > lastCheck)
+      const triggered = alerts.filter((a: any) => a.status === "triggered" && a.triggeredAt && a.triggeredAt > lastCheckRef.current)
       if (triggered.length > 0) {
         const newNotifs: Notification[] = triggered.map((a: any) => ({
           id: `notif_${a.id}_${a.triggeredAt}`,
@@ -112,9 +117,9 @@ export function NotificationCenter() {
           }
         }
       }
-      setLastCheck(Date.now())
+      lastCheckRef.current = Date.now()
     } catch { /* ignore */ }
-  }, [lastCheck])
+  }, [])
 
   useEffect(() => {
     checkAlerts()
