@@ -39,12 +39,12 @@ function plusBoard(maxRounds = 3) {
  * the 2-round budget is spent — the divergence cutoff fires, honestly. */
 function wildBoard() {
   return deliberate({
-    graph: templateForSite("bandwidth:browser"),
-    decisionNode: "payout",
+    graph: ccxt(),
+    decisionNode: "model_matrix",
     findings: [
-      { agentId: "credential", side: 1, strength: 1 }, // hop 1
-      { agentId: "daily_quest", side: -1, strength: 0.5 }, // hop 1
-      { agentId: "uptime_node", side: 1, strength: 1 } // hop 2 — swings at the cut
+      { agentId: "consensus", side: 1, strength: 1 }, // hop 1
+      { agentId: "technical", side: -1, strength: 0.5 }, // hop 1
+      { agentId: "order_flow", side: 1, strength: 1 } // hop 2 — swings at the cut
     ],
     maxRounds: 2,
     convergenceDelta: 0.05

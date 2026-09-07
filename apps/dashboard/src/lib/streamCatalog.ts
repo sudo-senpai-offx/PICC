@@ -43,37 +43,6 @@ export const STREAM_CATEGORY_LABELS: Record<string, string> = {
   other: "Other"
 }
 
-export const BANDWIDTH_APPS: CatalogEntry[] = [
-  { id: "honeygain", name: "Honeygain", category: "bandwidth", residential: true, vps: false, payout: "PayPal, Crypto", url: "https://dashboard.honeygain.com", note: "Direct API collector built into PICC." },
-  { id: "earnapp", name: "EarnApp", category: "bandwidth", residential: true, vps: false, payout: "PayPal, Amazon Gift Card, Wise", url: "https://earnapp.com", note: "Desktop/Android app. ToS prohibits Docker, VMs, hosting services and home servers — keep it off the Pi node; track as a desktop-only stream." },
-  { id: "iproyal", name: "IPRoyal Pawns", category: "bandwidth", residential: true, vps: false, payout: "PayPal, Crypto, Bank", url: "https://pawns.app" },
-  { id: "packetstream", name: "PacketStream", category: "bandwidth", residential: true, vps: false, payout: "PayPal", url: "https://packetstream.io" },
-  { id: "traffmonetizer", name: "Traffmonetizer", category: "bandwidth", residential: true, vps: true, payout: "USDT, PayPal", url: "https://traffmonetizer.com", note: "ToS says residential; VPS accepted in practice." },
-  { id: "repocket", name: "Repocket", category: "bandwidth", residential: true, vps: true, payout: "PayPal, Wise, Crypto", url: "https://repocket.com", note: "VPS accepted at lower rates; max 5 devices/sessions per account; min payout $10." },
-  { id: "earnfm", name: "EarnFM", category: "bandwidth", residential: true, vps: true, payout: "Crypto", url: "https://earn.fm" },
-  { id: "proxyrack", name: "ProxyRack", category: "bandwidth", residential: true, vps: true, payout: "PayPal, Crypto", url: "https://peer.proxyrack.com" },
-  { id: "mysterium", name: "Mysterium / MystNodes", category: "bandwidth", residential: false, vps: true, payout: "Crypto (MYST)", url: "https://mystnodes.co" },
-  { id: "grass", name: "Grass", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://app.grass.io" },
-  { id: "gradient", name: "Gradient Network", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://app.gradient.network" },
-  { id: "nodepay", name: "Nodepay", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://app.nodepay.ai" },
-  { id: "dawn", name: "Dawn Internet", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://dawninternet.com" },
-  { id: "bytebenefit", name: "ByteBenefit", category: "bandwidth", residential: true, vps: false, payout: "PayPal, Stripe", url: "https://bytebenefit.io" },
-  { id: "bytelixir", name: "ByteLixir", category: "bandwidth", residential: true, vps: true, payout: "Crypto", url: "https://bytelixir.com" },
-  { id: "passiveapp", name: "PassiveApp", category: "bandwidth", residential: true, vps: true, payout: "Crypto, PayPal", url: "https://passiveapp.com" },
-  { id: "titan", name: "Titan Network", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://edge.titannet.info" },
-  { id: "urnetwork", name: "URnetwork", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://ur.io" },
-  { id: "spide", name: "Spide", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://spide.network" },
-  { id: "teneo", name: "Teneo Protocol", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://dashboard.teneo.pro" },
-  { id: "anyone", name: "Anyone Protocol", category: "bandwidth", residential: false, vps: true, payout: "Crypto", url: "https://anyone.io" },
-  { id: "proxybase", name: "ProxyBase", category: "bandwidth", residential: false, vps: true, payout: "Crypto, USDC", url: "https://peer.proxybase.org" },
-  { id: "proxylite", name: "ProxyLite", category: "bandwidth", residential: false, vps: true, payout: "Crypto, PayPal", url: "https://proxylite.ru" },
-  { id: "presearch", name: "Presearch", category: "bandwidth", residential: false, vps: true, payout: "Crypto", url: "https://presearch.com" },
-  { id: "gridlink", name: "GridLink", category: "bandwidth", residential: true, vps: false, payout: "USDC (Solana)", url: "https://gridlink.network", note: "Android app — idle phones act as bandwidth relay nodes; ~$0.003/MB settled on-chain." },
-  { id: "openloop", name: "OpenLoop", category: "bandwidth", residential: true, vps: false, payout: "Crypto (OPL)", url: "https://openloop.so", note: "Solana DePIN — share unused bandwidth via browser extension; $15M+ raised." },
-  { id: "hivello", name: "Hivello", category: "bandwidth", residential: true, vps: true, payout: "Crypto", url: "https://hivello.com", note: "One app to earn across multiple DePIN networks; monetizes idle CPU." },
-  { id: "blockmesh", name: "BlockMesh", category: "bandwidth", residential: true, vps: false, payout: "Crypto", url: "https://blockmesh.io", note: "Passive earning via browser extension — low-touch, minimal effort." }
-]
-
 export const DEPIN_APPS: CatalogEntry[] = [
   { id: "helium", name: "Helium", category: "depin", residential: true, vps: false, payout: "Crypto (HNT)", url: "https://helium.com" },
   { id: "deeper", name: "Deeper Network", category: "depin", residential: true, vps: false, payout: "Crypto (DPR)", url: "https://deeper.network" },
@@ -196,7 +165,6 @@ export const TRADING_PLATFORM_APPS: CatalogEntry[] = [
 ]
 
 export const CATALOG = [
-  ...BANDWIDTH_APPS,
   ...DEPIN_APPS,
   ...STORAGE_APPS,
   ...COMPUTE_APPS,

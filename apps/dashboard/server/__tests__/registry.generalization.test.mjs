@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest"
 import {
   registerConnector,
   getConnector,
+  hasConnector,
+  getConnectorByOrigin,
   normalizeExtensionPayload,
-  snapshotForExtension
+  snapshotForExtension,
+  DEFAULT_CADENCE
 } from "../services/connectors.mjs"
 
 // The declarative registry surface (Q5): a connector can be described by
@@ -98,60 +101,79 @@ describe("snapshotForExtension (what the extension may see)", () => {
   })
 })
 
-describe("Task 9 — second site registered by CONFIG (grass, config-driven)", () => {
-  const grass = getConnector("grass")
-
-  it("exposes the declarative Q5 surface: origins, cadence, scan, extractors", () => {
-    expect(grass).toBeTruthy()
-    expect(grass.tuned).toBe(false)
-    expect(grass.origins).toEqual(["app.getgrass.io", "getgrass.io"])
-    expect(grass.scan.mode).toBe("wsFrames")
+describe("config-driven connectors generalize across venues (Q5)", () => {
+  registerConnector({
+    slug: "tz-cadence",
+    label: "Cadence (test)",
+    origins: ["bench.test"],
+    transports: ["browser"],
+    cadence: { realtimeMs: 20000, longMs: 600000 }
   })
 
-  it("carries the wsFrames wsUrlRe + mapFrame (key names only, tuned:false)", () => {
-    expect(grass.scan.wsUrlRe).toBe("getgrass\\.(io|app)")
-    expect(Array.isArray(grass.scan.mapFrame.balance)).toBe(true)
-    expect(grass.scan.mapFrame.balance).toContain("credits")
-    expect(grass.scan.mapFrame.lifetime).toContain("total")
+  registerConnector({
+    slug: "tz-scan",
+    label: "Scan (test)",
+    origins: ["scan.test"],
+    transports: ["browser"],
+    scan: {
+      mode: "wsFrames",
+      keys: ["credits", "total"],
+      wsUrlRe: "scan\\.test",
+      mapFrame: { balance: ["credits"], lifetime: ["total"] }
+    }
   })
 
   it("per-site cadence overrides the DEFAULT_CADENCE tier values", () => {
-    expect(grass.cadence.realtimeMs).toBe(20000)
-    expect(grass.cadence.longMs).toBe(600000)
+    expect(getConnector("tz-cadence").cadence.realtimeMs).toBe(20000)
+    expect(getConnector("tz-cadence").cadence.longMs).toBe(600000)
+    const eo = getConnector("expertoption")
+    expect(eo.cadence.realtimeMs).toBe(DEFAULT_CADENCE.realtimeMs)
   })
 
-  it("normalizeExtensionPayload yields ok for a config-matched frame", () => {
-    const r = normalizeExtensionPayload(getConnector("grass"), {
-      origin: "https://app.getgrass.io",
-      slug: "grass",
-      frames: [{ credits: "25.00", todayEarnings: "4.20", totalEarnings: "180.50" }]
+  it("a wsFrames scan carries key names only and stays honest for no-match frames", () => {
+    const ok = normalizeExtensionPayload(getConnector("tz-scan"), {
+      origin: "https://scan.test",
+      slug: "tz-scan",
+      frames: [{ credits: "25.00", total: "180.50" }]
     })
-    expect(r.status).toBe("ok")
-    expect(r.balance).toBe(25)
-    expect(r.today).toBe(4.2)
-    expect(r.lifetime).toBe(180.5)
-  })
+    expect(ok.status).toBe("ok")
+    expect(ok.balance).toBe(25)
+    expect(ok.lifetime).toBe(180.5)
 
-  it("normalizeExtensionPayload reports unconfigured (never zero) for a no-match frame", () => {
-    const r = normalizeExtensionPayload(getConnector("grass"), {
-      origin: "https://app.getgrass.io",
-      slug: "grass",
+    const un = normalizeExtensionPayload(getConnector("tz-scan"), {
+      origin: "https://scan.test",
+      slug: "tz-scan",
       frames: [{ something_unrelated: "1" }]
     })
-    expect(r.status).toBe("unconfigured")
-    expect(r.balance).toBeNull()
-    expect(r.lifetime).toBeNull()
+    expect(un.status).toBe("unconfigured")
+    expect(un.balance).toBeNull()
+    expect(un.lifetime).toBeNull()
   })
 
-  it("the extension snapshot exposes grass origins + scan key names, never values", () => {
+  it("the extension snapshot exposes origins + scan key names, never values", () => {
     const snap = snapshotForExtension()
-    const g = snap.registry.find((c) => c.slug === "grass")
-    expect(g).toBeTruthy()
-    expect(g.origins).toEqual(["app.getgrass.io", "getgrass.io"])
-    // scan.keys are NAMES, never the values a frame would carry.
-    expect(g.scan.keys).toEqual(expect.arrayContaining(["credits", "earnings"]))
-    expect(g.scan.mapFrame).toBeTruthy()
-    expect(g.url).toBeUndefined()
-    expect(g.extractors).toBeUndefined()
+    const s = snap.registry.find((c) => c.slug === "tz-scan")
+    expect(s).toBeTruthy()
+    expect(s.origins).toEqual(["scan.test"])
+    expect(s.scan.keys).toEqual(expect.arrayContaining(["credits", "total"]))
+    expect(s.scan.mapFrame).toBeTruthy()
+    expect(s.url).toBeUndefined()
+    expect(s.extractors).toBeUndefined()
+    expect(s.selectors).toBeUndefined()
+  })
+
+  it("removed bandwidth suite: no bandwidth site survives in the registry", () => {
+    for (const slug of ["honeygain", "earnapp", "pawns", "repocket", "traffmonetizer", "gradient", "grass"]) {
+      expect(getConnector(slug), `${slug} removed`).toBeUndefined()
+      expect(hasConnector(slug)).toBe(false)
+    }
+    expect(getConnectorByOrigin("https://dashboard.honeygain.com/dashboard")).toBeUndefined()
+    expect(getConnectorByOrigin("https://app.pawns.app")).toBeUndefined()
+  })
+
+  it("surviving trading + studio venues keep origin routing", () => {
+    const eo = getConnector("expertoption")
+    expect(getConnectorByOrigin("https://app.expertoption.finance/dashboard")).toBe(eo)
+    expect(getConnectorByOrigin("https://www.binance.com/en/trade")).toBe(getConnector("binance"))
   })
 })

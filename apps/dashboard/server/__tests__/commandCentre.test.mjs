@@ -25,10 +25,9 @@ describe("Command Centre — shipped catalog (L2)", () => {
     }
   })
 
-  test("shipped sites are the three truth-table rows", () => {
+  test("shipped sites are the two truth-table rows", () => {
     expect(policyGraphSites()).toEqual([
       "trading:ccxt",
-      "bandwidth:browser",
       "expertoption"
     ])
   })
@@ -40,10 +39,11 @@ describe("Command Centre — shipped catalog (L2)", () => {
     expect(t.envelope.mode).toBe("demo")
   })
 
-  test("bandwidth envelope honestly declares no capital-exposure numbers", () => {
-    const t = templateForSite("bandwidth:browser")
-    expect(t.envelope.maxExposureUsd).toBeNull()
-    expect(t.envelope.maxDailyLossPct).toBeNull()
+  test("trading envelope declares the ccxt authority ceiling ($10 / 2 concurrent / −5%)", () => {
+    const t = templateForSite("trading:ccxt")
+    expect(t.envelope.maxExposureUsd).toBe(10)
+    expect(t.envelope.maxConcurrent).toBe(2)
+    expect(t.envelope.maxDailyLossPct).toBe(5)
   })
 })
 
@@ -246,8 +246,9 @@ describe("Command Centre — validator: 5D envelope sanity", () => {
   })
 
   test("explicit null = not applicable — valid where the stream has no capital", () => {
-    const t = templateForSite("bandwidth:browser")
-    expect(t.envelope.maxExposureUsd).toBeNull()
+    const t = baseTemplate()
+    t.envelope.maxExposureUsd = null
+    t.envelope.maxDailyLossPct = null
     const { ok } = validatePolicyGraph(t)
     expect(ok).toBe(true)
   })

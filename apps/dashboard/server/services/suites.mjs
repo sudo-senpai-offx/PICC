@@ -5,8 +5,7 @@
  * sites. The trading suite is the flagship: it injects a live decision HUD
  * overlay into the page and powers the content-window + dashboard trading
  * panels. Every other recognized category gets the lighter content-window
- * suite (site info + related income apps + quick actions); the bandwidth
- * suite additionally mounts the automator + connector panels. The registry
+ * suite (site info + related income apps + quick actions). The registry
  * stays open so future connectors (DePIN node health, P2P loan tracking, …)
  * can attach per-category capabilities.
  */
@@ -18,14 +17,6 @@ export const SUITES = {
     overlay: true,
     hud: true,
     features: ["markets", "decisions", "autopilot", "ledger", "payouts"]
-  },
-  bandwidth: {
-    id: "bandwidth",
-    label: "Bandwidth",
-    icon: "🌐",
-    overlay: true,
-    hud: false,
-    features: ["automator", "connectors"]
   },
   depin: {
     id: "depin",

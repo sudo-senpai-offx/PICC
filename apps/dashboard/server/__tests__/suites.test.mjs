@@ -28,6 +28,11 @@ describe("site suites", () => {
 
   test("the trading suite is wired to the ExpertOption trading category", () => {
     expect(suiteForSite({ category: "trading", id: "expertoption" })).toBe(SUITES.trading)
-    expect(SUITES.bandwidth.features).toContain("automator")
+    expect(SUITES.trading.features).toEqual(["markets", "decisions", "autopilot", "ledger", "payouts"])
+  })
+
+  test("the bandwidth suite is gone after the removal — fallback is the generic site suite", () => {
+    expect(SUITES.bandwidth).toBeUndefined()
+    expect(suiteForSite({ category: "bandwidth" })).toBe(SUITES.other)
   })
 })

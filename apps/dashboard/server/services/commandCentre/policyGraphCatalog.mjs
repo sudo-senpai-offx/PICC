@@ -7,7 +7,7 @@
 //
 // Shape (validated by policyGraphValidator.mjs):
 //   site                 unique site id ("site:posture" space)
-//   stream               income stream ("trading" | "bandwidth" | ...)
+//   stream               income stream ("trading")
 //   venue                venue class the template targets
 //   automationPermission sanctioned | gray | forbidden   (5C, per-site truth)
 //   demoOnly             template may only ever run in demo mode
@@ -17,11 +17,10 @@
 //   envelope             {mode, maxExposureUsd, maxConcurrent, maxDailyLossPct}
 //                        — the ceiling the template permits; the Mode Engine
 //                        (slice 2) renders the actual per-site verdict. null
-//                        numeric fields mean "not applicable to this stream"
-//                        (e.g. bandwidth claims carry no market exposure).
+//                        numeric fields mean "not applicable to this stream".
 //   protocols            P-* protocol ids in effect for this site
 
-import { BANDWIDTH_ROSTER, EXPERTOPTION_ROSTER, TRADING_ROSTER } from "./agentRoster.mjs"
+import { EXPERTOPTION_ROSTER, TRADING_ROSTER } from "./agentRoster.mjs"
 
 export const DEFAULT_LOOP = Object.freeze({ maxRounds: 3, convergenceDelta: 0.05 })
 
@@ -69,31 +68,6 @@ export const POLICY_GRAPH_CATALOG = Object.freeze([
       maxExposureUsd: 10, // first-slice authority ceiling ($10)
       maxConcurrent: 2,
       maxDailyLossPct: 5 // first-slice authority (-5% / day)
-    },
-    protocols: PROTOCOLS
-  },
-  {
-    // Bandwidth browser automation class. Permission is gray per-provider until
-    // each provider's terms are verified — auto-claiming runs COPILOT-gated.
-    site: "bandwidth:browser",
-    stream: "bandwidth",
-    venue: "bandwidth-provider browsers (per-site TOS class)",
-    automationPermission: "gray",
-    demoOnly: false,
-    roster: BANDWIDTH_ROSTER,
-    edges: [
-      { from: "uptime_node", to: "daily_quest", topology: "1:1", purpose: "node presence gates quest eligibility" },
-      { from: "daily_quest", to: "payout", topology: "1:1", purpose: "quest completion triggers payout readiness" },
-      { from: "credential", to: "payout", topology: "1:1", purpose: "valid credential gates payout claiming" }
-    ],
-    loops: [
-      { node: "payout", maxRounds: 2, convergenceDelta: 0.05 }
-    ],
-    envelope: {
-      mode: "copilot",
-      maxExposureUsd: null, // claims only — no capital at risk
-      maxConcurrent: 2,
-      maxDailyLossPct: null // n/a — no market loss surface on this stream
     },
     protocols: PROTOCOLS
   },

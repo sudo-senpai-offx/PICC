@@ -25,24 +25,26 @@ function uniformFindings(side, strength = 1, overrides = {}) {
 
 describe("Command Centre — Deliberation: topology hops", () => {
   test("a hop-2 source's finding visibly lands one round after the hop-1 sources", () => {
-    // bandwidth: uptime_node →(1:1) daily_quest →(1:1) payout, credential →(1:1) payout
-    // BFS from payout: credential/daily_quest at hop 1, uptime_node at hop 2.
-    const g = templateForSite("bandwidth:browser")
+    // trading:ccxt decision looks at the model_matrix trunk: consensus →(1:1)
+    // model_matrix; the source arms (technical, order_flow, …) reach the trunk
+    // only THROUGH consensus →(1:1). BFS from model_matrix: consensus at hop 1,
+    // technical/order_flow at hop 2.
+    const g = templateForSite("trading:ccxt")
     const r = deliberate({
       graph: g,
-      decisionNode: "payout",
+      decisionNode: "model_matrix",
       findings: [
-        { agentId: "credential", side: 1, strength: 1 }, // hop 1
-        { agentId: "daily_quest", side: 1, strength: 1 }, // hop 1
-        { agentId: "uptime_node", side: -1, strength: 0.1 } // hop 2 — arrives late, opposes
+        { agentId: "consensus", side: 1, strength: 1 }, // hop 1
+        { agentId: "technical", side: 1, strength: 1 }, // hop 2
+        { agentId: "order_flow", side: -1, strength: 0.1 } // hop 2 — arrives late, opposes
       ],
       maxRounds: 4,
       convergenceDelta: 0.05
     })
-    // r1: both hop-1 +1 → surface 1.0; r2: uptime's late −0.1 lands → weighted average
-    // (1+1−0.1)/2.1 ≈ 0.905 (same-sign contributions cannot move a weighted average —
-    // the surface only shifts when the late voice OPPOSES); r3: quiet → converged.
-    // The timeline is the proof the hop-2 finding arrived at round 2, early-stopped at 3.
+    // r1: the hop-1 consensus +1 → surface 1.0; r2: the late −0.1 lands → weighted
+    // average (1+1−0.1)/2.1 ≈ 0.905 (same-sign contributions cannot move a weighted
+    // average — the surface only shifts when the late voice OPPOSES); r3: quiet →
+    // converged. The timeline is the proof the hop-2 finding arrived at round 2.
     expect(r.convergence).toBe("converged")
     expect(r.roundsUsed).toBe(3)
     expect(r.timeline.map((s) => Math.round(s * 1000) / 1000)).toEqual([1, 0.905, 0.905])
@@ -182,21 +184,22 @@ describe("Command Centre — Deliberation: solar-consensus convergence detector"
   })
 
   test("a board that is still swinging on the maxRounds cutoff reports non-converged (divergence cutoff)", () => {
-    // bandwidth payout board: credential/daily_quest at hop 1, uptime_node at hop 2.
-    // The late hop-2 arrival swings the surface again while the 2-round budget is
-    // already spent → honest non-converged (P-BOUNDED-LOOPS divergence cutoff).
-    const g = templateForSite("bandwidth:browser")
+    // trading:ccxt model_matrix board: consensus at hop 1, the source arms at
+    // hop 2. The late hop-2 arrivals swing the surface again while the 2-round
+    // budget is already spent → honest non-converged (P-BOUNDED-LOOPS divergence
+    // cutoff).
+    const g = templateForSite("trading:ccxt")
     const findings = [
-      { agentId: "credential", side: 1, strength: 1 },
-      { agentId: "daily_quest", side: -1, strength: 0.5 },
-      { agentId: "uptime_node", side: 1, strength: 1 }
+      { agentId: "consensus", side: 1, strength: 1 },
+      { agentId: "technical", side: -1, strength: 0.5 },
+      { agentId: "order_flow", side: 1, strength: 1 }
     ]
-    const r = deliberate({ graph: g, decisionNode: "payout", findings, maxRounds: 2, convergenceDelta: 0.05 })
+    const r = deliberate({ graph: g, decisionNode: "model_matrix", findings, maxRounds: 2, convergenceDelta: 0.05 })
     expect(r.roundsUsed).toBe(2)
     expect(r.maxRounds).toBe(2)
     expect(r.convergence).toBe("non-converged")
-    // r1: (1 − 0.5) / 1.5 = 0.333 · r2: (1 − 0.5 + 1) / 2.5 = 0.6 → still moving at the cut
-    expect(r.timeline.map((s) => Math.round(s * 1000) / 1000)).toEqual([0.333, 0.6])
+    // r1: consensus +1 → 1.0 · r2: (1 − 0.5 + 1) / 2.5 = 0.6 → still moving at the cut
+    expect(r.timeline.map((s) => Math.round(s * 1000) / 1000)).toEqual([1, 0.6])
   })
 
   test("the loop config on the graph is used when no overrides are passed (never infinite)", () => {

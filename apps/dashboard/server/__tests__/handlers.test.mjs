@@ -174,34 +174,6 @@ describe("PICC API handlers", () => {
   })
 
   it(
-    "automator health returns local issues, totals and alerts",
-    async () => {
-      const res = await call("POST", "/api/automator/health", {})
-      expect(res.status).toBe(200)
-      expect(res.body.ok).toBe(true)
-      expect(Array.isArray(res.body.issues)).toBe(true)
-      expect(Array.isArray(res.body.alerts)).toBe(true)
-      expect(res.body.totals).toHaveProperty("configured")
-      expect(res.body.totals).toHaveProperty("ready")
-      expect(res.body.totals).toHaveProperty("nodesTotal")
-    },
-    20_000
-  )
-
-  it(
-    "automator assist falls back to the local rule engine without LLM keys",
-    async () => {
-      const res = await call("POST", "/api/automator/assist", { question: "What should I do this week?" })
-      expect(res.status).toBe(200)
-      expect(res.body.ok).toBe(true)
-      expect(res.body.source).toBe("local")
-      expect(typeof res.body.advice).toBe("string")
-      expect(res.body.advice.length).toBeGreaterThan(0)
-    },
-    20_000
-  )
-
-  it(
     "opportunities catalog exposes research categories, opportunities and crews",
     async () => {
       const res = await call("GET", "/api/opportunities")

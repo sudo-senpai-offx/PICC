@@ -24,8 +24,10 @@ function greenInputs(overrides = {}) {
 }
 
 const ccxt = () => templateForSite("trading:ccxt")
-const bandwidth = () => templateForSite("bandwidth:browser")
 const expertoption = () => templateForSite("expertoption")
+/** The gray truth-table row left the shipped catalog with the bandwidth suite;
+ * the mode engine still guards gray venues — pinned via a synthetic template. */
+const gray = () => ({ ...ccxt(), site: "test:gray", automationPermission: "gray", demoOnly: false })
 
 describe("Command Centre — Mode Engine vocabulary", () => {
   test("mode set and rank order are fixed (BLOCKED < HOLD < COPILOT < AUTOPILOT_DEMO < AUTOPILOT)", () => {
@@ -108,8 +110,8 @@ describe("Command Centre — Mode Engine verdict matrix (gate × mode)", () => {
     expect(v.executionPower).toBe("none")
   })
 
-  test("gray venue (bandwidth) can never autopilot — COPILOT even with opt-in and full workability", () => {
-    const v = renderVerdict(bandwidth(), greenInputs())
+  test("gray venue can never autopilot — COPILOT even with opt-in and full workability", () => {
+    const v = renderVerdict(gray(), greenInputs())
     expect(v.mode).toBe("COPILOT")
     expect(v.reason.some((r) => r.includes("gray"))).toBe(true)
   })
@@ -145,8 +147,8 @@ describe("Command Centre — Mode Engine verdict matrix (gate × mode)", () => {
   })
 
   test("demo active without demoAllowed permission never fabricates a demo mode", () => {
-    const v = renderVerdict(bandwidth(), greenInputs({ demoActive: true }))
-    expect(v.mode).toBe("COPILOT") // bandwidth template is not demoOnly
+    const v = renderVerdict(gray(), greenInputs({ demoActive: true }))
+    expect(v.mode).toBe("COPILOT") // the gray template is not demoOnly
     expect(v.demoAllowed).toBe(false)
   })
 

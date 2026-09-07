@@ -4,8 +4,6 @@ import { SUITE_META } from "@/lib/suites"
 import type { SuiteMeta } from "@/lib/suites"
 import { Card } from "@/components/ui"
 import { MarketsSuite } from "@/components/TradingSuite"
-import { AutomatorPanel } from "@/components/AutomatorPanel"
-import { ConnectorsPanel } from "@/components/ConnectorsPanel"
 import { CommandCentrePanel } from "@/components/CommandCentrePanel"
 
 const SUITE_CATEGORIES = Object.values(SUITE_META) as SuiteMeta[]
@@ -15,21 +13,11 @@ const SUITE_CATEGORIES = Object.values(SUITE_META) as SuiteMeta[]
 // features that do not exist yet. Autopilot is NOT listed here: it moved to
 // its own Simulator-page tab (shared AutopilotSuite, mounted once).
 const SUITE_FEATURE_BADGES: Record<string, string[]> = {
-  trading: ["Markets", "Decisions", "Ledger", "Payouts", "Overlay HUD"],
-  bandwidth: ["Automator", "Connectors"]
+  trading: ["Markets", "Decisions", "Ledger", "Payouts", "Overlay HUD"]
 }
 
-// Command Centre (slice 4): ONE shared component mounted per stream — same
-// panel, stream-filtered rows. Named wrappers so the tab identity is stable
-// across renders (an inline arrow would remount the panel on every Suites
-// re-render).
-function TradingCommandCentre() {
-  return <CommandCentrePanel stream="trading" />
-}
-function BandwidthCommandCentre() {
-  return <CommandCentrePanel stream="bandwidth" />
-}
-
+// Command Centre: ONE shared component (trading-only) mounted directly so the
+// tab identity is stable across renders.
 const SUITE_DETAIL_COMPONENTS: Record<string, { label: string; Component: React.FC }[]> = {
   // The trading suite's expanded view hosts the market/prediction panel only.
   // Autopilot (demo-broker paper trading) lives as its own tab on the
@@ -38,12 +26,7 @@ const SUITE_DETAIL_COMPONENTS: Record<string, { label: string; Component: React.
   // entry point (see Simulator.tsx).
   trading: [
     { label: "Markets & Prediction", Component: MarketsSuite },
-    { label: "Command Centre", Component: TradingCommandCentre }
-  ],
-  bandwidth: [
-    { label: "Automator", Component: AutomatorPanel },
-    { label: "Connectors", Component: ConnectorsPanel },
-    { label: "Command Centre", Component: BandwidthCommandCentre }
+    { label: "Command Centre", Component: CommandCentrePanel }
   ]
 }
 
@@ -79,7 +62,7 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
       ) : (
         <p className="muted small">
           This suite category does not have PICC-managed panels yet. Connectors and
-          automator integrations can be added under Income → Connectors.
+          income sources are managed under Income.
         </p>
       )}
     </Card>

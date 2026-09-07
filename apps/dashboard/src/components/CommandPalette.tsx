@@ -21,7 +21,7 @@ const NAV_PAGES: { path: string; label: string; icon: string; feature?: FeatureK
   { path: "/suites", label: "Suites", icon: "📈", feature: "trading", keywords: "markets prediction paper ledger demo autopilot expertoption signals watchlist" },
   { path: "/agents", label: "Agents", icon: "🤖", feature: "agents", keywords: "crewai research crew" },
   { path: "/opportunities", label: "Opportunities", icon: "🧭", feature: "opportunities", keywords: "research bounties workflows" },
-  { path: "/income", label: "Income", icon: "💰", feature: "income", keywords: "payment links streams earnings catalog connectors automator" },
+  { path: "/income", label: "Income", icon: "💰", feature: "income", keywords: "payment links streams earnings catalog connectors" },
   { path: "/settings", label: "Settings", icon: "⚙️", keywords: "features toggles keys" },
   { path: "/profile", label: "Profile", icon: "👤", keywords: "account user" }
 ]

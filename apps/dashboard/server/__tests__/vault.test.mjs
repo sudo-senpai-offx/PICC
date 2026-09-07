@@ -61,11 +61,11 @@ describe("vault env-key mode", () => {
 
   it("returns fallback (never throws) when a different key tries to read an envelope", async () => {
     const dir = freshDir()
-    const file = join(dir, "automator-credentials.json")
+    const file = join(dir, "venue-credentials.json")
 
     process.env.PICC_VAULT_KEY = "key-A-xxxxxxxxxxxxxxxx"
     resetVaultKey()
-    await writeSecretJson(file, { honeygainToken: "hg-1" })
+    await writeSecretJson(file, { ccxtExchanges: { binance: "k-1" } })
 
     // Switch keys (e.g. a config change or a foreign host reading the file):
     // decryption must fail CLOSED — fallback, never a throw or plaintext leak.

@@ -97,7 +97,7 @@ describe("HoldingsEditor", () => {
     const add = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Add node")!
     add.click()
 
-    await vi.waitFor(() => expect(document.body.textContent).toContain("Honeygain"), WAIT)
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Silencio"), WAIT)
     // Monthly estimate is computed (0.4 * 30), not stored.
     await vi.waitFor(() => expect(document.body.textContent).toContain("$12.00/mo"), WAIT)
     expect(document.body.textContent).toContain("$12.50 total")

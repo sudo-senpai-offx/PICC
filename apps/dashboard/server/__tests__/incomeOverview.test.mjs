@@ -85,9 +85,9 @@ describe("GET /api/income/overview", () => {
     const authB = { authorization: `Bearer ${b.token}` }
 
     const created = await call("POST", "/api/data/income_streams/upsert", {
-      platform: "honeygain",
-      category: "bandwidth",
-      name: "Honeygain",
+      platform: "expertoption",
+      category: "trading",
+      name: "ExpertOption",
       status: "active",
       balance: 10,
       payoutThreshold: 20,
@@ -122,9 +122,9 @@ describe("GET /api/income/overview", () => {
     const auth = { authorization: `Bearer ${acct.token}` }
 
     await call("POST", "/api/data/income_streams/upsert", {
-      platform: "grass",
+      platform: "mysterium",
       category: "depin",
-      name: "Grass",
+      name: "Mysterium",
       status: "active",
       balance: 5,
       payoutThreshold: 10,
@@ -143,8 +143,8 @@ describe("GET /api/income/overview", () => {
     }, auth)
 
     seedSnapshots({
-      grass: { provider: "grass", lifetime: 30, today: 1.2, status: "ok", lastChecked: 123 },
-      honeygain: { provider: "honeygain", lifetime: 44.5, today: 0.75, status: "ok", lastChecked: 456 }
+      mysterium: { provider: "mysterium", lifetime: 30, today: 1.2, status: "ok", lastChecked: 123 },
+      aave: { provider: "aave", lifetime: 44.5, today: 0.75, status: "ok", lastChecked: 456 }
     })
 
     const res = await call("GET", "/api/income/overview", undefined, auth)
@@ -152,7 +152,7 @@ describe("GET /api/income/overview", () => {
 
     // Snapshots flow through the merged surface — keyed by provider slug (§4).
     const providers = Object.keys(res.body.snapshots).sort()
-    expect(providers).toEqual(["grass", "honeygain"])
+    expect(providers).toEqual(["aave", "mysterium"])
 
     // Holdings arrive grouped by table (§4), all scoped to this user.
     expect(Object.keys(res.body.holdings).sort()).toEqual(["depin", "financial", "nft", "transactions"])

@@ -22,7 +22,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleApi } from "../handlers.mjs"
 import { listBrokers, unregisterBroker } from "../services/brokers/index.mjs"
-import { ingestStudioFrame, liveEOStats, setFeedMode, stopLiveEO } from "../services/liveEO.mjs"
+import { feedProvenance, ingestAppFrame, ingestStudioFrame, liveEOStats, setFeedMode, stopLiveEO } from "../services/liveEO.mjs"
 
 function makeReq(method, url, body, headers = {}) {
   const raw = body !== undefined ? JSON.stringify(body) : null
@@ -178,5 +178,31 @@ describe("T11 machine-verified chain: ingest → EO adapter → candles endpoint
     expect(ingestStudioFrame(pushFrame(asset, 2200, vFor(4)))).toBe(false)
     candles = await call("POST", "/api/trading/candles", { assetId: asset, timeframe: 60, count: 20 })
     expect(candles.body.candles.at(-1).close).toBe(vFor(3)[3])
+  })
+
+  it("attributes the served leg by frame time — immune to same-millisecond wall-clock ties", async () => {
+    // Regression for a 1 ms-resolution race: with a frozen clock, BOTH legs
+    // ingest in the SAME wall-clock millisecond, so consumption timestamps tie
+    // and cannot say who fed the newest bar. Only the frame's own bar time can
+    // — the served series must be attributed by the data's chronology.
+    vi.useFakeTimers()
+    try {
+      const asset = "tiehappy"
+      vi.setSystemTime(1_700_000_000_000)
+      setFeedMode("auto")
+      // Studio feeds the NEWEST bar (1300 > 1000) → attributed to studio.
+      expect(ingestAppFrame(pushFrame(asset, 1000, vFor(0)))).toBe(true)
+      expect(ingestStudioFrame(pushFrame(asset, 1300, vFor(1)))).toBe(true)
+      expect(feedProvenance()).toBe("studio")
+      // Extension then feeds the NEWEST bar (2800 > 1900) → attributed back.
+      expect(ingestStudioFrame(pushFrame(asset, 1900, vFor(2)))).toBe(true)
+      expect(ingestAppFrame(pushFrame(asset, 2800, vFor(3)))).toBe(true)
+      expect(feedProvenance()).toBe("extension")
+      // No frames served yet → still honestly null (never a guess).
+      await stopLiveEO()
+      expect(feedProvenance()).toBe(null)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

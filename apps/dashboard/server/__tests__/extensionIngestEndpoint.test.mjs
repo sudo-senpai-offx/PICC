@@ -157,6 +157,17 @@ describe("POST /api/extension/ingest — income branch (Task 5)", () => {
     expect(res.status).toBe(404)
     expect(res.body.ok).toBe(false)
   })
+
+  it("404s income observations for the removed bandwidth origins", async () => {
+    for (const origin of ["https://dashboard.honeygain.com/dashboard", "https://app.traffmonetizer.com/"]) {
+      const res = await call("POST", "/api/extension/ingest", {
+        origin,
+        frames: [{ credits: "12.50", total: "99.99" }]
+      })
+      expect(res.status).toBe(404)
+      expect(res.body.ok).toBe(false)
+    }
+  })
 })
 
 describe("GET/POST /api/trading/feed-mode (T4)", () => {

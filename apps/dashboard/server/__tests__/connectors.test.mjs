@@ -74,8 +74,8 @@ describe("parseAmount", () => {
 
 describe("normalizeEarnings", () => {
   it("fills defaults and stamps lastChecked", () => {
-    const e = normalizeEarnings({ provider: "honeygain", balance: 5.5 })
-    expect(e.provider).toBe("honeygain")
+    const e = normalizeEarnings({ provider: "expertoption", balance: 5.5 })
+    expect(e.provider).toBe("expertoption")
     expect(e.balance).toBe(5.5)
     expect(e.currency).toBe("USD")
     expect(e.source).toBe("manual")
@@ -89,9 +89,11 @@ describe("normalizeEarnings", () => {
 describe("connector registry", () => {
   it("registers built-in connectors with sensible metadata", () => {
     expect(hasConnector("expertoption")).toBe(true)
-    expect(hasConnector("honeygain")).toBe(true)
     expect(hasConnector("opensea")).toBe(true)
     expect(hasConnector("nope")).toBe(false)
+    // bandwidth suite removed from the registry
+    expect(hasConnector("honeygain")).toBe(false)
+    expect(hasConnector("grass")).toBe(false)
     const eo = getConnector("expertoption")
     expect(eo.label).toBe("ExpertOption")
     expect(eo.category).toBe("trading")
@@ -100,9 +102,12 @@ describe("connector registry", () => {
   })
 
   it("enumerates all registered connectors", () => {
-    const slugs = listConnectors().map((c) => c.slug)
-    for (const s of ["expertoption", "honeygain", "earnapp", "pawns", "repocket", "grass", "gradient", "silencio", "opensea", "aave", "yearn"]) {
+const slugs = listConnectors().map((c) => c.slug)
+    for (const s of ["expertoption", "opensea", "aave", "yearn", "mysterium", "storj", "lido", "defillama"]) {
       expect(slugs).toContain(s)
+    }
+    for (const s of ["honeygain", "earnapp", "pawns", "repocket", "grass", "gradient", "silencio"]) {
+      expect(slugs).not.toContain(s)
     }
   })
 
@@ -113,7 +118,7 @@ describe("connector registry", () => {
 
 describe("browserCollect", () => {
   it("returns a normalized snapshot from mocked DOM reads", async () => {
-    const result = await browserCollect({ slug: "honeygain", url: "https://dashboard.honeygain.com/" })
+    const result = await browserCollect({ slug: "expertoption", url: "https://app.expertoption.finance/" })
     expect(result.status).toBe("ok")
     expect(result.balance).toBe(1234.56)
     expect(result.today).toBe(12.4)
@@ -125,7 +130,7 @@ describe("browserCollect", () => {
 
   it("returns an error snapshot when no browser is available", async () => {
     browserAvailable.mockResolvedValueOnce(false)
-    const result = await browserCollect({ slug: "honeygain", url: "https://x" })
+    const result = await browserCollect({ slug: "expertoption", url: "https://x" })
     expect(result.status).toBe("error")
     expect(result.error).toMatch(/no browser available/)
     expect(openBridge).not.toHaveBeenCalled()
@@ -142,7 +147,7 @@ describe("browserCollect", () => {
         return () => {}
       })
     }))
-    const result = await browserCollect({ slug: "honeygain", url: "https://dashboard.example.com/" })
+    const result = await browserCollect({ slug: "expertoption", url: "https://dashboard.example.com/" })
     expect(result.status).toBe("error")
     expect(result.error).toMatch(/no readable values/)
     expect(result.balance).toBeNull()
@@ -185,7 +190,7 @@ describe("collectSource", () => {
 describe("snapshot persistence", () => {
   it("persists a snapshot and exposes latest + filtered history", async () => {
     const snap = normalizeEarnings({
-      provider: "honeygain",
+      provider: "expertoption",
       platform: "Honeygain",
       balance: 12.5,
       lifetime: 100,
@@ -195,16 +200,16 @@ describe("snapshot persistence", () => {
     await persistSnapshot(snap)
 
     const latest = await getLatestSnapshots()
-    expect(latest.honeygain.balance).toBe(12.5)
+    expect(latest.expertoption.balance).toBe(12.5)
     // heavy payload is trimmed on the way to disk
-    expect(latest.honeygain.extra).toEqual({ url: "https://x", title: undefined })
+    expect(latest.expertoption.extra).toEqual({ url: "https://x", title: undefined })
 
-    const history = await getHistory("honeygain", 10)
+    const history = await getHistory("expertoption", 10)
     expect(history).toHaveLength(1)
-    expect(history[0].provider).toBe("honeygain")
+    expect(history[0].provider).toBe("expertoption")
 
     expect(await getHistory("opensea", 10)).toHaveLength(0)
-    expect(await getHistory("honeygain", 1)).toHaveLength(1)
+    expect(await getHistory("expertoption", 1)).toHaveLength(1)
   })
 
   it("appends multiple snapshots in order and respects the limit", async () => {
@@ -236,29 +241,29 @@ describe("live sessions", () => {
       })
     }))
 
-    const session = await openLiveSession("honeygain")
-    expect(session.slug).toBe("honeygain")
-    expect(liveSessionSlugs()).toContain("honeygain")
+    const session = await openLiveSession("expertoption")
+    expect(session.slug).toBe("expertoption")
+    expect(liveSessionSlugs()).toContain("expertoption")
 
     const seen = []
-    const off = subscribeLive("honeygain", (msg) => seen.push(msg))
-    expect(liveSubscriberCount("honeygain")).toBe(1)
+    const off = subscribeLive("expertoption", (msg) => seen.push(msg))
+    expect(liveSubscriberCount("expertoption")).toBe(1)
     expect(session.latest?.balance).toBe(5)
 
     // a page WS frame is forwarded immediately
     frameCb({ dir: "recv", payload: '{"action":"ping"}' })
     expect(seen.some((m) => m.type === "frame" && m.frame?.dir === "recv")).toBe(true)
 
-    await closeLiveSession("honeygain")
+    await closeLiveSession("expertoption")
     off()
-    expect(liveSessionSlugs()).not.toContain("honeygain")
-    expect(liveSubscriberCount("honeygain")).toBe(0)
+    expect(liveSessionSlugs()).not.toContain("expertoption")
+    expect(liveSubscriberCount("expertoption")).toBe(0)
     expect(seen.some((m) => m.type === "closed")).toBe(true)
   })
 
   it("reuses an existing session for the same slug", async () => {
-    const first = await openLiveSession("honeygain")
-    const second = await openLiveSession("honeygain")
+    const first = await openLiveSession("expertoption")
+    const second = await openLiveSession("expertoption")
     expect(second).toBe(first)
     await closeAllLiveSessions()
     expect(liveSessionSlugs()).toEqual([])
@@ -266,7 +271,7 @@ describe("live sessions", () => {
 
   it("fails cleanly when no browser is available", async () => {
     browserAvailable.mockResolvedValueOnce(false)
-    await expect(openLiveSession("honeygain")).rejects.toThrow(/no browser available/)
+    await expect(openLiveSession("expertoption")).rejects.toThrow(/no browser available/)
     expect(openBridge).not.toHaveBeenCalled()
   })
 

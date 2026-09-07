@@ -23,7 +23,7 @@ import { renderVerdict } from "./modeEngine.mjs"
 import { dayKeyOf } from "../u4faRisk.mjs"
 
 const NOT_WIRED = "not-wired — arrives with execution (slice 5+)"
-const VALID_STREAMS = ["trading", "bandwidth"]
+const VALID_STREAMS = ["trading"]
 
 /**
  * Compose the Command Centre overview.
@@ -36,14 +36,14 @@ const VALID_STREAMS = ["trading", "bandwidth"]
  * takeover:     safetySidecar.takeoverState() (null when none)
  * killState:    commandCentreRuntime.killSwitchState()
  * feeds:        { [site]: [{ name, ageSec, maxAgeSec }] } — OBSERVED mandatory-
- *               feed staleness (slice 5: bandwidth presence heartbeat). Sites
- *               absent from the map keep the capture-profile freshness logic.
+ *               feed staleness. Sites absent from the map keep the
+ *               capture-profile freshness logic.
  * execution:    { [site]: { action, power, inFlight, lastExecutedAt } } — the
- *               currently-executable slice-5 leg per site (bandwidth claims).
- *               A site with a leg has its envelope (5D) + rationale (5F) cells
- *               + opt-in note composed from OBSERVED execution state; sites
- *               without one stay "not-wired" (never a silent OK).
- * stream:       optional "trading" | "bandwidth" — filters the rows
+ *               currently-executable leg per site. A site with a leg has its
+ *               envelope (5D) + rationale (5F) cells + opt-in note composed
+ *               from OBSERVED execution state; sites without one stay
+ *               "not-wired" (never a silent OK).
+ * stream:       optional "trading" — filters the rows
  */
 export function composeCommandCentreOverview({
   sites = policyGraphSites(),
@@ -161,9 +161,8 @@ export function composeCommandCentreOverview({
             }
           }
           case "fresh-data": {
-            // Slice 5: bandwidth's mandatory feed (presence heartbeat) is
-            // OBSERVED — a site with a DECLARED feeds entry reports its real
-            // staleness; an empty declared array means within cadence.
+            // A site with a DECLARED feeds entry reports its real staleness;
+            // an empty declared array means within cadence.
             if (feedsDeclared) {
               if (siteStaleFeeds.length > 0) {
                 return {
@@ -217,7 +216,7 @@ export function composeCommandCentreOverview({
               const passNote =
                 env.maxExposureUsd != null
                   ? `${leg.power} leg observed: ${leg.inFlight} in-flight of ${cap ?? "n/a"} concurrent ceiling; market exposure capped at $${env.maxExposureUsd} per action (5D)`
-                  : `${leg.power} leg observed: ${leg.inFlight} in-flight of ${cap ?? "n/a"} concurrent ceiling — claims-only surface, no market exposure (5D)`
+                  : `${leg.power} leg observed: ${leg.inFlight} in-flight of ${cap ?? "n/a"} concurrent ceiling — no market-exposure surface on this site (5D)`
               return {
                 gate: name,
                 status: atCap ? "block" : "pass",
@@ -233,9 +232,7 @@ export function composeCommandCentreOverview({
               return {
                 gate: name,
                 status: "pass",
-                note: leg.action === "bandwidth:payout-claim"
-                  ? "every claim auto-renders its why/what/how from observed payout data + the acting human's consent (5F)"
-                  : "rationale is rendered from observed inputs before any execution (5F)"
+                note: "rationale is rendered from observed inputs before any execution (5F)"
               }
             }
             return { gate: name, status: "not-wired", note: NOT_WIRED }

@@ -84,13 +84,12 @@ export function removeEarning(id: string): StreamEarning[] {
 // Collector credentials (persisted locally so you enter them once)
 // ---------------------------------------------------------------------
 export interface CollectorCredentials {
-  honeygainToken: string
   cashpilotUrl: string
   cashpilotKey: string
 }
 
 export function getCollectorCredentials(): CollectorCredentials {
-  return read<CollectorCredentials>(K_COLLECTORS, { honeygainToken: "", cashpilotUrl: "", cashpilotKey: "" })
+  return read<CollectorCredentials>(K_COLLECTORS, { cashpilotUrl: "", cashpilotKey: "" })
 }
 
 export function saveCollectorCredentials(creds: CollectorCredentials) {
@@ -200,7 +199,7 @@ export function upsertPlatformStream(
       id: uid(),
       name: platform,
       platform,
-      category: "bandwidth",
+      category: "other",
       status: "active",
       balance: 0,
       totalEarned: 0,

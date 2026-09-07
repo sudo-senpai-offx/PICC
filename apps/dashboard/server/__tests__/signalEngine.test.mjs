@@ -87,7 +87,7 @@ describe("resolveAlertVenue (T5 / Decision D)", () => {
   })
 
   it("omits the venue when every candidate resolves mode 'none' (catalog-only asset)", async () => {
-    const candidateConfigs = [{ venueId: "honeygain", name: "Honeygain", via: "liveEO" }, { venueId: "whatever", name: "Whatever", via: "liveEO" }]
+    const candidateConfigs = [{ venueId: "aave", name: "Aave", via: "liveEO" }, { venueId: "whatever", name: "Whatever", via: "liveEO" }]
     const out = await resolveAlertVenue({ assetId: "EURUSD", candidateConfigs })
     expect(out).toBeUndefined()
   })

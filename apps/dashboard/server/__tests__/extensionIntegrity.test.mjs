@@ -185,8 +185,11 @@ describe("sensor extension integrity", () => {
     }
     // The full action vocabulary, pinned — adding an action must touch every side.
     expect([...sends].sort()).toEqual([
-      "capture-profiles", "capture-session", "income-frames", "open-broker-tab", "relay-flush", "sensor-queue-depth", "server-status", "venue-scan-now"
+      "capture-profiles", "capture-session", "open-broker-tab", "relay-flush", "sensor-queue-depth", "server-status", "venue-scan-now"
     ])
+    // The income leg is gone — its two relay actions must never reappear.
+    expect(sends.has("income-frames")).toBe(false)
+    expect(sends.has("capture-income-token")).toBe(false)
   })
 
   it("T8 locks the __piccCommand bridge: single-action intake, https-only url, truthful ack", () => {
@@ -262,37 +265,44 @@ describe("sensor extension integrity", () => {
     expect(served.profileKeys).toBe("user|account|profile|auth|session|current|me$|identity")
   })
 
-  it("Q5 parity: the built-in grass wsFrames entry equals the config-driven connector registry (income leg)", async () => {
+  it("income leg is fully stripped: no wsFrames/income relay surface remains anywhere (bandwidth contract)", () => {
+    const manifest = JSON.parse(readFileSync(join(EXT_DIR, "manifest.json"), "utf8"))
     const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
-    const { getConnector } = await import("../services/connectors.mjs")
-    const grass = getConnector("grass")
-    expect(grass).toBeTruthy()
-    const jsStringValue = (s) => s.replace(/\\\\/g, "\\")
+    const inject = readFileSync(join(EXT_DIR, "inject.js"), "utf8")
+    const background = readFileSync(join(EXT_DIR, "background.js"), "utf8")
 
-    // The wsFrames connector identity (origin + slug) that the inject sniffer
-    // tags frames with, and the host the sensor scans — pinned equal so the
-    // sensor's built-in fallback cannot drift from the served registry. The
-    // built-in derives its hostRe from the connector's origins; assert the two
-    // stay in lock-step (the sensor's anchor match must cover the served origin).
-    expect(content.includes(`origin: "${grass.origins[0]}"`)).toBe(true)
-    expect(content.includes(`slug: "grass"`)).toBe(true)
-    expect(content.includes("via: \"wsFrames\"")).toBe(true)
-    const hostReMatch = content.match(/hostRe: "([^"]+)"/g) ?? []
-    const grassHostRe = (hostReMatch.find((s) => s.includes("getgrass")) || "").match(/"([^"]+)"/)?.[1]
-    expect(grassHostRe).toBeTruthy()
-    // Collapse the source's `\\` to `\` (the built-in spells \. or \\. — both
-    // evaluate to the same regex source) before compiling the anchor match.
-    const compiledHostRe = jsStringValue(grassHostRe)
-    expect(new RegExp(`(?:^|\\.)${compiledHostRe}$`, "i").test(grass.origins[0])).toBe(true)
-    // mapFrame KEY NAMES (never values) mirror the registry scan.mapFrame.
-    expect(jsStringValue(content).includes(`wsUrlRe: "${grass.scan.wsUrlRe}"`)).toBe(true)
-    for (const key of Object.keys(grass.scan.mapFrame)) {
-      for (const alias of grass.scan.mapFrame[key]) {
-        expect(content.includes(`"${alias}"`), `built-in grass mapFrame keeps ${key}: "${alias}"`).toBe(true)
-      }
+    // manifest: no content-script match on any income-venue domain.
+    const matches = (manifest.content_scripts ?? []).flatMap((cs) => cs.matches ?? [])
+    for (const pat of matches) {
+      expect(pat).not.toMatch(/getgrass|honeygain|earnapp|pawns|repocket|traffmonetizer|gradient|silencio/)
     }
-    // The wsFrames executor must not add any new page-DOM access (pure frame
-    // relay), so the two-pin document. lock still holds.
+    // inject.js: the MAIN-world sniffer tags ONLY the EO trading leg.
+    expect(inject.includes("__piccIncomeFrame")).toBe(false)
+    expect(inject.includes("__piccEOFrame")).toBe(true)
+    // content.js: none of the income-leg structure may remain.
+    for (const gone of [
+      "__piccIncomeFrame",
+      "via: \"wsFrames\"",
+      "wsFrames",
+      "bufferIncomeFrame",
+      "relayIncomeFrames",
+      "stableFingerprint",
+      "incomeFrames",
+      "incomeTokenSent",
+      "captureIncomeToken",
+      "income-frames",
+      "capture-income-token"
+    ]) {
+      expect(content.includes(gone), `content.js must not contain ${gone}`).toBe(false)
+    }
+    // background.js: neither income relay handler may remain.
+    for (const gone of ["income-frames", "capture-income-token", "/api/income/capture-token", "forExtension=1"]) {
+      expect(background.includes(gone), `background.js must not contain ${gone}`).toBe(false)
+    }
+    // The strip did not disturb the trading locks the sensor still honors: the
+    // EO relay marker, the tunnel, and the two-read document. lock all hold.
+    expect(content.includes("__piccEOFrame")).toBe(true)
+    expect(content.includes('action: "relay-flush"')).toBe(true)
     const codeOnly = content.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "")
     expect(codeOnly.split("document.").length, "exactly two document. occurrences in executable code").toBe(3)
   })

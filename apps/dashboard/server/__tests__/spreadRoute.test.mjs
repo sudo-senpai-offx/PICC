@@ -12,12 +12,13 @@ vi.mock("../services/liveEO.mjs", () => ({
   fetchAssetCandles: async () => ({ ohlc: [], source: null })
 }))
 
-// The spread route's getCredentials comes from ./services/automator.mjs (which
-// re-exports it), NOT trading.mjs directly. Override only getCredentials on
-// automator: real ccxtConnector runs against these in-memory exchanges, each
-// carrying a real fetchTicker method (JSON could never store a function, so the
-// creds-file route is bypassed).
-vi.mock("../services/automator.mjs", async (importOriginal) => {
+// The spread route's getCredentials comes from ./services/venueCredentials.mjs
+// (the lean venue store that survived the bandwidth-suite removal), NOT
+// trading.mjs. Override only getCredentials on venueCredentials: real
+// ccxtConnector runs against these in-memory exchanges, each carrying a real
+// fetchTicker method (JSON could never store a function, so the creds-file
+// route is bypassed).
+vi.mock("../services/venueCredentials.mjs", async (importOriginal) => {
   const actual = await importOriginal()
   const exchanges = [
     { id: "exA", fetchTicker: async () => ({ symbol: "BTC/USDT", last: 100.055 }) },

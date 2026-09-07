@@ -16,8 +16,17 @@ import { templateForSite } from "../services/commandCentre/policyGraphCatalog.mj
 import { dayKeyOf } from "../services/u4faRisk.mjs"
 
 const ccxt = () => templateForSite("trading:ccxt")
-const bandwidth = () => templateForSite("bandwidth:browser")
 const expertoption = () => templateForSite("expertoption")
+/** The gray truth-table row left the shipped catalog with the bandwidth suite;
+ * the sidecar still enforces gray venues — pinned via a synthetic template
+ * (gray = no standing opt-in ceiling, no capital-exposure envelope numbers). */
+const gray = () => ({
+  ...ccxt(),
+  site: "test:gray",
+  automationPermission: "gray",
+  demoOnly: false,
+  envelope: { ...ccxt().envelope, maxExposureUsd: null, maxDailyLossPct: null }
+})
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -113,7 +122,7 @@ describe("Command Centre — Safety Sidecar: each gate in order", () => {
 
   test("cross-site day halt — a breaker on ANY site halts every site for the UTC day", () => {
     noteBreakerTrip("trading:ccxt", "dailyLoss")
-    const r = evaluateGate({ template: bandwidth(), proposal: greenProposal({ action: "bandwidth:claim-payout" }), state: greenState() })
+    const r = evaluateGate({ template: ccxt(), proposal: greenProposal(), state: greenState() })
     expect(r.allow).toBe(false)
     expect(r.blockedBy).toBe("cross-site-day-halt")
     expect(r.reason).toContain("trading:ccxt")
@@ -187,7 +196,7 @@ describe("Command Centre — Safety Sidecar: each gate in order", () => {
   })
 
   test("gray venue live action (5C) — proposals only", () => {
-    const r = evaluateGate({ template: bandwidth(), proposal: greenProposal(), state: greenState() })
+    const r = evaluateGate({ template: gray(), proposal: greenProposal(), state: greenState() })
     expect(r.allow).toBe(false)
     expect(r.blockedBy).toBe("toS-survival")
     expect(r.reason).toContain("gray")
@@ -390,30 +399,30 @@ describe("Command Centre — Safety Sidecar: wired kill-switch reader (the enfor
   })
 })
 
-describe("Command Centre — Safety Sidecar: execution power (slice 5 approved-claim leg)", () => {
-  // bandwidth:browser is gray (5C) → COPILOT only. The claim executes on FRESH
-  // per-action human consent (consentBy), which is NOT an automation opt-in.
-  function claimProposal(overrides = {}) {
+describe("Command Centre — Safety Sidecar: execution power (slice 5 proposals/consent leg)", () => {
+  // gray venues (5C) are COPILOT only: proposals may execute on FRESH per-action
+  // human consent (consentBy), which is NOT an automation opt-in.
+  function consentProposal(overrides = {}) {
     return greenProposal({
-      action: "bandwidth:payout-claim",
+      action: "ccxt:spot-order",
       power: "proposals",
-      consentBy: "usr_claim_01",
+      consentBy: "usr_consent_01",
       exposureUsd: 25,
-      idempotencyKey: "bandwidth:claim:traffmonetizer:2026-09-05-aabbcc",
+      idempotencyKey: "ccxt:spot:2026-09-05-aabbcc",
       ...overrides
     })
   }
 
-  test("gray venue + proposals power with fresh human consent passes the FULL gate (approved-claim leg)", () => {
-    const r = evaluateGate({ template: bandwidth(), proposal: claimProposal(), state: greenState({ optIn: false }), audit: auditCollector() })
+  test("gray venue + proposals power with fresh human consent passes the FULL gate (consent leg)", () => {
+    const r = evaluateGate({ template: gray(), proposal: consentProposal(), state: greenState({ optIn: false }), audit: auditCollector() })
     expect(r.allow).toBe(true)
     expect(r.reason).toContain("gate passed")
   })
 
   test("proposals leg WITHOUT consent is denied at opt-in — consent is required, and is NOT an opt-in", () => {
     const r = evaluateGate({
-      template: bandwidth(),
-      proposal: claimProposal({ consentBy: undefined }),
+      template: gray(),
+      proposal: consentProposal({ consentBy: undefined }),
       state: greenState({ optIn: true })
     })
     expect(r.allow).toBe(false)
@@ -423,8 +432,8 @@ describe("Command Centre — Safety Sidecar: execution power (slice 5 approved-c
 
   test("gray venue + live power is denied even WITH a standing opt-in — proposals only (5C)", () => {
     const r = evaluateGate({
-      template: bandwidth(),
-      proposal: claimProposal({ power: "live" }),
+      template: gray(),
+      proposal: consentProposal({ power: "live" }),
       state: greenState({ optIn: true })
     })
     expect(r.allow).toBe(false)
@@ -434,8 +443,8 @@ describe("Command Centre — Safety Sidecar: execution power (slice 5 approved-c
 
   test("gray venue + liveDemo power is denied (no demo surface on a gray site)", () => {
     const r = evaluateGate({
-      template: bandwidth(),
-      proposal: claimProposal({ power: "liveDemo" }),
+      template: gray(),
+      proposal: consentProposal({ power: "liveDemo" }),
       state: greenState({ optIn: true })
     })
     expect(r.allow).toBe(false)
@@ -511,16 +520,16 @@ describe("Command Centre — Safety Sidecar: execution power (slice 5 approved-c
   })
 
   test("the allow audit event records the power + the consent identity (5A separation intact)", () => {
-    evaluateGate({ template: bandwidth(), proposal: claimProposal(), state: greenState({ optIn: false }), audit: auditCollector() })
+    evaluateGate({ template: gray(), proposal: consentProposal(), state: greenState({ optIn: false }), audit: auditCollector() })
     expect(auditEvents).toHaveLength(1)
     expect(auditEvents[0].kind).toBe("safety-gate:allow")
     expect(auditEvents[0].data.power).toBe("proposals")
-    expect(auditEvents[0].data.consentBy).toBe("usr_claim_01")
+    expect(auditEvents[0].data.consentBy).toBe("usr_consent_01")
   })
 
   test("legacy proposals (no power field) keep today's exact semantics", () => {
     // gray + legacy live → proposals-only deny (unchanged)
-    const grayLive = evaluateGate({ template: bandwidth(), proposal: greenProposal(), state: greenState() })
+    const grayLive = evaluateGate({ template: gray(), proposal: greenProposal(), state: greenState() })
     expect(grayLive.allow).toBe(false)
     expect(grayLive.blockedBy).toBe("toS-survival")
     // sanctioned legacy live + opt-in → allow (unchanged)

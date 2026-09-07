@@ -14,16 +14,6 @@ interface StepDef {
 
 const STEPS: StepDef[] = [
   {
-    category: "bandwidth",
-    title: "Bandwidth sharing",
-    description:
-      "Sell your unused home or VPS internet bandwidth to companies that need residential IPs for ad-verification, price-checking and market research.",
-    examples: ["Honeygain", "EarnApp", "IPRoyal Pawns", "PacketStream", "Repocket", "Traffmonetizer"],
-    defaultName: "Honeygain",
-    setupHint:
-      "Install the app on a device that stays online, leave it running, and it accrues cents per day. Most pay out at $20–$40 via PayPal or crypto. PICC can auto-sync Honeygain — see the collectors step at the end."
-  },
-  {
     category: "dividend",
     title: "Dividends",
     description:
@@ -173,7 +163,7 @@ export function StreamSetupWizard({
           </h2>
           {done ? (
             <Button variant="ghost" onClick={onSetCollectorsHint}>
-              🎁 Add Honeygain / CashPilot collectors
+              🎁 Add CashPilot collector
             </Button>
           ) : (
             <Button variant="ghost" onClick={() => setCollapsed(false)}>

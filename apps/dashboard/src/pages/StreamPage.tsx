@@ -4,7 +4,6 @@ import { getStreams, getEarnings } from "@/lib/streams"
 import { SUITE_META } from "@/lib/suites"
 import { Card } from "@/components/ui"
 import { MarketsSuite } from "@/components/TradingSuite"
-import { AutomatorPanel } from "@/components/AutomatorPanel"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
 import { OverlaySettingsPanel } from "@/components/OverlaySettingsPanel"
 import { openBrowser, browserTab } from "@/lib/api"
@@ -16,7 +15,6 @@ function usd(n: number) {
 
 const SUITE_PANELS: Record<string, React.FC> = {
   trading: () => <MarketsSuite />,
-  bandwidth: () => <AutomatorPanel />,
   depin: ConnectorsPanel,
   nft: ConnectorsPanel,
   defi: ConnectorsPanel,
@@ -120,7 +118,7 @@ function SuitePanel({ category }: { category: string }) {
     return (
       <Card>
         <p className="muted small">
-          No PICC suite panel for this category yet. Configure connectors and automations
+          No PICC suite panel for this category yet. Configure connectors
           under Income → Connectors.
         </p>
       </Card>

@@ -1,35 +1,33 @@
 // PICC periodic orchestrator — small in-process jobs that keep the dashboard
 // fresh without hammering any external API.
 //
-//   yield-refresh   every 30 min  warms the DeFi/staking cache (harmless when
-//                                 the cache is already warm — single-flight).
-//   payout-alert    every 30 min  sweeps provider + manual balances and logs a
-//                                 "balance meets payout threshold" entry to
-//                                 agent_logs ONCE per platform per day. It only
-//                                 flags; requesting a payout stays human.
-//   credential-expiry  every 30 min  checks session JWTs for upcoming expiry and
-//                                 logs a credential_expiry entry to agent_logs
-//                                 ONCE per platform per day.
-//   ccxt-market-data   every 15 sec  polls every CCXT exchange configured in the
-//                                 credential store (trading-credentials.json →
-//                                 ccxtExchanges) for OHLCV + ticker, stores the
-//                                 normalized candles in the shared liveCCXT state
-//                                 and lets adaptiveConfluence fold them into the
-//                                 existing indicator/decision pipeline. Read-only.
+//   yield-refresh     every 30 min  warms the DeFi/staking cache (harmless when
+//                                   the cache is already warm — single-flight).
+//   ccxt-market-data  every 15 sec  polls every CCXT exchange configured in the
+//                                   credential store (trading-credentials.json →
+//                                   ccxtExchanges) for OHLCV + ticker, stores the
+//                                   normalized candles in the shared liveCCXT state
+//                                   and lets adaptiveConfluence fold them into the
+//                                   existing indicator/decision pipeline. Read-only.
+//   paper-mark        every 15 min  marks paper positions to market and auto-closes
+//                                   take-profit/stop-loss hits.
+//   eo-staleness      every 30 sec  flags a connected-but-stale ExpertOption stream
+//                                   honestly (never a silent OK).
+//   eo-liveness       every 30 sec  re-checks the live browser session behind the
+//                                   token + samples the 24h uptime ring.
 //   headless-session-refresh  every 60 sec  iterates the enabled venues of the
-//                                 headless-session capture engine (captureProfiles)
-//                                 whose token-refresh cadence is due, re-capturing
-//                                 the broker session token through the studio
-//                                 browser and reviving a dead EO session when the
-//                                 token actually changed. No enabled venue / no
-//                                 cadence due ⇒ exits in one loop over the profile
-//                                 table. Read-only vs the broker (session reads);
-//                                 token strings never reach logs or responses.
+//                                   headless-session capture engine (captureProfiles)
+//                                   whose token-refresh cadence is due, re-capturing
+//                                   the broker session token through the studio
+//                                   browser and reviving a dead EO session when the
+//                                   token actually changed. No enabled venue / no
+//                                   cadence due ⇒ exits in one loop over the profile
+//                                   table. Read-only vs the broker (session reads);
+//                                   token strings never reach logs or responses.
 //
 // Jobs are concurrency-guarded (a slow run is skipped, not queued) and all
 // outbound work funnels through the shared polite rate limiter. startScheduler
 // is called from index.mjs only — tests import the module without side effects.
-import { automatorStatus, getCredentials, jwtInfo } from "./automator.mjs"
 import { yieldSnapshot } from "./yields.mjs"
 import { appendRow, listRows } from "./localstore.mjs"
 import { rateLimitStatus } from "./rateLimit.mjs"
@@ -112,94 +110,6 @@ every(
     await yieldSnapshot()
   },
   { staggerMs: 20_000 }
-)
-
-every(
-  "payout-alert",
-  30 * 60 * 1000,
-  async () => {
-    const status = await automatorStatus()
-    const ready = []
-    for (const p of Object.values(status.providers ?? {})) {
-      const threshold = Number(p?.payoutThreshold)
-      if (p?.status === "ok" && Number.isFinite(threshold) && threshold > 0 && Number(p?.balance) >= threshold) {
-        ready.push({ platform: p.platform, balance: Number(p.balance), threshold })
-      }
-    }
-    for (const m of status.manual ?? []) {
-      const threshold = Number(m?.payoutThreshold)
-      if (threshold > 0 && Number(m?.balance) >= threshold && m?.status !== "paused") {
-        ready.push({ platform: m.platform || m.name, balance: Number(m.balance), threshold })
-      }
-    }
-    if (ready.length === 0) return
-
-    const today = new Date().toISOString().slice(0, 10)
-    const existing = await listRows("agent_logs")
-    const loggedToday = (platform) =>
-      existing.some(
-        (r) =>
-          r?.kind === "payout_ready" &&
-          r?.platform === platform &&
-          String(r?.created_at ?? "").startsWith(today)
-      )
-
-    for (const r of ready) {
-      if (loggedToday(r.platform)) continue
-      await appendRow("agent_logs", {
-        kind: "payout_ready",
-        source: "scheduler",
-        level: "info",
-        platform: r.platform,
-        balance: r.balance,
-        payoutThreshold: r.threshold,
-        note: `Balance ${r.balance} meets the ${r.threshold} payout threshold — request the payout manually when ready.`
-      })
-    }
-  },
-  { staggerMs: 35_000 }
-)
-
-every(
-  "credential-expiry",
-  30 * 60 * 1000,
-  async () => {
-    const creds = await getCredentials()
-    const sessions = [
-      { platform: "Traffmonetizer", token: creds.traffmonetizerToken },
-      { platform: "Pawns", token: creds.pawnsToken },
-      { platform: "Repocket", token: creds.repocketToken }
-    ]
-    const today = new Date().toISOString().slice(0, 10)
-    const existing = await listRows("agent_logs")
-    const loggedToday = (platform) =>
-      existing.some(
-        (r) =>
-          r?.kind === "credential_expiry" &&
-          r?.platform === platform &&
-          String(r?.created_at ?? "").startsWith(today)
-      )
-
-    for (const { platform, token } of sessions) {
-      const info = jwtInfo(token)
-      if (!info.valid || info.exp == null) continue
-      const level = info.daysLeft < 0 ? "danger" : "warn"
-      const note =
-        info.daysLeft < 0
-          ? `${platform} session token expired on ${info.expiresAt.slice(0, 10)} — paste a fresh one or collection stops.`
-          : `${platform} session token expires on ${info.expiresAt.slice(0, 10)} (${Math.max(1, Math.ceil(info.daysLeft))} days) — refresh before then.`
-      if (loggedToday(platform)) continue
-      await appendRow("agent_logs", {
-        kind: "credential_expiry",
-        source: "scheduler",
-        level,
-        platform,
-        expiresAt: info.expiresAt,
-        note
-      })
-    }
-  },
-  { staggerMs: 50_000 }
 )
 
 // Marks paper positions to market and auto-closes any whose take-profit or

@@ -176,7 +176,8 @@ export function snapshotForExtension() {
       keys: Array.isArray(c.scan?.keys) ? c.scan.keys.map((k) => (typeof k === "string" ? k : k?.key)).filter(Boolean) : [],
       profileKeys: c.scan?.profileKeys ?? null,
       wsUrlRe: c.scan?.wsUrlRe ?? null,
-      mapFrame: c.scan?.mapFrame ?? null
+      mapFrame: c.scan?.mapFrame ?? null,
+      capture: c.scan?.capture ?? null
     },
     tuned: c.tuned === true
   }))
@@ -578,83 +579,6 @@ registerConnector({
     balance: "input[placeholder*='balance'], [class*='balance']",
     today: "[class*='today-profit'], [class*='profit-today'], [class*='daily']",
     lifetime: "[class*='total-profit'], [class*='total-earned']"
-  }
-})
-
-// Bandwidth / DePIN sources with no public API — read their own dashboards.
-const BANDWIDTH = [
-  ["honeygain", "Honeygain", "https://dashboard.honeygain.com/"],
-  ["earnapp", "EarnApp", "https://earnapp.com/dashboard"],
-  ["pawns", "Pawns.app", "https://app.pawns.app/"],
-  ["repocket", "Repocket", "https://app.repocket.com/"],
-  ["grass", "Grass", "https://app.getgrass.io/"],
-  ["gradient", "Gradient", "https://app.gradient.network/"],
-  ["silencio", "Silencio", "https://silencio.network/"]
-]
-for (const [slug, label, url] of BANDWIDTH) {
-  registerConnector({
-    slug,
-    label,
-    category: "bandwidth",
-    transports: ["browser"],
-    url,
-    defaults: { label },
-    selectors: {
-      balance: "[class*='balance'], [class*='credits'], [class*='earnings']",
-      today: "[class*='today'], [class*='daily']",
-      lifetime: "[class*='total'], [class*='lifetime']",
-      payoutThreshold: "[class*='minimum'], [class*='threshold']"
-    }
-  })
-}
-
-// Grass — the FIRST declarative wsFrames income connector (Q5 config-driven
-// generalization, Task 9). Registered here by config alone: explicit origins,
-// per-site cadence, extractors, and a wsFrames `scan` describing the dashboard
-// gateway's frame key NAMES to read. tuned:false — the wsUrlRe/mapFrame aliases
-// are unverified against a live session and must be tuned per-site before
-// trusting a value. This later registration intentionally supersedes the
-// generic browser-only BANDWIDTH loop entry (Map.set overwrites) so grass is
-// wsFrames-capable while the other bandwidth sites stay browser-only.
-registerConnector({
-  slug: "grass",
-  label: "Grass",
-  category: "bandwidth",
-  transports: ["browser", "ws"],
-  url: "https://app.getgrass.io/",
-  origins: ["app.getgrass.io", "getgrass.io"],
-  tuned: false,
-  defaults: { label: "Grass" },
-  cadence: {
-    realtimeMs: 20000,
-    intermittentMs: 120000,
-    longMs: 600000,
-    activityWindowMs: 90000,
-    prolongedMs: 1200000
-  },
-  extractors: {
-    balance: "[class*='balance'], [class*='credits'], [class*='earnings']",
-    today: "[class*='today'], [class*='daily']",
-    lifetime: "[class*='total'], [class*='lifetime']",
-    payoutThreshold: "[class*='minimum'], [class*='threshold']"
-  },
-  selectors: {
-    balance: "[class*='balance'], [class*='credits'], [class*='earnings']",
-    today: "[class*='today'], [class*='daily']",
-    lifetime: "[class*='total'], [class*='lifetime']",
-    payoutThreshold: "[class*='minimum'], [class*='threshold']"
-  },
-  scan: {
-    mode: "wsFrames",
-    keys: ["credits", "earnings", "payout", "total"],
-    profileKeys: null,
-    wsUrlRe: "getgrass\\.(io|app)",
-    mapFrame: {
-      balance: ["credits", "balance"],
-      today: ["todayEarnings", "today", "earningsToday"],
-      lifetime: ["lifetimeEarnings", "lifetime", "totalEarnings", "total"],
-      payoutThreshold: ["minPayout", "minimumPayout", "threshold"]
-    }
   }
 })
 

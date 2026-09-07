@@ -19,7 +19,7 @@ const HEARTBEAT_MS = 30_000
 // on prolonged inactivity. The worker's alarm wakes the scheduler even when
 // this service worker sleeps; the sensor's own content timers are a resilience
 // fallback only.
-import { SYNC, cadenceFor, cadenceMsFor } from "./syncPolicy.js"
+import { SYNC, cadenceFor } from "./syncPolicy.js"
 
 // ── State ────────────────────────────────────────────────────────────────────
 let serverOnline = false
@@ -50,10 +50,9 @@ function isTrustedSender(sender) {
 // tabs so the sensor comes back without user action. Next-navigation injection
 // is the safety net if this is too aggressive in some Chrome version (R1).
 async function resurrectSensorTabs() {
-  // Q5 Task 8: sensor hosts are config-driven, not EO-only. Refresh the venue
-  // config + generalized registry snapshot first so a registered income origin
-  // (e.g. grass) is recognized too; with the server offline the config maps
-  // stay empty and this degrades to the localhost-dashboard reload only.
+  // Refresh the venue config first so a registered trading venue is recognized
+  // too; with the server offline the config map stays empty and this degrades
+  // to the localhost-dashboard reload only.
   try { await ensureVenueConfig() } catch { /* offline — degrade gracefully */ }
   const tabs = await chrome.tabs.query({})
   for (const tab of tabs) {
@@ -323,26 +322,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
   }
 
-  // Q5 — income wsFrames relay (income leg). The content script's wsFrames
-  // executor buffers DECLARATIVE income frames (captured from a configured
-  // venue's gateway WS stream by an inject sniffer, tagged __piccIncomeFrame)
-  // and tunnels them here — this worker context is host-permission exempt, so
-  // it performs the ingest POST on the sensor's behalf (a content-script fetch
-  // to http://localhost from an https venue page dies on CORS + mixed content).
-  // The server's /api/extension/ingest income branch routes on `origin`; the
-  // frames are already sanitized by content.js and re-validated server-side.
-  if (msg.action === "income-frames") {
-    const origin = String(msg.origin ?? "").slice(0, 128)
-    const slug = String(msg.slug ?? "").slice(0, 64)
-    const frames = Array.isArray(msg.frames) ? msg.frames : []
-    if (!origin || !frames.length) { sendResponse({ ok: false, error: "no origin or frames" }); return false }
-    if (frames.length > 200) { sendResponse({ ok: false, error: "batch too large" }); return false } // ingest cap (handlers.mjs:4294)
-    serverFetch("/api/extension/ingest", { method: "POST", body: { origin, slug, frames } })
-      .then((r) => sendResponse({ ok: r.ok === true, status: r.status ?? null, error: r.error ?? null }))
-      .catch((err) => sendResponse({ ok: false, error: String(err?.message ?? err) }))
-    return true
-  }
-
   // T13 — venue-session observation relay (capture leg). Same channel as
   // relay-flush: the content script observes the venue tab's configured keys +
   // storage-tier account profile, tunnels the observation through the worker
@@ -407,20 +386,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 const venueConfigs = new Map()   // hostRe pattern -> venueId
 const tabVenues = new Map()      // tabId -> { venueId, host, url, active, lastFocusedAt, lastSyncAt }
 const VENUE_CFG_TTL = 5 * 60 * 1000
-const venueCadence = new Map()   // lowercased host -> { slug, cadence } (Q5 generalized registry)
 
 async function ensureVenueConfig() {
-  // Q5: extended to ALSO pull the generalized connector registry snapshot
-  // (origins + per-site cadence). Both sources share one refresh TTL; a failure
-  // on either side only degrades that side — never fabricated or zero-filled.
-  const fresh = venueConfigs.size || venueCadence.size
+  const fresh = venueConfigs.size
   if (fresh && Date.now() - (venueConfigs._at || 0) < VENUE_CFG_TTL) return fresh
-  const [profiles, registry] = await Promise.all([
-    serverFetch("/api/trading/capture-profiles"),
-    serverFetch("/api/connectors?forExtension=1")
-  ])
+  const profiles = await serverFetch("/api/trading/capture-profiles")
   venueConfigs.clear()
-  venueCadence.clear()
   venueConfigs._at = Date.now()
   if (profiles.ok === true && Array.isArray(profiles.data?.venues)) {
     for (const v of profiles.data.venues) {
@@ -430,16 +401,7 @@ async function ensureVenueConfig() {
       if (re) venueConfigs.set(v.venueId, { venueId: v.venueId, hostRe: re })
     }
   }
-  const reg = registry.ok === true ? registry.data?.registry : null
-  if (Array.isArray(reg)) {
-    for (const c of reg) {
-      for (const o of (c.origins || [])) {
-        const host = String(o).toLowerCase().replace(/^www\./, "")
-        if (host) venueCadence.set(host, { slug: c.slug, cadence: c.cadence || {} })
-      }
-    }
-  }
-  return venueConfigs.size > 0 || venueCadence.size > 0
+  return venueConfigs.size > 0
 }
 
 function classifyHost(hostname) {
@@ -449,31 +411,12 @@ function classifyHost(hostname) {
   return null
 }
 
-// Q5 Task 8: a host is a SENSOR target when it is a trading venue
-// (venueConfigs from capture-profiles) OR a registered income-connector origin
-// (venueCadence from the forExtension registry snapshot). Income origins carry
-// no trading venueId — the worker pings their sensor by host and cadenceForVenue
-// applies the connector's own registry cadence.
+// A host is a SENSOR target when it is a trading venue (venueConfigs from
+// capture-profiles).
 function sensorHostKind(hostname) {
   const venueId = classifyHost(hostname)
   if (venueId) return { kind: "trading", venueId }
-  const host = String(hostname || "").toLowerCase().replace(/^www\./, "")
-  if (venueCadence.has(host)) return { kind: "income", host }
   return null
-}
-
-// Q5: per-venue cadence. A host that matches a generalized connector uses that
-// connector's registry `cadence` tier values, min-bounded by the beat floor;
-// the tier selection is identical to the pure cross-site cadenceFor policy
-// (activity window → realtime, prolonged → intermittent, else long). A host
-// with no registry override falls back to cadenceFor unchanged.
-function cadenceForVenue(host, tabState, now) {
-  // Q5: a registry per-site cadence wins when the host matches a generalized
-  // connector; otherwise fall back to the pure cross-site cadenceFor. The beat
-  // floor (TICK_MS) is applied here because the policy resolver is floor-free.
-  const cfg = venueCadence.get(String(host || "").toLowerCase().replace(/^www\./, ""))
-  if (!cfg) return cadenceFor(tabState, now)
-  return Math.max(cadenceMsFor(tabState, now, cfg.cadence || {}), SYNC.TICK_MS)
 }
 
 // T8 / REQ-10 — async focus-or-create. The exact discovery pattern of
@@ -518,8 +461,7 @@ function refreshTabModel() {
       if (tab?.id == null || !tab.url) continue
       let u = null
       try { u = new URL(tab.url) } catch { continue }
-      // Q5 Task 8: model BOTH trading venues and registered income origins — an
-      // income tab (venueId null) still gets the worker's sync beat and cadence.
+      // Model trading venue tabs — every one gets the worker's sync beat.
       const kind = sensorHostKind(u.hostname)
       if (!kind) continue
       live.add(tab.id)
@@ -554,9 +496,10 @@ async function syncCadenceStep() {
   const now = Date.now()
   for (const [tabId, t] of tabVenues) {
     // The beat floor: MV3 alarms cannot fire faster than TICK_MS, so even the
-    // realtime tier is capped at the beat. cadenceForVenue() picks the tier by
-    // the pure policy, then applies any registry per-site cadence override.
-    const cadence = cadenceForVenue(t.host, t, now)
+    // realtime tier is capped at the beat. cadenceFor picks the tier by the
+    // pure cross-site policy (activity window → realtime, prolonged →
+    // intermittent, else long).
+    const cadence = cadenceFor(t, now)
     if (now - (t.lastSyncAt || 0) >= cadence) {
       t.lastSyncAt = now
       chrome.tabs.sendMessage(tabId, { action: "venue-scan-now" })

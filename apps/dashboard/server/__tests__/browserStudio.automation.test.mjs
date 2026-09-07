@@ -39,24 +39,24 @@ async function call(handleApi, method, path, body) {
 describe("Browser automation — pure helpers", () => {
   it("maps detected site ids to tuned connector slugs", async () => {
     const { siteToConnectorSlug } = await import("../services/browserStudio.mjs")
-    expect(siteToConnectorSlug("honeygain")).toBe("honeygain")
-    expect(siteToConnectorSlug("iproyal")).toBe("pawns")
     expect(siteToConnectorSlug("nft-royalties")).toBe("opensea")
     expect(siteToConnectorSlug("defi-supply")).toBe("aave")
-    expect(siteToConnectorSlug("mysterium")).toBe("mysterium")
+    expect(siteToConnectorSlug("expertoption")).toBe("expertoption")
+    expect(siteToConnectorSlug("honeygain")).toBeNull() // bandwidth suite removed
+    expect(siteToConnectorSlug("mysterium")).toBeNull() // no tuned connector for depin
     expect(siteToConnectorSlug("packetstream")).toBeNull()
     expect(siteToConnectorSlug("")).toBeNull()
   })
 
   it("suggests payout threshold progress and flags when reached", async () => {
     const { automationSuggestions } = await import("../services/browserStudio.mjs")
-    const site = { id: "honeygain", note: "1 credit = $0.001." }
+    const site = { id: "opensea", note: "Royalties settle weekly." }
     const near = automationSuggestions(site, { balance: 10, today: 1.25, lifetime: 42, payoutThreshold: 20, estimatedDaily: 1.5 })
     expect(near.join("\n")).toContain("Balance: $10.00")
     expect(near.join("\n")).toContain("50% of the $20.00 payout threshold.")
     expect(near.join("\n")).toContain("Earned today: $1.25")
     expect(near.join("\n")).toContain("Estimated daily: $1.50")
-    expect(near.join("\n")).toContain("1 credit = $0.001.")
+    expect(near.join("\n")).toContain("Royalties settle weekly.")
 
     const ready = automationSuggestions(site, { balance: 21, today: null, lifetime: null, payoutThreshold: 20, estimatedDaily: null })
     expect(ready.join("\n")).toContain("Payout threshold reached — you can withdraw.")
@@ -64,16 +64,15 @@ describe("Browser automation — pure helpers", () => {
 
   it("falls back when nothing is readable and still appends the site note", async () => {
     const { automationSuggestions } = await import("../services/browserStudio.mjs")
-    const site = { id: "earnapp", note: "Desktop-only." }
+    const site = { id: "expertoption", note: "Demo mode only." }
     const out = automationSuggestions(site, { balance: null, today: null, lifetime: null, payoutThreshold: null, estimatedDaily: null })
     expect(out[0]).toContain("No readable figures yet")
-    expect(out).toContain("Desktop-only.")
+    expect(out).toContain("Demo mode only.")
   })
 
-  it("detects the mysterium canonical host for both TLDs", async () => {
+  it("detects the expertoption venue host", async () => {
     const { detectSite } = await import("../services/browserStudio.mjs")
-    expect(detectSite("https://mystnodes.co").id).toBe("mysterium")
-    expect(detectSite("https://mystnodes.com").id).toBe("mysterium")
+    expect(detectSite("https://app.expertoption.finance/").id).toBe("expertoption")
   })
 })
 

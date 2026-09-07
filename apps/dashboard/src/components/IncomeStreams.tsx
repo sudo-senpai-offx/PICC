@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { postPresence, pushStreamsSnapshot, testHoneygain, syncCashPilot, getSessionPolicy, setSessionPolicy } from "@/lib/api"
+import { pushStreamsSnapshot, syncCashPilot, getSessionPolicy, setSessionPolicy } from "@/lib/api"
 import type { SessionPolicyDecision } from "@/lib/api"
-import { STREAM_CATEGORY_LABELS, CATALOG, BANDWIDTH_APPS, DEPIN_APPS, STORAGE_APPS, COMPUTE_APPS, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS, TRADING_PLATFORM_APPS } from "@/lib/streamCatalog"
+import { STREAM_CATEGORY_LABELS, CATALOG, DEPIN_APPS, STORAGE_APPS, COMPUTE_APPS, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS, TRADING_PLATFORM_APPS } from "@/lib/streamCatalog"
 import { StreamSetupWizard } from "@/components/StreamSetupWizard"
 import { HoldingsEditor } from "@/components/HoldingsEditor"
 import {
@@ -50,7 +50,6 @@ function StreamsTab() {
   const [serverNote, setServerNote] = useState<string | null>(null)
 
   const savedCreds = useMemo(getCollectorCredentials, [])
-  const [hgToken, setHgToken] = useState(savedCreds.honeygainToken)
   const [cpUrl, setCpUrl] = useState(savedCreds.cashpilotUrl)
   const [cpKey, setCpKey] = useState(savedCreds.cashpilotKey)
 
@@ -114,13 +113,6 @@ function StreamsTab() {
     return () => window.clearTimeout(t)
   }, [streams, earnings])
 
-  // Presence heartbeat so the Automator panel can show this dashboard is live.
-  useEffect(() => {
-    postPresence("dashboard").catch(() => undefined)
-    const i = window.setInterval(() => postPresence("dashboard").catch(() => undefined), 5 * 60 * 1000)
-    return () => window.clearInterval(i)
-  }, [])
-
   const addFromWizard = (input: Omit<IncomeStream, "id">) => {
     commit(addStream(input))
     setEarnings(getEarnings())
@@ -130,55 +122,11 @@ function StreamsTab() {
     collectorsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
   }
 
-  const syncHoneygain = async (record: boolean) => {
-    if (!hgToken.trim()) return
-    setCollecting(true)
-    setCollectorMsg("")
-    saveCollectorCredentials({ honeygainToken: hgToken.trim(), cashpilotUrl: cpUrl.trim(), cashpilotKey: cpKey.trim() })
-    try {
-      const snap = await testHoneygain(hgToken.trim())
-      if (!snap.ok) throw new Error(snap.error ?? "sync failed")
-      const { stream, streams: next } = upsertPlatformStream("Honeygain", {
-        balance: snap.balance,
-        totalEarned: snap.lifetimeEarnings,
-        payoutThreshold: snap.payoutThreshold,
-        payoutMethod: "PayPal, Crypto",
-        collector: "honeygain",
-        status: "active",
-        estimatedDaily: estimateDailyFromHistory(snap.daily),
-        note: snap.todayEarnings > 0 ? `Today: ${usd(snap.todayEarnings)}` : undefined,
-        lastCollected: new Date().toISOString()
-      })
-      commit(applyAutoEstimates(next, getEarnings()))
-      if (record) {
-        const today = new Date().toISOString().slice(0, 10)
-        let all = getEarnings()
-        for (const d of snap.daily.filter((x) => x.date && x.usd > 0)) {
-          all = recordEarning(stream.id, d.date, d.usd, "auto")
-        }
-        if (snap.todayEarnings > 0) all = recordEarning(stream.id, today, snap.todayEarnings, "auto")
-        setEarnings(all)
-        commit(applyAutoEstimates(getStreams(), all))
-      }
-      setCollectorMsg(
-        `✅ Honeygain synced — balance ${usd(snap.balance)}, lifetime ${usd(snap.lifetimeEarnings)}, ` +
-          `payout threshold ${usd(snap.payoutThreshold)}`
-      )
-    } catch (err) {
-      setCollectorMsg(`❌ ${(err as Error).message}`)
-    } finally {
-      setCollecting(false)
-    }
-  }
-
-  const syncHoneygainTest = () => syncHoneygain(false)
-  const syncHoneygainRecord = () => syncHoneygain(true)
-
   const importCashPilot = async () => {
     if (!cpUrl.trim()) return
     setCollecting(true)
     setCollectorMsg("")
-    saveCollectorCredentials({ honeygainToken: hgToken.trim(), cashpilotUrl: cpUrl.trim(), cashpilotKey: cpKey.trim() })
+    saveCollectorCredentials({ cashpilotUrl: cpUrl.trim(), cashpilotKey: cpKey.trim() })
     try {
       const snap = await syncCashPilot(cpUrl.trim(), cpKey.trim())
       if (!snap.ok) throw new Error(snap.error ?? "import failed")
@@ -305,18 +253,12 @@ function StreamsTab() {
         <p className="muted small">Free, real balance pulls from services you already use. Credentials stay on this device and are only sent to the provider.</p>
         <div className="stack" style={{ gap: 10 }}>
           <div className="row wrap" style={{ gap: 8 }}>
-            <input className="input" type="password" placeholder="Honeygain bearer token" value={hgToken} onChange={(e) => setHgToken(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
-            <button className="btn btn-secondary" disabled={collecting || !hgToken.trim()} onClick={syncHoneygainTest}>Test token</button>
-            <button className="btn btn-primary" disabled={collecting || !hgToken.trim()} onClick={syncHoneygainRecord}>Sync Honeygain</button>
-          </div>
-          <div className="row wrap" style={{ gap: 8 }}>
             <input className="input" placeholder="CashPilot URL (http://localhost:8080)" value={cpUrl} onChange={(e) => setCpUrl(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
             <input className="input" placeholder="CashPilot admin key" value={cpKey} onChange={(e) => setCpKey(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
             <button className="btn btn-primary" disabled={collecting || !cpUrl.trim()} onClick={importCashPilot}>Import from CashPilot</button>
           </div>
           {collectorMsg ? <p className="muted small">{collectorMsg}</p> : null}
           <p className="muted small">
-            Honeygain token: log in at dashboard.honeygain.com → DevTools → Network → copy the <code>Authorization: Bearer</code> value.{" "}
             CashPilot: run the self-hosted aggregator, set <code>CASHPILOT_ADMIN_API_KEY</code>.
           </p>
         </div>
@@ -394,7 +336,7 @@ function StreamsTab() {
               <option key={c} value={c}>{STREAM_CATEGORY_LABELS[c]}</option>
             ))}
           </select>
-          <input className="input" placeholder="Platform (Honeygain, REIT…)" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })} style={{ flex: 1, minWidth: 120 }} />
+          <input className="input" placeholder="Platform (REIT, cashback…)" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })} style={{ flex: 1, minWidth: 120 }} />
           <input className="input" placeholder="Est $/day" value={form.estimatedDaily} onChange={(e) => setForm({ ...form, estimatedDaily: e.target.value })} type="number" min="0" style={{ width: 100 }} />
           <input className="input" placeholder="Balance" value={form.balance} onChange={(e) => setForm({ ...form, balance: e.target.value })} type="number" min="0" style={{ width: 100 }} />
           <input className="input" placeholder="Threshold" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: e.target.value })} type="number" min="0" style={{ width: 100 }} />
@@ -579,10 +521,9 @@ function OverviewTab() {
 // Catalog tab
 // ---------------------------------------------------------------------
 function CatalogTab() {
-  const [filter, setFilter] = useState<"all" | "bandwidth" | "depin" | "storage" | "compute" | "crypto" | "defi" | "nft" | "p2p" | "agent" | "interest" | "dividend" | "rental" | "content" | "trading">("all")
+  const [filter, setFilter] = useState<"all" | "depin" | "storage" | "compute" | "crypto" | "defi" | "nft" | "p2p" | "agent" | "interest" | "dividend" | "rental" | "content" | "trading">("all")
   const groups: Record<string, typeof CATALOG> = {
     all: CATALOG,
-    bandwidth: BANDWIDTH_APPS,
     depin: DEPIN_APPS,
     storage: STORAGE_APPS,
     compute: COMPUTE_APPS,
@@ -600,7 +541,6 @@ function CatalogTab() {
   const rows = groups[filter] ?? CATALOG
   const filters: { key: typeof filter; label: string }[] = [
     { key: "all", label: "All" },
-    { key: "bandwidth", label: "Bandwidth" },
     { key: "depin", label: "DePIN" },
     { key: "storage", label: "Storage" },
     { key: "compute", label: "GPU / Compute" },

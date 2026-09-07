@@ -475,16 +475,6 @@ function hostOf(url) {
 
 const SITE_INDEX = [
   ["localhost,127.0.0.1,0.0.0.0", "picc-dashboard", "PICC Dashboard", "other", 0, "http://localhost:3000", "PICC command center — no overlay injection on this host."],
-  ["dashboard.honeygain.com,honeygain.com", "honeygain", "Honeygain", "bandwidth", 20, "https://dashboard.honeygain.com", "1 credit = $0.001; Lucky Pot quest is auto-spinnable."],
-  ["earnapp.com", "earnapp", "EarnApp", "bandwidth", 5, "https://earnapp.com/dashboard", "Desktop-only — ToS bans Docker/VMs/servers."],
-  ["pawns.app,iproyal.com", "iproyal", "IPRoyal Pawns", "bandwidth", 5, "https://pawns.app", "Min payout $5."],
-  ["packetstream.io", "packetstream", "PacketStream", "bandwidth", 5, "https://packetstream.io", "3% cashout fee."],
-  ["traffmonetizer.com,app.traffmonetizer.com", "traffmonetizer", "Traffmonetizer", "bandwidth", 10, "https://traffmonetizer.com", "7-day JWT session."],
-  ["repocket.com,app.repocket.co", "repocket", "Repocket", "bandwidth", 10, "https://repocket.com", "Max 5 devices; VPS ok at lower rates."],
-  ["mystnodes.co,mystnodes.com", "mysterium", "Mysterium / MystNodes", "bandwidth", 0, "https://mystnodes.com", "DePIN VPN node (MYST)."],
-  ["app.grass.io,getgrass.io", "grass", "Grass", "bandwidth", 0, "https://app.grass.io", "Browser-extension style node."],
-  ["app.gradient.network,gradient.network", "gradient", "Gradient Network", "bandwidth", 0, "https://app.gradient.network", "Desktop node."],
-  ["app.nodepay.ai,nodepay.ai", "nodepay", "Nodepay", "bandwidth", 0, "https://app.nodepay.ai", "Desktop node."],
   ["silencio.network", "silencio", "Silencio", "depin", 0, "https://www.silencio.network", "Mobile noise-mapping; daily quests."],
   ["opensea.io", "nft-royalties", "OpenSea", "nft", 0, "https://opensea.io", "Floor price / volume reads."],
   ["app.aave.com,aave.com", "defi-supply", "Aave", "defi", 0, "https://app.aave.com", "Supply stablecoins for APY."],
@@ -1666,16 +1656,8 @@ const automation = {
 
 /** Map a detected site id to the tuned connector slug that reads its DOM. */
 const SITE_TO_CONNECTOR = {
-  honeygain: "honeygain",
-  earnapp: "earnapp",
-  iproyal: "pawns",
-  repocket: "repocket",
-  grass: "grass",
-  gradient: "gradient",
-  silencio: "silencio",
   "nft-royalties": "opensea",
   "defi-supply": "aave",
-  mysterium: "mysterium",
   expertoption: "expertoption"
 }
 

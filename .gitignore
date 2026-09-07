@@ -33,8 +33,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Runtime data (automator credentials, snapshots, presence)
+# Runtime data (per-service data dirs: snapshots, command-centre state, credentials)
 apps/dashboard/server/data/
+apps/dashboard/server/services/data/
 
 # Embedded git repos
 infra/btcpayserver/btcpayserver-docker/

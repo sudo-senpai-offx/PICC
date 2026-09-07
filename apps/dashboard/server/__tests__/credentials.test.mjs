@@ -65,44 +65,6 @@ afterAll(() => {
 })
 
 describe("credentials endpoints", () => {
-  it("never echoes stored automator secrets when saving", async () => {
-    const res = await call("POST", "/api/automator/credentials", {
-      honeygainToken: "sekret-token",
-      pawnsPassword: "hunter2",
-      pollIntervalMinutes: 30
-    })
-    expect(res.status).toBe(200)
-    expect(res.body.ok).toBe(true)
-    expect(res.body.honeygainToken).not.toBe("sekret-token")
-    expect(res.body.pawnsPassword).not.toBe("hunter2")
-    expect(res.body.pollIntervalMinutes).toBe(30)
-    // automator-credentials.json is encrypted at rest (vault) — read it back
-    // through the vault to assert what actually persisted.
-    const { readSecretJson } = await import("../services/vault.mjs")
-    const saved = await readSecretJson(join(tmp, "automator-credentials.json"), null)
-    expect(saved).not.toBeNull()
-    expect(saved.honeygainToken).toBe("sekret-token")
-    expect(saved.pawnsPassword).toBe("hunter2")
-  })
-
-  it("masks automator secrets on GET", async () => {
-    const res = await call("GET", "/api/automator/credentials")
-    expect(res.status).toBe(200)
-    expect(res.body.honeygainToken).not.toBe("sekret-token")
-    expect(res.body.pawnsPassword).not.toBe("hunter2")
-  })
-
-  it("keeps existing automator tokens when a blank field is saved", async () => {
-    await call("POST", "/api/automator/credentials", { honeygainToken: "keep-me" })
-    const res = await call("POST", "/api/automator/credentials", { pollIntervalMinutes: 10 })
-    expect(res.status).toBe(200)
-    const { readSecretJson } = await import("../services/vault.mjs")
-    const saved = await readSecretJson(join(tmp, "automator-credentials.json"), null)
-    expect(saved).not.toBeNull()
-    expect(saved.honeygainToken).toBe("keep-me")
-    expect(saved.pollIntervalMinutes).toBe(10)
-  })
-
   it("never echoes trading secrets when saving", async () => {
     const res = await call("POST", "/api/trading/credentials", { expertoptionToken: "eo-tok", riskPerTradePct: 5 })
     expect(res.status).toBe(200)
@@ -141,10 +103,10 @@ describe("credentials endpoints", () => {
     const acct = await createAccount({ email: "a@b.com", password: "password123", name: "Test" })
     expect(acct.token).toBeTruthy()
 
-    const noAuth = await call("GET", "/api/automator/credentials")
+    const noAuth = await call("GET", "/api/trading/credentials")
     expect(noAuth.status).toBe(401)
 
-    const authed = await call("GET", "/api/automator/credentials", undefined, {
+    const authed = await call("GET", "/api/trading/credentials", undefined, {
       authorization: `Bearer ${acct.token}`
     })
     expect(authed.status).toBe(200)

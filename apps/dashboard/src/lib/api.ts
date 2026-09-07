@@ -371,22 +371,6 @@ export function getSchedulerStatus(): Promise<SchedulerStatus> {
 // ---------------------------------------------------------------------
 // Earnings collectors — real balances from free self-hosted sources
 // ---------------------------------------------------------------------
-export interface HoneygainSnapshot {
-  ok: boolean
-  platform: string
-  currency: string
-  balance: number
-  lifetimeEarnings: number
-  todayEarnings: number
-  payoutThreshold: number
-  daily: { date: string; usd: number }[]
-  error?: string
-}
-
-export function testHoneygain(token: string): Promise<HoneygainSnapshot> {
-  return post<HoneygainSnapshot>("/collectors/honeygain", { token })
-}
-
 export interface CashPilotSnapshot {
   ok: boolean
   summary: { total: number; today: number; month: number; changePct: number | null }
@@ -397,159 +381,6 @@ export interface CashPilotSnapshot {
 
 export function syncCashPilot(url: string, key: string): Promise<CashPilotSnapshot> {
   return post<CashPilotSnapshot>("/collectors/cashpilot", { url, key })
-}
-
-// ---------------------------------------------------------------------
-// PICC Automator — Tier 0 stream monitoring, nodes, quests, presence
-// ---------------------------------------------------------------------
-export interface AutomatorCredentials {
-  honeygainToken: string
-  pawnsEmail: string
-  pawnsPassword: string
-  pawnsToken: string
-  traffmonetizerToken: string
-  repocketEmail: string
-  repocketPassword: string
-  repocketToken: string
-  earnappOAuthToken: string
-  earnappBrdSessionId: string
-  pollIntervalMinutes: number
-}
-
-export interface ProviderStatus {
-  slug: string
-  platform: string
-  configured: boolean
-  status: "ok" | "error" | "not_configured"
-  balance: number | null
-  lifetimeEarnings?: number
-  todayEarnings?: number
-  payoutThreshold: number | null
-  currency?: string
-  daily?: { date: string; usd: number }[]
-  estimatedDaily?: number
-  devices?: number
-  tokenExpiresAt?: string | null
-  tokenExpiresInDays?: number | null
-  error?: string | null
-  lastChecked?: number | null
-}
-
-export interface ManualStreamStatus {
-  id: string
-  name: string
-  platform: string
-  category: string
-  status: string
-  balance: number
-  totalEarned: number
-  payoutThreshold: number
-  estimatedDaily: number
-  url?: string
-  lastCollected?: string | null
-}
-
-export interface AutomatorStatus {
-  ok: boolean
-  updatedAt: string
-  pollIntervalMinutes: number
-  providers: Record<string, ProviderStatus>
-  manual: ManualStreamStatus[]
-}
-
-export interface NodeInfo {
-  id: string
-  name: string
-  category: string
-  process: boolean
-  docker: boolean
-  detected: boolean
-  notes: string
-}
-
-export interface QuestItem {
-  id: string
-  platform: string
-  label: string
-  cadence: "daily" | "weekly"
-  device: "web" | "mobile"
-  url: string
-  reward: string
-  note: string
-}
-
-export interface PresenceStatus {
-  ok: boolean
-  devices: Record<string, { ts: string; minutesAgo: number }>
-  updatedAt: string | null
-}
-
-/** GET returns credentials with secrets masked ("••••••"); empty means not saved. */
-export function getAutomatorCredentials(): Promise<AutomatorCredentials> {
-  return request<AutomatorCredentials>("/automator/credentials")
-}
-
-export function saveAutomatorCredentials(
-  creds: Partial<AutomatorCredentials>
-): Promise<{ ok: boolean } & AutomatorCredentials> {
-  return post<{ ok: boolean } & AutomatorCredentials>("/automator/credentials", creds)
-}
-
-export function getAutomatorStatus(): Promise<AutomatorStatus> {
-  return request<AutomatorStatus>("/automator/status")
-}
-
-export function scanNodes(): Promise<{ ok: boolean; nodes: NodeInfo[] }> {
-  return request<{ ok: boolean; nodes: NodeInfo[] }>("/automator/nodes")
-}
-
-export function getQuests(): Promise<{ ok: boolean; quests: QuestItem[] }> {
-  return request<{ ok: boolean; quests: QuestItem[] }>("/automator/quests")
-}
-
-export function postPresence(device: string): Promise<{ ok: boolean }> {
-  return post("/automator/presence", { device })
-}
-
-export interface AutomatorIssue {
-  severity: "info" | "warn" | "danger" | "success"
-  topic: string
-  platform?: string
-  message: string
-}
-
-export interface AutomatorAlert {
-  id: string
-  kind: string
-  source?: string
-  level?: string
-  platform?: string
-  note?: string
-  balance?: number
-  payoutThreshold?: number
-  created_at?: string
-}
-
-export interface AutomatorHealth {
-  ok: boolean
-  issues: AutomatorIssue[]
-  alerts: AutomatorAlert[]
-  totals: { configured: number; ready: number; nodesDetected: number; nodesTotal: number }
-  checkedAt: string
-}
-
-export function getAutomatorHealth(): Promise<AutomatorHealth> {
-  return post<AutomatorHealth>("/automator/health", {})
-}
-
-export function askAutomator(
-  question: string
-): Promise<{ ok: boolean; source: "llm" | "local"; advice: string; issues: AutomatorIssue[] }> {
-  return post("/automator/assist", { question })
-}
-
-export function getPresence(): Promise<PresenceStatus> {
-  return request<PresenceStatus>("/automator/presence")
 }
 
 export function pushStreamsSnapshot(
@@ -1572,7 +1403,7 @@ export interface CommandCentreGate {
 
 export interface CommandCentreSite {
   site: string
-  stream: "trading" | "bandwidth"
+  stream: "trading"
   venue: string
   mode: CommandCentreMode
   executionPower: string
@@ -1585,8 +1416,8 @@ export interface CommandCentreSite {
     deliberation: unknown
   }
   demo: { demoOnly: boolean; active: boolean; note: string | null }
-  // slice 5: the OBSERVED claims leg per site (bandwidth) — null when the site
-  // has no live execution leg wired yet (never fabricated)
+  // the OBSERVED execution leg per site — null when the site has no live
+  // execution leg wired yet (never fabricated)
   executionLeg?: {
     leg: string
     action: string
@@ -1612,15 +1443,8 @@ export interface CommandCentreOverview {
   sites: CommandCentreSite[]
 }
 
-export function getCommandCentreOverview(
-  stream?: "trading" | "bandwidth",
-  token?: string
-): Promise<CommandCentreOverview> {
-  return request<CommandCentreOverview>(
-    stream ? `/command-centre/overview?stream=${stream}` : "/command-centre/overview",
-    {},
-    token
-  )
+export function getCommandCentreOverview(token?: string): Promise<CommandCentreOverview> {
+  return request<CommandCentreOverview>("/command-centre/overview", {}, token)
 }
 
 export function setCommandCentreKillSwitch(
@@ -1634,49 +1458,6 @@ export function setCommandCentreKillSwitch(
   state: { global: boolean; sites: Record<string, boolean> }
 }> {
   return post(`/command-centre/kill-switch`, { scope, kill }, token)
-}
-
-// ---- Slice 5: the bandwidth payout-claim leg. The server lists scheduler
-// payout_ready observations joined with an honest claimed/ready status from
-// the durable audit trail; executing a claim is a HUMAN per-action approval
-// (consentBy) that runs the full gate chain BEFORE the venue step.
-export interface CommandCentreClaim {
-  platform: string
-  balance: number
-  payoutThreshold: number
-  notedAt: string | null
-  ref: string
-  idempotencyKey: string
-  status: "ready" | "claimed"
-  note: string | null
-}
-
-export function getCommandCentreClaims(token?: string): Promise<{
-  ok: boolean
-  at: string
-  claims: CommandCentreClaim[]
-}> {
-  return request<{ ok: boolean; at: string; claims: CommandCentreClaim[] }>("/command-centre/claims", {}, token)
-}
-
-export function executeCommandCentreClaim(
-  body: {
-    platform: string
-    balance: number
-    threshold: number
-    ref?: string
-    claimWorkflowId: string
-    tabId?: number
-  },
-  token?: string
-): Promise<{
-  ok: boolean
-  platform: string
-  consentBy: string
-  gate: { allow: boolean; blockedBy: string | null }
-  execution: { status: "executed" | "failed"; idempotencyKey?: string; error?: string } | null
-}> {
-  return post(`/command-centre/execute`, body, token)
 }
 
 // ---- Slice 6: the CCXT order rail (trading:ccxt). One proposal rail, TWO

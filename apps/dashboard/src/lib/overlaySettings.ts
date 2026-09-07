@@ -92,10 +92,6 @@ export const SUITE_DOCKABLES: Record<string, DockableConfig[]> = {
     { id: "server-status", title: "PICC Status", icon: "🔌", defaultPosition: "bottom-right", defaultSize: { width: 260, height: 160 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Server connection health and data pipeline status" },
     { id: "data-sources", title: "Data Sources", icon: "🩺", defaultPosition: "right", defaultSize: { width: 280, height: 260 }, defaultOpacity: 0.92, defaultCollapsed: true, description: "Honesty status of every feed: live, local, stale, unconfigured" },
   ],
-  bandwidth: [
-    { id: "speed", title: "Speed Monitor", icon: "📡", defaultPosition: "top-right", defaultSize: { width: 280, height: 200 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Real-time bandwidth speed tests and history" },
-    { id: "connectors", title: "Connectors", icon: "🔌", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Connected services and API health" },
-  ],
   affiliate: [
     { id: "tracker", title: "Affiliate Tracker", icon: "💰", defaultPosition: "top-right", defaultSize: { width: 300, height: 220 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "Referral links, clicks, and earnings" },
     { id: "optimizer", title: "Link Optimizer", icon: "🔗", defaultPosition: "bottom-right", defaultSize: { width: 280, height: 180 }, defaultOpacity: 0.92, defaultCollapsed: false, description: "A/B test results and link performance" },

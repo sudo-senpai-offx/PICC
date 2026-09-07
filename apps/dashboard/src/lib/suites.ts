@@ -13,12 +13,6 @@ export const SUITE_META: Record<string, SuiteMeta> = {
     icon: "📈",
     blurb: "Prediction, paper ledger, signals, watchlist and the read-only broker bridge + demo autopilot."
   },
-  bandwidth: {
-    id: "bandwidth",
-    label: "Bandwidth",
-    icon: "🌐",
-    blurb: "Node health, earnings and the income automator for bandwidth-sharing apps."
-  },
   depin: { id: "depin", label: "DePIN", icon: "🛰️", blurb: "DePIN node health and earnings." },
   nft: { id: "nft", label: "NFT & Royalties", icon: "🎨", blurb: "NFT floor price and volume reads." },
   defi: { id: "defi", label: "DeFi & Yield", icon: "💧", blurb: "Supply stables and yield vault tracking." },

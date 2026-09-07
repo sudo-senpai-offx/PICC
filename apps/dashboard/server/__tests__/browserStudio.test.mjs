@@ -41,10 +41,9 @@ async function call(handleApi, method, path, body, headers) {
 describe("Browser Studio â€” site detection", () => {
   it("maps known dashboards to catalog entries", async () => {
     const { detectSite } = await import("../services/browserStudio.mjs")
-    expect(detectSite("https://dashboard.honeygain.com/").id).toBe("honeygain")
+    expect(detectSite("https://app.expertoption.finance/").id).toBe("expertoption")
     expect(detectSite("https://www.luno.com/my").id).toBe("luno")
     expect(detectSite("https://aigen.dev/").id).toBe("aigen")
-    expect(detectSite("https://app.pawns.app").name).toContain("Pawns")
   }, 15_000)
 
   it("returns a generic profile for unknown sites", async () => {
@@ -59,7 +58,7 @@ describe("Browser Studio â€” site detection", () => {
     expect(detectSite("https://app.expertoption.finance/").platformKind).toBe("binary")
     expect(detectSite("https://www.binance.com").platformKind).toBe("spot")
     expect(detectSite("https://www.bybit.com").platformKind).toBe("derivatives")
-    expect(detectSite("https://dashboard.honeygain.com/").platformKind).toBeNull()
+    expect(detectSite("https://aigen.dev/").platformKind).toBeNull()
   })
 })
 
@@ -85,7 +84,7 @@ describe("Browser Studio — trading venue redirects (Slice 5 / R5)", () => {
     expect(eo.mode).toBe("venue")
     expect(eo.url).toBe("https://app.expertoption.finance/")
     // Non-trading / unknown sites → no redirection at all.
-    expect(instrumentUrl("honeygain", "BTCUSD").mode).toBe("none")
+    expect(instrumentUrl("silencio", "BTCUSD").mode).toBe("none")
     expect(instrumentUrl("whatever", "BTCUSD").mode).toBe("none")
   })
 })
@@ -103,15 +102,15 @@ describe("Browser Studio â€” credential vault", () => {
 
   it("saves, lists, reads and deletes site credentials", async () => {
     const m = await import("../services/browserStudio.mjs?case=vault")
-    await m.saveSiteCredentials("Honeygain", { username: "a@b.c", password: "s3cret" })
+    await m.saveSiteCredentials("ExpertOption", { username: "a@b.c", password: "s3cret" })
 
-    const creds = await m.getSiteCredentials("honeygain")
+    const creds = await m.getSiteCredentials("expertoption")
     expect(creds.username).toBe("a@b.c")
     expect(creds.password).toBe("s3cret")
 
-    expect(await m.getVaultSites()).toEqual(["honeygain"])
+    expect(await m.getVaultSites()).toEqual(["expertoption"])
 
-    const del = await m.deleteSiteCredentials("honeygain")
+    const del = await m.deleteSiteCredentials("expertoption")
     expect(del.deleted).toBe(true)
     expect(await m.getVaultSites()).toEqual([])
   })
@@ -141,23 +140,23 @@ describe("Browser Studio â€” settings, permissions and per-source prefs", (
   })
 
   it("merges partial settings into the store", async () => {
-    await m.saveBrowserSettings({ homepage: "https://dashboard.honeygain.com", devTools: true })
+    await m.saveBrowserSettings({ homepage: "https://app.expertoption.finance", devTools: true })
     const s = await m.getBrowserSettings()
-    expect(s.homepage).toBe("https://dashboard.honeygain.com")
+    expect(s.homepage).toBe("https://app.expertoption.finance")
     expect(s.devTools).toBe(true)
     expect(s.stealth).toBe(true) // untouched field preserved
   })
 
   it("normalizes origins and stores/removes per-site permissions", async () => {
-    const set = await m.setSitePermission("https://dashboard.honeygain.com/x", "notifications", "allow")
-    expect(set.origin).toBe("https://dashboard.honeygain.com")
-    await m.setSitePermission("https://dashboard.honeygain.com", "geolocation", "block")
+    const set = await m.setSitePermission("https://app.expertoption.finance/x", "notifications", "allow")
+    expect(set.origin).toBe("https://app.expertoption.finance")
+    await m.setSitePermission("https://app.expertoption.finance", "geolocation", "block")
 
     const perms = await m.getSitePermissions()
-    expect(perms["https://dashboard.honeygain.com"].notifications).toBe("allow")
-    expect(perms["https://dashboard.honeygain.com"].geolocation).toBe("block")
+    expect(perms["https://app.expertoption.finance"].notifications).toBe("allow")
+    expect(perms["https://app.expertoption.finance"].geolocation).toBe("block")
 
-    const del = await m.removeSitePermissions("https://dashboard.honeygain.com")
+    const del = await m.removeSitePermissions("https://app.expertoption.finance")
     expect(del.deleted).toBe(true)
     expect(await m.getSitePermissions()).toEqual({})
   })
@@ -167,11 +166,11 @@ describe("Browser Studio â€” settings, permissions and per-source prefs", (
   })
 
   it("saves per-source browser preferences (profile/headless/homepage/overlay)", async () => {
-    const r = await m.saveBrowserPreference("honeygain", { profile: "honey", headless: false, homepage: "https://dashboard.honeygain.com", overlay: true })
-    expect(r.prefs.profile).toBe("honey")
+    const r = await m.saveBrowserPreference("expertoption", { profile: "eo-studio", headless: false, homepage: "https://app.expertoption.finance", overlay: true })
+    expect(r.prefs.profile).toBe("eo-studio")
     expect(r.prefs.headless).toBe(false)
     const all = await m.getBrowserPreferences()
-    expect(all.honeygain).toMatchObject({ profile: "honey", homepage: "https://dashboard.honeygain.com" })
+    expect(all.expertoption).toMatchObject({ profile: "eo-studio", homepage: "https://app.expertoption.finance" })
   })
 
   it("deep-merges overlaySettings including dockables and dockableLayout", async () => {
@@ -242,10 +241,10 @@ describe("Browser Studio â€” API routes", () => {
   })
 
   it("detects the site for a given URL via /assist", async () => {
-    const res = await call(handleApi, "POST", "/api/browser/assist", { url: "https://dashboard.honeygain.com/" })
+    const res = await call(handleApi, "POST", "/api/browser/assist", { url: "https://app.expertoption.finance/" })
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
-    expect(res.body.site.id).toBe("honeygain")
+    expect(res.body.site.id).toBe("expertoption")
     expect(res.body.hasSavedCredentials).toBeTypeOf("boolean")
   })
 

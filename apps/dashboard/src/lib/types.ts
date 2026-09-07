@@ -214,7 +214,7 @@ export interface IncomeStream {
   lastCollected?: string
   url?: string
   note?: string
-  collector?: "honeygain" | "cashpilot" | "manual"
+  collector?: "cashpilot" | "manual"
 }
 
 export interface StreamEarning {

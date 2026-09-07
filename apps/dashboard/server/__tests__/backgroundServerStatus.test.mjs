@@ -215,54 +215,6 @@ describe("background worker server-status for the popup (T11 follow-up)", () => 
     expect(fetchCalls).toBe(before) // no POST until a valid, trusted batch arrives
   })
 
-  it("income-frames (Q5): a trusted sensor's income batch is POSTed with origin+slug to ingest", async () => {
-    const posts = []
-    const h = makeHarness({
-      fetchFn: async (url, init) => {
-        if (String(url).includes("/api/extension/ingest")) {
-          posts.push({ url, init })
-          return { ok: true, status: 200, json: async () => ({ ok: true, origin: "app.getgrass.io", slug: "grass", accepted: 1 }) }
-        }
-        return { ok: true, json: async () => okHealth }
-      }
-    })
-    await h.settleBoot()
-    const resp = await h.send(
-      { action: "income-frames", origin: "app.getgrass.io", slug: "grass", frames: [{ ts: 1, credits: "1.5" }] },
-      { id: "picc-test-id" }
-    )
-    expect(resp.ok).toBe(true)
-    expect(resp.status).toBe(200)
-    expect(posts.length).toBe(1)
-    expect(posts[0].url).toContain("/api/extension/ingest")
-    const body = JSON.parse(posts[0].init.body)
-    expect(body.origin).toBe("app.getgrass.io")
-    expect(body.slug).toBe("grass")
-    expect(body.frames).toHaveLength(1)
-  })
-
-  it("income-frames: missing origin, empty/oversized batches and untrusted senders never reach the server", async () => {
-    let fetchCalls = 0
-    const h = makeHarness({ fetchFn: async (url) => { fetchCalls += 1; return { ok: true, json: async () => okHealth } } })
-    await h.settleBoot()
-    const before = fetchCalls
-
-    const noOrigin = await h.send({ action: "income-frames", slug: "grass", frames: [{}] }, { id: "picc-test-id" })
-    expect(noOrigin.ok).toBe(false)
-    expect(noOrigin.error).toBe("no origin or frames")
-
-    const empty = await h.send({ action: "income-frames", origin: "x", frames: [] }, { id: "picc-test-id" })
-    expect(empty.ok).toBe(false)
-
-    const oversize = await h.send({ action: "income-frames", origin: "x", frames: Array(201).fill({}) }, { id: "picc-test-id" })
-    expect(oversize.ok).toBe(false)
-
-    const evil = await h.send({ action: "income-frames", origin: "x", frames: [{}] }, { url: "https://evil.example" })
-    expect(evil).toEqual({ error: "untrusted sender" })
-
-    expect(fetchCalls).toBe(before)
-  })
-
   it("open-broker-tab: focuses the existing venue tab when classifyHost matches (REQ-10)", async () => {
     const h = makeHarness({
       fetchFn: async (url) => {
@@ -338,69 +290,55 @@ describe("background worker server-status for the popup (T11 follow-up)", () => 
     expect(h.state.tabUpdates).toEqual([])
   })
 
-  // Q5 Task 8 — the worker's sensor-host recognition is config-driven: a
-  // registered income origin (grass) from the forExtension snapshot is treated
-  // as a sensor host alongside the trading venue config — no EO-only regexes.
-  function registryHarness(tabsQuery) {
-    return makeHarness({
-      fetchFn: async (url) => {
-        const s = String(url)
-        if (s.includes("/api/connectors?forExtension=1")) {
-          return {
-            ok: true, status: 200,
-            json: async () => ({
-              ok: true,
-              registry: [
-                { slug: "grass", origins: ["app.getgrass.io", "getgrass.io"], cadence: { realtimeMs: 20000, intermittentMs: 120000, longMs: 600000, activityWindowMs: 90000, prolongedMs: 1200000 } },
-                { slug: "expertoption", origins: ["app.expertoption.finance"], cadence: {} }
-              ]
-            })
-          }
-        }
-        if (s.includes("/api/trading/capture-profiles")) {
-          return { ok: true, status: 200, json: async () => ({ ok: true, venues: [{ venueId: "expertoption", hostRe: "expertoption\\.(com|finance)", enabled: true }] }) }
-        }
-        return { ok: true, status: 200, json: async () => okHealth }
+// The worker's sensor-host recognition is config-driven (capture-profiles): a
+// registered trading venue host is a sensor target — the EO hostname is matched
+// by the SERVED hostRe, never an EO-only hardcode in the worker.
+function venueHarness(tabsQuery) {
+  return makeHarness({
+    fetchFn: async (url) => {
+      const s = String(url)
+      if (s.includes("/api/trading/capture-profiles")) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, venues: [{ venueId: "expertoption", hostRe: "expertoption\\.(com|finance)", enabled: true }] }) }
       }
-    }, { query: tabsQuery })
-  }
-
-  async function until(fn, ms = 2000) {
-    const t0 = Date.now()
-    while (!fn()) {
-      if (Date.now() - t0 > ms) throw new Error("timeout waiting for background worker")
-      await new Promise((r) => setTimeout(r, 10))
+      return { ok: true, status: 200, json: async () => okHealth }
     }
+  }, { query: tabsQuery })
+}
+
+async function until(fn, ms = 2000) {
+  const t0 = Date.now()
+  while (!fn()) {
+    if (Date.now() - t0 > ms) throw new Error("timeout waiting for background worker")
+    await new Promise((r) => setTimeout(r, 10))
   }
+}
 
-  it("Task 8: resurrectSensorTabs reloads a registered income-origin tab (grass) alongside trading venues", async () => {
-    const h = registryHarness(async () => [
-      { id: 11, url: "https://app.getgrass.io/dashboard" },
-      { id: 12, url: "https://app.expertoption.finance/" },
-      { id: 13, url: "https://example.com/" }
-    ])
-    await h.settleBoot()
-    h.state.startupListener() // resurrectSensorTabs() — config fetch + reload pass
-    await until(() => h.state.tabReloads.length >= 2)
-    // grass (registry origin) + EO (trading venue config) are reloaded...
-    expect(h.state.tabReloads.sort()).toEqual([11, 12])
-    // ...and an unrelated host is never touched.
-    expect(h.state.tabReloads).not.toContain(13)
-  })
+it("resurrectSensorTabs reloads a registered trading-venue tab (expertoption) alongside the dashboard", async () => {
+  const h = venueHarness(async () => [
+    { id: 11, url: "https://app.expertoption.finance/" },
+    { id: 12, url: "https://example.com/" }
+  ])
+  await h.settleBoot()
+  h.state.startupListener() // resurrectSensorTabs() — config fetch + reload pass
+  await until(() => h.state.tabReloads.length >= 1)
+  expect(h.state.tabReloads).toEqual([11])
+  // ...and an unrelated host is never touched.
+  expect(h.state.tabReloads).not.toContain(12)
+})
 
-  it("Task 8: a sync beat pings an income-origin sensor tab at its registry cadence", async () => {
-    const h = registryHarness(async () => [
-      { id: 21, url: "https://app.getgrass.io/dashboard", active: true },
-      { id: 22, url: "https://news.example", active: false }
-    ])
-    await h.settleBoot()
-    expect(h.state.alarmListener).toBeTruthy()
-    h.state.alarmListener({ name: "picc-sync" })
-    await until(() => h.state.sentMessages.some(([id]) => id === 21))
-    const pings = h.state.sentMessages.filter(([id]) => id === 21)
-    expect(pings.length).toBeGreaterThan(0)
-    expect(pings[0][1]).toEqual({ action: "venue-scan-now" })
-    // the unrelated tab is never pinged
-    expect(h.state.sentMessages.some(([id]) => id === 22)).toBe(false)
-  })
+it("a sync beat pings an active trading venue-sensor tab at the policy cadence", async () => {
+  const h = venueHarness(async () => [
+    { id: 21, url: "https://app.expertoption.finance/", active: true },
+    { id: 22, url: "https://news.example", active: false }
+  ])
+  await h.settleBoot()
+  expect(h.state.alarmListener).toBeTruthy()
+  h.state.alarmListener({ name: "picc-sync" })
+  await until(() => h.state.sentMessages.some(([id]) => id === 21))
+  const pings = h.state.sentMessages.filter(([id]) => id === 21)
+  expect(pings.length).toBeGreaterThan(0)
+  expect(pings[0][1]).toEqual({ action: "venue-scan-now" })
+  // the unrelated tab is never pinged
+  expect(h.state.sentMessages.some(([id]) => id === 22)).toBe(false)
+})
 })

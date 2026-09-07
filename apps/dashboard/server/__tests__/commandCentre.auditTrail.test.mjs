@@ -68,7 +68,7 @@ describe("Command Centre — audit trail: disk persistence (PICC_COMMAND_CENTRE_
       vi.resetModules() // fresh instance reads the tmp DATA_DIR at import
       const audit = await import("../services/commandCentre/auditTrail.mjs")
       audit.appendAudit({ site: "trading:ccxt", kind: "mode-verdict", data: { mode: "AUTOPILOT" } })
-      audit.appendAudit({ site: "bandwidth:browser", kind: "safety-gate:deny", data: { blockedBy: "5C" } })
+      audit.appendAudit({ site: "trading:ccxt", kind: "safety-gate:deny", data: { blockedBy: "5C" } })
       const file = join(dir, "command-centre-audit.jsonl")
       expect(existsSync(file)).toBe(true)
       const lines = readFileSync(file, "utf8").split("\n").filter(Boolean)

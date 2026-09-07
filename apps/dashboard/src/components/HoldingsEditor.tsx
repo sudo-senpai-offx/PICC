@@ -10,16 +10,12 @@ import { appendData, listData, removeData, type DataRow } from "@/lib/localdata"
 const BLOCKCHAINS = ["Ethereum", "Solana", "Polygon"]
 const NODE_TYPES = ["bandwidth", "storage", "compute", "environmental", "energy"]
 const DEPIN_PLATFORMS = [
-  "Honeygain",
-  "EarnApp",
   "DeNet",
   "Silencio",
   "COIN",
   "GridLink",
   "OpenLoop",
   "Hivello",
-  "Grass",
-  "Gradient",
   "ProjectSolarMining"
 ]
 const NODE_STATUSES = ["active", "offline", "paused", "retired"]
@@ -35,7 +31,7 @@ export function HoldingsEditor({ onChange }: { onChange?: () => void }) {
   // NFT add form
   const [nft, setNft] = useState({ collection: "", tokenId: "", blockchain: "Ethereum", purchase: "", floor: "" })
   // DePIN add form
-  const [depin, setDepin] = useState({ platform: "Honeygain", nodeType: "bandwidth", status: "active", daily: "", total: "" })
+  const [depin, setDepin] = useState({ platform: "Silencio", nodeType: "bandwidth", status: "active", daily: "", total: "" })
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -83,7 +79,7 @@ export function HoldingsEditor({ onChange }: { onChange?: () => void }) {
         daily_earnings: NUM(depin.daily),
         total_earnings: NUM(depin.total)
       })
-      setDepin({ platform: "Honeygain", nodeType: "bandwidth", status: "active", daily: "", total: "" })
+      setDepin({ platform: "Silencio", nodeType: "bandwidth", status: "active", daily: "", total: "" })
       await refresh()
       onChange?.()
     } catch (e) {

@@ -93,7 +93,7 @@ afterEach(() => {
 describe("CommandCentrePanel (slice 4 surface)", () => {
   it("renders the server's verdict, the full 10-gate rail, and honest not-wired cells", async () => {
     stubFetch(overview)
-    const m = mount(<CommandCentrePanel stream="trading" />)
+    const m = mount(<CommandCentrePanel />)
     await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
     const text = m.host.textContent ?? ""
@@ -114,7 +114,7 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
 
   it("renders the global-kill banner and BLOCKED verdicts when the switch is ON", async () => {
     stubFetch(blocked)
-    const m = mount(<CommandCentrePanel stream="trading" />)
+    const m = mount(<CommandCentrePanel />)
     await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
     const text = m.host.textContent ?? ""
@@ -135,7 +135,7 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
     })
     vi.stubGlobal("fetch", fetchMock)
 
-    const m = mount(<CommandCentrePanel stream="trading" />)
+    const m = mount(<CommandCentrePanel />)
     await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
     expect(m.host.textContent).toContain("COPILOT")
@@ -157,164 +157,10 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
       status: 500,
       json: async () => ({ error: "overview exploded" })
     } as unknown as Response)))
-    const m = mount(<CommandCentrePanel stream="trading" />)
+    const m = mount(<CommandCentrePanel />)
     await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
     expect(m.host.textContent).toContain("overview exploded")
-    m.unmount()
-  })
-})
-
-// ---- slice 5: the bandwidth claims leg. The panel lists scheduler payout_ready
-// observations, and "Approve & claim" is a FRESH human approval that POSTs to
-// /command-centre/execute (which runs the full gate chain before the venue).
-describe("CommandCentrePanel (slice 5 claims leg)", () => {
-  const bandwidthSite = {
-    ...overview.sites[0],
-    site: "bandwidth:browser",
-    stream: "bandwidth",
-    venue: "bandwidth-browser (bandwidth sharing)",
-    mode: "COPILOT" as const,
-    executionPower: "proposals",
-    executionLeg: {
-      leg: "proposals",
-      action: "bandwidth:payout-claim",
-      inFlight: 0,
-      lastExecutedAt: null,
-      consent: "per-action human consent (consentBy) — NOT an automation opt-in"
-    },
-    gates: overview.sites[0].gates.map((g) =>
-      g.gate === "fresh-data" || g.gate === "envelope-within-ceiling" || g.gate === "rationale-renderable"
-        ? { ...g, status: "pass" as const }
-        : g
-    )
-  }
-
-  const readyClaim = {
-    platform: "Traffmonetizer",
-    balance: 12.4,
-    payoutThreshold: 10,
-    notedAt: "2026-09-05T00:00:00.000Z",
-    ref: "2026-09-05",
-    idempotencyKey: "bandwidth:claim:Traffmonetizer:2026-09-05",
-    status: "ready" as const,
-    note: null
-  }
-
-  it("bandwidth stream renders scheduler payout claims, then Approve & claim POSTs the fresh approval and shows claimed", async () => {
-    const posts: { path: string; body: Record<string, unknown> }[] = []
-    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
-      if (init?.method === "POST" && String(path).includes("/command-centre/execute")) {
-        posts.push({ path: String(path), body: JSON.parse(String(init.body)) as Record<string, unknown> })
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            ok: true,
-            platform: "Traffmonetizer",
-            consentBy: "default",
-            gate: { allow: true, blockedBy: null },
-            execution: { status: "executed", idempotencyKey: "bandwidth:claim:Traffmonetizer:2026-09-05" }
-          })
-        } as unknown as Response
-      }
-      if (String(path).includes("/command-centre/claims")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            ok: true,
-            at: "2026-09-05T00:00:01.000Z",
-            claims: posts.length > 0 ? [{ ...readyClaim, status: "claimed" }] : [readyClaim]
-          })
-        } as unknown as Response
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ ...overview, stream: "bandwidth", sites: [bandwidthSite] })
-      } as unknown as Response
-    })
-    vi.stubGlobal("fetch", fetchMock)
-
-    const m = mount(<CommandCentrePanel stream="bandwidth" />)
-    await new Promise((r) => setTimeout(r, 10))
-    flushSync(() => {})
-
-    const text = m.host.textContent ?? ""
-    expect(text).toContain("Payout claims (bandwidth)")
-    expect(text).toContain("Traffmonetizer")
-    expect(text).toContain("ready")
-    expect(text).toContain("balance 12.4")
-
-    const input = m.host.querySelector('input[aria-label="claim workflow id for Traffmonetizer"]') as HTMLInputElement
-    expect(input).toBeTruthy()
-    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
-    valueSetter?.call(input, "wf-payout-claim")
-    input.dispatchEvent(new Event("input", { bubbles: true }))
-    flushSync(() => {})
-
-    const approve = m.host.querySelector('button[aria-label="approve and claim Traffmonetizer"]') as HTMLButtonElement
-    expect(approve.disabled).toBe(false)
-    approve.click()
-    await new Promise((r) => setTimeout(r, 10))
-    flushSync(() => {})
-
-    // the fresh approval reached /command-centre/execute with the observed claim
-    expect(posts).toHaveLength(1)
-    expect(posts[0].body).toEqual({
-      platform: "Traffmonetizer",
-      balance: 12.4,
-      threshold: 10,
-      ref: "2026-09-05",
-      claimWorkflowId: "wf-payout-claim"
-    })
-    const after = m.host.textContent ?? ""
-    expect(after).toContain("approved — claim executed")
-    expect(after).toContain("claimed")
-    m.unmount()
-  })
-
-  it("a BLOCKED approval renders the honest gate blocker on the card — no fabricated success", async () => {
-    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
-      if (init?.method === "POST" && String(path).includes("/command-centre/execute")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            ok: false,
-            platform: "Traffmonetizer",
-            consentBy: "default",
-            gate: { allow: false, blockedBy: "fresh-data" },
-            execution: null
-          })
-        } as unknown as Response
-      }
-      if (String(path).includes("/command-centre/claims")) {
-        return { ok: true, status: 200, json: async () => ({ ok: true, at: "2026-09-05T00:00:01.000Z", claims: [readyClaim] }) } as unknown as Response
-      }
-      return { ok: true, status: 200, json: async () => ({ ...overview, stream: "bandwidth", sites: [bandwidthSite] }) } as unknown as Response
-    })
-    vi.stubGlobal("fetch", fetchMock)
-
-    const m = mount(<CommandCentrePanel stream="bandwidth" />)
-    await new Promise((r) => setTimeout(r, 10))
-    flushSync(() => {})
-
-    const input = m.host.querySelector('input[aria-label="claim workflow id for Traffmonetizer"]') as HTMLInputElement
-    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
-    valueSetter?.call(input, "wf-payout-claim")
-    input.dispatchEvent(new Event("input", { bubbles: true }))
-    flushSync(() => {})
-    const approve = m.host.querySelector('button[aria-label="approve and claim Traffmonetizer"]') as HTMLButtonElement
-    approve.click()
-    await new Promise((r) => setTimeout(r, 10))
-    flushSync(() => {})
-
-    const after = m.host.textContent ?? ""
-    expect(after).toContain("blocked before the venue: fresh-data")
-    // the claim is still ready — the card never lies about its state
-    expect(after).toContain("ready")
     m.unmount()
   })
 })
@@ -389,7 +235,7 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     })
     vi.stubGlobal("fetch", fetchMock)
 
-    const m = mount(<CommandCentrePanel stream="trading" />)
+    const m = mount(<CommandCentrePanel />)
     await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
     expect(m.host.textContent).toContain("CCXT orders (trading)")
@@ -440,7 +286,7 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     })
     vi.stubGlobal("fetch", fetchMock)
 
-    const m = mount(<CommandCentrePanel stream="trading" />)
+    const m = mount(<CommandCentrePanel />)
     await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
     const execute = m.host.querySelector('button[aria-label="execute via picc picc-ord-1"]') as HTMLButtonElement
@@ -475,7 +321,7 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     })
     vi.stubGlobal("fetch", fetchMock)
 
-    const m = mount(<CommandCentrePanel stream="trading" />)
+    const m = mount(<CommandCentrePanel />)
     await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
     const input = m.host.querySelector('input[aria-label="venue order id for picc-ord-1"]') as HTMLInputElement

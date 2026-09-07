@@ -22,7 +22,7 @@ describe("Command Centre — runtime kill-switch store (L0, enforced)", () => {
   test("a per-site kill only bites its own site; other sites stay clear", () => {
     expect(runtimeMemory.setKillSwitch("trading:ccxt", true).ok).toBe(true)
     expect(runtimeMemory.siteKilled("trading:ccxt")).toBe(true)
-    expect(runtimeMemory.siteKilled("bandwidth:browser")).toBe(false)
+    expect(runtimeMemory.siteKilled("expertoption")).toBe(false)
     expect(runtimeMemory.anyKillActive()).toBe(true)
     expect(runtimeMemory.killSwitchState().global).toBe(false)
   })
@@ -79,7 +79,7 @@ describe("Command Centre — runtime kill-switch store: disk persistence", () =>
     try {
       vi.resetModules()
       const runtime = await import("../services/commandCentre/commandCentreRuntime.mjs")
-      runtime.setKillSwitch("bandwidth:browser", true)
+      runtime.setKillSwitch("expertoption", true)
       const file = join(dir, "command-centre-runtime.json")
       expect(existsSync(file)).toBe(true)
 
@@ -89,11 +89,11 @@ describe("Command Centre — runtime kill-switch store: disk persistence", () =>
 
       vi.resetModules()
       const rebooted = await import("../services/commandCentre/commandCentreRuntime.mjs")
-      expect(rebooted.siteKilled("bandwidth:browser")).toBe(true)
+      expect(rebooted.siteKilled("expertoption")).toBe(true)
       expect(rebooted.siteKilled("trading:ccxt")).toBe(false)
       // an explicit human clear is RECORDED as an off switch, not forgotten
       expect(rebooted.killSwitchState().sites).toEqual({
-        "bandwidth:browser": true,
+        expertoption: true,
         "trading:ccxt": false
       })
     } finally {

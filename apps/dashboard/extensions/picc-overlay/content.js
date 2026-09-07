@@ -108,7 +108,17 @@
     })
     if (online && wasOffline) console.info("[picc-sensor] server found via worker probe")
     if (online) flush() // drain anything queued while offline
-    // NOTE: venue-session observation is NO LONGER driven from here. Cadence is
+    // Startup/refresh sync: the FIRST successful probe triggers one immediate
+    // venue scan (this tab only; MIN_SCAN_MS-floor + capture dedup keep it
+    // cheap) so a freshly loaded page pushes its latest status before the
+    // worker's first cadence beat lands. After that the worker cadence owns
+    // scheduling — this probe never scans again until the tab reloads.
+    if (online && !firstScanDone) {
+      firstScanDone = true
+      scheduleVenueScan()
+    }
+    // NOTE: venue-session observation beyond that one startup scan is NO LONGER
+    // driven from here. Cadence is
     // owned by the background worker — per-STREAM, keyed on that stream's own tab
     // activity (realtime for an active tab / within its activity window,
     // intermittent when the activity window lapses, long-period on prolonged
@@ -248,17 +258,6 @@
     if (!d || typeof d !== "object") return
     if (d.__piccEOFrame && d.frame) queueFrame(d.frame)
     if (d.__piccCommand) handlePiccCommand(d.__piccCommand)
-    // Q5 — income wsFrames: an inject sniffer on an income-venue domain tags
-    // gateway WS frames with the CONNECTOR identity (origin + slug) so this
-    // sensor knows which income stream a frame belongs to. Pure in-memory
-    // buffer; flushed to the worker via `income-frames`, and the worker (host-
-    // permission-exempt) POSTs it to the server's income ingest. No storage,
-    // no DOM — the sensor never touches the ingest URL itself.
-    if (d.__piccIncomeFrame && d.frame && d.origin && d.slug) bufferIncomeFrame({
-      origin: String(d.origin).slice(0, 128),
-      slug: String(d.slug).slice(0, 64),
-      frame: d.frame
-    })
   }
   window.addEventListener("message", onMessage)
 
@@ -358,79 +357,12 @@
         { type: "sessionStorage", key: "token" }
       ],
       profileKeys: "user|account|profile|auth|session|current|me$|identity"
-    },
-    // Q5 — config-driven income wsFrames connector (second site). Declarative
-    // mirror of the registry `grass` entry (connectors.mjs): the sensor's OWN
-    // authoritative scan config for the income leg — an inject sniffer on the
-    // venue domain tags gateway WS frames __piccIncomeFrame; this executor
-    // buffers and relays them. Pure frame relay: NO new document. access (the
-    // sensor's page surface stays pinned at the two reads below).
-    grass: {
-      hostRe: "getgrass\\.(io|app)",
-      via: "wsFrames",
-      origin: "app.getgrass.io",
-      slug: "grass",
-      wsUrlRe: "getgrass\\.(io|app)",
-      mapFrame: {
-        balance: ["credits", "balance"],
-        today: ["todayEarnings", "today", "earningsToday"],
-        lifetime: ["lifetimeEarnings", "lifetime", "totalEarnings", "total"],
-        payoutThreshold: ["minPayout", "minimumPayout", "threshold"]
-      }
     }
   }
   let captureConfig = null // [{venueId, hostRe, via, keys, profileKeys, enabled}...] server view (or built-in fallback)
   let captureConfigAt = 0
   const CAPTURE_CFG_TTL = 5 * 60 * 1000
   const captureSent = {} // venueId -> last relayed token (IN-MEMORY only — never persisted)
-
-  // ── Income wsFrames (Q5) ─────────────────────────────────────────────────
-  // The income leg is a PURE frame relay: an inject sniffer on an income-venue
-  // domain (see the grass PICC_CAPTURE_BUILTIN entry / Task 14) tags gateway WS
-  // frames __piccIncomeFrame with origin+slug+frame; we buffer them here and
-  // the wsFrames executor flushes them to the worker's `income-frames` POST. State
-  // is IN-MEMORY only (never extension storage), deduped by capped size, and the
-  // relay is throttled to the same heartbeat the trading queue uses. NO document.
-  // access — the sensor's page surface stays pinned at two reads.
-  const INCOME_FRAME_MAX = 200            // ingest batch cap (handlers.mjs:4294)
-  const incomeFrames = {}                 // origin -> array of buffered frames
-  const DEDUP_KEYS = 64                   // max dedup fingerprints per origin
-  const incomeSent = {}                   // origin -> Set of last seen fingerprints
-  function bufferIncomeFrame({ origin, slug, frame }) {
-    const fp = stableFingerprint({ slug, frame })
-    const seen = incomeSent[origin] || (incomeSent[origin] = new Set())
-    if (seen.has(fp)) return // already relayed this frame — no noise
-    const arr = incomeFrames[origin] || (incomeFrames[origin] = [])
-    if (arr.length >= INCOME_FRAME_MAX) return // batch full — drop until a flush
-    arr.push({ origin, slug, frame })
-  }
-  // Cheap deterministic fingerprint so identical (or re-posted) frames do not
-  // re-relay. Not a hash — a length-capped serialization; dedup is best-effort.
-  function stableFingerprint(o) {
-    try { return JSON.stringify(o).slice(0, 512) } catch { return "" }
-  }
-
-  // The wsFrames executor: run within the venue-scan dispatch for a venue whose
-  // `via` is "wsFrames". Flushes the buffered income frames for that venue's
-  // origin and records fingerprints only on an ACCEPTED ingest (so a dropped /
-  // rejected batch is retried on the next tick).
-  function relayIncomeFrames(venue) {
-    const origin = String(venue.origin ?? venue.venueId ?? "").slice(0, 128)
-    const frames = incomeFrames[origin]
-    if (!frames || !frames.length) return
-    const batch = frames.splice(0, INCOME_FRAME_MAX)
-    const p = chromeGuard(() => chrome.runtime.sendMessage({
-      action: "income-frames",
-      origin,
-      slug: String(venue.slug ?? "").slice(0, 64),
-      frames: batch.map((f) => f.frame)
-    }))
-    if (p && typeof p.then === "function") {
-      p.then((res) => {
-        if (res && res.ok === true) for (const f of batch) (incomeSent[origin] ?? new Set()).add(stableFingerprint(f))
-      }).catch(() => {})
-    }
-  }
 
   // ── Venue-scan cadence (per-stream, worker-directed) ─────────────────────
   // The WORKER owns the sync schedule and pings this tab's sensor via
@@ -443,6 +375,7 @@
   const RESILIENCE_SCAN_MS = 300_000    // worker-quiet fallback (long-period)
   let lastScanAt = 0
   let lastWorkerPingAt = 0
+  let firstScanDone = false
   function scheduleVenueScan() { lastScanAt = Date.now(); scanVenueSession() }
   function noteWorkerPing() { lastWorkerPingAt = Date.now() }
 
@@ -597,28 +530,16 @@
     } catch { /* worker unreachable — fall through to built-in */ }
     captureConfig = venues || Object.entries(PICC_CAPTURE_BUILTIN).map(([venueId, cfg]) => ({
       venueId,
+      name: cfg.name,
       hostRe: cfg.hostRe,
       via: cfg.via,
       keys: cfg.keys,
       profileKeys: cfg.profileKeys,
+      origin: cfg.origin,
+      slug: cfg.slug,
+      capture: cfg.capture ?? null,
       enabled: true
     }))
-    // Q5 — the income wsFrames venues are the sensor's OWN config (they do not
-    // ride the trading capture-profiles table). Merge the wsFrames built-ins in
-    // so the executor is available in BOTH serving modes without touching the
-    // trading venue list.
-    for (const [venueId, cfg] of Object.entries(PICC_CAPTURE_BUILTIN)) {
-      if (cfg.via !== "wsFrames") continue
-      if (captureConfig.some((v) => v.venueId === venueId)) continue
-      captureConfig.push({
-        venueId,
-        hostRe: cfg.hostRe,
-        via: cfg.via,
-        origin: cfg.origin,
-        slug: cfg.slug,
-        enabled: true
-      })
-    }
     captureConfigAt = Date.now()
     return captureConfig
   }
@@ -630,9 +551,6 @@
     const venues = await venueScanConfig()
     const venue = venues.find((v) => v && v.enabled !== false && matchesVenueHost(v.hostRe, hostname))
     if (!venue) return
-    // Q5 — income wsFrames venues: relay the buffered income frames (the sensor
-    // is a pure in-memory frame relay; no session-token observation applies).
-    if (venue.via === "wsFrames") { relayIncomeFrames(venue); return }
     store.get(["piccSessionCapture"], ({ piccSessionCapture }) => {
       if (piccSessionCapture === false) return // user kill-switch for session capture, defaults ON
       // liveEO → shape scan (mirror of captureExpertOptionSession); every other

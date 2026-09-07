@@ -1,23 +1,21 @@
+// CashPilot collector honesty — the sole surviving collector after the
+// bandwidth-suite removal. Pins the real normalization contract: alternate
+// field names unwrap, missing change is null (never a fabricated 0), API
+// failures throw honestly, and drifted envelope shapes degrade to [] rather
+// than invented rows.
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
-  fetchEarnAppSnapshot,
-  fetchPawnsSnapshot,
-  fetchRepocketSnapshot,
-  fetchTraffmonetizerSnapshot
+  fetchCashPilotSummary,
+  fetchCashPilotDaily,
+  fetchCashPilotBreakdown
 } from "../services/collectors.mjs"
 
-function jsonResponse(body, { status = 200, headers = {} } = {}) {
+function jsonResponse(body, { status = 200 } = {}) {
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers,
-    json: () => Promise.resolve(body)
-  }
-}
-
-function cookieHeaders(setCookieLines) {
-  return {
-    getSetCookie: () => setCookieLines
+    json: () => Promise.resolve(body),
+    text: async () => JSON.stringify(body)
   }
 }
 
@@ -25,184 +23,97 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe("Repocket collector", () => {
-  it("logs in via Firebase and reads centsCredited as USD balance", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ idToken: "id-token-123" }))
-      .mockResolvedValueOnce(jsonResponse({ centsCredited: 1234 }))
-    vi.stubGlobal("fetch", fetchMock)
-
-    const result = await fetchRepocketSnapshot("me@example.com", "secret")
-
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls[0][0]).toContain("identitytoolkit.googleapis.com")
-    expect(fetchMock.mock.calls[1][1].headers["Auth-Token"]).toBe("id-token-123")
-    expect(result).toMatchObject({ ok: true, platform: "Repocket", currency: "USD", balance: 12.34, payoutThreshold: 10 })
-  })
-
-  it("throws honestly when Firebase login returns no token", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "INVALID_PASSWORD" })))
-    await expect(fetchRepocketSnapshot("me@example.com", "wrong")).rejects.toThrow("no auth token")
-  })
-
-  it("throws when the report is missing centsCredited (API drift)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn()
-        .mockResolvedValueOnce(jsonResponse({ idToken: "id-token-123" }))
-        .mockResolvedValueOnce(jsonResponse({ status: "ok" }))
+describe("CashPilot collector — summary", () => {
+  it("normalizes the summary endpoint shape (total/today/month/change)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ total: 1240.5, today: 4.2, month: 88.1, change: 3.4 })
     )
-    await expect(fetchRepocketSnapshot("me@example.com", "secret")).rejects.toThrow("centsCredited")
-  })
-
-  it("skips Firebase login when a session idToken is provided (Google accounts)", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ centsCredited: 9876 }))
     vi.stubGlobal("fetch", fetchMock)
 
-    const result = await fetchRepocketSnapshot("", "", "eyJ.firebase.idtoken")
+    const result = await fetchCashPilotSummary("https://cashpilot.local", "admin-key-1")
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toContain("api.repocket.com/api/reports/current")
-    expect(init.headers["Auth-Token"]).toBe("eyJ.firebase.idtoken")
-    expect(result.balance).toBe(98.76)
+    expect(String(url)).toBe("https://cashpilot.local/api/earnings/summary")
+    expect(init.headers["X-API-Key"]).toBe("admin-key-1")
+    expect(init.headers.Authorization).toBe("Bearer admin-key-1")
+    expect(result).toMatchObject({ total: 1240.5, today: 4.2, month: 88.1, changePct: 3.4 })
   })
 
-  it("rejects a non-JWT Repocket session token without calling the API", async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal("fetch", fetchMock)
+  it("falls back to alternate field names (lifetime/monthly/change_pct)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ lifetime: 100, monthly: 9, change_pct: -1.2 })))
+    const result = await fetchCashPilotSummary("https://cashpilot.local", "")
+    expect(result).toMatchObject({ total: 100, month: 9, changePct: -1.2 })
+  })
 
-    await expect(fetchRepocketSnapshot("", "", "not-a-jwt")).rejects.toThrow("not a JWT")
-    expect(fetchMock).not.toHaveBeenCalled()
+  it("changePct is null when the API is silent (never a fabricated 0)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ total: 5 })))
+    const result = await fetchCashPilotSummary("https://cashpilot.local", "k")
+    expect(result.changePct).toBeNull()
   })
 })
 
-describe("Pawns collector", () => {
-  it("logs in via email/password then reads /users/me", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ auth_token: "pawn-jwt-123" }))
-      .mockResolvedValueOnce(jsonResponse({ balance: { available: 5, pending: 1.5 }, total_earnings: 10, today_earnings: 0.5 }))
-    vi.stubGlobal("fetch", fetchMock)
-
-    const result = await fetchPawnsSnapshot("me@example.com", "secret")
-
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls[0][0]).toContain("/login/email")
-    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer pawn-jwt-123")
-    expect(result).toMatchObject({ ok: true, platform: "Pawns", currency: "USD", balance: 6.5, lifetimeEarnings: 10, todayEarnings: 0.5, payoutThreshold: 5 })
+describe("CashPilot collector — anti-fabrication + auth", () => {
+  it("throws honestly on a rejected key (401/403)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "forbidden" }, { status: 403 })))
+    await expect(fetchCashPilotSummary("https://cashpilot.local", "bad")).rejects.toThrow("credentials rejected")
   })
 
-  it("skips login when a session JWT is provided (Google accounts)", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ balance: { available: 2, pending: 0 }, total_earnings: 4 }))
-    vi.stubGlobal("fetch", fetchMock)
-
-    const result = await fetchPawnsSnapshot("", "", "eyJ.pawns.jwt")
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toContain("/users/me")
-    expect(init.headers.Authorization).toBe("Bearer eyJ.pawns.jwt")
-    expect(result.balance).toBe(2)
+  it("throws honestly on rate limiting (429)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, { status: 429 })))
+    await expect(fetchCashPilotDaily("https://cashpilot.local", "k")).rejects.toThrow("rate limited")
   })
 
-  it("rejects a non-JWT Pawns session token without calling the API", async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal("fetch", fetchMock)
-
-    await expect(fetchPawnsSnapshot("", "", "not-a-jwt")).rejects.toThrow("not a JWT")
-    expect(fetchMock).not.toHaveBeenCalled()
+  it("throws on an unknown HTTP error with the URL in the message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ detail: "boom" }, { status: 502 })))
+    await expect(fetchCashPilotBreakdown("https://cashpilot.local", "k")).rejects.toThrow("HTTP 502")
   })
 })
 
-describe("Traffmonetizer collector", () => {
-  it("reads balance from data.traffmonetizer.com get_balance with the session JWT", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: { balance: "3.25" } }))
+describe("CashPilot collector — daily series", () => {
+  it("normalizes a vanilla array and adds the ?days= window", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse([{ date: "2026-09-05", total: 1.1 }, { date: "2026-09-06", earnings: 2.2 }])
+    )
     vi.stubGlobal("fetch", fetchMock)
-
-    const result = await fetchTraffmonetizerSnapshot("eyJ.abc.def")
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe("https://data.traffmonetizer.com/api/app_user/get_balance")
-    expect(init.headers.Authorization).toBe("Bearer eyJ.abc.def")
-    expect(init.headers.Origin).toBe("https://app.traffmonetizer.com")
-    expect(init.headers.Referer).toBe("https://app.traffmonetizer.com/")
-    expect(result).toMatchObject({ ok: true, platform: "Traffmonetizer", currency: "USD", balance: 3.25, payoutThreshold: 10 })
+    const result = await fetchCashPilotDaily("https://cashpilot.local", "k", 14)
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/earnings/daily?days=14")
+    expect(result).toEqual([
+      { date: "2026-09-05", usd: 1.1 },
+      { date: "2026-09-06", usd: 2.2 }
+    ])
   })
 
-  it("rejects the base64 Application Token (not a JWT) without calling the API", async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal("fetch", fetchMock)
-
-    await expect(fetchTraffmonetizerSnapshot("base64-not-a-jwt=")).rejects.toThrow("Local Storage")
-    expect(fetchMock).not.toHaveBeenCalled()
+  it("unwraps { daily } / { series } envelopes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ series: [{ day: "2026-09-01", amount: 3.3 }] })))
+    const result = await fetchCashPilotDaily("https://cashpilot.local", "k")
+    expect(result).toEqual([{ date: "2026-09-01", usd: 3.3 }])
   })
 
-  it("throws honestly on an expired or invalid JWT", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, { status: 401 })))
-
-    await expect(fetchTraffmonetizerSnapshot("eyJ.abc.def")).rejects.toThrow("expired or invalid")
-  })
-
-  it("throws when the balance field is missing (API drift)", async () => {
+  it("returns an empty array (never a fabricated row) when the API shape drifts", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ status: "ok" })))
-
-    await expect(fetchTraffmonetizerSnapshot("eyJ.abc.def")).rejects.toThrow("missing balance")
+    const result = await fetchCashPilotDaily("https://cashpilot.local", "k")
+    expect(result).toEqual([])
   })
 })
 
-describe("EarnApp collector", () => {
-  it("rotates XSRF then reads the balance from /money", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({}, { headers: cookieHeaders(["xsrf-token=abc123; Path=/; HttpOnly"]) }))
-      .mockResolvedValueOnce(jsonResponse({ balance: 12.5 }))
-    vi.stubGlobal("fetch", fetchMock)
-
-    const result = await fetchEarnAppSnapshot("oauth-token")
-
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls[0][0]).toContain("/sec/rotate_xsrf")
-    const moneyUrl = fetchMock.mock.calls[1][0]
-    const moneyHeaders = fetchMock.mock.calls[1][1].headers
-    expect(moneyUrl).toContain("/money")
-    expect(moneyHeaders.Cookie).toContain("oauth-refresh-token=oauth-token")
-    expect(moneyHeaders.Cookie).toContain("xsrf-token=abc123")
-    expect(moneyHeaders["X-Requested-With"]).toBe("XMLHttpRequest")
-    expect(result).toMatchObject({ ok: true, platform: "EarnApp", currency: "USD", balance: 12.5, payoutThreshold: 5 })
+describe("CashPilot collector — per-service breakdown", () => {
+  it("normalizes service rows across the accepted envelopes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      services: [
+        { service: "expertoption", balance: 100, threshold: 10, total: 500 },
+        { name: "opensea", earnings: 2, min_payout: 0.5, lifetime: 30 }
+      ]
+    })))
+    const result = await fetchCashPilotBreakdown("https://cashpilot.local", "k")
+    expect(result).toEqual([
+      { service: "expertoption", balance: 100, threshold: 10, total: 500 },
+      { service: "opensea", balance: 2, threshold: 0.5, total: 30 }
+    ])
   })
 
-  it("falls back to a plain set-cookie header when getSetCookie is unavailable", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({}, { headers: { get: () => "xsrf-token=xyz789; Path=/" } }))
-      .mockResolvedValueOnce(jsonResponse({ balance: 7.25 }))
-    vi.stubGlobal("fetch", fetchMock)
-
-    const result = await fetchEarnAppSnapshot("oauth-token", "sess-1")
-    expect(result.balance).toBe(7.25)
-    expect(fetchMock.mock.calls[1][1].headers.Cookie).toContain("brd_sess_id=sess-1")
-  })
-
-  it("throws honestly on a rejected session", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn()
-        .mockResolvedValueOnce(jsonResponse({}, { headers: cookieHeaders(["xsrf-token=abc123"]) }))
-        .mockResolvedValueOnce(jsonResponse({}, { status: 403 }))
-    )
-    await expect(fetchEarnAppSnapshot("bad-token")).rejects.toThrow("rejected")
-  })
-
-  it("throws when the balance field is missing (API drift)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn()
-        .mockResolvedValueOnce(jsonResponse({}, { headers: cookieHeaders(["xsrf-token=abc123"]) }))
-        .mockResolvedValueOnce(jsonResponse({ greeting: "hi" }))
-    )
-    await expect(fetchEarnAppSnapshot("oauth-token")).rejects.toThrow("missing balance")
+  it("returns [] when the API returns an unexpected shape (no invented services)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ okay: true })))
+    const result = await fetchCashPilotBreakdown("https://cashpilot.local", "k")
+    expect(result).toEqual([])
   })
 })

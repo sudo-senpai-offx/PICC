@@ -15,24 +15,13 @@ import { createPayPalOrder, capturePayPalOrder, hasPayPal } from "./services/pay
 import { createEwalletOrder, submitEwalletOrder, walletInfo, WALLET_IDS } from "./services/ewallet.mjs"
 import { createBtcpayInvoice, btcpayInvoiceStatus, hasBtcpay, btcpayNodeHealth } from "./services/btcpay.mjs"
 import { getCompetitorData } from "./services/amazon.mjs"
-import { fetchHoneygainSnapshot, fetchCashPilotSummary, fetchCashPilotDaily, fetchCashPilotBreakdown } from "./services/collectors.mjs"
-import {
-  automatorStatus,
-  getCredentials,
-  saveCredentials,
-  getSnapshot,
-  saveSnapshot,
-  recordPresence,
-  presenceStatus,
-  scanNodes,
-  providerDetail,
-  QUEST_CATALOG
-} from "./services/automator.mjs"
+import { fetchCashPilotSummary, fetchCashPilotDaily, fetchCashPilotBreakdown } from "./services/collectors.mjs"
+import { getSnapshot, saveSnapshot } from "./services/streamSnapshot.mjs"
+import { getCredentials as getVenueCredentials } from "./services/venueCredentials.mjs"
 import { forecastSeries } from "./services/forecast.mjs"
 import { getCryptoMarket, getCryptoPrice } from "./services/crypto.mjs"
 import { yieldSnapshot } from "./services/yields.mjs"
 import { schedulerStatus } from "./services/scheduler.mjs"
-import { automatorAssist, automatorHealth } from "./services/automatorAdvice.mjs"
 import { opportunityCatalog, listWorkflows, monitorBountyBoards } from "./services/opportunities.mjs"
 import { extractKeywords } from "./services/keywords.mjs"
 import {
@@ -137,9 +126,8 @@ import {
 } from "./services/commandCentre/safetySidecar.mjs"
 import { anyKillActive, killSwitchState, setKillSwitch } from "./services/commandCentre/commandCentreRuntime.mjs"
 import { readAudit } from "./services/commandCentre/auditTrail.mjs"
-import { listSegments } from "./services/bandwidthSuite/segments.mjs"
 import { composeCommandCentreOverview } from "./services/commandCentre/commandCentreOverview.mjs"
-import { claimIdempotencyKey, claimPayout, executionStatus } from "./services/commandCentre/commandCentreExecution.mjs"
+import { executionStatus } from "./services/commandCentre/commandCentreExecution.mjs"
 import {
   CCXT_ORDER_ACTION,
   CCXT_SITE,
@@ -161,10 +149,6 @@ import { dayKeyOf } from "./services/u4faRisk.mjs"
 
 wireKillSwitchReader(() => anyKillActive())
 wireAuditReader(() => readAudit())
-// Slice 5 — bandwidth 5E: the presence heartbeat is the mandatory browser-
-// uptime feed for the claim leg. A node we have not seen in this window cannot
-// be proven fresh, so claims are denied (conservative deny, never "probably up").
-const PRESENCE_STALE_MIN = 10
 import {
   studioStatus,
   openStudio,
@@ -269,25 +253,6 @@ function withTimeout(promise, ms) {
     timer = setTimeout(() => rej(new Error("timeout")), ms)
   })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
-}
-
-const AUTOMATOR_SECRET_FIELDS = [
-  "pawnsPassword",
-  "pawnsToken",
-  "honeygainToken",
-  "traffmonetizerToken",
-  "repocketPassword",
-  "repocketToken",
-  "earnappOAuthToken",
-  "earnappBrdSessionId"
-]
-
-function maskAutomatorCredentials(creds) {
-  const out = { ...creds }
-  for (const field of AUTOMATOR_SECRET_FIELDS) {
-    out[field] = creds[field] ? "••••••" : ""
-  }
-  return out
 }
 
 // ---------------------------------------------------------------------
@@ -1589,35 +1554,12 @@ async function _handleApiInner(req, res, url, reqId) {
         ? { record: rec, stale: staleFrom({ record: rec, cadenceMs: metricsCadenceMs(site) ?? 5 * 60 * 1000 }) }
         : null
     }
-    // Slice 5 — bandwidth mandatory-feed freshness observed from the presence
-    // heartbeat, and the currently-executable claim leg, both fed to the
-    // composition so the rail reports what is actually wired (never a silent OK).
-    const presence = await presenceStatus()
-    const bwDevices = Object.values(presence?.devices ?? {})
-    const bwMaxMin = bwDevices.length ? Math.max(...bwDevices.map((d) => d.minutesAgo ?? Infinity)) : Infinity
-    const feeds = {
-      "bandwidth:browser":
-        bwMaxMin <= PRESENCE_STALE_MIN
-          ? []
-          : [
-              {
-                name: "presence-heartbeat",
-                ageSec: Number.isFinite(bwMaxMin) ? bwMaxMin * 60 : Infinity,
-                maxAgeSec: PRESENCE_STALE_MIN * 60
-              }
-            ]
-    }
-    const lastBandwidthClaimAt = readAudit()
-      .filter((e) => e.kind === "execution:executed" && String(e.data?.action ?? "").startsWith("bandwidth:"))
-      .map((e) => e.at ?? null)
-      .filter(Boolean)
-      .sort()
-      .at(-1)
     // Slice 6 — trading:ccxt: the equity observation is the site's mandatory
     // 5E feed (fresh = an observation exists and is within CCXT_EQUITY_STALE_MS).
     // No observation EVER → the feeds key stays ABSENT → the overview reports
     // fresh-data as not-wired (never a silent OK). The execution leg reflects
     // the order rail: in-flight from the seam, lastExecutedAt from the audit.
+    const feeds = {}
     const ccxtEquity = ccxtEquityLastObserved()
     if (ccxtEquity) {
       feeds["trading:ccxt"] = [
@@ -1632,12 +1574,6 @@ async function _handleApiInner(req, res, url, reqId) {
       .at(-1)
     const executionNow = executionStatus()
     const execution = {
-      "bandwidth:browser": {
-        action: "bandwidth:payout-claim",
-        power: "proposals",
-        inFlight: executionNow["bandwidth:browser"]?.inFlight ?? 0,
-        lastExecutedAt: lastBandwidthClaimAt ?? null
-      },
       [CCXT_SITE]: {
         action: CCXT_ORDER_ACTION,
         power: "proposals",
@@ -1683,118 +1619,6 @@ async function _handleApiInner(req, res, url, reqId) {
     }
     const result = setKillSwitch(scope, kill)
     writeJson(res, 200, { ok: result.ok, userId, scope, kill, state: killSwitchState() })
-    return
-  }
-
-  // ---- Command Centre slice 5: the first LIVE execution leg (bandwidth
-  // payout claims, human-approved per action). Everything here reads the SAME
-  // observed state the enforcement layer reads: kill switch from the runtime
-  // store (plus the wired reader), breakers from the sidecar's cross-site
-  // halt, freshness from the presence heartbeat, concurrency from the
-  // execution seam. The venue-touching step is the interventions workflow
-  // engine — the executor seam is fixture-stubbed in tests, and the claim
-  // fails honestly (audited) when the browser is closed.
-
-  // GET lists the payout_ready observations (scheduler wrote them from
-  // automator status: balance >= payoutThreshold) joined with an honest
-  // claimed/ready status from the durable audit trail.
-  if (path === "/api/command-centre/claims" && req.method === "GET") {
-    if (!(await requireAuth(req, res))) return true
-    const rows = await listRows("agent_logs")
-    const audits = readAudit()
-    const executedKeys = new Set(
-      audits.filter((e) => e.kind === "execution:executed").map((e) => e.data?.idempotencyKey)
-    )
-    const claims = rows
-      .filter((r) => r?.kind === "payout_ready")
-      .map((r) => {
-        const day = String(r.created_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)
-        const key = claimIdempotencyKey({ platform: r.platform, payoutRef: day })
-        return {
-          platform: r.platform,
-          balance: r.balance,
-          payoutThreshold: r.payoutThreshold,
-          notedAt: r.created_at ?? null,
-          ref: day,
-          idempotencyKey: key,
-          status: executedKeys.has(key) ? "claimed" : "ready",
-          note: r.note ?? null
-        }
-      })
-    writeJson(res, 200, { ok: true, at: new Date().toISOString(), claims })
-    return
-  }
-
-  // POST runs the FULL 10-gate chain (evaluateGate) and — only on a pass —
-  // hands the approved claim to the workflow engine. The acting human's uid IS
-  // the fresh per-action consent; recorded, never called an opt-in.
-  if (path === "/api/command-centre/execute" && req.method === "POST") {
-    if (!(await requireAuth(req, res))) return true
-    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
-    const platform = String(body?.platform ?? "").trim()
-    const balance = Number(body?.balance)
-    const threshold = Number(body?.threshold)
-    const payoutRef = String(body?.ref ?? new Date().toISOString().slice(0, 10)).slice(0, 10)
-    const claimWorkflowId = String(body?.claimWorkflowId ?? "").trim()
-    const tabId = body?.tabId != null ? Number(body.tabId) : null
-    if (!platform) return writeJson(res, 400, { ok: false, error: "platform is required" })
-    if (!Number.isFinite(balance) || !Number.isFinite(threshold)) {
-      return writeJson(res, 400, { ok: false, error: "balance and threshold must be finite numbers" })
-    }
-    if (!claimWorkflowId) {
-      return writeJson(
-        res,
-        400,
-        { ok: false, error: "claimWorkflowId is required — save a payout-claim workflow in Workflows and pass its id (the workflow engine is the venue-touching leg)" }
-      )
-    }
-
-    const halt = crossSiteHaltState()
-    const haltToday = halt && halt.dayKey === dayKeyOf(Date.now())
-    const presence = await presenceStatus()
-    const devices = Object.values(presence?.devices ?? {})
-    const maxMinutes = devices.length ? Math.max(...devices.map((d) => d.minutesAgo ?? Infinity)) : Infinity
-    const staleFeeds =
-      maxMinutes <= PRESENCE_STALE_MIN
-        ? []
-        : [
-            {
-              name: "presence-heartbeat",
-              ageSec: Number.isFinite(maxMinutes) ? maxMinutes * 60 : Infinity,
-              maxAgeSec: PRESENCE_STALE_MIN * 60
-            }
-          ]
-
-    const result = await claimPayout({
-      platform,
-      balance,
-      threshold,
-      payoutRef,
-      consentBy,
-      state: {
-        killSwitch: anyKillActive(),
-        optIn: false, // claims leg: per-action consent, not a standing opt-in
-        breakers: {
-          dailyLossHalted: haltToday && halt.breaker === "dailyLoss",
-          regimeHalted: haltToday && (halt.breaker === "regime" || halt.breaker === "regimeHalted"),
-          siteCapped: false // no site-cap observation source yet — never claimed
-        },
-        staleFeeds,
-        concurrentUnits: executionStatus()["bandwidth:browser"]?.inFlight ?? 0,
-        dayLossPct: 0, // claims surface: no market loss axis (catalog maxDailyLossPct null)
-        claimWorkflowId,
-        tabId
-      },
-      executor: async () => interventions.runWorkflow({ workflowId: claimWorkflowId, tabId, approval: "manual" })
-    })
-    writeJson(res, 200, {
-      ok: result.ok,
-      platform,
-      consentBy,
-      gate: result.gate,
-      execution: result.execution,
-      state: killSwitchState()
-    })
     return
   }
 
@@ -3218,7 +3042,7 @@ async function _handleApiInner(req, res, url, reqId) {
       // CCXT tickers from configured pairs.
       try {
         const { fetchTicker, toCcxtSymbol } = await import("./services/ccxtConnector.mjs")
-        const creds = await getCredentials()
+const creds = await getVenueCredentials()
         for (const cfg of (Array.isArray(creds.ccxtExchanges) ? creds.ccxtExchanges : []).slice(0, 4)) {
           const sym = toCcxtSymbol(cfg.symbol)
           const wantBase = assetId.replace(/[^A-Z]/g, "").slice(0, 3)
@@ -3536,33 +3360,6 @@ async function _handleApiInner(req, res, url, reqId) {
     return true
   }
 
-  // Bandwidth suite M1 — read-only registry surface so the running app can
-  // verify the declared IP segments (one provider per segment, per the honest
-  // contract). Registration/assignment are config actions, kept off the API in
-  // M1; the segments file is the source of what this reports.
-  if (path === "/api/bandwidth/segments" && req.method === "GET") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
-    writeJson(res, 200, { segments: listSegments() })
-    return true
-  }
-
-  if (path === "/api/collectors/honeygain" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
-    const token = String(body.token || "").trim()
-    if (!token) return writeJson(res, 400, { error: "token required" })
-    try {
-      writeJson(res, 200, await withTimeout(fetchHoneygainSnapshot(token), 25000))
-    } catch (err) {
-      console.warn("[picc] honeygain collector failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
   if (path === "/api/collectors/cashpilot" && req.method === "POST") {
     // This route makes the SERVER fetch an arbitrary URL and reflect the
     // response — a strict token is required even before any account exists.
@@ -3832,96 +3629,6 @@ async function _handleApiInner(req, res, url, reqId) {
       writeJson(res, 200, { ok: true, row: await appendRow(table, body.row ?? body, userId) })
       return
     }
-  }
-
-  // -------------------------------------------------------------------
-  // PICC Automator — Tier 0 stream monitoring, nodes, quests, presence
-  // -------------------------------------------------------------------
-  if (path === "/api/automator/credentials" && (req.method === "GET" || req.method === "POST")) {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
-    if (req.method === "GET") {
-      const creds = await getCredentials()
-      writeJson(res, 200, maskAutomatorCredentials(creds))
-      return
-    }
-    try {
-      const creds = await saveCredentials(body)
-      // Never echo stored secrets back — mask them exactly like GET.
-      writeJson(res, 200, { ok: true, ...maskAutomatorCredentials(creds) })
-    } catch (err) {
-      console.error("[picc] automator credentials failed:", err)
-      writeJson(res, 500, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  if (path === "/api/automator/status" && (req.method === "GET" || req.method === "POST")) {
-    try {
-      writeJson(res, 200, await automatorStatus())
-    } catch (err) {
-      console.error("[picc] automator status failed:", err)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  if (path === "/api/automator/detail" && (req.method === "GET" || req.method === "POST")) {
-    const slug = String(body?.platform ?? body?.slug ?? "").trim().toLowerCase()
-    if (!slug) return writeJson(res, 400, { error: "platform slug required" })
-    try {
-      writeJson(res, 200, await providerDetail(slug))
-    } catch (err) {
-      console.error("[picc] automator detail failed:", err)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  if (path === "/api/automator/nodes" && (req.method === "GET" || req.method === "POST")) {
-    try {
-      writeJson(res, 200, { ok: true, nodes: await scanNodes() })
-    } catch (err) {
-      console.error("[picc] automator node scan failed:", err)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  if (path === "/api/automator/quests" && (req.method === "GET" || req.method === "POST")) {
-    writeJson(res, 200, { ok: true, quests: QUEST_CATALOG })
-    return
-  }
-
-  if (path === "/api/automator/presence" && req.method === "POST") {
-    writeJson(res, 200, await recordPresence(body?.device))
-    return
-  }
-
-  if (path === "/api/automator/presence" && req.method === "GET") {
-    writeJson(res, 200, await presenceStatus())
-    return
-  }
-
-  if (path === "/api/automator/health" && (req.method === "GET" || req.method === "POST")) {
-    try {
-      writeJson(res, 200, await automatorHealth())
-    } catch (err) {
-      console.error("[picc] automator health failed:", err)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
-
-  if (path === "/api/automator/assist" && req.method === "POST") {
-    try {
-      writeJson(res, 200, await automatorAssist(body?.question))
-    } catch (err) {
-      console.error("[picc] automator assist failed:", err)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
   }
 
   if (path === "/api/opportunities" && (req.method === "GET" || req.method === "POST")) {

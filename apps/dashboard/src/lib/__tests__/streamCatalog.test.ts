@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   CATALOG,
-  BANDWIDTH_APPS,
   DEPIN_APPS,
   STORAGE_APPS,
   COMPUTE_APPS,
@@ -18,7 +17,6 @@ import {
 } from "../streamCatalog"
 
 const GROUPS: Record<string, typeof CATALOG> = {
-  bandwidth: BANDWIDTH_APPS,
   depin: DEPIN_APPS,
   storage: STORAGE_APPS,
   compute: COMPUTE_APPS,

@@ -62,28 +62,6 @@ export const AGENT_REGISTRY = Object.freeze({
     task: "compute the confidence-floored model matrix, abstaining below significance",
     modules: ["modelMatrix.mjs"],
     status: "ready"
-  },
-
-  // ── Bandwidth team (lighter) ────────────────────────────────────────────
-  uptime_node: {
-    task: "report node/uptime status from the automator scan",
-    modules: ["automator.mjs"],
-    status: "ready"
-  },
-  daily_quest: {
-    task: "track daily-quest catalog and presence heartbeat",
-    modules: ["automator.mjs"],
-    status: "ready"
-  },
-  payout: {
-    task: "detect payout readiness and claim via the interventions workflow engine, idempotently",
-    modules: ["automator.mjs", "interventions.mjs"],
-    status: "ready"
-  },
-  credential: {
-    task: "report credential expiry / validity for bandwidth providers",
-    modules: ["automator.mjs"],
-    status: "ready"
   }
 })
 
@@ -98,14 +76,6 @@ export const TRADING_ROSTER = Object.freeze([
   "consensus",
   "risk_manager",
   "model_matrix"
-])
-
-/** Ordered roster for the bandwidth site template (deliberation order). */
-export const BANDWIDTH_ROSTER = Object.freeze([
-  "uptime_node",
-  "daily_quest",
-  "payout",
-  "credential"
 ])
 
 /** Ordered roster for the ExpertOption demo template (ExpertBot pattern subset). */

@@ -1,20 +1,16 @@
 /**
  * PICC upstream bridge — MAIN world WebSocket sniffer.
  *
- * Runs in each page's own JS world (world: "MAIN") on the venues it is
- * registered for (see manifest.json: ExpertOption trading + income venues like
- * Grass). Wraps window.WebSocket so incoming JSON frames from each gateway are
- * relayed to the PICC content script via window.postMessage. The content script
- * batches them and pushes to the local PICC server.
+ * Runs in each page's own JS world (world: "MAIN") on the venue it is
+ * registered for (see manifest.json: ExpertOption trading). Wraps
+ * window.WebSocket so incoming JSON frames from the gateway are relayed to the
+ * PICC content script via window.postMessage. The content script batches them
+ * and pushes to the local PICC server.
  *
- * Venue registry (data-driven): one sniffer, many gateways. Each entry names
+ * Venue registry (data-driven): one sniffer, one gateway. Each entry names
  * the socket hosts to sniff and how the relayed frame is TAGGED:
  *   • expertoption (trading leg): __piccEOFrame — the sensor's trading pipeline
  *     knows the origin/slug implicitly.
- *   • grass (income leg, Q5/connector catalog): __piccIncomeFrame WITH origin +
- *     slug so the sensor can route the frame to the right income connector
- *     (content.js bufferIncomeFrame). Mirrors PICC_CAPTURE_BUILTIN.grass
- *     (content.js) and the registry grass entry (connectors.mjs).
  *
  * Defensive by design: never throws into the page, never blocks frames,
  * silently no-ops when anything is unavailable.
@@ -27,13 +23,6 @@
       wsUrlRe: /expertoption\.(com|finance)/i,
       // Trading leg: relay under the EO marker — the sensor knows the venue.
       tag: (frame) => ({ __piccEOFrame: true, frame })
-    },
-    {
-      wsUrlRe: /getgrass\.(io|app)/i,
-      // Income leg: tag with the connector identity (origin + slug) so the
-      // sensor can attribute the frame to the right income stream. origin and
-      // slug are pinned to PICC_CAPTURE_BUILTIN.grass / the registry grass entry.
-      tag: (frame) => ({ __piccIncomeFrame: true, frame, origin: "app.getgrass.io", slug: "grass" })
     }
   ]
 
