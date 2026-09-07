@@ -15,10 +15,17 @@
 //     not silently shrink)
 //   • there is no withdraw/transfer/leverage/cancel code path anywhere in this
 //     module — those methods stay guarded in ccxtConnector
-//   • credentials come from the process environment (PICC_CCXT_APIKEY_<EXCHANGE>
-//     / PICC_CCXT_SECRET_<EXCHANGE> / PICC_CCXT_PASSWORD_<EXCHANGE> /
-//     PICC_CCXT_SANDBOX_<EXCHANGE>; a global PICC_CCXT_SANDBOX=1 is also
-//     honored). They never reach the masked credentials UI and are never logged.
+//   • credentials come from the process environment, in ONE of two modes per
+//     exchange (a complete pair is required; a half-set pair is refused):
+//       CEX-style  : PICC_CCXT_APIKEY_<EXCHANGE> + PICC_CCXT_SECRET_<EXCHANGE>
+//                    (+ optional PICC_CCXT_PASSWORD_<EXCHANGE>)
+//       wallet-key : PICC_CCXT_WALLETADDRESS_<EXCHANGE> +
+//                    PICC_CCXT_PRIVATEKEY_<EXCHANGE>
+//                    (Hyperliquid: the main wallet address + the API wallet's
+//                    private key; ccxt hyperliquid requires these, NOT apiKey/
+//                    secret — verified against the installed ccxt build)
+//     PICC_CCXT_SANDBOX_<EXCHANGE> (and a global PICC_CCXT_SANDBOX=1) are also
+//     honored. Credentials never reach the masked UI and are never logged.
 //     On the exchange, configure the API key with "view + trade, NO withdrawal"
 //     permission where the venue supports it.
 //
@@ -92,17 +99,25 @@ function envKey(exchangeId) {
 
 /**
  * Read the ordering credentials for one exchange from the process environment.
- * Returns null when no apiKey+secret pair is configured — the leg is then
- * honestly inoperable (never a silent "no keys needed").
+ * Two modes, selected by which pair is complete (one of them MUST be):
+ *   CEX-style  : PICC_CCXT_APIKEY_<EX> + PICC_CCXT_SECRET_<EX>
+ *   wallet-key : PICC_CCXT_WALLETADDRESS_<EX> + PICC_CCXT_PRIVATEKEY_<EX>
+ * Returns null when neither pair is complete — the leg is then honestly
+ * inoperable (never a silent "no keys needed"). Both pairs may be set at once
+ * (each venue reads the fields it requires).
  */
 export function ccxtKeysForExchange(exchangeId) {
   const suffix = envKey(exchangeId)
   const apiKey = process.env[`PICC_CCXT_APIKEY_${suffix}`]
   const secret = process.env[`PICC_CCXT_SECRET_${suffix}`]
-  if (!apiKey || !secret) return null
+  const walletAddress = process.env[`PICC_CCXT_WALLETADDRESS_${suffix}`]
+  const privateKey = process.env[`PICC_CCXT_PRIVATEKEY_${suffix}`]
+  const cexPair = Boolean(apiKey && secret)
+  const walletPair = Boolean(walletAddress && privateKey)
+  if (!cexPair && !walletPair) return null
   return {
-    apiKey,
-    secret,
+    ...(cexPair ? { apiKey, secret } : {}),
+    ...(walletPair ? { walletAddress, privateKey } : {}),
     password: process.env[`PICC_CCXT_PASSWORD_${suffix}`] ?? undefined,
     sandbox:
       process.env[`PICC_CCXT_SANDBOX_${suffix}`] === "1" ||
@@ -125,7 +140,7 @@ export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox 
   const keys = ccxtKeysForExchange(id)
   if (requireKeys && !keys) {
     throw new Error(
-      `ccxt ordering seam: no ${envKey(id)} credentials configured (PICC_CCXT_APIKEY_${envKey(id)} / PICC_CCXT_SECRET_${envKey(id)}) — the execution leg is inoperable without them`
+      `ccxt ordering seam: no ${envKey(id)} credentials configured — set either PICC_CCXT_APIKEY_${envKey(id)} + PICC_CCXT_SECRET_${envKey(id)} (CEX-style) or PICC_CCXT_WALLETADDRESS_${envKey(id)} + PICC_CCXT_PRIVATEKEY_${envKey(id)} (Hyperliquid-style) — the execution leg is inoperable without them`
     )
   }
 
@@ -141,6 +156,8 @@ export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox 
   if (keys?.apiKey) opts.apiKey = keys.apiKey
   if (keys?.secret) opts.secret = keys.secret
   if (keys?.password) opts.password = keys.password
+  if (keys?.walletAddress) opts.walletAddress = keys.walletAddress
+  if (keys?.privateKey) opts.privateKey = keys.privateKey
 
   const instance = new Ctor(opts)
   const wantSandbox = sandbox ?? keys?.sandbox ?? false

@@ -300,6 +300,11 @@ describe("M4 — decideAssets runtime plumbing (context, regime latch, per-asset
   }
 
   it("enabled assets run U4FA inside the engine and the regime latch persists across cycles", async () => {
+    // Four in-memory decideAssets passes (fixture data, pure CPU, no I/O) are
+    // microseconds of work, but the suite runs 3 workers of heavy files (5-11s
+    // candle/order suites) concurrently on shared cores; the default 5s raw
+    // ceiling starved this test by ~150ms in a full-suite run. 15s keeps the
+    // budget honest for contention without hiding a real regression.
     const pin = pinAbove()
     const d1 = (await decideAssets({ data: dataWith(pin.candles), observedPayout: {}, now: NOW, u4faContext: runtimeContext() }))[0]
     expect(d1.verdict).toBe("TRADE")
@@ -323,7 +328,7 @@ describe("M4 — decideAssets runtime plumbing (context, regime latch, per-asset
     const d4 = (await decideAssets({ data: dataWith(pin.candles), observedPayout: {}, now: NOW, u4faContext: runtimeContext() }))[0]
     expect(d4.verdict).toBe("TRADE")
     expect(d4.strategies.u4fa.result.regime).toMatchObject({ chop: false, streak: 0 })
-  })
+  }, 15000)
 
   it("assets not opted-in stay OFF (no U4FA result attached)", async () => {
     const data = {

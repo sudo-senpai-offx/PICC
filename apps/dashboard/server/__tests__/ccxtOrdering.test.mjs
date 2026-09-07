@@ -70,6 +70,21 @@ const BINANCE_KEYS = {
   PICC_CCXT_SECRET_BINANCE: "secret-binance"
 }
 
+const HYPERLIQUID_KEYS = {
+  PICC_CCXT_WALLETADDRESS_HYPERLIQUID: "0x1111111111111111111111111111111111111111",
+  PICC_CCXT_PRIVATEKEY_HYPERLIQUID: "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+}
+
+/** Fixture ccxt lib whose constructor captures the opts it was built with. */
+function captureLib(id, capture, ex) {
+  const lib = {}
+  lib[id] = function Ctor(opts) {
+    capture.push(opts)
+    return ex
+  }
+  return lib
+}
+
 describe("ccxtOrdering — credentials", () => {
   afterEach(() => {
     for (const k of Object.keys(process.env)) {
@@ -107,6 +122,47 @@ describe("ccxtOrdering — credentials", () => {
     mod._setCcxtLibForTests(fakeLib({ binance: ex }))
     await mod.placeCcxtOrder({ exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 1000 })
     expect(ex.sandbox).toBe(true)
+  })
+
+  it("wallet-key credentials (Hyperliquid) are read from the environment as an alternative pair", async () => {
+    const mod = await import("../services/ccxtOrdering.mjs")
+    expect(mod.ccxtKeysForExchange("hyperliquid")).toBeNull()
+    Object.assign(process.env, HYPERLIQUID_KEYS)
+    expect(mod.ccxtKeysForExchange("hyperliquid")).toEqual({
+      walletAddress: HYPERLIQUID_KEYS.PICC_CCXT_WALLETADDRESS_HYPERLIQUID,
+      privateKey: HYPERLIQUID_KEYS.PICC_CCXT_PRIVATEKEY_HYPERLIQUID,
+      password: undefined,
+      sandbox: false
+    })
+  })
+
+  it("a HALF-SET wallet pair is refused — no walletAddress without privateKey and vice versa", async () => {
+    const mod = await import("../services/ccxtOrdering.mjs")
+    Object.assign(process.env, { PICC_CCXT_WALLETADDRESS_HYPERLIQUID: "0x1111111111111111111111111111111111111111" })
+    expect(mod.ccxtKeysForExchange("hyperliquid")).toBeNull()
+  })
+
+  it("wallet-mode opts (walletAddress + privateKey) reach the ccxt constructor for hyperliquid", async () => {
+    const mod = await import("../services/ccxtOrdering.mjs")
+    mod._resetCcxtOrderingState()
+    Object.assign(process.env, HYPERLIQUID_KEYS)
+    const captured = []
+    const ex = makeExchange()
+    ex.id = "hyperliquid"
+    mod._setCcxtLibForTests(captureLib("hyperliquid", captured, ex))
+    const instance = await mod.ccxtInstanceFor("hyperliquid")
+    expect(captured).toHaveLength(1)
+    expect(captured[0].walletAddress).toBe(HYPERLIQUID_KEYS.PICC_CCXT_WALLETADDRESS_HYPERLIQUID)
+    expect(captured[0].privateKey).toBe(HYPERLIQUID_KEYS.PICC_CCXT_PRIVATEKEY_HYPERLIQUID)
+    expect(instance).toBe(ex)
+  })
+
+  it("the no-credentials error names BOTH credential modes", async () => {
+    const mod = await import("../services/ccxtOrdering.mjs")
+    mod._setCcxtLibForTests(fakeLib({ binance: makeExchange() }))
+    await expect(
+      mod.placeCcxtOrder({ exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 500 })
+    ).rejects.toThrow(/PICC_CCXT_WALLETADDRESS_BINANCE/)
   })
 })
 

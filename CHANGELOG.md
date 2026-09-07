@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-05 — ordering seam: Hyperliquid wallet-key credential mode
+
+The `ccxtOrdering` seam now accepts a second, mutually exclusive credential mode for venues that
+sign with a wallet + private key instead of apiKey/secret (ccxt `hyperliquid` requires
+`walletAddress` + `privateKey` — verified against the installed ccxt build:
+`requiredCredentials = { apiKey: false, secret: false, walletAddress: true, privateKey: true }`).
+Configure `PICC_CCXT_WALLETADDRESS_<EX>` + `PICC_CCXT_PRIVATEKEY_<EX>` (main wallet address + the
+API wallet's private key — create the API wallet with "view + trade, NO withdrawal" on
+app.hyperliquid.xyz/API). A half-set pair is refused; CEX mode is unchanged; both pairs may be
+present at once (each venue reads the fields it requires). Env vars documented in
+`apps/dashboard/.env.example`; spec §6 credential line updated.
+
+- **Seam** — `ccxtKeysForExchange` / `ccxtInstanceFor` pass `walletAddress` + `privateKey` through
+  to the ccxt constructor; the no-credentials error names both modes.
+- **Tests** — 4 new fixture tests (wallet-pair read, half-set pair refused, constructor opts,
+  dual-mode error message). Suite 1,868 → 1,872.
+
 ## 2026-09-05 — Command Centre Web slice 6: first live CCXT execution leg (trading:ccxt orders)
 
 Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the

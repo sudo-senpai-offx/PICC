@@ -416,8 +416,14 @@ function processAppObject(obj, source = "studio") {
       if (tf === LIVE_BAR_PERIOD && c.v.length >= 4) {
         const [o, h, l, cl] = c.v.map(Number)
         if (Number.isFinite(cl) && cl > 0 && [o, h, l].every((n) => Number.isFinite(n) && n > 0)) {
-          recordTick(assetId, cl, Number(c.t) || Date.now() / 1000)
-          applyLiveBar(assetId, Number(c.t) || 0, o, h, l, cl)
+          const barT = Number(c.t) || 0
+          recordTick(assetId, cl, barT || Date.now() / 1000)
+          applyLiveBar(assetId, barT, o, h, l, cl)
+          // Provenance clock: the newest bar time this leg fed into the shared
+          // buffers. feedProvenance attributes the SERVED series by this, not
+          // by the wall-clock consumption stamp — that stamp ties at 1 ms
+          // resolution when both legs ingest within the same millisecond.
+          if (legStats[source].lastConsumedFrameAt < barT) legStats[source].lastConsumedFrameAt = barT
         }
       }
     }
@@ -442,8 +448,8 @@ function processAppObject(obj, source = "studio") {
 // preference gate's fallback depends on.
 const LEG_ALIVE_MS = 60_000 // same liveness window the status uses for upstream frames
 const legStats = {
-  extension: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0 },
-  studio: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0 }
+  extension: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0, lastConsumedFrameAt: 0 },
+  studio: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0, lastConsumedFrameAt: 0 }
 }
 // Back-compat alias: consumers reading `stats.upstream.*` keep working.
 const upstreamStats = legStats.extension
@@ -961,6 +967,7 @@ export async function stopLiveEO() {
     leg.accepted = 0
     leg.lastAt = 0
     leg.lastConsumedAt = 0
+    leg.lastConsumedFrameAt = 0
   }
   if (!upstreamActive) {
     buffers.clear()
@@ -1052,6 +1059,24 @@ export async function restartLiveEO({ force = false } = {}) {
  * preference gate (T4) may drop one leg while its frames keep arriving.
  */
 export function feedProvenance() {
+  // Attribute by the frame's own clock (bar time) whenever a leg has fed
+  // candle rows: bar time is what actually ordered the shared buffers (newest
+  // frame wins), and it is immune to the 1 ms wall-clock resolution — two
+  // legs ingesting within the same millisecond used to tie and fall back to
+  // an extension-biased guess. Profile/error frames carry no bar time; legs
+  // that only touched those attribute by consumption wall-clock (arrival
+  // order is all we know for them).
+  const extFrame = Number(legStats.extension.lastConsumedFrameAt) || 0
+  const studioFrame = Number(legStats.studio.lastConsumedFrameAt) || 0
+  if (extFrame || studioFrame) {
+    if (extFrame !== studioFrame) return extFrame > studioFrame ? "extension" : "studio"
+    // Identical bar time fed to BOTH legs: the bucket's values came from the
+    // leg that processed last — disambiguate by consumption order.
+    const extArr = Number(legStats.extension.lastConsumedAt) || 0
+    const studioArr = Number(legStats.studio.lastConsumedAt) || 0
+    if (extArr > studioArr) return "extension"
+    if (studioArr > extArr) return "studio"
+  }
   const ext = Number(legStats.extension.lastConsumedAt) || 0
   const studio = Number(legStats.studio.lastConsumedAt) || 0
   if (!ext && !studio) return null // nothing served yet — honest, never a guess

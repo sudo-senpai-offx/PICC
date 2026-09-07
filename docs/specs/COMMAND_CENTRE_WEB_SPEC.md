@@ -433,10 +433,13 @@ CI; live-venue behavior is a manual verify step, not a unit test.
    proposal rail with TWO carriers sharing ONE gate+envelope (carrier B — "I placed it, PICC
    verifies" — is the default; carrier A — "PICC executes" — runs only on the acting human's FRESH
    per-action click and is the ONLY path that reaches `createOrder`):
-   `ccxtOrdering.mjs` (the deliberate createOrder-exception seam — the process's ONLY
-   `createOrder` caller while `ccxtConnector`'s read-only guard stays amputated for every other
-   module; env-only credentials `PICC_CCXT_APIKEY|SECRET|PASSWORD_<EX>` + `PICC_CCXT_SANDBOX_<EX>`
-   (+ global `PICC_CCXT_SANDBOX=1`), never logged / never in responses / never in the audit; spot-
+`ccxtOrdering.mjs` (the deliberate createOrder-exception seam — the process's ONLY
+    `createOrder` caller while `ccxtConnector`'s read-only guard stays amputated for every other
+    module; env-only credentials in one of two modes — CEX-style `PICC_CCXT_APIKEY|SECRET|PASSWORD_<EX>`
+    or wallet-key `PICC_CCXT_WALLETADDRESS|PRIVATEKEY_<EX>` (Hyperliquid requires address+privateKey,
+    NOT apiKey/secret, verified against the installed ccxt build; a HALF-SET pair is refused) +
+    `PICC_CCXT_SANDBOX_<EX>` (+ global `PICC_CCXT_SANDBOX=1`), never logged / never in responses /
+    never in the audit; spot-
    only defaultType, `enableRateLimit`, sandbox-mode first, limit-only; independently REFUSES any
    order whose limit-notional exceeds the $10 hard cap — defense-in-depth, never a silent shrink;
    read-only `verifyCcxtFill` / keyless `fetchReferencePrice` / wallet `observeCcxtEquity` with a

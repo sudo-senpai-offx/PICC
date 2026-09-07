@@ -211,9 +211,14 @@ describe("sensor content.js context lifecycle (T2)", () => {
     expect(typeof listener).toBe("function")
     const handedBack = listener({ action: "sensor-queue-depth" }, {}, (r) => { response = r })
     expect(handedBack).toBe(false) // synchronous reply: port closed
-    // With no venue config cached yet, the tab reports no venue honestly, and
-    // with no scan ever scheduled yet the scan-entry clock is honestly null.
-    expect(response).toEqual({ action: "sensor-queue-depth", depth: 0, observed: true, venueId: null, venueName: null, scannedAt: null })
+    // With no venue config cached yet, the tab reports no venue honestly. The
+    // one-per-tab startup scan (fired right after the first successful server
+    // probe) has ALREADY entered a scan cycle even on this non-venue host, so
+    // the scan-entry clock is a real timestamp — the scan ran, found no venue
+    // (venueId/venueName stay null), and never fabricated a "venue seen".
+    expect(response).toMatchObject({ action: "sensor-queue-depth", depth: 0, observed: true, venueId: null, venueName: null })
+    expect(typeof response.scannedAt).toBe("number")
+    expect(response.scannedAt).toBeGreaterThan(0)
 
     // push one real broker-shaped frame, then re-read: the observed depth is 1
     h.state.getImpl = (keys, cb) => cb({ piccRelayEnabled: true })
