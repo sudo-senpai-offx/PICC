@@ -171,7 +171,7 @@ export function AppShell() {
         collapsed={outer.collapsed}
         onToggleSidebar={() => {
           outer.toggle()
-          if (inMinistry && !outer.collapsed) inner.toggle()
+          if (inMinistry && outer.collapsed) inner.toggle() // manual expand collapses inner
         }}
         onOpenPalette={() => setPaletteOpen(true)}
       />
