@@ -1,28 +1,40 @@
+export type SuiteId = "trading" | "earnings" | "intelligence"
+export type SuiteStatus = "production" | "under-development"
+
 export interface SuiteMeta {
   id: string
   label: string
   icon: string
   blurb: string
+  status: SuiteStatus
 }
 
-/** Client display metadata for every suite id (server owns feature/overlay flags). */
+/** Client display metadata for every ministry id. Server owns feature/overlay flags. */
 export const SUITE_META: Record<string, SuiteMeta> = {
   trading: {
     id: "trading",
     label: "Trading",
     icon: "📈",
-    blurb: "Prediction, paper ledger, signals, watchlist and the read-only broker bridge + demo autopilot."
+    blurb: "Market execution, venues, models and P&L. Paper/demo until the go-live gate passes.",
+    status: "production"
   },
-  depin: { id: "depin", label: "DePIN", icon: "🛰️", blurb: "DePIN node health and earnings." },
-  nft: { id: "nft", label: "NFT & Royalties", icon: "🎨", blurb: "NFT floor price and volume reads." },
-  defi: { id: "defi", label: "DeFi & Yield", icon: "💧", blurb: "Supply stables and yield vault tracking." },
-  crypto: { id: "crypto", label: "Crypto & Staking", icon: "₿", blurb: "Exchange and staking dashboards." },
-  p2p: { id: "p2p", label: "P2P Lending", icon: "🤝", blurb: "Peer-to-peer lending portfolios." },
-  agent: { id: "agent", label: "AI Agent", icon: "🤖", blurb: "Agent-economy platforms." },
-  other: { id: "other", label: "Site", icon: "🧭", blurb: "PICC site intelligence." }
+  earnings: {
+    id: "earnings",
+    label: "Earnings",
+    icon: "💰",
+    blurb: "The broad income ministry: cashback, micro-task, UX, referral, affiliate, royalty, yield and agent-income.",
+    status: "under-development"
+  },
+  intelligence: {
+    id: "intelligence",
+    label: "Intelligence for PICC",
+    icon: "🧭",
+    blurb: "Prime-minister suite: the governor, decision support, and zero-to-one guidance toward profitability.",
+    status: "under-development"
+  }
 }
 
-/** Resolve display metadata for a suite id (falls back to a generic site suite). */
+/** Resolve display metadata for a ministry id (falls back to null). */
 export function suiteMeta(id?: string | null): SuiteMeta | null {
   if (id && Object.hasOwn(SUITE_META, id)) return SUITE_META[id]
   return null
