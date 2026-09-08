@@ -551,9 +551,10 @@ git commit -m "feat(ministries): ministry shell with inner sidebar + pseudo-full
 
 - [ ] **Step 1: Write the failing test**
 
-Create `apps/dashboard/src/lib/__tests__/ministrySettings.test.ts`:
+Create `apps/dashboard/src/lib/__tests__/ministrySettings.test.ts` (note: must start with the repo-native `// @vitest-environment jsdom` docblock — localStorage is unavailable under vitest's default node environment; same pattern as `income.test.ts`):
 
 ```ts
+// @vitest-environment jsdom
 import { describe, expect, it, beforeEach } from "vitest"
 import { getMinistrySettings, saveMinistrySettings, type AutopilotMode } from "@/lib/ministrySettings"
 
