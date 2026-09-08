@@ -12,6 +12,7 @@ import { isFeatureOn } from "@/lib/settings"
 import type { FeatureKey } from "@/lib/settings"
 import { AppErrorBoundary } from "@/components/AppErrorBoundary"
 import { Spinner } from "@/components/ui"
+import { MinistryRoom } from "@/pages/ministry/MinistryRoom"
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { session, loading } = useAuth()
@@ -55,6 +56,7 @@ export default function App() {
             ministry shell's Outlet — it keeps the trading UI + deep links alive. */}
         <Route path="suites/:suiteId" element={<MinistryShell />}>
           <Route index element={<Suites />} />
+          <Route path="*" element={<MinistryRoom />} />
         </Route>
         <Route path="suites" element={<Navigate to="/suites/trading" replace />} />
         <Route path="trading" element={<Navigate to="/suites/trading" replace />} />
