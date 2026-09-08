@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { NavLink, Outlet, useNavigate } from "react-router-dom"
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { signOutLocal } from "@/lib/auth"
 import { useAuth } from "@/hooks/useAuth"
 import { isFeatureOn } from "@/lib/settings"
@@ -71,10 +71,13 @@ const NAV: { section: string; items: { to: string; label: string; icon: string; 
   }
 ]
 
-function useSidebarState() {
+const OUTER_RAIL_KEY = "picc.rail.outer"
+const INNER_RAIL_KEY = "picc.rail.inner"
+
+function useRailState(key: string) {
   const [collapsed, setCollapsed] = useState(() => {
     try {
-      return localStorage.getItem("picc.sidebar.collapsed") === "1"
+      return localStorage.getItem(key) === "1"
     } catch {
       return false
     }
@@ -83,7 +86,7 @@ function useSidebarState() {
     setCollapsed((c) => {
       const next = !c
       try {
-        localStorage.setItem("picc.sidebar.collapsed", next ? "1" : "0")
+        localStorage.setItem(key, next ? "1" : "0")
       } catch {
         /* storage unavailable */
       }
@@ -124,10 +127,22 @@ function ShellFooter() {
 export function AppShell() {
   const { session } = useAuth()
   const navigate = useNavigate()
-  const { collapsed, toggle } = useSidebarState()
+  const outer = useRailState(OUTER_RAIL_KEY)
+  const inner = useRailState(INNER_RAIL_KEY)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   useExternalLinkRouter()
+
+  const location = useLocation()
+  const inMinistry = location.pathname.startsWith("/suites/")
+  useEffect(() => {
+    if (inMinistry) {
+      // entering a suite: collapse outer rail, expand inner rail
+      if (!outer.collapsed) outer.toggle()
+      if (inner.collapsed) inner.toggle()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inMinistry])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -151,8 +166,15 @@ export function AppShell() {
   })).filter((section) => section.items.length > 0)
 
   return (
-    <div className={collapsed ? "shell collapsed" : "shell"}>
-      <TopBar collapsed={collapsed} onToggleSidebar={toggle} onOpenPalette={() => setPaletteOpen(true)} />
+    <div className={outer.collapsed ? "shell collapsed" : "shell"}>
+      <TopBar
+        collapsed={outer.collapsed}
+        onToggleSidebar={() => {
+          outer.toggle()
+          if (inMinistry && !outer.collapsed) inner.toggle()
+        }}
+        onOpenPalette={() => setPaletteOpen(true)}
+      />
       <div className="shell-body">
         <aside className="sidebar">
           <div className="brand">
@@ -172,7 +194,7 @@ export function AppShell() {
                     to={item.to}
                     end={item.to === "/"}
                     className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-                    title={collapsed ? item.label : undefined}
+                    title={outer.collapsed ? item.label : undefined}
                   >
                     <span className="nav-icon">{item.icon}</span>
                     <span className="nav-label">{item.label}</span>

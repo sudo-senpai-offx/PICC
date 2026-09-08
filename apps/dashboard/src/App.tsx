@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell"
 import { Login } from "@/pages/Login"
 import { Dashboard } from "@/pages/Dashboard"
 import { Suites } from "@/pages/Suites"
+import MinistryShell from "@/pages/MinistryShell"
 import { Profile } from "@/pages/Profile"
 import { Settings } from "@/pages/Settings"
 import { useAuth } from "@/hooks/useAuth"
@@ -50,8 +51,11 @@ export default function App() {
         />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />
-        {/* Interim bridge: existing Suites page holds the trading UI + deep links until MinistryShell (Task 3) */}
-        <Route path="suites/:suiteId" element={<Suites />} />
+        {/* The existing Suites page is now the ministry landing under the
+            ministry shell's Outlet — it keeps the trading UI + deep links alive. */}
+        <Route path="suites/:suiteId" element={<MinistryShell />}>
+          <Route index element={<Suites />} />
+        </Route>
         <Route path="suites" element={<Navigate to="/suites/trading" replace />} />
         <Route path="trading" element={<Navigate to="/suites/trading" replace />} />
       </Route>

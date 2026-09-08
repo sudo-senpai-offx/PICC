@@ -1643,4 +1643,29 @@ kbd {
   }
 }
 
+/* ---------- Ministry shell ---------- */
+.ministry-shell {
+  display: flex;
+  height: 100%;
+}
+.ministry-sidebar {
+  width: 220px;
+  border-right: 1px solid #333;
+  padding: 12px;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+.ministry-brand {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.ministry-content {
+  flex: 1;
+  min-width: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
 
