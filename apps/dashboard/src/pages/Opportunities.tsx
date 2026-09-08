@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { NavLink } from "react-router-dom"
 import { Badge, Button, Card, Spinner } from "@/components/ui"
 import {
   getBountyBoards,
@@ -9,6 +10,12 @@ import {
   type OpportunityCatalogResult,
   type WorkflowTemplate
 } from "@/lib/api"
+import {
+  getTradingSignals,
+  screenerRun,
+  type TradingSignal,
+  type WatchlistItem
+} from "@/lib/trading"
 
 const STATUS_TONE: Record<Opportunity["status"], "success" | "warn" | "muted"> = {
   ready: "success",
@@ -28,6 +35,12 @@ export function Opportunities() {
   const [category, setCategory] = useState<string>("all")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [signals, setSignals] = useState<TradingSignal[]>([])
+  const [signalsFetched, setSignalsFetched] = useState(false)
+  const [signalsFailed, setSignalsFailed] = useState(false)
+  const [topMovers, setTopMovers] = useState<WatchlistItem[]>([])
+  const [screenerFetched, setScreenerFetched] = useState(false)
+  const [screenerFailed, setScreenerFailed] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -52,6 +65,38 @@ export function Opportunities() {
     }
   }, [])
 
+  useEffect(() => {
+    let alive = true
+    getTradingSignals()
+      .then((res) => {
+        if (!alive) return
+        setSignals(res.ok ? res.signals : [])
+        setSignalsFetched(true)
+      })
+      .catch(() => {
+        if (!alive) return
+        setSignalsFailed(true)
+        setSignalsFetched(true)
+      })
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    screenerRun({ sort: "change24h", limit: 5 })
+      .then((res) => {
+        if (!alive) return
+        setTopMovers(res.results)
+        setScreenerFetched(true)
+      })
+      .catch(() => {
+        if (!alive) return
+        setScreenerFailed(true)
+        setScreenerFetched(true)
+      })
+    return () => { alive = false }
+  }, [])
+
   const shown = useMemo(() => {
     if (!catalog) return []
     return category === "all"
@@ -72,6 +117,75 @@ export function Opportunities() {
       </header>
 
       {error ? <p className="form-error">{error}</p> : null}
+
+      <Card className="stack">
+        <div>
+          <h2 className="h2">Live market opportunities</h2>
+          <p className="muted small">
+            Decision support only — observations from signals and screener models, no orders placed from here.
+          </p>
+        </div>
+
+        <div>
+          <h3 className="h3">Watchlist signals</h3>
+          {signalsFailed ? (
+            <p className="muted">Signals unavailable — market data not configured.</p>
+          ) : signalsFetched && signals.length === 0 ? (
+            <p className="muted">No signals yet — predictions will appear here when the models emit them.</p>
+          ) : (
+            <div className="grid-2">
+              {signals.map((s) => (
+                <Card key={s.id} className="stack">
+                  <div className="row space-between">
+                    <strong>{s.symbol ?? "—"}</strong>
+                    <Badge tone={s.direction === "up" ? "success" : s.direction === "down" ? "danger" : "muted"}>
+                      {s.direction ?? "—"}
+                    </Badge>
+                  </div>
+                  {s.confidence != null ? (
+                    <p className="muted small">Confidence: {s.confidence}%</p>
+                  ) : null}
+                  <p className="muted small">{new Date(s.createdAt).toLocaleDateString()}</p>
+                  <NavLink className="small" to="/suites/trading/markets">
+                    open Markets →
+                  </NavLink>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3 className="h3">Top movers (24h)</h3>
+          {screenerFailed ? (
+            <p className="muted">Screener unavailable — market data not configured.</p>
+          ) : screenerFetched && topMovers.length === 0 ? (
+            <p className="muted">No movers found — screener results will appear here when data is available.</p>
+          ) : (
+            <div className="grid-2">
+              {topMovers.map((m) => (
+                <Card key={m.symbol} className="stack">
+                  <div className="row space-between">
+                    <strong>{m.symbol}</strong>
+                    <span className="muted small">${m.last.toLocaleString()}</span>
+                  </div>
+                  <div className="row wrap gap">
+                    <Badge tone={m.change24h >= 0 ? "success" : "danger"}>
+                      {m.change24h >= 0 ? "+" : ""}{m.change24h.toFixed(2)}% 24h
+                    </Badge>
+                    <Badge tone="muted">
+                      {m.changeWeek >= 0 ? "+" : ""}{m.changeWeek.toFixed(2)}% 7d
+                    </Badge>
+                  </div>
+                  <NavLink className="small" to="/suites/trading/markets">
+                    open Markets →
+                  </NavLink>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
 
       <div className="grid-2">
         {catalog?.categories.map((c) => (
