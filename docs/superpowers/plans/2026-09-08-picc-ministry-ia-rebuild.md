@@ -501,16 +501,18 @@ And render the shell body with per-rail classes:
 <div className={outer.collapsed ? "shell collapsed" : "shell"}>
   <TopBar collapsed={outer.collapsed} onToggleSidebar={() => {
     outer.toggle()
-    if (inMinistry && !outer.collapsed) inner.toggle() // manual expand collapses inner
+    // RULING 2026-09-08 (was `!outer.collapsed`): `outer.collapsed` reads the PRE-toggle
+    // value (React batches setState), so `!outer.collapsed` collapses inner when the user
+    // COLLAPSES outer — inverted. The correct manual expand-collapses-inner branch is
+    // `outer.collapsed` (pre-toggle true => about to expand). See ledger ruling.
+    if (inMinistry && outer.collapsed) inner.toggle() // manual expand collapses inner
   }} onOpenPalette={() => setPaletteOpen(true)} />
   ...
   <aside className="sidebar">{/* ... existing outer nav ... */}</aside>
   <main className="content"><Outlet /></main>
 ```
 
-- [ ] **Step 7: Remove the old Suites page**
-
-Delete `apps/dashboard/src/pages/Suites.tsx`. Remove any `import { Suites } from "@/pages/Suites"` in `App.tsx` (Task 2 already removed its route usage; drop the import if present).
+- [x] **Step 7: Remove the old Suites page** — SUPERSEDED by option-A ruling (2026-09-08): `Suites.tsx` is NOT deleted, NOT moved. It hosts the working Trading UI (MarketsSuite + CommandCentrePanel gallery + deep-link behavior) and remains the ministry **index landing** under the MinistryShell Outlet (`<Route index element={<Suites />} />`). Original text: "Delete `apps/dashboard/src/pages/Suites.tsx`. Remove any `import { Suites } from "@/pages/Suites"` — do NOT follow.
 
 - [ ] **Step 8: Add minimal style classes**
 
@@ -530,7 +532,7 @@ Run: `npx vitest run src/components/__tests__/MinistryShell.test.tsx src/compone
 
 ```bash
 git add apps/dashboard/src/pages/MinistryShell.tsx apps/dashboard/src/components/AppShell.tsx apps/dashboard/src/index.css
-git rm apps/dashboard/src/pages/Suites.tsx
+# NOTE (option-A ruling): do NOT `git rm apps/dashboard/src/pages/Suites.tsx` — it is kept as ministry landing.
 git commit -m "feat(ministries): ministry shell with inner sidebar + pseudo-full-takeover"
 ```
 
