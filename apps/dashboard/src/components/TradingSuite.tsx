@@ -282,10 +282,7 @@ export function MarketsSuite() {
               <AssistantCard status={status?.paper ?? null} />
             </div>
           </div>
-          <div className="grid">
-            <WatchlistScannerCard />
-            <NewsCard />
-          </div>
+          <NewsCard />
           <PaperAnalyticsCard />
         </>
       )}
