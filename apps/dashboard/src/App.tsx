@@ -3,11 +3,7 @@ import { Opportunities } from "@/pages/Opportunities"
 import { AppShell } from "@/components/AppShell"
 import { Login } from "@/pages/Login"
 import { Dashboard } from "@/pages/Dashboard"
-import { Simulator } from "@/pages/Simulator"
-import { Agents } from "@/pages/Agents"
-import { Income } from "@/pages/Income"
 import { Suites } from "@/pages/Suites"
-import { StreamPage } from "@/pages/StreamPage"
 import { Profile } from "@/pages/Profile"
 import { Settings } from "@/pages/Settings"
 import { useAuth } from "@/hooks/useAuth"
@@ -44,24 +40,6 @@ export default function App() {
         }
       >
         <Route index element={<Dashboard />} />
-        <Route path="simulator" element={<Simulator />} />
-        <Route
-          path="suites"
-          element={
-            <RequireFeature feature="trading">
-              <Suites />
-            </RequireFeature>
-          }
-        />
-        <Route path="trading" element={<Navigate to="/suites" replace />} />
- <Route
-          path="agents"
-          element={
-            <RequireFeature feature="agents">
-              <Agents />
-            </RequireFeature>
-          }
-        />
         <Route
           path="opportunities"
           element={
@@ -70,24 +48,12 @@ export default function App() {
             </RequireFeature>
           }
         />
-        <Route
-          path="income"
-          element={
-            <RequireFeature feature="income">
-              <Income />
-            </RequireFeature>
-          }
-        />
-        <Route
-          path="streams/:id"
-          element={
-            <RequireFeature feature="income">
-              <StreamPage />
-            </RequireFeature>
-          }
-        />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />
+        {/* Interim bridge: existing Suites page holds the trading UI + deep links until MinistryShell (Task 3) */}
+        <Route path="suites/:suiteId" element={<Suites />} />
+        <Route path="suites" element={<Navigate to="/suites/trading" replace />} />
+        <Route path="trading" element={<Navigate to="/suites/trading" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

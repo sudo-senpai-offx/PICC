@@ -1,4 +1,4 @@
-export type FeatureKey = "simulator" | "agents" | "opportunities" | "overlay" | "content" | "income" | "trading" | "browser"
+export type FeatureKey = "simulator" | "agents" | "opportunities" | "overlay" | "content" | "income" | "trading" | "browser" | "earnings" | "intelligence"
 
 export interface FeatureDef {
   label: string
@@ -13,7 +13,9 @@ export const FEATURES: Record<FeatureKey, FeatureDef> = {
   content: { label: "Content Studio", desc: "Blog, YouTube, affiliate, and social drafts." },
   income: { label: "Income Channels", desc: "Payment links for BTCPay and TNG eWallet." },
   trading: { label: "Trading Suite", desc: "Multi-model prediction, read-only live broker bridge, and paper trading." },
-  browser: { label: "Browser Studio", desc: "Integrated browser for all income sources — PICC can overlay, cast, and control it." }
+  browser: { label: "Browser Studio", desc: "Integrated browser for all income sources — PICC can overlay, cast, and control it." },
+  earnings: { label: "Earnings Suite", desc: "The broad income ministry: cashback, micro-task, UX, referral, affiliate, royalty, yield and agent-income." },
+  intelligence: { label: "Intelligence Suite", desc: "Prime-minister suite: the governor, decision support, and zero-to-one guidance." }
 }
 
 const DEFAULTS: Record<FeatureKey, boolean> = {
@@ -24,7 +26,9 @@ const DEFAULTS: Record<FeatureKey, boolean> = {
   content: true,
   income: true,
   trading: true,
-  browser: true
+  browser: true,
+  earnings: true,
+  intelligence: true
 }
 
 const STORAGE_KEY = "picc.features"

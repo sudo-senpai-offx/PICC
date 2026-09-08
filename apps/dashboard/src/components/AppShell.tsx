@@ -51,16 +51,15 @@ const NAV: { section: string; items: { to: string; label: string; icon: string; 
     section: "Command",
     items: [
       { to: "/", label: "Dashboard", icon: "▦", feature: null },
-      { to: "/simulator", label: "Simulator", icon: "📊", feature: "simulator" },
-      { to: "/agents", label: "Agents", icon: "🤖", feature: "agents" },
       { to: "/opportunities", label: "Opportunities", icon: "🧭", feature: "opportunities" }
     ]
   },
   {
-    section: "Financial",
+    section: "Suites",
     items: [
-      { to: "/suites", label: "Suites", icon: "📈", feature: "trading" },
-      { to: "/income", label: "Income", icon: "💰", feature: "income" }
+      { to: "/suites/trading", label: "Trading", icon: "📈", feature: "trading" },
+      { to: "/suites/earnings", label: "Earnings", icon: "💰", feature: "earnings" },
+      { to: "/suites/intelligence", label: "Intelligence for PICC", icon: "🧭", feature: "intelligence" }
     ]
   },
   {
