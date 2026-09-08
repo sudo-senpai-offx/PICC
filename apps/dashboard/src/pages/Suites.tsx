@@ -62,7 +62,7 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
       ) : (
         <p className="muted small">
           This suite category does not have PICC-managed panels yet. Connectors and
-          income sources are managed under Income.
+          income sources are managed under the Earnings ministry.
         </p>
       )}
     </Card>

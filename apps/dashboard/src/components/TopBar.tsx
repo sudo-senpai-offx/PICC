@@ -3,11 +3,8 @@ import { NotificationCenter } from "@/components/NotificationCenter"
 
 const TITLES: Record<string, string> = {
   "/": "Command Center",
-  "/simulator": "Simulator",
   "/suites": "Suites",
-  "/agents": "Agents",
   "/opportunities": "Opportunities",
-  "/income": "Income",
   "/settings": "Settings",
   "/profile": "Profile"
 }

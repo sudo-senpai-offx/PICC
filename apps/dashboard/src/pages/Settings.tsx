@@ -139,9 +139,9 @@ export function Settings() {
 
       <div className="card" style={{ marginTop: 8 }}>
         <p className="muted" style={{ margin: 0 }}>
-          These are <strong>PICC-wide</strong> settings. Per-ministry settings (site catalogs, the
-          autopilot/copilot flip-switch, confidence threshold) live inside each ministry at
-          <code> /suites/&lt;ministry&gt;/settings</code>.
+          These are <strong>PICC-wide</strong> settings. Per-ministry settings (the
+          autopilot/copilot flip-switch, confidence threshold) are stored per ministry and
+          will get their own surface inside each ministry (under development).
         </p>
       </div>
 

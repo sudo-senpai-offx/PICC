@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { Card, Badge, Spinner } from "@/components/ui"
 import { useUser } from "@/hooks/useAuth"
 import { getHealth, getBtcpayStatus, getExtensionStatus } from "@/lib/api"
@@ -9,6 +9,14 @@ import { formatMoney, listAccounts, listTransactions, netWorthTotals, syncTradin
 import { getPaperOverview } from "@/lib/trading"
 import { getStreams, getEarnings, streamSummary } from "@/lib/streams"
 import { CryptoMarkets } from "@/components/CryptoMarkets"
+
+// Control-deck entry points. Destinations must be LIVE P1 routes only — the
+// de-linked top-level pages (/simulator, /income, /agents, /streams/:id) have
+// no routes in P1 and must never appear here (whole-branch review 2026-09-08).
+export const QUICK_ACTIONS: ReadonlyArray<{ icon: string; label: string; hint: string; to: string }> = [
+  { icon: "📈", label: "Predict market", hint: "Markets & prediction", to: "/suites/trading" },
+  { icon: "📈", label: "Suites", hint: "Manage all ministries", to: "/suites" }
+]
 
 function SystemStatus() {
   const [health, setHealth] = useState<Awaited<ReturnType<typeof getHealth>> | null>(null)
@@ -148,13 +156,7 @@ export function Dashboard() {
   const summary = streamSummary(getStreams(), getEarnings())
   const incomeMonthly = summary.monthly ? `$${Math.round(summary.monthly).toLocaleString("en-US")}/mo` : "—"
 
-  const quickActions = [
-    { icon: "📊", label: "Financial Twin", hint: "Monte Carlo projection", onClick: () => navigate("/simulator") },
-    { icon: "📈", label: "Predict market", hint: "Markets & prediction", onClick: () => navigate("/simulator?tab=markets") },
-    { icon: "📈", label: "Suites", hint: "Manage all suites", onClick: () => navigate("/suites") },
-    { icon: "💰", label: "Income streams", hint: "View streams", onClick: () => navigate("/income") },
-    { icon: "💳", label: "Payment link", hint: "Invoice a buyer", onClick: () => navigate("/income") }
-  ]
+  const quickActions = QUICK_ACTIONS.map((a) => ({ ...a, onClick: () => navigate(a.to) }))
 
   return (
     <div className="stack stack-lg">
@@ -197,9 +199,7 @@ export function Dashboard() {
             <Card>
               <div className="metric-label">Active Simulations</div>
               <div className="metric-value">{sims.length}</div>
-              <Link to="/simulator" className="link-btn">
-                Run a new simulation →
-              </Link>
+              <span className="muted small">Simulator re-homes into the Trading ministry (under development)</span>
             </Card>
             <Card>
               <div className="metric-label">AI Agent Status</div>
@@ -211,16 +211,16 @@ export function Dashboard() {
             <Card>
               <div className="metric-label">Ready to cash out</div>
               <div className="metric-value">{summary.cashoutReady.length}</div>
-              <Link to="/income" className="link-btn">
-                View streams →
-              </Link>
+              <span className="muted small">
+                Stream views re-home into the Earnings ministry (under development)
+              </span>
             </Card>
             <Card>
               <div className="metric-label">Agent Insights</div>
               <div className="metric-value">{logs.length}</div>
-              <Link to="/agents" className="link-btn">
-                View activity →
-              </Link>
+              <span className="muted small">
+                Agent activity re-homes into the Intelligence ministry (under development)
+              </span>
             </Card>
           </div>
 
@@ -252,7 +252,7 @@ export function Dashboard() {
                 <h2 className="h2">Recent simulations</h2>
                 {sims.length === 0 ? (
                   <p className="muted">
-                    No simulations yet. Try the Financial Twin emulator — it never touches real money.
+                    No simulations yet. New simulations will run from the Trading ministry (under development).
                   </p>
                 ) : (
                   <table className="table">
