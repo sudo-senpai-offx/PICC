@@ -113,6 +113,7 @@ describe("ministry room routes (SP-1 T1.3)", () => {
     mounted.push(m)
     await waitFor(() => !!m.host.querySelector('header[data-room="dashboard"]'), "dashboard room header")
     await waitFor(() => m.host.textContent.includes("Paper cash available"), "dashboard StatusCards")
+    expect(m.host.textContent).toContain("Paper cash available")
     expect(m.host.textContent).toContain("Trade planner")
     expect(m.host.textContent).toContain("Adaptive Confluence")
   })

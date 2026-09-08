@@ -19,7 +19,6 @@ import { BacktestPanel } from "@/components/BacktestPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { AlertPanel } from "@/components/AlertPanel"
 import { CalendarPanel } from "@/components/CalendarPanel"
-import { PortfolioPanel } from "@/components/PortfolioPanel"
 import { WatchlistPanel } from "@/components/WatchlistPanel"
 import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { PatternPanel } from "@/components/PatternPanel"
@@ -270,7 +269,6 @@ export function MarketsSuite() {
           <AdvancedIndicatorsPanel assetId={chartAsset} timeframe="daily" />
           <AlertPanel />
           <CalendarPanel />
-          <PortfolioPanel />
           <AccountMetricsPanel />
           <WatchlistPanel />
           <ScreenerPanel />
