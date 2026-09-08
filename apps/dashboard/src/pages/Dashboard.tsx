@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { NavLink, useNavigate } from "react-router-dom"
 import { Card, Badge, Spinner } from "@/components/ui"
 import { useUser } from "@/hooks/useAuth"
 import { getHealth, getBtcpayStatus, getExtensionStatus } from "@/lib/api"
+import type { HealthInfo } from "@/lib/api"
 import { listData } from "@/lib/localdata"
 import type { AgentLog, SimulationRow } from "@/lib/types"
 import { formatMoney, listAccounts, listTransactions, netWorthTotals, syncTradingAccount } from "@/lib/finance"
-import { getPaperOverview } from "@/lib/trading"
+import { getPaperOverview, getTradingStatus } from "@/lib/trading"
+import type { TradingStatus } from "@/lib/trading"
 import { getStreams, getEarnings, streamSummary } from "@/lib/streams"
 import { CryptoMarkets } from "@/components/CryptoMarkets"
 
@@ -104,6 +106,8 @@ export function Dashboard() {
   const [logs, setLogs] = useState<AgentLog[]>([])
   const [loading, setLoading] = useState(true)
   const [netWorth, setNetWorth] = useState<{ usdTotal: number; byCurrency: Record<string, number>; accountCount: number } | null>(null)
+  const [tradingStatus, setTradingStatus] = useState<TradingStatus | null>(null)
+  const [health, setHealth] = useState<HealthInfo | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -140,6 +144,12 @@ export function Dashboard() {
     return () => {
       cancelled = true
     }
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+    getTradingStatus().then(setTradingStatus).catch(() => setTradingStatus(null))
+    getHealth().then(setHealth).catch(() => setHealth(null))
   }, [user])
 
   const money = (n: unknown) =>
@@ -195,34 +205,111 @@ export function Dashboard() {
             </div>
           </Card>
 
-          <div className="grid-4">
+          {/* ── Ministry status hero strip ── */}
+          <div className="grid-3">
             <Card>
-              <div className="metric-label">Active Simulations</div>
-              <div className="metric-value">{sims.length}</div>
-              <span className="muted small">Simulator re-homes into the Trading ministry (under development)</span>
+              <NavLink to="/suites/trading" className={({ isActive }) => (isActive ? "nav-link card active" : "nav-link card")}>
+                <div className="row gap" style={{ alignItems: "center" }}>
+                  <span style={{ fontSize: 24 }}>📈</span>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Trading</div>
+                    <div className="muted small">
+                      {tradingStatus
+                        ? `${formatMoney(tradingStatus.paper.cash)} cash · ${tradingStatus.paper.openCount} open`
+                        : "unavailable"}
+                    </div>
+                  </div>
+                </div>
+              </NavLink>
             </Card>
             <Card>
-              <div className="metric-label">AI Agent Status</div>
-              <div className="metric-value">
-                <Badge tone="success">● Idle</Badge>
-              </div>
-              <span className="muted">Researcher · Analyst · Content Creator</span>
+              <NavLink to="/suites/earnings" className={({ isActive }) => (isActive ? "nav-link card active" : "nav-link card")}>
+                <div className="row gap" style={{ alignItems: "center" }}>
+                  <span style={{ fontSize: 24 }}>💰</span>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Earnings</div>
+                    <div className="muted small">
+                      {summary.activeCount > 0
+                        ? `${summary.activeCount} stream${summary.activeCount === 1 ? "" : "s"} · ${incomeMonthly}`
+                        : "no streams yet"}
+                    </div>
+                  </div>
+                </div>
+              </NavLink>
             </Card>
             <Card>
-              <div className="metric-label">Ready to cash out</div>
-              <div className="metric-value">{summary.cashoutReady.length}</div>
-              <span className="muted small">
-                Stream views re-home into the Earnings ministry (under development)
-              </span>
-            </Card>
-            <Card>
-              <div className="metric-label">Agent Insights</div>
-              <div className="metric-value">{logs.length}</div>
-              <span className="muted small">
-                Agent activity re-homes into the Intelligence ministry (under development)
-              </span>
+              <NavLink to="/suites/intelligence" className={({ isActive }) => (isActive ? "nav-link card active" : "nav-link card")}>
+                <div className="row gap" style={{ alignItems: "center" }}>
+                  <span style={{ fontSize: 24 }}>🧠</span>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Intelligence</div>
+                    <div className="muted small">
+                      {health
+                        ? `${Object.values(health.providers).filter(Boolean).length} providers configured`
+                        : "unavailable"}
+                    </div>
+                  </div>
+                </div>
+              </NavLink>
             </Card>
           </div>
+
+          {/* ── Ministry summary grid (real client reads, no fabricated values) ── */}
+          <Card className="stack">
+            <h2 className="h2" style={{ margin: 0 }}>Ministry summary</h2>
+            <div className="grid-4">
+              <div>
+                <div className="metric-label">Paper PnL realized</div>
+                <div className="metric-value">
+                  {tradingStatus ? formatMoney(tradingStatus.paper.realizedPnl) : "unavailable"}
+                </div>
+                <span className="muted small">Trading ministry</span>
+              </div>
+              <div>
+                <div className="metric-label">Active streams</div>
+                <div className="metric-value">{summary.activeCount}</div>
+                <span className="muted small">Earnings ministry</span>
+              </div>
+              <div>
+                <div className="metric-label">Accounts tracked</div>
+                <div className="metric-value">
+                  {netWorth ? netWorth.accountCount : "unavailable"}
+                </div>
+                <span className="muted small">Finance tracker</span>
+              </div>
+              <div>
+                <div className="metric-label">Net worth</div>
+                <div className="metric-value">{netWorthDisplay}</div>
+                <span className="muted small">{netWorthNote}</span>
+              </div>
+            </div>
+          </Card>
+
+          {/* ── Ministry room quick-links ── */}
+          {/* keep in sync with MinistryShell INNER_NAV (SP-1) */}
+          <Card className="stack">
+            <h2 className="h2" style={{ margin: 0 }}>Ministry rooms</h2>
+            <div className="grid-3">
+              {[
+                { to: "/suites/trading/dashboard", label: "Trading Dashboard", hint: "Overview & status" },
+                { to: "/suites/trading/markets", label: "Markets", hint: "Charts & analysis" },
+                { to: "/suites/trading/paper", label: "Paper Trading", hint: "Simulated trades" },
+                { to: "/suites/earnings/dashboard", label: "Earnings Dashboard", hint: "Revenue overview" },
+                { to: "/suites/earnings/simulator", label: "Income Simulator", hint: "Income modelling" },
+                { to: "/suites/intelligence/dashboard", label: "Intelligence Dashboard", hint: "Research overview" },
+                { to: "/suites/intelligence/guidance", label: "Guidance", hint: "Advisor & insights" }
+              ].map((room) => (
+                <NavLink
+                  key={room.to}
+                  to={room.to}
+                  className={({ isActive }) => (isActive ? "nav-link card active" : "nav-link card")}
+                >
+                  <div style={{ fontWeight: 600 }}>{room.label}</div>
+                  <div className="muted small">{room.hint}</div>
+                </NavLink>
+              ))}
+            </div>
+          </Card>
 
           <Card className="stack">
             <div className="row-between">
