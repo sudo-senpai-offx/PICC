@@ -42,5 +42,6 @@ infra/btcpayserver/btcpayserver-docker/
 
 # Scratch / session tooling (never source-controlled)
 .freebuff/
+.firecrawl/
 dev_pack_code.py
 project_tree.txt
