@@ -1055,7 +1055,7 @@ function ToggleRow({ label, checked, onChange }: { label: string; checked: boole
 // ---------------------------------------------------------------------
 // Status cards
 // ---------------------------------------------------------------------
-function StatusCards({
+export function StatusCards({
   paper,
   riskPct,
   demo,
@@ -1137,7 +1137,7 @@ function StatusCards({
 // ---------------------------------------------------------------------
 // Prediction engine
 // ---------------------------------------------------------------------
-function PredictionCard({ recordSignal }: { recordSignal: () => void }) {
+export function PredictionCard({ recordSignal }: { recordSignal: () => void }) {
   const [symbol, setSymbol] = useState("EURUSD")
   const [days, setDays] = useState(3)
   const [result, setResult] = useState<PredictionResult | null>(null)
@@ -1300,7 +1300,7 @@ function PredictionResultView({ result }: { result: PredictionResult }) {
 // ---------------------------------------------------------------------
 // Pro Analysis — layered confluence report
 // ---------------------------------------------------------------------
-function ProAnalysisCard() {
+export function ProAnalysisCard() {
   const [symbol, setSymbol] = useState("EURUSD")
   const [days, setDays] = useState(3)
   const [result, setResult] = useState<ProAnalysisResult | null>(null)
@@ -1547,7 +1547,7 @@ function ProAnalysisResultView({ result }: { result: ProAnalysisResult }) {
 // ---------------------------------------------------------------------
 // Paper trading ledger
 // ---------------------------------------------------------------------
-function PaperTradingCard({
+export function PaperTradingCard({
   positions = [],
   closed = [],
   refresh
@@ -1634,7 +1634,7 @@ function PaperTradingCard({
 // Mirrors what serious journals/tools (TradeBench, Edgewonk) call "plan
 // before you enter": size every position off a fixed % risk, not feelings.
 // ---------------------------------------------------------------------
-function TradePlannerCard() {
+export function TradePlannerCard() {
   const [balance, setBalance] = useState("10000")
   const [riskPct, setRiskPct] = useState("2")
   const [entry, setEntry] = useState("1.1000")
@@ -1739,7 +1739,7 @@ function ExitRow({
 // ---------------------------------------------------------------------
 // Watchlist + multi-asset scanner (covers /trading/watchlist + /scan)
 // ---------------------------------------------------------------------
-function WatchlistScannerCard() {
+export function WatchlistScannerCard() {
   const [quotes, setQuotes] = useState<WatchlistQuote[]>([])
   const [symbol, setSymbol] = useState("")
   const [scan, setScan] = useState<ScanResult | null>(null)
@@ -1860,7 +1860,7 @@ function WatchlistScannerCard() {
 // ---------------------------------------------------------------------
 // Market news (Serper) — covers /trading/news
 // ---------------------------------------------------------------------
-function NewsCard() {
+export function NewsCard() {
   const [query, setQuery] = useState("")
   const [news, setNews] = useState<MarketNewsResult | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1916,7 +1916,7 @@ function NewsCard() {
 // ---------------------------------------------------------------------
 // Paper analytics (equity curve, drawdown, full metrics) — /trading/paper/analytics
 // ---------------------------------------------------------------------
-function PaperAnalyticsCard() {
+export function PaperAnalyticsCard() {
   const [analytics, setAnalytics] = useState<PaperAnalyticsResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -2066,7 +2066,7 @@ function PaperAnalyticsCard() {
 // ---------------------------------------------------------------------
 // Signals + assistant
 // ---------------------------------------------------------------------
-function SignalsCard({ signals, refresh }: { signals: TradingSignal[]; refresh: () => void }) {
+export function SignalsCard({ signals, refresh }: { signals: TradingSignal[]; refresh: () => void }) {
   const [accuracy, setAccuracy] = useState<SignalAccuracy | null>(null)
   const [resolvePrice, setResolvePrice] = useState<Record<string, string>>({})
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)

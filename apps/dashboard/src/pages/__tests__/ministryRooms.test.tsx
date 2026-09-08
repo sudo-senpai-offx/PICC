@@ -50,6 +50,18 @@ describe("ministry room routes (SP-1 T1.3)", () => {
     vi.stubGlobal("fetch", vi.fn(async () => {
       return { ok: false, status: 404, json: async () => ({ ok: false, error: "no data (stubbed)" }) } as Response
     }))
+    // jsdom omits matchMedia, which browsers provide — required by the
+    // iOS-install banner (useInstallBanner) that AutopilotSuite renders.
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    }))
   })
 
   afterEach(() => {
@@ -85,5 +97,49 @@ describe("ministry room routes (SP-1 T1.3)", () => {
     mounted.push(m)
     await waitFor(() => !!m.host.querySelector('header[data-room="guidance"]'), "intelligence guidance room header")
     expect(m.host.querySelector('header[data-room="guidance"]')?.textContent).toContain("Guidance")
+  })
+
+  it("markets room renders its curated panels", async () => {
+    const m = mount("/suites/trading/markets")
+    mounted.push(m)
+    await waitFor(() => !!m.host.querySelector('header[data-room="markets"]'), "markets room header")
+    await waitFor(() => m.host.textContent.includes("Watchlists"), "markets Watchlists panel")
+    expect(m.host.textContent).toContain("Cross-Venue Spread")
+    expect(m.host.textContent).toContain("Economic Calendar")
+  })
+
+  it("dashboard room renders its curated panels", async () => {
+    const m = mount("/suites/trading/dashboard")
+    mounted.push(m)
+    await waitFor(() => !!m.host.querySelector('header[data-room="dashboard"]'), "dashboard room header")
+    await waitFor(() => m.host.textContent.includes("Paper cash available"), "dashboard StatusCards")
+    expect(m.host.textContent).toContain("Trade planner")
+    expect(m.host.textContent).toContain("Adaptive Confluence")
+  })
+
+  it("paper room renders its curated panels", async () => {
+    const m = mount("/suites/trading/paper")
+    mounted.push(m)
+    await waitFor(() => !!m.host.querySelector('header[data-room="paper"]'), "paper room header")
+    await waitFor(() => m.host.textContent.includes("Paper trading"), "paper PaperTradingCard")
+    expect(m.host.textContent).toContain("Trade Journal")
+    expect(m.host.textContent).toContain("Decision accuracy ledger")
+  })
+
+  it("command-centre room renders its curated panels", async () => {
+    const m = mount("/suites/trading/command-centre")
+    mounted.push(m)
+    await waitFor(() => !!m.host.querySelector('header[data-room="command-centre"]'), "command-centre room header")
+    await waitFor(() => m.host.textContent.includes("Command Centre"), "command-centre panel")
+    expect(m.host.textContent).toContain("Pattern Recognition")
+    expect(m.host.textContent).toContain("Signal log")
+  })
+
+  it("autopilot room renders AutopilotSuite without triggering the ProAnalysis result", async () => {
+    const m = mount("/suites/trading/autopilot")
+    mounted.push(m)
+    await waitFor(() => !!m.host.querySelector('header[data-room="autopilot"]'), "autopilot room header")
+    await waitFor(() => m.host.textContent.includes("Automated demo-trading engine"), "autopilot suite static label")
+    expect(m.host.textContent).toContain("Model Matrix")
   })
 })
