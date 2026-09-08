@@ -778,12 +778,10 @@ git commit -m "feat(ministries): server-side cumulative ministry aggregation"
 - Test: `apps/dashboard/src/components/__tests__/CommandPalette.test.tsx` (new)
 
 **Interfaces:**
-- Consumes: `SUITE_META` (Task 1).
+- Consumes: nothing new (NAV_PAGES labels are hardcoded per the snippet below — SUITE_META from Task 1 is NOT imported, per ruling; importing it unused would fail `noUnusedLocals`).
 - Produces: `NAV_PAGES` with entries: `/` (Command Center), `/opportunities`, `/suites/trading`, `/suites/earnings`, `/suites/intelligence`, `/settings`, `/profile`. Removed: `/simulator`, `/agents`, `/income`. Comments/keywords updated to reflect whole-app search.
 
-- [ ] **Step 1: Write the failing test**
-
-Create `apps/dashboard/src/components/__tests__/CommandPalette.test.tsx`:
+- [ ] **Step 1: Write the failing test** — RULING: the original snippet below used @testing-library/react (not installed; repo-native ruling bans it). The operative test is the repo-native rewrite in the task brief (createRoot+flushSync+exact-text helpers, native value-setter + `input` dispatch for typing). Assertion contracts preserved: search `earnings` → `Earnings` row present; search `simulator`/`agents`/`income` → no `/Simulator/i`/`/Agents/i`/`/Income/i` rows. vi.mock `@/lib/api` (openBrowser/closeBrowser) and `@/lib/streamCatalog` (`CATALOG: []`) to neutralize the Income apps group. Original (non-operative) plan snippet for reference:
 
 ```tsx
 import { describe, expect, it, vi } from "vitest"
@@ -828,7 +826,7 @@ describe("CommandPalette pages", () => {
 
 > The palette filters `items` to the top visible slice; searching a removed page should yield no matching row. If the `Income apps` group (from `CATALOG`) interferes, the mock `CATALOG: []` neutralizes it.
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 2: Run to verify it fails** (repo-native test from the brief)
 
 Run: `npx vitest run src/components/__tests__/CommandPalette.test.tsx`
 Expected: FAIL — `NAV_PAGES` still has `simulator/agents/income`, and "Earnings" isn't a page entry.
