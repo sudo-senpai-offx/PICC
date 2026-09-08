@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter } from "react-router-dom"
@@ -35,12 +35,25 @@ function getByText(target: string): HTMLElement | null {
 }
 
 describe("AppShell nav", () => {
+  let mounted: Array<{ unmount: () => void }> = []
+
+  beforeEach(() => {
+    mounted = []
+  })
+
+  afterEach(() => {
+    // Unmount before global teardown so a failing test never ghosts a live
+    // AppShell into the next test's document.
+    mounted.forEach((m) => m.unmount())
+    mounted = []
+  })
+
   it("shows Command, Suites, Account groups with the ministry entries", () => {
-    mount(
+    mounted.push(mount(
       <MemoryRouter initialEntries={["/"]}>
         <AppShell />
       </MemoryRouter>
-    )
+    ))
     expect(getByText("Dashboard")).toBeTruthy()
     expect(getByText("Opportunities")).toBeTruthy()
     expect(getByText("Trading")).toBeTruthy()
@@ -51,22 +64,22 @@ describe("AppShell nav", () => {
   })
 
   it("no longer shows removed pages (Simulator, Agents, Income)", () => {
-    mount(
+    mounted.push(mount(
       <MemoryRouter initialEntries={["/"]}>
         <AppShell />
       </MemoryRouter>
-    )
+    ))
     expect(getByText("Simulator")).toBeNull()
     expect(getByText("Agents")).toBeNull()
     expect(getByText("Income")).toBeNull()
   })
 
   it("labels the Suites group", () => {
-    mount(
+    mounted.push(mount(
       <MemoryRouter initialEntries={["/"]}>
         <AppShell />
       </MemoryRouter>
-    )
+    ))
     expect(getByText("Suites")).toBeTruthy()
   })
 })
