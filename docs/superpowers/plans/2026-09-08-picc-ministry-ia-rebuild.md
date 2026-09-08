@@ -642,14 +642,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Keep PICC Settings PICC-scoped**
 
-Add a `muted` note card at the top of `apps/dashboard/src/pages/Settings.tsx` (inside the `.page` div, after the `<h1>`) that links to per-ministry settings:
+Add a `muted` note card at the top of `apps/dashboard/src/pages/Settings.tsx` (inside the `.page` div, after the `<h1>`) that honestly scopes PICC vs per-ministry settings (amended by whole-branch review 2026-09-08: the original snippet advertised `/suites/<ministry>/settings`, a route that does not exist in P1 — sub-routes are intentionally empty; also overclaimed "site catalogs", which are expanded-scope work):
 
 ```tsx
 <div className="card" style={{ marginTop: 8 }}>
   <p className="muted" style={{ margin: 0 }}>
-    These are <strong>PICC-wide</strong> settings. Per-ministry settings (site catalogs, the
-    autopilot/copilot flip-switch, confidence threshold) live inside each ministry at
-    <code> /suites/&lt;ministry&gt;/settings</code>.
+    These are <strong>PICC-wide</strong> settings. Per-ministry settings (the
+    autopilot/copilot flip-switch, confidence threshold) are stored per ministry and
+    will get their own surface inside each ministry (under development).
   </p>
 </div>
 ```
@@ -961,7 +961,7 @@ git commit -m "feat(ministries): per-ministry extension capture catalog"
 - REQ-2 (per-ministry workspace: dashboard/src/inner sidebar/simulator/settings) → Tasks 1, 3, 4
 - REQ-3 (Intelligence master suite) → Tasks 1, 3 (Intelligence inner nav has Governor/Guidance)
 - REQ-4 (governance, governor suggests) → Task 3 (Governor surface) + spec only (P2 Task 8)
-- REQ-5 (per-suite autopilot/copilot flip-switch) → Task 4
+- REQ-5 (per-suite autopilot/copilot flip-switch) → Task 4 (persistence layer + PICC Settings de-scoping note); the per-ministry **exposure surface** (the flip-switch UI inside each ministry) is NOT built in P1 — sub-routes under `/suites/:suiteId/*` are intentionally empty in P1 (see Known cross-task dependency below). Deferred to the expanded feature workstream.
 - REQ-6 (confidence-gated) → Task 4 (field) + P2 Task 8 (computation)
 - REQ-7 (zero-to-one, no wizard) → Task 3 (Intelligence Guidance) + spec
 - REQ-8 (cumulative dashboard) → Task 5 (server aggregate)
