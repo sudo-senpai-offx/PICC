@@ -1654,6 +1654,12 @@ kbd {
   padding: 12px;
   flex-shrink: 0;
   overflow-y: auto;
+  height: 100%;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ministry-sidebar::-webkit-scrollbar {
+  display: none;
 }
 .ministry-brand {
   display: flex;
