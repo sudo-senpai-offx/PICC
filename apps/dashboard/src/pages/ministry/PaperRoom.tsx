@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { PaperTradingCard, PaperAnalyticsCard } from "@/components/TradingSuite"
+import { PaperTradingCard } from "@/components/TradingSuite"
 import { LedgerPanel } from "@/components/LedgerPanel"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { getPaperPositions, getPaperHistory } from "@/lib/trading"
@@ -29,7 +29,6 @@ export function PaperRoom() {
         <p className="muted small">Paper trading ledger — simulated positions, analytics and the full trade journal.</p>
       </header>
       <PaperTradingCard positions={positions} closed={closed} refresh={refresh} />
-      <PaperAnalyticsCard />
       <LedgerPanel />
       <TradeJournalPanel />
     </div>

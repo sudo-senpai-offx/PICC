@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { openBrokerTab, validateVenueTradeUrl } from "@/lib/brokerLink"
 import { Badge, Button, Card, Field, Input, Select, Spinner, Textarea } from "@/components/ui"
 import { ReadinessPanel } from "@/components/ReadinessPanel"
@@ -41,7 +41,6 @@ import {
   QUICK_ASSETS,
   getAutopilotConfig,
   getDemoAnalytics,
-  getDemoDeals,
   getBrokerDemoStatus,
   getMarketNews,
   getPaperAnalytics,
@@ -69,7 +68,6 @@ import type {
   AutopilotConfig,
   ClosedTrade,
   DemoAnalyticsResult,
-  DemoDeal,
   BrokerDemoStatus,
   MarketNewsResult,
   PaperAnalyticsResult,
@@ -283,7 +281,6 @@ export function MarketsSuite() {
             </div>
           </div>
           <NewsCard />
-          <PaperAnalyticsCard />
         </>
       )}
     </div>
@@ -299,7 +296,6 @@ export function AutopilotSuite() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [demo, setDemo] = useState<BrokerDemoStatus | null>(null)
   const [analytics, setAnalytics] = useState<DemoAnalyticsResult | null>(null)
-  const [deals, setDeals] = useState<DemoDeal[]>([])
   const [extension, setExtension] = useState<ExtensionStatus | null>(null)
   const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number }>({ token: "", demo: true, riskPct: 2 })
   const [credsMsg, setCredsMsg] = useState<string | null>(null)
@@ -311,11 +307,10 @@ export function AutopilotSuite() {
 
   const load = async () => {
     try {
-      const [c, d, a, dl, ext, cr, br] = await Promise.allSettled([
+      const [c, d, a, ext, cr, br] = await Promise.allSettled([
         getAutopilotConfig(),
         getBrokerDemoStatus(),
         getDemoAnalytics().catch(() => null),
-        getDemoDeals(30).catch(() => ({ ok: false, deals: [] as DemoDeal[] })),
         getExtensionStatus(),
         getTradingCredentials(),
         getBrokers().catch(() => null)
@@ -327,7 +322,6 @@ export function AutopilotSuite() {
       }
       if (d.status === "fulfilled") setDemo(d.value)
       if (a.status === "fulfilled" && a.value) setAnalytics(a.value)
-      if (dl.status === "fulfilled" && dl.value.ok) setDeals(dl.value.deals)
       if (ext.status === "fulfilled") setExtension(ext.value)
       if (br.status === "fulfilled" && br.value?.ok) setBrokers(br.value)
       if (cr.status === "fulfilled") {
@@ -366,7 +360,6 @@ export function AutopilotSuite() {
     if (!snapshot || snapshot.ts < lastLoadAt.current) return
     if (snapshot.demo) setDemo(snapshot.demo)
     if (snapshot.analytics) setAnalytics(snapshot.analytics)
-    if (snapshot.deals) setDeals(snapshot.deals.ok ? snapshot.deals.deals : [])
   }, [snapshot])
 
   // Keep in sync when autopilot config changes elsewhere (overlay dockables).
@@ -804,24 +797,11 @@ export function AutopilotSuite() {
             <p className="muted small">No open deals. Start the autopilot to begin.</p>
           )}
         </Card>
-        <Card className="pad stack">
-          <h3>Recent Settlements</h3>
-          {demo?.settled?.length ? (
-            demo.settled.slice(0, 8).map((d, i) => (
-              <div key={d.serverId || `${d.closedAt}-${i}`} className="row-between">
-                <span className="muted small">
-                  {d.asset} {d.type.toUpperCase()} {fmtMoney(d.amount, demo?.currency)}
-                </span>
-                <Badge tone={d.result === "win" ? "success" : d.result === "loss" ? "danger" : "muted"}>
-                  {d.result ?? "—"} {d.profit != null ? (d.profit >= 0 ? "+" : "") + d.profit.toFixed(2) : ""}
-                </Badge>
-              </div>
-            ))
-          ) : (
-            <p className="muted small">No settlements yet.</p>
-          )}
-        </Card>
       </div>
+      <p className="muted small">
+        Settled outcomes and decision accuracy live in the paper-room Ledger.{" "}
+        <Link to="/suites/trading/paper">see Ledger</Link>
+      </p>
 
       {/* ─── Analytics ─── */}
       {analytics ? (
@@ -866,32 +846,6 @@ export function AutopilotSuite() {
                     />
                   ))
                 })()}
-              </div>
-            </div>
-          ) : null}
-          {deals.length > 0 ? (
-            <div>
-              <h4 className="small">Deal History</h4>
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr><th>Asset</th><th>Type</th><th>Amount</th><th>Open</th><th>Result</th><th>PnL</th></tr>
-                  </thead>
-                  <tbody>
-                    {deals.slice(0, 15).map((d) => (
-                      <tr key={d.serverId || d.requestId}>
-                        <td>{d.asset}</td>
-                        <td>{d.type.toUpperCase()}</td>
-                        <td>{fmtMoney(d.amount, demo?.currency)}</td>
-                        <td>{d.openPrice}</td>
-                        <td>{d.result ?? (d.status === "active" ? "active" : "—")}</td>
-                        <td className={d.profit != null && d.profit < 0 ? "danger-text" : ""}>
-                          {d.profit != null ? (d.profit >= 0 ? "+" : "") + d.profit.toFixed(2) : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </div>
           ) : null}
