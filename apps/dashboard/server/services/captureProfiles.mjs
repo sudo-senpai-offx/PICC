@@ -717,6 +717,7 @@ export function extensionCaptureConfigs() {
       const cfg = {
         venueId: p.id,
         name: p.name,
+        ministry: "trading",
         status: p.status,
         enabled: isVenueEnabled(p.id),
         hostRe: p.capture.hostRe,
@@ -740,6 +741,13 @@ export function extensionCaptureConfigs() {
       return cfg
     })
     .filter((c) => Array.isArray(c.keys) && c.keys.length > 0)
+}
+
+/** REQ-14: per-ministry view of the extension capture catalog. A ministry with no
+ * extension support returns [] — honest absence, never a fabricated venue. */
+export function extensionCaptureConfigsByMinistry(ministryId) {
+  const id = String(ministryId || "")
+  return extensionCaptureConfigs().filter((c) => c.ministry === id)
 }
 
 /**

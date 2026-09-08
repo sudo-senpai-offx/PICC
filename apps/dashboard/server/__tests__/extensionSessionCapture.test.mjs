@@ -18,6 +18,7 @@ import {
   _resetHeadlessSessionState,
   captureSessionFromExtension,
   extensionCaptureConfigs,
+  extensionCaptureConfigsByMinistry,
   headlessSessionRefresh,
   headlessSessionStatus
 } from "../services/captureProfiles.mjs"
@@ -375,5 +376,22 @@ describe("status provenance — sourceLeg (T13)", () => {
 
   it("a venue never captured reports sourceLeg null (honest provenance)", () => {
     expect(headlessSessionStatus().iqoption.sourceLeg).toBeNull()
+  })
+})
+
+describe("per-ministry capture catalog (REQ-14)", () => {
+  it("tags every served venue with its ministry", () => {
+    const configs = extensionCaptureConfigs()
+    expect(configs.length).toBeGreaterThan(0)
+    for (const c of configs) expect(c.ministry).toBe("trading")
+  })
+  it("reports a ministry WITHOUT extension support honestly (empty, not fabricated)", () => {
+    expect(extensionCaptureConfigsByMinistry("earnings")).toEqual([])
+    expect(extensionCaptureConfigsByMinistry("intelligence")).toEqual([])
+  })
+  it("returns the capture-enabled venues for a supported ministry", () => {
+    const ids = extensionCaptureConfigsByMinistry("trading").map((c) => c.venueId)
+    expect(ids).toContain("expertoption")
+    expect(ids).toContain("iqoption")
   })
 })
