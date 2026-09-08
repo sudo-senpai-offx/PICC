@@ -17,11 +17,10 @@ interface CmdItem {
 
 const NAV_PAGES: { path: string; label: string; icon: string; feature?: FeatureKey; keywords?: string }[] = [
   { path: "/", label: "Command Center", icon: "▦", keywords: "dashboard home overview" },
-  { path: "/simulator", label: "Simulator", icon: "📊", feature: "simulator", keywords: "financial twin monte carlo prediction listing content" },
-  { path: "/suites", label: "Suites", icon: "📈", feature: "trading", keywords: "markets prediction paper ledger demo autopilot expertoption signals watchlist" },
-  { path: "/agents", label: "Agents", icon: "🤖", feature: "agents", keywords: "crewai research crew" },
   { path: "/opportunities", label: "Opportunities", icon: "🧭", feature: "opportunities", keywords: "research bounties workflows" },
-  { path: "/income", label: "Income", icon: "💰", feature: "income", keywords: "payment links streams earnings catalog connectors" },
+  { path: "/suites/trading", label: "Trading", icon: "📈", feature: "trading", keywords: "markets prediction paper ledger autopilot command centre signals watchlist" },
+  { path: "/suites/earnings", label: "Earnings", icon: "💰", feature: "earnings", keywords: "cashback micro-task ux referral affiliate royalty yield income" },
+  { path: "/suites/intelligence", label: "Intelligence for PICC", icon: "🧭", feature: "intelligence", keywords: "governor prime-minister zero-to-one profitability decision support" },
   { path: "/settings", label: "Settings", icon: "⚙️", keywords: "features toggles keys" },
   { path: "/profile", label: "Profile", icon: "👤", keywords: "account user" }
 ]
