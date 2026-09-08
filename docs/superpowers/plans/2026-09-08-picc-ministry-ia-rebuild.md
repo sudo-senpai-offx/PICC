@@ -863,62 +863,93 @@ git commit -m "feat(ministries): whole-app command palette search, drop removed 
 
 ---
 
-### Task 7: Extension generalization (per-ministry catalogs)
+### Task 7: Extension generalization (per-ministry catalogs) — REMAPPED server-side (ruling 2026-09-08)
+
+> **Amended by ruling (2026-09-08).** The original Task 7 premised a hardcoded trading site list in
+> `content.js`/`background.js` to replace with a `MINISTRY_CATALOGS` map + per-ministry
+> chrome.storage keys. Verified reality (read every extension file): the extension is a read-only
+> sensor by construction (content.js:1/6, background.js:8 — "overlay/automation removed",
+> "read-only"); the capture config is SERVER-driven (`/api/trading/capture-profiles` →
+> `extensionCaptureConfigs()`) with a built-in EO fallback pinned EQUAL to the served config; the
+> scanner is venue-generic (hostRe match, `via` dispatch); `autopilotPanel.js` is an orphan (not
+> loaded by popup.html/sidepanel.html) — the automation/autopilot semantic the plan said to
+> preserve does not exist in the extension; naive edits would break the pinned integrity contract
+> (chrome.storage count 7, document. count 2, action vocabulary 7, chromeGuard, T8 bridge). Ruling
+> per spec REQ-14/T7 acceptance ("per-ministry catalog, not a hardcoded trading set; a ministry
+> without extension support reports honestly; no fabrication"): move the per-ministry dimension
+> into the SERVER's capture catalog. Extension files: NO code changes.
 
 **Files:**
-- Modify: `apps/dashboard/extensions/picc-overlay/manifest.json` (if present)
-- Modify: `apps/dashboard/extensions/picc-overlay/content.js` (if present)
-- Modify: `apps/dashboard/extensions/picc-overlay/background.js` (if present)
-- Check: `apps/dashboard/extensions/picc-overlay/` directory layout (globbing first)
-- Test: `node --check` on each touched JS file (browser-only code — no vitest; per repo convention)
+- Modify: `apps/dashboard/server/services/captureProfiles.mjs`
+- Modify: `apps/dashboard/server/__tests__/extensionSessionCapture.test.mjs` (append this task's tests)
+- Check (no edit): `apps/dashboard/extensions/picc-overlay/content.js`, `background.js` — `node --check` baseline
+- Test: vitest on `extensionSessionCapture.test.mjs` (server)
 
 **Interfaces:**
-- Consumes: existing overlay `chrome.storage` keys.
-- Produces: a per-ministry catalog object `MINISTRY_CATALOGS` mapping suite id → list of sites/controls; site config moved to the ministry namespace so configured sites are managed in per-ministry settings (Task 4) rather than a hardcoded trading set.
+- Consumes: existing `CAPTURE_PROFILES` rows (venue ids expertoption/iqoption, both trading venues).
+- Produces: `extensionCaptureConfigs()` entries gain `ministry`; new export `extensionCaptureConfigsByMinistry(ministryId)` → venues for that ministry, `[]` when none (honest).
 
-- [ ] **Step 1: Inspect the overlay**
+- [ ] **Step 1: Write the honest per-ministry view**
 
-Run (bash):
-```
-Get-ChildItem -Recurse apps/dashboard/extensions/picc-overlay | Select-Object FullName
-```
-Read `manifest.json`, `content.js`, `background.js` to find every hardcoded trading/site reference before changing anything.
-
-- [ ] **Step 2: Write a `node --check` guard BEFORE editing**
-
-The repo's browser-only verification is `node --check` (no vitest for content scripts). Confirm each file currently parses:
-
-Run: `node --check apps/dashboard/extensions/picc-overlay/content.js` (and same for `background.js`)
-Expected: exit 0 (baseline).
-
-- [ ] **Step 3: Introduce `MINISTRY_CATALOGS`**
-
-In `background.js` (or the appropriate shared module), add a per-ministry catalog map. Exact shape depends on the observed `chrome.storage` keys from Step 1 (this is an UNVERIFIED read — verify before writing). Example:
+In `apps/dashboard/server/services/captureProfiles.mjs`, add `ministry` to each served entry of
+`extensionCaptureConfigs()` (all current capture-enabled venues are trading venues →
+`ministry: "trading"`), and add:
 
 ```js
-const MINISTRY_CATALOGS = {
-  trading: { /* existing trading sites/controls */ },
-  earnings: { /* earnings-site controls, empty/under-development */ },
-  intelligence: { /* governor read-only surfaces */ }
+export function extensionCaptureConfigsByMinistry(ministryId) {
+  const id = String(ministryId || "")
+  return extensionCaptureConfigs().filter((c) => c.ministry === id)
 }
 ```
 
-Key the storage so the configured set is namespaced per ministry (`chrome.storage.local.set({ ["picc.ministry." + suiteId + ".sites"]: ... })`) so Task 4's per-ministry settings own it.
+A ministry without extension support returns `[]` — honest absence, never a fabricated venue.
 
-- [ ] **Step 4: Replace hardcoded trading-only behavior**
+- [ ] **Step 2: Append tests**
 
-Replace any hardcoded trading site list in `content.js`/`background.js` with lookups into `MINISTRY_CATALOGS` by the active ministry. A ministry without a catalog (or with an empty one) must report honestly (no fabricated controls). Keep the existing `automation`/`autopilot` semantic distinction intact (do not rename or weaken it).
+In `apps/dashboard/server/__tests__/extensionSessionCapture.test.mjs` (inside or beside the T13
+capture-profiles describe):
 
-- [ ] **Step 5: Verify**
+```js
+describe("per-ministry capture catalog (REQ-14)", () => {
+  it("tags every served venue with its ministry", () => {
+    const configs = extensionCaptureConfigs()
+    expect(configs.length).toBeGreaterThan(0)
+    for (const c of configs) expect(c.ministry).toBe("trading")
+  })
+  it("reports a ministry WITHOUT extension support honestly (empty, not fabricated)", () => {
+    expect(extensionCaptureConfigsByMinistry("earnings")).toEqual([])
+    expect(extensionCaptureConfigsByMinistry("intelligence")).toEqual([])
+  })
+  it("returns the capture-enabled venues for a supported ministry", () => {
+    const ids = extensionCaptureConfigsByMinistry("trading").map((c) => c.venueId)
+    expect(ids).toContain("expertoption")
+    expect(ids).toContain("iqoption")
+  })
+})
+```
 
-Run: `node --check apps/dashboard/extensions/picc-overlay/content.js` and `node --check apps/dashboard/extensions/picc-overlay/background.js`
-Expected: exit 0 on both. Grep the extension for `MINISTRY_CATALOGS` to confirm wiring.
+Import `extensionCaptureConfigsByMinistry` alongside `extensionCaptureConfigs`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Verify — extension untouched**
+
+Run: `node --check apps/dashboard/extensions/picc-overlay/content.js` and
+`node --check apps/dashboard/extensions/picc-overlay/background.js`
+Expected: exit 0 on both (unchanged files — baseline proof the sensor wasn't edited).
+
+- [ ] **Step 4: Verify — server tests + integrity**
+
+Run:
+```
+npx vitest run apps/dashboard/server/__tests__/extensionSessionCapture.test.mjs apps/dashboard/server/__tests__/extensionIntegrity.test.mjs
+```
+Expected: green — the extensionIntegrity suite (chrome.storage count, document. count, action
+vocabulary, T13 parity) proves the extension files are untouched and still honor the contract.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add apps/dashboard/extensions/picc-overlay
-git commit -m "feat(ministries): generalize overlay extension to per-ministry catalogs"
+git add apps/dashboard/server/services/captureProfiles.mjs apps/dashboard/server/__tests__/extensionSessionCapture.test.mjs
+git commit -m "feat(ministries): per-ministry extension capture catalog"
 ```
 
 ---
@@ -943,7 +974,7 @@ git commit -m "feat(ministries): generalize overlay extension to per-ministry ca
 - REQ-15 (folding) → Task 1 (suites.ts rewrite)
 - REQ-16 (go-live gate, no real-money) → Global Constraints; not a build task
 
-**Placeholder scan:** Every task has real file paths, real code, real test code, real commit commands. The only intentional verification-gate text is Task 7 Step 3's "UNVERIFIED read — verify before writing" (the extension internals were not read this session) and Task 3 Step 6's wiring comment. These are honest gates, not placeholders.
+**Placeholder scan:** Every task has real file paths, real code, real test code, real commit commands. The only intentional verification-gate text was Task 7 Step 3's "UNVERIFIED read — verify before writing" (the extension internals were not read this session) and Task 3 Step 6's wiring comment. These are honest gates, not placeholders. Task 7's gate WAS exercised: the extension internals were read in full and the task was REMAPPED server-side (see Task 7 amended section + ledger ruling).
 
 **Type consistency:**
 - `SuiteId` / `SuiteStatus` / `SuiteMeta.status` defined in Task 1, used in Tasks 1, 3, 4, 6. ✓
