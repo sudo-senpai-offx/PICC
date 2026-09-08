@@ -72,7 +72,6 @@ const NAV: { section: string; items: { to: string; label: string; icon: string; 
 ]
 
 const OUTER_RAIL_KEY = "picc.rail.outer"
-const INNER_RAIL_KEY = "picc.rail.inner"
 
 function useRailState(key: string) {
   const [collapsed, setCollapsed] = useState(() => {
@@ -128,7 +127,6 @@ export function AppShell() {
   const { session } = useAuth()
   const navigate = useNavigate()
   const outer = useRailState(OUTER_RAIL_KEY)
-  const inner = useRailState(INNER_RAIL_KEY)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   useExternalLinkRouter()
@@ -137,9 +135,8 @@ export function AppShell() {
   const inMinistry = location.pathname.startsWith("/suites/")
   useEffect(() => {
     if (inMinistry) {
-      // entering a suite: collapse outer rail, expand inner rail
+      // entering a suite: collapse the outer rail; the inner rail stays expanded
       if (!outer.collapsed) outer.toggle()
-      if (inner.collapsed) inner.toggle()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inMinistry])
@@ -169,10 +166,9 @@ export function AppShell() {
     <div className={outer.collapsed ? "shell collapsed" : "shell"}>
       <TopBar
         collapsed={outer.collapsed}
-        onToggleSidebar={() => {
-          outer.toggle()
-          if (inMinistry && outer.collapsed) inner.toggle() // manual expand collapses inner
-        }}
+  onToggleSidebar={() => {
+    outer.toggle()
+  }}
         onOpenPalette={() => setPaletteOpen(true)}
       />
       <div className="shell-body">
