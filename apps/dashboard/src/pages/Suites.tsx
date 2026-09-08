@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { NavLink, useParams, useSearchParams } from "react-router-dom"
 import { SUITE_META } from "@/lib/suites"
 import type { SuiteMeta } from "@/lib/suites"
 import { Card } from "@/components/ui"
@@ -69,7 +69,33 @@ function SuiteDetail({ suiteId }: { suiteId: string }) {
   )
 }
 
+// --- Room link quick cards ---
+// keep in sync with MinistryShell INNER_NAV (SP-1)
+const ROOM_LINKS: Record<string, { slug: string; label: string; hint: string }[]> = {
+  trading: [
+    { slug: "dashboard",      label: "Dashboard",      hint: "Overview & status" },
+    { slug: "markets",        label: "Markets",        hint: "Charts & analysis" },
+    { slug: "paper",          label: "Paper",          hint: "Simulated trades" },
+    { slug: "autopilot",      label: "Autopilot",      hint: "Auto demo trading" },
+    { slug: "command-centre", label: "Command Centre", hint: "Signals & patterns" },
+    { slug: "simulator",      label: "Simulator",      hint: "Income simulation" },
+    { slug: "settings",       label: "Settings",       hint: "Configuration" }
+  ],
+  earnings: [
+    { slug: "dashboard", label: "Dashboard", hint: "Revenue overview" },
+    { slug: "simulator", label: "Simulator", hint: "Income modelling" },
+    { slug: "settings",  label: "Settings",  hint: "Configuration" }
+  ],
+  intelligence: [
+    { slug: "dashboard", label: "Dashboard", hint: "Research overview" },
+    { slug: "governor",  label: "Governor",  hint: "Autonomy rules" },
+    { slug: "guidance",  label: "Guidance",  hint: "Advisor & insights" },
+    { slug: "settings",  label: "Settings",  hint: "Configuration" }
+  ]
+}
+
 export function Suites() {
+  const { suiteId } = useParams<{ suiteId: string }>()
   const [searchParams] = useSearchParams()
   // T6 / REQ-9: a notification deep link (?asset=…&panel=chart[&venue=…]) lands
   // directly on the trading suite instead of the collapsed card list. The
@@ -100,6 +126,23 @@ export function Suites() {
           </div>
         </div>
       </header>
+
+      {suiteId && ROOM_LINKS[suiteId] && (
+        <div className="grid">
+          {ROOM_LINKS[suiteId].map((room) => (
+            <NavLink
+              key={room.slug}
+              to={room.slug}
+              className={({ isActive }) => (isActive ? "nav-link card active" : "nav-link card")}
+            >
+              <div>
+                <div style={{ fontWeight: 600 }}>{room.label}</div>
+                <div className="muted small">{room.hint}</div>
+              </div>
+            </NavLink>
+          ))}
+        </div>
+      )}
 
       <div className="grid-3">
         {SUITE_CATEGORIES.map((suite) => {
