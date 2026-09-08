@@ -137,6 +137,14 @@ export function Settings() {
       <h1>Settings</h1>
       <p className="muted">Enable, disable, and configure every PICC feature from one place.</p>
 
+      <div className="card" style={{ marginTop: 8 }}>
+        <p className="muted" style={{ margin: 0 }}>
+          These are <strong>PICC-wide</strong> settings. Per-ministry settings (site catalogs, the
+          autopilot/copilot flip-switch, confidence threshold) live inside each ministry at
+          <code> /suites/&lt;ministry&gt;/settings</code>.
+        </p>
+      </div>
+
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Features</h2>
         <div className="stack">
