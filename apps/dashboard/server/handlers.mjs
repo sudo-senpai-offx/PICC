@@ -90,6 +90,8 @@ import {
   demoAnalytics,
   getAutopilotConfig,
   saveAutopilotConfig,
+  getAutopilotDecisions,
+  whyAutopilot,
   tradingReadiness,
 } from "./services/autopilot.mjs"
 import {
@@ -2090,6 +2092,26 @@ async function _handleApiInner(req, res, url, reqId) {
 
   if (path === "/api/trading/autopilot/stop" && req.method === "POST") {
     writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
+    return
+  }
+
+  if (path === "/api/trading/autopilot/decisions" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      writeJson(res, 200, getAutopilotDecisions(Math.min(Math.max(Number(parsed.searchParams.get("limit")) || 50, 1), 500)))
+    } catch (err) {
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  if (path === "/api/trading/autopilot/why" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      writeJson(res, 200, await whyAutopilot({ assetId: body?.assetId ?? parsed.searchParams.get("assetId") }))
+    } catch (err) {
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
     return
   }
 
