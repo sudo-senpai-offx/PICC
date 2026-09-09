@@ -948,6 +948,56 @@ export function runBacktest(symbol: string, days = 3, windows = 10): Promise<Bac
   return post<BacktestResult>("/trading/backtest", { symbol, days, windows })
 }
 
+export interface WalkForwardWindow {
+  idx: number
+  trainStart: number
+  testStart: number
+  hitRate: number
+  hit: boolean
+  returnPct: number
+  entry: number
+  exit: number
+}
+
+export interface GateSearchResult {
+  ok: boolean
+  error?: string
+  protocol?: string
+}
+
+export interface WalkForwardResult {
+  ok: boolean
+  symbol: string
+  horizonDays: number
+  trainWindow: number
+  testWindow: number
+  stepSize: number
+  windowsCompleted: number
+  walkForwardHitRate: number | null
+  totalReturnPct: number
+  maxDrawdownPct: number
+  equity: Array<{ i: number; v: number }>
+  drawdown: Array<{ i: number; v: number }>
+  windowDetails: WalkForwardWindow[]
+  gateHyperopt: GateSearchResult | null
+  gateWalkForward: GateSearchResult | null
+  name?: string
+  error?: string
+}
+
+export function runWalkForward(opts: {
+  symbol: string
+  horizonDays?: number
+  trainWindow?: number
+  testWindow?: number
+  stepSize?: number
+  maxWindows?: number
+  payoutPct?: number
+  hyperoptWindows?: number
+}): Promise<WalkForwardResult> {
+  return post<WalkForwardResult>("/trading/walk-forward", opts)
+}
+
 export interface AdvancedIndicators {
   ichimoku: { tenkan: number | null; kijun: number | null; senkouA: number | null; senkouB: number | null; chikou: number | null; cloudColor: number | null; trend: string }
   fibonacci: { retracements: Array<{ ratio: number; label: string; price: number }>; extensions: Array<{ ratio: number; label: string; price: number }>; swingHigh: number | null; swingLow: number | null; trend: string; range: number | null }

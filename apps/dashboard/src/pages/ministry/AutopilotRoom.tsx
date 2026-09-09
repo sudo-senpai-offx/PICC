@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { AutopilotSuite, ProAnalysisCard, PredictionCard } from "@/components/TradingSuite"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
+import { WalkForwardCard } from "@/components/WalkForwardCard"
 import { Badge, Button, Card, Spinner } from "@/components/ui"
 import { getAutopilotDecisions, whyAutopilot } from "@/lib/trading"
 import type { AutopilotDecisionEntry, AutopilotWhyResult } from "@/lib/trading"
@@ -190,6 +191,7 @@ export function AutopilotRoom() {
       </header>
       <AutopilotDecisionsCard />
       <AutopilotSuite />
+      <WalkForwardCard />
       <ProAnalysisCard />
       <PredictionCard recordSignal={() => {}} />
       <ModelMatrixPanel assetId="EURUSD" />
