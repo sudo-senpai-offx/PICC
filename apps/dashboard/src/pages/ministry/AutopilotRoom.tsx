@@ -66,7 +66,7 @@ function DecisionRow({
           <div className="stack small" style={{ gap: 4 }}>
             <p className="muted">
               {why.data?.reason ?? "No answer yet."}
-              {why.data?.wouldTrade ? "" : " Dry-run decision support only — no order is placed."}
+              {" Dry-run decision support only — no order is placed."}
             </p>
             <div className="stack" style={{ gap: 2 }}>
               {(why.data?.gates ?? []).map((g) => (
