@@ -28,7 +28,7 @@ function DrawdownBars({ drawdown }: { drawdown: Array<{ t: string | null; equity
           <div className="muted small" style={{ width: 70, flex: "0 0 70px" }}>{i === 0 ? "start" : d.t ?? ""}</div>
           <div style={{ flex: 1, background: "var(--border)", height: 10, borderRadius: 3 }}>
             <div
-              style={{ width: `${Math.max(0, Math.min(100, d.drawdown))}%`, background: "var(--border)", height: 10, borderRadius: 3 }}
+              style={{ width: `${Math.max(0, Math.min(100, d.drawdown))}%`, background: "var(--danger)", height: 10, borderRadius: 3 }}
             />
           </div>
           <div className="muted small" style={{ width: 60, textAlign: "right" }}>{d.drawdown.toFixed(1)}%</div>
