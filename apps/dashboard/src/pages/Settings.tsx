@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { NavLink } from "react-router-dom"
 import { getHealth } from "@/lib/api"
 import type { HealthInfo } from "@/lib/api"
 import { getAgentSettings, saveAgentSettings } from "@/lib/api"
@@ -139,9 +140,9 @@ export function Settings() {
 
       <div className="card" style={{ marginTop: 8 }}>
         <p className="muted" style={{ margin: 0 }}>
-          These are <strong>PICC-wide</strong> settings. Per-ministry settings (the
-          autopilot/copilot flip-switch, confidence threshold) are stored per ministry and
-          will get their own surface inside each ministry (under development).
+          These are <strong>PICC-wide</strong> settings. Per-ministry settings (autopilot mode,
+          confidence threshold) live in each ministry's Settings room —{" "}
+          <NavLink to="/suites/trading/settings">view trading settings</NavLink>.
         </p>
       </div>
 
