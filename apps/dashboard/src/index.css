@@ -1308,6 +1308,17 @@ textarea.input {
   font-size: 12px;
 }
 
+.palette-result-count {
+  margin-right: auto;
+}
+
+.palette-footer-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
 kbd {
   background: var(--bg-card);
   border: 1px solid var(--border);

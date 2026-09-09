@@ -177,7 +177,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         </div>
         <div className="palette-list" role="listbox" id="palette-list" aria-label="Commands">
           {visible.length === 0 ? (
-            <div className="palette-empty muted">No matches for “{query}” — try a page, feature, or income app.</div>
+            <div className="palette-empty">
+              <div>Nothing matches “{query}”.</div>
+              <div className="small muted">Try a ministry, a feature name, or an income app.</div>
+            </div>
           ) : (
             visible.map((it, idx) => (
               <button
@@ -201,7 +204,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           )}
         </div>
         <div className="palette-footer muted">
-          <kbd>↑</kbd> <kbd>↓</kbd> navigate · <kbd>↵</kbd> run · <kbd>Ctrl K</kbd> close
+          {q && (
+            <span className="palette-result-count">
+              {matches.length === 1 ? "1 match" : `${matches.length} matches`}
+              {visible.length < matches.length ? ` — showing ${visible.length}` : ""}
+            </span>
+          )}
+          <span className="palette-footer-keys">
+            <kbd>↑</kbd> <kbd>↓</kbd> navigate · <kbd>↵</kbd> run · <kbd>Esc</kbd> close
+          </span>
         </div>
       </div>
     </div>

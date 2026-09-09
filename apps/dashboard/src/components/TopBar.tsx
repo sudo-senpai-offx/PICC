@@ -1,5 +1,6 @@
 import { useLocation } from "react-router-dom"
 import { NotificationCenter } from "@/components/NotificationCenter"
+import { SUITE_META } from "@/lib/suites"
 
 const TITLES: Record<string, string> = {
   "/": "Command Center",
@@ -7,6 +8,15 @@ const TITLES: Record<string, string> = {
   "/opportunities": "Opportunities",
   "/settings": "Settings",
   "/profile": "Profile"
+}
+
+// Real ministry context: inside /suites/:suiteId/... show the ministry's label
+// (Trading, Earnings, Intelligence for PICC) instead of falling back to "PICC".
+function suiteTitleFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/suites\/([^/]+)/)
+  if (!match) return null
+  const meta = SUITE_META[match[1]]
+  return meta ? meta.label : null
 }
 
 export function TopBar({
@@ -19,7 +29,7 @@ export function TopBar({
   onOpenPalette: () => void
 }) {
   const { pathname } = useLocation()
-  const title = TITLES[pathname] ?? "PICC"
+  const title = suiteTitleFromPath(pathname) ?? TITLES[pathname] ?? "PICC"
 
   return (
     <header className="topbar">
