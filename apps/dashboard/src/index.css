@@ -912,6 +912,11 @@ textarea.input {
   font-size: 20px;
 }
 
+.auth-divider {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
 /* ---------- Research / chips ---------- */
 .row.wrap {
   flex-wrap: wrap;

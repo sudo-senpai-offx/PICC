@@ -77,18 +77,19 @@ export function Login() {
           </Button>
         </form>
 
-        {mode === "signup" ? (
-          <p className="muted small">
-            Your account and credentials live only on this machine — nothing is sent to a cloud service.
+        <div className="auth-divider stack">
+          {mode === "signup" ? (
+            <p className="muted small text-center">
+              Your account and credentials live only on this machine — nothing is sent to a cloud service.
+            </p>
+          ) : null}
+          <p className="muted text-center">
+            {mode === "signin" ? "No account yet?" : "Already have an account?"}{" "}
+            <button type="button" className="link-btn" onClick={() => setMode(mode === "signin" ? "signup" : "signin")}>
+              {mode === "signin" ? "Create one" : "Sign in"}
+            </button>
           </p>
-        ) : null}
-
-        <p className="muted text-center">
-          {mode === "signin" ? "No account yet?" : "Already have an account?"}{" "}
-          <button type="button" className="link-btn" onClick={() => setMode(mode === "signin" ? "signup" : "signin")}>
-            {mode === "signin" ? "Create one" : "Sign in"}
-          </button>
-        </p>
+        </div>
       </Card>
     </div>
   )
