@@ -10,8 +10,8 @@ const SUITE_CATEGORIES = Object.values(SUITE_META) as SuiteMeta[]
 
 // Feature badges only promise what each suite actually ships. Suites without
 // PICC-managed panels are honestly labeled "Site-only" instead of advertising
-// features that do not exist yet. Autopilot is NOT listed here: it moved to
-// its own Simulator-page tab (shared AutopilotSuite, mounted once).
+// features that do not exist yet. Autopilot is NOT listed here: it has its
+// own ministry room (trading → Autopilot, shared AutopilotSuite, mounted once).
 const SUITE_FEATURE_BADGES: Record<string, string[]> = {
   trading: ["Markets", "Decisions", "Ledger", "Payouts", "Overlay HUD"]
 }
@@ -20,10 +20,10 @@ const SUITE_FEATURE_BADGES: Record<string, string[]> = {
 // tab identity is stable across renders.
 const SUITE_DETAIL_COMPONENTS: Record<string, { label: string; Component: React.FC }[]> = {
   // The trading suite's expanded view hosts the market/prediction panel only.
-  // Autopilot (demo-broker paper trading) lives as its own tab on the
-  // Simulator page — the SAME shared AutopilotSuite component, mounted once.
-  // Removed the duplicate "Autopilot" tab here 2026-09-02 to de-duplicate the
-  // entry point (see Simulator.tsx).
+  // Autopilot (demo-broker paper trading) has its own ministry room
+  // (trading → Autopilot) — the SAME shared AutopilotSuite component, mounted
+  // once. Removed the duplicate "Autopilot" tab here 2026-09-02 to
+  // de-duplicate the entry point (see trading SimulatorRoom).
   trading: [
     { label: "Markets & Prediction", Component: MarketsSuite },
     { label: "Command Centre", Component: CommandCentrePanel }

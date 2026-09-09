@@ -19,7 +19,6 @@ const USER_FACING = [
   "components/TradingHud.tsx",
   "components/DockablePreview.tsx",
   "components/ConfluencePanel.tsx",
-  "pages/Simulator.tsx",
   "lib/suites.ts",
   "lib/settings.ts"
 ]
