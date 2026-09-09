@@ -23,6 +23,7 @@ import { ScreenerPanel } from "@/components/ScreenerPanel"
 import { PatternPanel } from "@/components/PatternPanel"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
 import { getBrokers, getTradingVenues, getTradingCatalog, assetOptionGroups, type BrokersResult, type TradingVenuesResult, type CatalogCategory } from "@/lib/trading"
+import { computePositionSize, computeRiskReward, computeHalfKelly } from "@/lib/positionMath"
 import { request, post } from "@/lib/api"
 import { isPushSupported } from "@/lib/push"
 import { useWebPush } from "@/hooks/useWebPush"
@@ -1588,27 +1589,25 @@ export function TradePlannerCard() {
   const [stop, setStop] = useState("1.0900")
   const [target, setTarget] = useState("1.1300")
   const [side, setSide] = useState<"up" | "down">("up")
+  const [winRate, setWinRate] = useState("55")
 
   const b = Number(balance) || 0
   const e = Number(entry) || 0
   const s = Number(stop) || 0
   const t = Number(target) || 0
   const rp = Number(riskPct) || 0
+  const wr = Number(winRate) || 0
 
   const valid = b > 0 && e > 0 && s > 0 && t > 0 && e !== s && t !== e
   const stopOk = side === "up" ? s < e : s > e
   const targetOk = side === "up" ? t > e : t < e
   const ok = valid && stopOk && targetOk
 
-  const riskPerUnit = ok ? Math.abs(e - s) : 0
-  const rewardPerUnit = ok ? Math.abs(t - e) : 0
-  const riskUsd = ok ? (b * rp) / 100 : 0
-  const positionUnits = ok && riskPerUnit > 0 ? riskUsd / riskPerUnit : 0
-  const notional = positionUnits * e
-  const rewardUsd = rewardPerUnit * positionUnits
-  const rR = rewardPerUnit > 0 && riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0
-  const stopPct = riskPerUnit > 0 ? (riskPerUnit / e) * 100 : 0
-  const targetPct = rewardPerUnit > 0 ? (rewardPerUnit / e) * 100 : 0
+  const size = ok ? computePositionSize(b, rp, e, s) : null
+  const rr = ok ? computeRiskReward(e, s, t) : null
+  const kelly = ok && rr ? computeHalfKelly(wr, rr.rR) : null
+  const rewardUsd = size && rr ? rr.rewardPerUnit * size.positionUnits : null
+  const targetPct = rr ? (rr.rewardPerUnit / e) * 100 : null
 
   return (
     <Card className="pad stack">
@@ -1639,22 +1638,33 @@ export function TradePlannerCard() {
         <Field label="Take profit">
           <Input type="number" value={target} onChange={(e) => setTarget(e.target.value)} />
         </Field>
+        <Field label="Win rate % (for Kelly)">
+          <Input type="number" min={1} max={99} value={winRate} onChange={(e) => setWinRate(e.target.value)} />
+        </Field>
       </div>
       {!ok ? (
         <p className="muted small">
           {!valid ? "Enter positive balance, entry, stop and target." : !stopOk ? "Stop must be below entry for long / above entry for short." : "Take profit must be above entry for long / below entry for short."}
         </p>
       ) : (
-        <div className="grid grid-4 muted small">
-          <div>risk per trade: <strong className="danger-text">{fmtMoney(riskUsd)}</strong></div>
-          <div>position size: <strong>{positionUnits.toLocaleString("en-US", { maximumFractionDigits: 2 })} units</strong></div>
-          <div>notional: <strong>{fmtMoney(notional)}</strong></div>
-          <div>reward at target: <strong className="success-text">{fmtMoney(rewardUsd)}</strong></div>
-          <div>reward:risk: <strong>{rR.toFixed(2)}R</strong></div>
-          <div>to stop: <strong>-{stopPct.toFixed(2)}%</strong></div>
-          <div>to target: <strong>+{targetPct.toFixed(2)}%</strong></div>
-          <div>viability: <strong>{rR >= 1 ? "acceptable (≥1R)" : "poor (<1R)"}</strong></div>
-        </div>
+        <>
+          <div className="grid grid-4 muted small">
+            <div>risk per trade: <strong className="danger-text">{fmtMoney(size ? size.riskUsd : null)}</strong></div>
+            <div>position size: <strong>{size ? size.positionUnits.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"} units</strong></div>
+            <div>notional: <strong>{fmtMoney(size ? size.notional : null)}</strong></div>
+            <div>reward at target: <strong className="success-text">{fmtMoney(rewardUsd)}</strong></div>
+            <div>reward:risk: <strong>{rr ? `${rr.rR.toFixed(2)}R` : "—"}</strong></div>
+            <div>to stop: <strong>{size ? `-${size.stopPct.toFixed(2)}%` : "—"}</strong></div>
+            <div>to target: <strong>{targetPct != null ? `+${targetPct.toFixed(2)}%` : "—"}</strong></div>
+            <div>viability: <strong>{rr ? (rr.rR >= 1 ? "acceptable (≥1R)" : "poor (<1R)") : "—"}</strong></div>
+          </div>
+          <p className="muted small">
+            {kelly != null
+              ? `Kelly guidance: ${(kelly * 100).toFixed(1)}% of balance (half-Kelly)`
+              : "Kelly guidance unavailable — enter a win rate between 1 and 99."}
+            {kelly != null ? " Kelly assumes your win rate is accurate — it is not a prediction of future results." : ""}
+          </p>
+        </>
       )}
     </Card>
   )
