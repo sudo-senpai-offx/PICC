@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { sma, ema, bollinger, rsi, macd, std, type OverlayCandle } from "../indicators"
+import { sma, ema, bollinger, rsi, macd, std, choppinessIndex, trueStrengthIndex, deMarker, fisherTransform, coppockCurve, nicheIndicators, type OverlayCandle } from "../indicators"
 
 // Boundary fixtures mirror the U4FA factor-boundary test style: constructed
 // inputs pin warm-up, flat-series, and empty-input behavior so the chart
@@ -145,5 +145,141 @@ describe("macd", () => {
     expect(m.line.length).toBeGreaterThan(0)
     for (const p of m.line) expect(p.value).toBeGreaterThan(0)
     expect(m.signal[m.signal.length - 1].value).toBeLessThan(m.line[m.line.length - 1].value)
+  })
+})
+
+// --- Niche indicators (in-house) ---
+
+const spread: OverlayCandle[] = Array.from({ length: 40 }, (_, i) => ({
+  time: 1_700_000_000 + i * 300,
+  open: 100 + i % 10,
+  high: 100 + i % 10 + 2,
+  low: 100 + i % 10 - 2,
+  close: 100 + i % 10
+}))
+
+const downs = Array.from({ length: 60 }, (_, i) => 200 - i)
+
+describe("niche indicators", () => {
+  it("nicheIndicators([]) returns null", () => {
+    expect(nicheIndicators([])).toBeNull()
+  })
+
+  it("nicheIndicators on flat series returns all five with finite values", () => {
+    const r = nicheIndicators(candles(flats))
+    expect(r).not.toBeNull()
+    expect(r!.choppiness.length).toBeGreaterThan(0)
+    expect(r!.tsi.length).toBeGreaterThan(0)
+    expect(r!.deMarker.length).toBeGreaterThan(0)
+    expect(r!.fisher.fisher.length).toBeGreaterThan(0)
+    expect(r!.fisher.signal.length).toBeGreaterThan(0)
+    expect(r!.coppock.length).toBeGreaterThan(0)
+    const all = [...r!.choppiness, ...r!.tsi, ...r!.deMarker, ...r!.fisher.fisher, ...r!.fisher.signal, ...r!.coppock]
+    expect(all.every((p) => Number.isFinite(p.value))).toBe(true)
+  })
+
+  it("choppiness on flat series (equal H/L) = 50 (honest fallback)", () => {
+    const out = choppinessIndex(candles(flats))
+    expect(out.length).toBeGreaterThan(0)
+    expect(out[out.length - 1].value).toBe(50)
+  })
+
+  it("choppiness on spread series stays in [0, 100]", () => {
+    const out = choppinessIndex(spread)
+    expect(out.length).toBeGreaterThan(0)
+    for (const p of out) {
+      expect(p.value).toBeGreaterThanOrEqual(0)
+      expect(p.value).toBeLessThanOrEqual(100)
+    }
+  })
+
+  it("TSI: alternating (saw) → near 0; monotonic rise → > 25", () => {
+    const sawTsi = trueStrengthIndex(candles(saw))
+    expect(sawTsi.length).toBeGreaterThan(0)
+    expect(Math.abs(sawTsi[sawTsi.length - 1].value)).toBeLessThan(30)
+    const upTsi = trueStrengthIndex(candles(ups))
+    expect(upTsi.length).toBeGreaterThan(0)
+    expect(upTsi[upTsi.length - 1].value).toBeGreaterThan(25)
+  })
+
+  it("deMarker: monotonic rise → > 50; monotonic fall → < 50", () => {
+    const upDe = deMarker(candles(ups))
+    expect(upDe.length).toBeGreaterThan(0)
+    expect(upDe[upDe.length - 1].value).toBeGreaterThan(50)
+    const downDe = deMarker(candles(downs))
+    expect(downDe.length).toBeGreaterThan(0)
+    expect(downDe[downDe.length - 1].value).toBeLessThan(50)
+  })
+
+  it("fisherTransform: returns both arrays with equal length; rising (unsaturated) series → fisher > signal", () => {
+    // 20-bar linear rise — long enough to warm up but short enough that the
+    // atanh transform has not yet saturated at its ~3.8 asymptote, so the
+    // signal still lags fisher on the last bar.
+    const rise20 = Array.from({ length: 20 }, (_, i) => 100 + i)
+    const out = fisherTransform(candles(rise20))
+    expect(out.fisher.length).toBeGreaterThan(0)
+    expect(out.signal.length).toBe(out.fisher.length - 1)
+    expect(out.fisher[out.fisher.length - 1].value).toBeGreaterThan(out.signal[out.signal.length - 1].value)
+  })
+
+  it("fisherTransform crossover: append a sharp drop, verify Fisher crosses below signal", () => {
+    const rising = Array.from({ length: 40 }, (_, i) => 100 + i)
+    const drop = Array.from({ length: 15 }, (_, i) => 140 - i * 5)
+    const combined = [...rising, ...drop]
+    const out = fisherTransform(candles(combined))
+    expect(out.fisher.length).toBeGreaterThan(0)
+    expect(out.signal.length).toBeGreaterThan(0)
+    const lastF = out.fisher[out.fisher.length - 1].value
+    const lastS = out.signal[out.signal.length - 1].value
+    expect(lastF).toBeLessThan(lastS)
+  })
+
+  it("coppockCurve: empty → []; warm-up (< 23 bars) → []; steady series → finite", () => {
+    expect(coppockCurve([])).toHaveLength(0)
+    expect(coppockCurve(candles(Array(23).fill(100)))).toHaveLength(0)
+    const out = coppockCurve(candles(flats))
+    expect(out.length).toBeGreaterThan(0)
+    expect(Number.isFinite(out[out.length - 1].value)).toBe(true)
+  })
+
+  it("warm-up: each indicator emits 0 points when N < warm-up, > 0 when N sufficient", () => {
+    const chopShort = choppinessIndex(candles(Array(14).fill(100)))
+    const chopLong = choppinessIndex(candles(Array(16).fill(100)))
+    expect(chopShort).toHaveLength(0)
+    expect(chopLong.length).toBeGreaterThan(0)
+
+    const tsiShort = trueStrengthIndex(candles(Array(30).fill(100)))
+    const tsiLong = trueStrengthIndex(candles(Array(40).fill(100)))
+    expect(tsiShort).toHaveLength(0)
+    expect(tsiLong.length).toBeGreaterThan(0)
+
+    const deShort = deMarker(candles(Array(14).fill(100)))
+    const deLong = deMarker(candles(Array(16).fill(100)))
+    expect(deShort).toHaveLength(0)
+    expect(deLong.length).toBeGreaterThan(0)
+
+    const fiShort = fisherTransform(candles(Array(8).fill(100)))
+    const fiLong = fisherTransform(candles(Array(9).fill(100)))
+    expect(fiShort.fisher).toHaveLength(0)
+    expect(fiLong.fisher.length).toBeGreaterThan(0)
+
+    const coShort = coppockCurve(candles(Array(23).fill(100)))
+    const coLong = coppockCurve(candles(Array(24).fill(100)))
+    expect(coShort).toHaveLength(0)
+    expect(coLong.length).toBeGreaterThan(0)
+  })
+
+  it("non-finite guard: NaN candle does not crash; remaining valid bars produce output", () => {
+    const withNaN = [...flats.slice(0, 30), NaN, ...flats.slice(31)]
+    const c = withNaN.map((c, i) => ({
+      time: 1_700_000_000 + i * 300, open: c, high: c, low: c, close: c
+    })) as OverlayCandle[]
+    const r = nicheIndicators(c)
+    expect(r).not.toBeNull()
+    expect(r!.choppiness.length).toBeGreaterThan(0)
+    expect(r!.tsi.length).toBeGreaterThan(0)
+    expect(r!.deMarker.length).toBeGreaterThan(0)
+    expect(r!.fisher.fisher.length).toBeGreaterThan(0)
+    expect(r!.coppock.length).toBeGreaterThan(0)
   })
 })

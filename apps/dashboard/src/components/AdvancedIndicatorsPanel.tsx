@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react"
 import { Card, Badge, Button } from "@/components/ui"
 import { getAdvancedIndicators, type AdvancedIndicators, type IndicatorsResult } from "@/lib/trading"
+import { nicheIndicators } from "@/lib/indicators"
+import { fetchCandles, type Timeframe } from "@/hooks/useCandleData"
 
 function fmt(v: number | null, decimals = 2) {
   if (v == null || !Number.isFinite(v)) return "—"
@@ -93,17 +95,18 @@ function PivotTable({ pivots }: { pivots: NonNullable<AdvancedIndicators["pivots
   )
 }
 
-export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: string; timeframe: string }) {
+export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: string; timeframe: string | Timeframe }) {
   const [data, setData] = useState<IndicatorsResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<"overview" | "ichimoku" | "fibonacci" | "pivots" | "volume" | "all">("overview")
+  const [niche, setNiche] = useState<ReturnType<typeof nicheIndicators> | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await getAdvancedIndicators(assetId, timeframe, 200)
+      const res = await getAdvancedIndicators(assetId, String(timeframe), 200)
       setData(res)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load indicators")
@@ -113,6 +116,35 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
   }, [assetId, timeframe])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // Niche indicators: fetch 200 candles and compute client-side.
+  // Timeframe prop may be a label string (e.g. "daily"); fetchCandles requires
+  // a numeric Timeframe. Convert via the known label map; warn and set null on
+  // unknown labels (honest degradation, no crash).
+  useEffect(() => {
+    let alive = true
+    const LABEL_MAP: Record<string, Timeframe> = {
+      "5s": 5, "15s": 15, "30s": 30, "1m": 60, "5m": 300,
+      "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400,
+      "1D": 86400, "1W": 604800, "1M": 2592000, "daily": 86400,
+    }
+    const tf = typeof timeframe === "number" && [5,15,30,60,300,900,1800,3600,14400,86400,604800,2592000].includes(timeframe)
+      ? (timeframe as Timeframe)
+      : LABEL_MAP[timeframe as string]
+    if (tf == null) {
+      console.warn("AdvancedIndicatorsPanel: niche indicators unavailable — unrecognized timeframe", timeframe)
+      setNiche(null)
+      return
+    }
+    fetchCandles(assetId, tf, 200)
+      .then(({ rows }) => {
+        if (!alive) return
+        const c = rows.map((r) => ({ time: r.time, open: r.open, high: r.high, low: r.low, close: r.close }))
+        setNiche(nicheIndicators(c))
+      })
+      .catch(() => { if (alive) setNiche(null) })
+    return () => { alive = false }
+  }, [assetId, timeframe])
 
   const ind = data?.indicators
   if (error) return <Card style={{ padding: 12, color: "var(--danger)", fontSize: 12 }}>{error}</Card>
@@ -239,6 +271,24 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
                 <Row label="Aroon">{ind.aroon.read}</Row>
                 <Row label="LR R²">{fmt(ind.linearRegression.r2, 3)}</Row>
               </Section>
+
+              {niche && (
+                <Section title="Niche Indicators (in-house)" color="#f59e0b">
+                  <Row label="Choppiness(14)">
+                    {fmt(niche.choppiness.at(-1)?.value ?? null)} { niche.choppiness.at(-1)?.value != null
+                      ? niche.choppiness.at(-1)!.value > 61.8 ? "(choppy)" : niche.choppiness.at(-1)!.value < 38.2 ? "(trending)" : "(transitional)"
+                      : ""}
+                  </Row>
+                  <Row label="TSI(25,13)">{fmt(niche.tsi.at(-1)?.value ?? null)}</Row>
+                  <Row label="DeMarker(14)">{fmt(niche.deMarker.at(-1)?.value ?? null)}</Row>
+                  <Row label="Fisher(9)">{fmt(niche.fisher.fisher.at(-1)?.value ?? null)} / {fmt(niche.fisher.signal.at(-1)?.value ?? null)} (Fisher/Signal)</Row>
+                  <Row label="Coppock(10,14,11)">{fmt(niche.coppock.at(-1)?.value ?? null)}</Row>
+                  <p style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 4 }}>
+                    Implemented in-house — formulas from the PICC corpus (COMPREHENSIVE_TRADING_KNOWLEDGE_BASE.md).
+                    Computed from the current 200-bar chart series, not synced to the server indicator snapshot.
+                  </p>
+                </Section>
+              )}
             </>
           )}
         </>

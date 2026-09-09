@@ -157,3 +157,192 @@ export function macd<T>(candles: OverlayCandle<T>[], { fast = 12, slow = 26, sig
   }
   return { line, signal: sig, hist }
 }
+
+// ---------------------------------------------------------------------------
+// Niche indicators (in-house) — pure, dependency-free, canonical formulas
+// from COMPREHENSIVE_TRADING_KNOWLEDGE_BASE.md
+// ---------------------------------------------------------------------------
+
+/** Wilder smoothing: SMA-seeded then `(prev*(p-1)+current)/p`. Same pattern as the RSI avgGain smoothing. */
+function wilderSmooth(values: number[], period: number): Array<number | null> {
+  const p = Math.max(1, Math.round(period))
+  const out: Array<number | null> = Array(values.length).fill(null)
+  let sum = 0
+  let count = 0
+  for (let i = 0; i < values.length; i++) {
+    if (!isFin(values[i])) continue
+    if (count < p) {
+      sum += values[i]
+      count++
+      if (count === p) { out[i] = sum / p }
+      continue
+    }
+    const prev = out[i - 1]
+    if (prev == null) continue
+    out[i] = (prev * (p - 1) + values[i]) / p
+  }
+  return out
+}
+
+/** Weighted moving average: weights descending `period, period-1, …, 1`, denominator = sum(1..period). */
+function wma(values: number[], period: number): Array<number | null> {
+  const p = Math.max(1, Math.round(period))
+  const denom = (p * (p + 1)) / 2
+  const out: Array<number | null> = Array(values.length).fill(null)
+  for (let i = p - 1; i < values.length; i++) {
+    let sum = 0
+    let valid = true
+    for (let j = 0; j < p; j++) {
+      if (!isFin(values[i - j])) { valid = false; break }
+      sum += values[i - j] * (p - j)
+    }
+    if (valid) out[i] = sum / denom
+  }
+  return out
+}
+
+/** Choppiness Index (period=14): 100×log₁₀(ATR_sum/(HH-LL))/log₁₀(period). Range 0–100. */
+export function choppinessIndex<T>(candles: OverlayCandle<T>[], period = 14): OverlayPoint<T>[] {
+  const p = Math.max(2, Math.round(period))
+  const out: OverlayPoint<T>[] = []
+  if (candles.length < p + 1) return out
+  const highs = candles.map((c) => c.high)
+  const lows = candles.map((c) => c.low)
+  const closes = closesOf(candles)
+  const trArr: number[] = []
+  for (let i = 1; i < closes.length; i++) {
+    if (!isFin(highs[i]) || !isFin(lows[i]) || !isFin(closes[i - 1])) { trArr.push(NaN); continue }
+    trArr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])))
+  }
+  let atrSum = 0
+  for (let i = p - 1; i < trArr.length; i++) {
+    if (i === p - 1) {
+      atrSum = 0
+      for (let j = 0; j < p; j++) atrSum += isFin(trArr[i - j]) ? trArr[i - j] : 0
+    } else {
+      atrSum += isFin(trArr[i]) ? trArr[i] : 0
+      atrSum -= isFin(trArr[i - p]) ? trArr[i - p] : 0
+    }
+    const ci = i + 1
+    if (ci < p) continue
+    let hh = -Infinity, ll = Infinity
+    for (let j = ci - p; j < ci; j++) {
+      if (highs[j] > hh) hh = highs[j]
+      if (lows[j] < ll) ll = lows[j]
+    }
+    const chop = hh !== ll ? 100 * Math.log10(atrSum / (hh - ll)) / Math.log10(p) : 50
+    if (ci < candles.length) out.push({ time: candles[ci].time, value: chop })
+  }
+  return out
+}
+
+/** True Strength Index (long=25, short=13): double-smoothed momentum ratio. Range -100..100. */
+export function trueStrengthIndex<T>(candles: OverlayCandle<T>[], { long = 25, short = 13 } = {}): OverlayPoint<T>[] {
+  const closes = closesOf(candles)
+  const pc: number[] = Array(closes.length).fill(NaN)
+  for (let i = 1; i < closes.length; i++) {
+    if (isFin(closes[i]) && isFin(closes[i - 1])) pc[i] = closes[i] - closes[i - 1]
+  }
+  const absPc = pc.map((v) => Math.abs(v))
+  const doubleSmoothPC = emaPadded(emaPadded(pc, long).map((v) => v ?? NaN), short)
+  const doubleSmoothAbsPC = emaPadded(emaPadded(absPc, long).map((v) => v ?? NaN), short)
+  const out: OverlayPoint<T>[] = []
+  for (let i = 0; i < closes.length; i++) {
+    if (doubleSmoothPC[i] == null || doubleSmoothAbsPC[i] == null) continue
+    const denom = doubleSmoothAbsPC[i] as number
+    out.push({ time: candles[i].time, value: denom !== 0 ? 100 * (doubleSmoothPC[i] as number) / denom : 0 })
+  }
+  return out
+}
+
+/** DeMarker (period=14): Wilder-smoothed DeMax/(DeMax+DeMin). Range 0–100. */
+export function deMarker<T>(candles: OverlayCandle<T>[], period = 14): OverlayPoint<T>[] {
+  const p = Math.max(2, Math.round(period))
+  const highs = candles.map((c) => c.high)
+  const lows = candles.map((c) => c.low)
+  const deMax: number[] = []
+  const deMin: number[] = []
+  for (let i = 0; i < candles.length; i++) {
+    if (i === 0 || !isFin(highs[i]) || !isFin(highs[i - 1]) || !isFin(lows[i]) || !isFin(lows[i - 1])) {
+      deMax.push(NaN); deMin.push(NaN); continue
+    }
+    deMax.push(Math.max(highs[i] - highs[i - 1], 0))
+    deMin.push(Math.max(lows[i - 1] - lows[i], 0))
+  }
+  const sMax = wilderSmooth(deMax, p)
+  const sMin = wilderSmooth(deMin, p)
+  const out: OverlayPoint<T>[] = []
+  for (let i = 0; i < candles.length; i++) {
+    if (sMax[i] == null || sMin[i] == null) continue
+    const denom = (sMax[i] as number) + (sMin[i] as number)
+    out.push({ time: candles[i].time, value: denom !== 0 ? 100 * (sMax[i] as number) / denom : 50 })
+  }
+  return out
+}
+
+/**
+ * Fisher Transform (period=9): smoothed mid→atanh normalization.
+ * Returns `{ fisher, signal }` (same shape pattern as macd).
+ */
+export function fisherTransform<T>(candles: OverlayCandle<T>[], period = 9): { fisher: OverlayPoint<T>[]; signal: OverlayPoint<T>[] } {
+  const p = Math.max(2, Math.round(period))
+  const fisherOut: OverlayPoint<T>[] = []
+  const signalOut: OverlayPoint<T>[] = []
+  if (candles.length < p) return { fisher: fisherOut, signal: signalOut }
+  const mid = candles.map((c) => (c.high + c.low) / 2)
+  const fisherArr: number[] = []
+  let smoothedPrev = 0
+  for (let i = p - 1; i < candles.length; i++) {
+    let hh = -Infinity, ll = Infinity
+    for (let j = i - p + 1; j <= i; j++) {
+      if (mid[j] > hh) hh = mid[j]
+      if (mid[j] < ll) ll = mid[j]
+    }
+    const raw = hh !== ll ? 2 * ((mid[i] - ll) / (hh - ll) - 0.5) : 0
+    const clamped = Math.max(-0.999, Math.min(0.999, raw))
+    const smoothed = clamped * 0.666 + smoothedPrev * 0.334
+    smoothedPrev = smoothed
+    const f = 0.5 * Math.log((1 + smoothed) / (1 - smoothed))
+    fisherArr.push(f)
+    fisherOut.push({ time: candles[i].time, value: f })
+    if (fisherArr.length >= 2) {
+      const prev = fisherArr[fisherArr.length - 2]
+      signalOut.push({ time: candles[i].time, value: f * 0.5 + prev * 0.5 })
+    }
+  }
+  return { fisher: fisherOut, signal: signalOut }
+}
+
+/**
+ * Coppock Curve (wmaPeriod=10, rocLong=14, rocShort=11): WMA(10) of ROC14+ROC11.
+ * First emit at bar `rocLong + wmaPeriod - 1` (needs rocLong+1 closes).
+ */
+export function coppockCurve<T>(candles: OverlayCandle<T>[], { wmaPeriod = 10, rocLong = 14, rocShort = 11 } = {}): OverlayPoint<T>[] {
+  const closes = closesOf(candles)
+  const rocArr: number[] = Array(closes.length).fill(NaN)
+  for (let i = rocLong; i < closes.length; i++) {
+    if (!isFin(closes[i]) || !isFin(closes[i - rocLong]) || !isFin(closes[i - rocShort])) continue
+    rocArr[i] = ((closes[i] - closes[i - rocLong]) / closes[i - rocLong]) * 100
+      + ((closes[i] - closes[i - rocShort]) / closes[i - rocShort]) * 100
+  }
+  return zip(candles, wma(rocArr, wmaPeriod))
+}
+
+/** Convenience aggregator: runs all five niche indicators. Returns null when candles < MIN_NICH (25). */
+export function nicheIndicators<T>(candles: OverlayCandle<T>[]): {
+  choppiness: OverlayPoint<T>[]
+  tsi: OverlayPoint<T>[]
+  deMarker: OverlayPoint<T>[]
+  fisher: { fisher: OverlayPoint<T>[]; signal: OverlayPoint<T>[] }
+  coppock: OverlayPoint<T>[]
+} | null {
+  const MIN_NICH = 25
+  if (candles.length < MIN_NICH) return null
+  return {
+    choppiness: choppinessIndex(candles),
+    tsi: trueStrengthIndex(candles),
+    deMarker: deMarker(candles),
+    fisher: fisherTransform(candles),
+    coppock: coppockCurve(candles),
+  }
+}
