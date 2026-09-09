@@ -7,26 +7,31 @@ import {
   getProfile,
   saveProfileName,
 } from "@/lib/api"
-import type { HealthInfo } from "@/lib/api"
+import type { HealthInfo, ProfileInfo } from "@/lib/api"
 import { FinanceTracker } from "@/components/FinanceTracker"
 
 type Notice = { kind: "ok" | "warn" | "err"; text: string } | null
 
+const LINKED_PROVIDERS = ["google", "email", "github"] as const
 
 export function Profile() {
   const user = useUser()
   const navigate = useNavigate()
   const [health, setHealth] = useState<HealthInfo | null>(null)
+  const [profile, setProfile] = useState<ProfileInfo | null>(null)
+  const [profileError, setProfileError] = useState(false)
   const [name, setName] = useState("")
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice>(null)
 
   const refresh = () => {
     getProfile()
-      .then((p) => setName(p.name))
-      .catch(() => {})
+      .then((p) => {
+        setProfile(p)
+        setName(p.name)
+      })
+      .catch(() => setProfileError(true))
   }
-
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => {})
@@ -52,41 +57,37 @@ export function Profile() {
     }
   }
 
-  
-
-  
-
-  
-
-  
-
-  
-
-  
-
-
   return (
     <div className="page">
       <h1>Profile</h1>
-      <p>
-        Signed in as: <strong>{user?.email || "—"}</strong>
-      </p>
-      <p className="muted">Plan: Free — all features included, no subscriptions.</p>
-      <p className="muted small">
-        Account and credentials are stored locally on this machine (server/data). Nothing leaves your home.
-      </p>
 
-      {notice && (
-        <div
-          className={`badge ${notice.kind === "ok" ? "badge-success" : notice.kind === "warn" ? "badge-warn" : "badge-danger"}`}
-          style={{ marginTop: 16, display: "inline-flex" }}
-        >
-          {notice.text}
-        </div>
-      )}
-
+      {/* Identity card */}
       <div className="card" style={{ marginTop: 16 }}>
-        <h2>Account settings</h2>
+        <h2 className="h2">Identity</h2>
+        <div className="row" style={{ gap: 8, alignItems: "baseline" }}>
+          <span className="muted">Email:</span>
+          <span>{user?.email || "—"}</span>
+        </div>
+        {user?.name && (
+          <div className="row" style={{ gap: 8, alignItems: "baseline" }}>
+            <span className="muted">Name:</span>
+            <span>{user.name}</span>
+          </div>
+        )}
+        {user?.createdAt && (
+          <div className="row" style={{ gap: 8, alignItems: "baseline" }}>
+            <span className="muted">Created:</span>
+            <span>{new Date(user.createdAt).toLocaleDateString()}</span>
+          </div>
+        )}
+        <p className="muted small" style={{ marginTop: 8 }}>
+          Account and credentials are stored locally on this machine (server/data). Nothing leaves your home.
+        </p>
+      </div>
+
+      {/* Account settings card */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2 className="h2">Account settings</h2>
         <div className="row" style={{ alignItems: "flex-end" }}>
           <div className="field" style={{ flex: 1 }}>
             <label className="field-label" htmlFor="profile-name">
@@ -104,20 +105,88 @@ export function Profile() {
             {busy === "name" ? "Saving…" : "Save"}
           </button>
         </div>
+        {notice && (
+          <div
+            className={`badge ${notice.kind === "ok" ? "badge-success" : notice.kind === "warn" ? "badge-warn" : "badge-danger"}`}
+            style={{ marginTop: 12, display: "inline-flex" }}
+          >
+            {notice.text}
+          </div>
+        )}
       </div>
 
+      {/* Provider health card */}
       <div className="card" style={{ marginTop: 16 }}>
-        <h2>Provider health</h2>
-        <ul>
-          <li>Market data (Yahoo): {p?.yahoo ? "ok" : "unavailable"}</li>
-          <li>LLM rotation ({p?.llmProviders?.join(", ") || "none"}): {p?.llm ? "ok" : "unavailable"}</li>
-          <li>Serper research: {p?.serper ? "ok" : "unavailable"}</li>
-          <li>BTCPay: {p?.btcpay ? "reachable" : "unreachable"}</li>
-          <li>eWallet (TNG): {p?.ewallet ? "ok" : "unavailable"}</li>
-          <li>Agents crews: {p?.agents ? "online" : "offline"}</li>
-        </ul>
+        <h2 className="h2">Provider health</h2>
+        <div className="row-pad" style={{ gap: 8, alignItems: "baseline" }}>
+          <span className="muted">Market data (Yahoo):</span>
+          <span className={`badge ${p?.yahoo ? "badge-success" : "badge-muted"}`}>
+            {p?.yahoo ? "ok" : "unavailable"}
+          </span>
+        </div>
+        <div className="row-pad" style={{ gap: 8, alignItems: "baseline" }}>
+          <span className="muted">LLM rotation ({p?.llmProviders?.join(", ") || "none"}):</span>
+          <span className={`badge ${p?.llm ? "badge-success" : "badge-muted"}`}>
+            {p?.llm ? "ok" : "unavailable"}
+          </span>
+        </div>
+        <div className="row-pad" style={{ gap: 8, alignItems: "baseline" }}>
+          <span className="muted">Serper research:</span>
+          <span className={`badge ${p?.serper ? "badge-success" : "badge-muted"}`}>
+            {p?.serper ? "ok" : "unavailable"}
+          </span>
+        </div>
+        <div className="row-pad" style={{ gap: 8, alignItems: "baseline" }}>
+          <span className="muted">BTCPay:</span>
+          <span className={`badge ${p?.btcpay ? "badge-success" : "badge-danger"}`}>
+            {p?.btcpay ? "reachable" : "unreachable"}
+          </span>
+        </div>
+        <div className="row-pad" style={{ gap: 8, alignItems: "baseline" }}>
+          <span className="muted">eWallet (TNG):</span>
+          <span className={`badge ${p?.ewallet ? "badge-success" : "badge-muted"}`}>
+            {p?.ewallet ? "ok" : "unavailable"}
+          </span>
+        </div>
+        <div style={{ gap: 8, alignItems: "baseline" }}>
+          <span className="muted">Agents crews:</span>
+          <span className={`badge ${p?.agents ? "badge-success" : "badge-danger"}`}>
+            {p?.agents ? "online" : "offline"}
+          </span>
+        </div>
       </div>
 
+      {/* External links card */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2 className="h2">External links</h2>
+        {profileError ? (
+          <p className="muted">Profile unavailable.</p>
+        ) : (
+          LINKED_PROVIDERS.map((provider) => {
+            const link = profile?.links[provider]
+            return (
+              <div key={provider} className="row" style={{ gap: 8, alignItems: "baseline" }}>
+                <span className="muted">{provider}:</span>
+                {link ? (
+                  <span>
+                    {link.username}
+                    {link.linkedAt && (
+                      <span className="muted small">
+                        {" "}
+                        linked {new Date(link.linkedAt).toLocaleDateString()}
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="muted">not linked</span>
+                )}
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {/* Sign out */}
       <button style={{ marginTop: 16 }} onClick={signOut}>
         Sign out
       </button>
