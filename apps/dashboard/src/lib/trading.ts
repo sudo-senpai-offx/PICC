@@ -963,6 +963,8 @@ export interface GateSearchResult {
   ok: boolean
   error?: string
   protocol?: string
+  windowsRequested?: number
+  windowsEvaluated?: number
 }
 
 export interface WalkForwardResult {

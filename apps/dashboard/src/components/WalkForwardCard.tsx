@@ -3,6 +3,8 @@ import { Badge, Button, Card, Field, Input, Spinner } from "@/components/ui"
 import type { WalkForwardResult } from "@/lib/trading"
 import { runWalkForward } from "@/lib/trading"
 
+// NOTE: the walk-forward endpoint returns percentages ALREADY (hitRate,
+// totalReturnPct, maxDrawdownPct) — do NOT multiply by 100 here.
 function fmtPct(n: number | null | undefined): string {
   if (n == null || !isFinite(n)) return "—"
   return n + "%"
@@ -122,6 +124,7 @@ export function WalkForwardCard() {
         <div className="stack">
           <p className="muted small">
             {result.symbol} · horizon {result.horizonDays}d · train {result.trainWindow} · test {result.testWindow} · step {result.stepSize}
+            {result.gateWalkForward?.ok === true ? ` · ${result.gateWalkForward.windowsEvaluated} hyperopt folds evaluated` : ""}
             {result.name ? ` · ${result.name}` : ""}
           </p>
           <div className="grid grid-4">
