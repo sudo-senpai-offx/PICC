@@ -600,6 +600,7 @@ export interface MarketNewsResult {
   query: string
   source: string
   items: NewsItem[]
+  degraded?: { reason: string }
 }
 
 export function getMarketNews(opts: { symbol?: string; query?: string; num?: number } = {}): Promise<MarketNewsResult> {

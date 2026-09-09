@@ -517,8 +517,13 @@ export async function watchlistQuotes() {
 // Market news (Serper) + multi-asset scanner
 // ---------------------------------------------------------------------
 export async function marketNews({ symbol, query, num = 5 } = {}) {
-  if (!env.serperApiKey) throw new Error("Serper not configured — set SERPER_API_KEY in the server env")
   const q = String(query || (symbol ? `${symbol} finance` : "financial markets today")).trim()
+  // Unconfigured ≠ broken: never fake news, never a 500. The client renders
+  // the honest degraded state instead. Configured-but-failing Serper still
+  // throws below (real 502 with the real error).
+  if (!env.serperApiKey) {
+    return { ok: true, query: q, source: "serper", items: [], degraded: { reason: "news_api_unconfigured" } }
+  }
   if (!q) throw new Error("query required")
   const items = await serperNews(q, num)
   return { ok: true, query: q, source: "serper", items }

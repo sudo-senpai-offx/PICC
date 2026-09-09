@@ -1829,7 +1829,17 @@ export function NewsCard() {
     try {
       const r = await getMarketNews({ query: (q ?? query.trim()) || undefined, num: 8 })
       setNews(r)
-      if (r.items.length === 0) setMsg({ ok: false, text: "No news found for that query." })
+      if (r.degraded) {
+        setMsg({
+          ok: false,
+          text:
+            r.degraded.reason === "news_api_unconfigured"
+              ? "live news is not configured — configure SERPER_API_KEY to enable live news"
+              : "live news unavailable — configure SERPER_API_KEY to enable live news"
+        })
+      } else if (r.items.length === 0) {
+        setMsg({ ok: false, text: "No news found for that query." })
+      }
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message })
     } finally {
