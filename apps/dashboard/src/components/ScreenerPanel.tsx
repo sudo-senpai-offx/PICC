@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react"
 import { Card, Button } from "@/components/ui"
-import { screenerRun, type WatchlistItem } from "@/lib/trading"
+import { screenerRun, getWatchlists, type WatchlistItem } from "@/lib/trading"
 
 const SORT_OPTIONS = [
   { value: "change24h", label: "24h Change" },
@@ -18,11 +18,38 @@ export function ScreenerPanel() {
   const [limit, setLimit] = useState(20)
   const [total, setTotal] = useState(0)
   const [universe, setUniverse] = useState(0)
+  const [universeMode, setUniverseMode] = useState<"all" | "watchlist">("all")
+  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([])
+  const [watchlistError, setWatchlistError] = useState<string | null>(null)
+
+  const fetchWatchlist = useCallback(async () => {
+    setWatchlistError(null)
+    try {
+      const res = await getWatchlists()
+      if (res?.ok && Array.isArray(res.watchlists) && res.watchlists[0]) {
+        const syms = res.watchlists[0].symbols
+        if (Array.isArray(syms)) {
+          const deduped = [...new Set(syms.map(s => String(s).toUpperCase()))]
+          setWatchlistSymbols(deduped)
+        }
+      } else {
+        setWatchlistSymbols([])
+      }
+    } catch {
+      setWatchlistError("Could not load watchlist")
+    }
+  }, [])
+
+  useEffect(() => { fetchWatchlist() }, [fetchWatchlist])
 
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await screenerRun({ sort, limit })
+      const opts: { sort: string; limit: number; symbols?: string[] } = { sort, limit }
+      if (universeMode === "watchlist" && watchlistSymbols.length > 0) {
+        opts.symbols = watchlistSymbols
+      }
+      const res = await screenerRun(opts)
       // Null-guards: a well-formed-but-non-ok body must NOT overwrite the
       // initial empty array / zero counts with `undefined` — that crashes the
       // panel on `results.map()` below. Leave the honest empty state intact.
@@ -31,9 +58,13 @@ export function ScreenerPanel() {
       if (typeof res?.universe === "number") setUniverse(res.universe)
     } catch { /* ignore */ }
     setLoading(false)
-  }, [sort, limit])
+  }, [sort, limit, universeMode, watchlistSymbols])
 
   useEffect(() => { refresh() }, [])
+
+  const handleModeChange = useCallback((mode: "all" | "watchlist") => {
+    setUniverseMode(mode)
+  }, [])
 
   return (
     <Card style={{ padding: 12 }}>
@@ -56,11 +87,31 @@ export function ScreenerPanel() {
             <option value={20}>Top 20</option>
             <option value={30}>Top 30</option>
           </select>
-          <Button variant="primary" onClick={refresh} disabled={loading} style={{ fontSize: 10, padding: "2px 10px" }}>
+          <select
+            value={universeMode}
+            onChange={(e) => handleModeChange(e.target.value as "all" | "watchlist")}
+            style={{ padding: "2px 6px", fontSize: 10, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 3, color: "var(--text)" }}
+          >
+            <option value="all">All</option>
+            <option value="watchlist">Watchlist</option>
+          </select>
+          <Button
+            variant="primary"
+            onClick={refresh}
+            disabled={loading || (universeMode === "watchlist" && watchlistSymbols.length === 0)}
+            style={{ fontSize: 10, padding: "2px 10px" }}
+          >
             {loading ? "..." : "Scan"}
           </Button>
         </div>
       </div>
+
+      {watchlistError && (
+        <div style={{ fontSize: 9, color: "var(--danger, #ff6b6b)", marginBottom: 4 }}>{watchlistError}</div>
+      )}
+      {universeMode === "watchlist" && watchlistSymbols.length === 0 && !watchlistError && (
+        <div style={{ fontSize: 9, color: "var(--text-muted)", marginBottom: 4 }}>add symbols to your watchlist to scope the screener</div>
+      )}
 
       <div style={{ maxHeight: 240, overflowY: "auto" }}>
         <table style={{ width: "100%", fontSize: 10, borderCollapse: "collapse" }}>
