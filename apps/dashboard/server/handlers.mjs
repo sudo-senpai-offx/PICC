@@ -200,6 +200,7 @@ import {
 } from "./services/browserStudio.mjs"
 import { suiteForSite } from "./services/suites.mjs"
 import { collectSourceStatuses } from "./services/dataSources.mjs"
+import { getAllIntegrations, getMinistryIntegrations } from "./services/integrationRegistry.mjs"
 import * as interventions from "./services/interventions.mjs"
 
 // ---------------------------------------------------------------------
@@ -4371,6 +4372,20 @@ const creds = await getVenueCredentials()
       res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" })
       res.end(text)
     }
+    return
+  }
+
+  // Per-ministry integration catalog (R9.2). Read-only: the registry is a
+  // static seed with honest boundary metadata; state is "unconfigured" until
+  // a probe proves otherwise. Unknown ministry -> honest empty list, not 404.
+  if (path === "/api/integrations" && req.method === "GET") {
+    writeJson(res, 200, getAllIntegrations())
+    return
+  }
+
+  if (path.startsWith("/api/integrations/") && req.method === "GET") {
+    const ministry = path.slice("/api/integrations/".length)
+    writeJson(res, 200, { ok: true, entries: getMinistryIntegrations(ministry) })
     return
   }
 

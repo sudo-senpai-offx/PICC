@@ -3,8 +3,17 @@ import { useParams } from "react-router-dom"
 import { getMinistrySettings, saveMinistrySettings } from "@/lib/ministrySettings"
 import type { AutopilotMode } from "@/lib/ministrySettings"
 import type { SuiteId } from "@/lib/suites"
+import { Badge } from "@/components/ui"
+import { fetchIntegrations } from "@/lib/integrations"
+import type { IntegrationEntry } from "@/lib/integrations"
 
 const VALID_SUITES = new Set<string>(["trading", "earnings", "intelligence"])
+
+function statusBadge(state: IntegrationEntry["state"]) {
+  const label = state === "connected" ? "Connected" : state === "degraded" ? "Degraded" : "Unconfigured"
+  const tone = state === "connected" ? "success" : state === "degraded" ? "warn" : "muted"
+  return <Badge tone={tone}>{label}</Badge>
+}
 
 export function SettingsRoom() {
   const { suiteId: raw } = useParams<{ suiteId: string }>()
@@ -12,12 +21,33 @@ export function SettingsRoom() {
 
   const [mode, setMode] = useState<AutopilotMode>("auto")
   const [threshold, setThreshold] = useState(0.6)
+  const [integrations, setIntegrations] = useState<IntegrationEntry[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!suiteId) return
     const s = getMinistrySettings(suiteId)
     setMode(s.mode)
     setThreshold(s.confidenceThreshold)
+  }, [suiteId])
+
+  useEffect(() => {
+    if (!suiteId) return
+    let cancelled = false
+    setLoading(true)
+    fetchIntegrations(suiteId)
+      .then((entries) => {
+        if (!cancelled) setIntegrations(entries)
+      })
+      .catch(() => {
+        if (!cancelled) setIntegrations([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [suiteId])
 
   if (!suiteId) {
@@ -91,6 +121,48 @@ export function SettingsRoom() {
       <p className="muted small" style={{ margin: "8px 0 0 0" }}>
         Settings are stored locally on this machine per ministry.
       </p>
+
+      <div className="card">
+        <h3 className="h3">Integrations</h3>
+        <p className="muted small" style={{ margin: "0 0 12px 0" }}>
+          Read-only info acquisition honoring each source's free-tier boundaries.
+        </p>
+        {loading ? (
+          <p className="muted">Loading…</p>
+        ) : integrations.length === 0 ? (
+          <p className="muted">No integration data available</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>What It Does</th>
+                  <th>Free Tier</th>
+                  <th>Rate Limit</th>
+                  <th>Key?</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {integrations.map((i) => (
+                  <tr key={i.id}>
+                    <td><strong>{i.name}</strong></td>
+                    <td>{i.purpose}</td>
+                    <td>{i.boundary.freeTier}</td>
+                    <td>{i.boundary.rateLimit}</td>
+                    <td>{i.boundary.keyRequired ? "Yes" : "No"}</td>
+                    <td>{statusBadge(i.state)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="muted small" style={{ margin: "12px 0 0 0" }}>
+          New sources are added over time (PICC-as-a-country).
+        </p>
+      </div>
     </div>
   )
 }
