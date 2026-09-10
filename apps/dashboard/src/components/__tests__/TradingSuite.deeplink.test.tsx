@@ -7,9 +7,15 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { useEffect, useState } from "react"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
-import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 
-vi.mock("@/lib/auth", () => ({ getToken: () => "" }))
+vi.mock("@/lib/auth", () => ({
+  getStoredSession: () => ({ access_token: "t", user: { id: "u", name: "SP0 Observer", email: "sp0.observer@picc.local" } }),
+  fetchMe: async () => ({ id: "u", name: "SP0 Observer", email: "sp0.observer@picc.local" }),
+  signOutLocal: async () => {},
+  setStoredSession: () => {},
+  getToken: () => "t"
+}))
 
 vi.mock("@/hooks/useRealtimeSuite", () => {
   const useRealtimeSuite = () => {
@@ -44,6 +50,7 @@ vi.mock("@/lib/brokerLink", async (importOriginal) => {
 import { openBrokerTab } from "@/lib/brokerLink"
 import { MarketsSuite } from "@/components/TradingSuite"
 import { Suites } from "@/pages/Suites"
+import App from "@/App"
 
 vi.stubGlobal("confirm", () => true)
 
@@ -79,6 +86,39 @@ function mount(url: string, element: React.ReactNode) {
   return {
     host,
     root,
+    unmount() {
+      flushSync(() => { root.unmount() })
+      document.body.removeChild(host)
+    }
+  }
+}
+
+/**
+ * Mount the full App route tree so the /suites redirect actually runs, and
+ * record every committed pathname+search so the test can assert the query
+ * string survived the redirect end-to-end.
+ */
+function mountApp(url: string) {
+  const host = document.createElement("div")
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const urls: string[] = []
+  function UrlProbe() {
+    const location = useLocation()
+    urls.push(location.pathname + location.search)
+    return null
+  }
+  flushSync(() => {
+    root.render(
+      <MemoryRouter initialEntries={[url]}>
+        <UrlProbe />
+        <App />
+      </MemoryRouter>
+    )
+  })
+  return {
+    host,
+    urls,
     unmount() {
       flushSync(() => { root.unmount() })
       document.body.removeChild(host)
@@ -192,5 +232,25 @@ describe("deep-link landing (T6 / REQ-9)", () => {
     mounted.push(m)
     // The trading suite opened itself: the chart select is live and asset is applied.
     await waitFor(() => chartSelect()?.value === "BTCUSD", "chart select == BTCUSD")
+  })
+
+  it("/suites redirect preserves search params into /suites/trading (App route tree)", async () => {
+    // jsdom omits matchMedia, which the shell's components may query.
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn()
+    }))
+    const m = mountApp("/suites?asset=EURUSD&panel=chart")
+    mounted.push(m)
+    await waitFor(() => m.urls.some((u) => u === "/suites/trading?asset=EURUSD&panel=chart"), "redirected URL carries the query string")
+    // Deep link works end-to-end through the redirect.
+    await waitFor(() => chartSelect()?.value === "EURUSD", "chart select == EURUSD through the redirect")
+    expect(m.host.textContent).not.toContain("Something went wrong")
   })
 })

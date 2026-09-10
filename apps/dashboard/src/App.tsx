@@ -28,6 +28,11 @@ function RequireFeature({ feature, children }: { feature: FeatureKey; children: 
   return <>{children}</>
 }
 
+function SuitesRedirect() {
+  const { search } = useLocation()
+  return <Navigate to={`/suites/trading${search}`} replace />
+}
+
 export default function App() {
   return (
     <AppErrorBoundary>
@@ -58,7 +63,7 @@ export default function App() {
           <Route index element={<Suites />} />
           <Route path="*" element={<MinistryRoom />} />
         </Route>
-        <Route path="suites" element={<Navigate to="/suites/trading" replace />} />
+        <Route path="suites" element={<SuitesRedirect />} />
         <Route path="trading" element={<Navigate to="/suites/trading" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
