@@ -51,6 +51,7 @@ const NAV: { section: string; items: { to: string; label: string; icon: string; 
     section: "Command",
     items: [
       { to: "/", label: "Dashboard", icon: "▦", feature: null },
+      { to: "/studio", label: "Browser Studio", icon: "🌐", feature: "browser" },
       { to: "/opportunities", label: "Opportunities", icon: "🧭", feature: "opportunities" }
     ]
   },

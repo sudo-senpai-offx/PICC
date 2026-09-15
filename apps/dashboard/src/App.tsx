@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell"
 import { Login } from "@/pages/Login"
 import { Dashboard } from "@/pages/Dashboard"
 import { Suites } from "@/pages/Suites"
+import { StudioPage } from "@/pages/StudioPage"
 import MinistryShell from "@/pages/MinistryShell"
 import { Profile } from "@/pages/Profile"
 import { Settings } from "@/pages/Settings"
@@ -57,6 +58,7 @@ export default function App() {
         />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />
+        <Route path="studio" element={<StudioPage />} />
         {/* The existing Suites page is now the ministry landing under the
             ministry shell's Outlet — it keeps the trading UI + deep links alive. */}
         <Route path="suites/:suiteId" element={<MinistryShell />}>
