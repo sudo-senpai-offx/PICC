@@ -361,6 +361,7 @@
   }
   let captureConfig = null // [{venueId, hostRe, via, keys, profileKeys, enabled}...] server view (or built-in fallback)
   let captureConfigAt = 0
+  let serverSessionCaptureEnabled = null // server view of the PICC-side kill-switch; null = server never observed
   const CAPTURE_CFG_TTL = 5 * 60 * 1000
   const captureSent = {} // venueId -> last relayed token (IN-MEMORY only — never persisted)
 
@@ -524,9 +525,13 @@
   async function venueScanConfig() {
     if (captureConfig && Date.now() - captureConfigAt < CAPTURE_CFG_TTL) return captureConfig
     let venues = null
+    let serverSession = null
     try {
       const res = await chromeGuard(() => chrome.runtime.sendMessage({ action: "capture-profiles" }))
       if (res && Array.isArray(res.venues) && res.venues.length) venues = res.venues
+      // The PICC-side kill-switch (server truth) rides the folded view; keep it
+      // independent of the venues array so a venue list of zero still carries it.
+      if (res && typeof res.sessionCaptureEnabled === "boolean") serverSession = res.sessionCaptureEnabled
     } catch { /* worker unreachable — fall through to built-in */ }
     captureConfig = venues || Object.entries(PICC_CAPTURE_BUILTIN).map(([venueId, cfg]) => ({
       venueId,
@@ -540,6 +545,12 @@
       capture: cfg.capture ?? null,
       enabled: true
     }))
+    // Server observed → keep its kill-switch view; server silent on this pass
+    // (unreachable, or no boolean in the folded payload) → reset to null so a
+    // previously-observed OFF never outlives the server's silence: the extension
+    // toggle becomes the sole authority again (extension-only mode, ADR-0001
+    // independence rule). Absent is never treated as OFF.
+    serverSessionCaptureEnabled = serverSession
     captureConfigAt = Date.now()
     return captureConfig
   }
@@ -551,6 +562,11 @@
     const venues = await venueScanConfig()
     const venue = venues.find((v) => v && v.enabled !== false && matchesVenueHost(v.hostRe, hostname))
     if (!venue) return
+    // S6/T6.2 — PICC-side kill-switch is authoritative when the server actually
+    // observed it OFF (owner decision 2026-09-15): capture does not occur even
+    // if the extension toggle says enabled. Null = "server never observed",
+    // default-ON — the local toggle below alone dictates (independence).
+    if (serverSessionCaptureEnabled === false) return
     store.get(["piccSessionCapture"], ({ piccSessionCapture }) => {
       if (piccSessionCapture === false) return // user kill-switch for session capture, defaults ON
       // liveEO → shape scan (mirror of captureExpertOptionSession); every other

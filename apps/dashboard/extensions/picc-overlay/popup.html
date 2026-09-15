@@ -35,6 +35,10 @@
   <div class="row"><span class="lbl">Sync (this tab)</span><span id="sync-tab" class="st dim">—</span></div>
   <div class="row"><span class="lbl">Frames queued</span><span id="queued" class="st">0</span></div>
   <div class="row"><span class="lbl">Relay enabled</span><button id="relay" class="switch"><span class="knob"></span></button></div>
+  <div class="row"><span class="lbl">Session capture</span><button id="capture" class="switch"><span class="knob"></span></button></div>
+  <div id="capture-note" class="note bad" style="display:none;">
+    Session capture is disabled in PICC settings — the dashboard toggle overrides this switch. Re-enable it in the web app (Settings → Session capture).
+  </div>
 
   <label class="lbl" style="display:block;margin:10px 0 4px;font-size:11px;">Dashboard URL</label>
   <input id="backend" placeholder="http://localhost:5173" />

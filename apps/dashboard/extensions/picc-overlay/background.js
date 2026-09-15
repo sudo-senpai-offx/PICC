@@ -180,6 +180,15 @@ async function sendHeartbeat() {
     if (tab) tabInfo = { id: tab.id, url: tab.url, title: tab.title }
   } catch {}
 
+  // T6.2 — relay the session-capture kill-switch so the server can observe
+  // piccSessionCapture=false as skip-unconfigured (honest: absent storage =
+  // default-ON, never assumed false by the server).
+  let captureEnabled = null
+  try {
+    const ks = await chrome.storage.local.get(["piccSessionCapture"])
+    if (typeof ks.piccSessionCapture === "boolean") captureEnabled = ks.piccSessionCapture
+  } catch { /* storage unavailable — honest null */ }
+
   await serverFetch("/api/extension/heartbeat", {
     method: "POST",
     body: {
@@ -187,7 +196,8 @@ async function sendHeartbeat() {
       activeTab: tabInfo,
       serverOnline: true,
       port: detectedPort,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      captureEnabled
     }
   })
 }
@@ -354,10 +364,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // T13 — scanner config for the content scripts (the venue rows → keys the
   // sensor may READ on a venue tab). Key names only, forwarded verbatim.
+  // T6.2/S6 (owner decision 2026-09-15): the folded server view of the
+  // PICC-side session-capture kill-switch rides along so the sensor + popup can
+  // honor "PICC settings overrides the extension toggle when both are present".
   if (msg.action === "capture-profiles") {
     serverFetch("/api/trading/capture-profiles")
-      .then((r) => sendResponse({ ok: r.ok === true, venues: r.data?.venues ?? null, status: r.status ?? null }))
-      .catch((err) => sendResponse({ ok: false, venues: null, error: String(err?.message ?? err) }))
+      .then((r) => sendResponse({
+        ok: r.ok === true,
+        venues: r.data?.venues ?? null,
+        sessionCaptureEnabled: r.data?.sessionCaptureEnabled ?? null,
+        status: r.status ?? null
+      }))
+      .catch((err) => sendResponse({ ok: false, venues: null, sessionCaptureEnabled: null, error: String(err?.message ?? err) }))
     return true
   }
 

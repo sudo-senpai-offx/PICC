@@ -71,8 +71,8 @@ function fmtTime(iso) {
 }
 
 async function refresh() {
-  const { piccSensorStatus, piccRelayEnabled, piccServerOnline, piccServerPort, piccHeadlessStatus } = await chrome.storage.local.get([
-    "piccSensorStatus", "piccRelayEnabled", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"
+  const { piccSensorStatus, piccRelayEnabled, piccSessionCapture, piccServerOnline, piccServerPort, piccHeadlessStatus } = await chrome.storage.local.get([
+    "piccSensorStatus", "piccRelayEnabled", "piccSessionCapture", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"
   ])
   // Fresh probe beats the heartbeat's cached state; fall back to the cache if
   // the worker is unreachable (should never happen — same extension).
@@ -88,6 +88,30 @@ async function refresh() {
   // per-platform sync decision. No venue host => honestly "not a PICC venue".
   renderSyncTab(q?.venueId ?? null, q?.venueName ?? null, piccHeadlessStatus?.venues ?? null)
   $("relay").classList.toggle("on", piccRelayEnabled !== false)
+  renderSessionCapture(piccSessionCapture)
+}
+
+function renderSessionCapture(localValue) {
+  // S6/T6.2 — the session-capture switch is the SENSOR-side kill-switch for the
+  // capture leg. The PICC settings view (server) OVERRIDES it when the server
+  // actually reported it OFF (owner decision 2026-09-15): capture does not
+  // occur even if the local toggle says enabled, and the popup says why instead
+  // of silently ignoring the switch. Null = "server never observed" (default-ON,
+  // local toggle alone dictates), never assumed OFF.
+  const cap = $("capture")
+  const note = $("capture-note")
+  cap.classList.toggle("on", localValue !== false)
+  cap.disabled = false
+  note.style.display = "none"
+  chrome.runtime.sendMessage({ action: "capture-profiles" })
+    .then((res) => {
+      if (res && res.sessionCaptureEnabled === false) {
+        cap.classList.remove("on")
+        cap.disabled = true // the PICC settings toggle is authoritative; local flip would lie
+        note.style.display = "block"
+      }
+    })
+    .catch(() => { /* server view unavailable — local toggle alone dictates (independence) */ })
 }
 
 function renderSyncTab(venueId, venueName, allVenues) {
@@ -110,10 +134,22 @@ function renderSyncTab(venueId, venueName, allVenues) {
     : `this tab hosts ${label}`
 }
 
-$("relay").addEventListener("click", async () => {
-  const { piccRelayEnabled } = await chrome.storage.local.get(["piccRelayEnabled"])
-  await chrome.storage.local.set({ piccRelayEnabled: piccRelayEnabled === false })
+async function flipToggle(key) {
+  // Both switches are the same dance: read the single flag, write the inverse,
+  // re-render. Each handler below stays a one-liner so the popup's storage
+  // footprint (one key read + one key write per toggle) is easy to audit.
+  const cur = await chrome.storage.local.get([key])
+  await chrome.storage.local.set({ [key]: cur[key] === false })
   await refresh()
+}
+
+$("relay").addEventListener("click", () => flipToggle("piccRelayEnabled"))
+
+$("capture").addEventListener("click", () => {
+  // The PICC-settings view (server) is authoritative when present — the toggle
+  // is disabled there, so a click here only flips the local switch when the
+  // extension is the only surface (independence architecture).
+  flipToggle("piccSessionCapture")
 })
 
 $("open").addEventListener("click", async () => {
