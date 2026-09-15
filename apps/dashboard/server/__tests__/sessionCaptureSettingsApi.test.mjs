@@ -1,14 +1,11 @@
 // S6/T6.2 — PICC-side session-capture kill-switch API (owner decision 2026-09-15):
 //   GET  /api/settings/session-capture        → {ok, enabled, configured}
 //   POST /api/settings/session-capture        → {ok, settings:{enabled, configured}}
-//   GET  /api/trading/capture-profiles        → payload now carries
-//        sessionCaptureEnabled (the extension's server view for the AND-gate).
 // Honesty contract under test:
 //   - unset (no file) → enabled:true, configured:false (absent ≠ off);
 //   - POST with a non-boolean → 400 (never silently coerced to off);
 //   - the settings POST is auth-guarded; GET stays public like sibling /settings
-//     GET views;
-//   - the capture-profiles fold is the SAME boolean used by the settings store.
+//     GET views.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -104,19 +101,5 @@ describe("session-capture settings API (S6/T6.2)", () => {
     expect(res.body.error).toBeTruthy()
     const get = await call(handleApi, "GET", "/api/settings/session-capture")
     expect(get.body.enabled).toBe(true)
-  })
-
-  it("capture-profiles payload folds the SAME store boolean (default true)", async () => {
-    const res = await call(handleApi, "GET", "/api/trading/capture-profiles")
-    expect(res.status).toBe(200)
-    expect(res.body.ok).toBe(true)
-    expect(res.body.sessionCaptureEnabled).toBe(true)
-    expect(Array.isArray(res.body.venues)).toBe(true)
-  })
-
-  it("capture-profiles reflects a persisted disable", async () => {
-    store.saveSessionCaptureSetting(false)
-    const res = await call(handleApi, "GET", "/api/trading/capture-profiles")
-    expect(res.body.sessionCaptureEnabled).toBe(false)
   })
 })

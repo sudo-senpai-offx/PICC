@@ -71,8 +71,8 @@ export function windowLabel({ leadMinutes = 0, windowMinutes = 0, at = Date.now(
 
 /**
  * Decision D: resolve the deep-link venue for an alerting asset from the
- * sensor-covered set — the SAME catalog the extension live-scans
- * (captureProfiles.extensionCaptureConfigs). Candidate pool narrowed to
+ * sensor-covered set — the studio-browser capture catalog
+ * (captureProfiles.studioCaptureCatalog). Candidate pool narrowed to
  * liveEO-verified capture venues only (PICC_SIGNAL_VENUE_POOL_DECISION.md,
  * 2026-09-02): IS/storageScan venues have no verified live session path, so a
  * deep link onto them would be a fabrication of openability. Each survivor is
@@ -84,7 +84,7 @@ export function windowLabel({ leadMinutes = 0, windowMinutes = 0, at = Date.now(
  * candidates so the seam stays in lockstep with the real catalog.
  */
 export async function resolveAlertVenue({ assetId, candidateConfigs, instrument } = {}) {
-  const configs = candidateConfigs ?? (await import("./captureProfiles.mjs")).extensionCaptureConfigs()
+  const configs = candidateConfigs ?? (await import("./captureProfiles.mjs")).studioCaptureCatalog()
   const urlFor = instrument ?? (await import("./browserStudio.mjs")).instrumentUrl
   const candidates = configs
     .filter((c) => c.via === "liveEO")

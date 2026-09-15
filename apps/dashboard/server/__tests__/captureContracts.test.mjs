@@ -13,19 +13,14 @@
 //      the state lives in memory, the file is byte-identical before/after.
 //   3. account-metrics record shape — the full emitted vocabulary, with
 //      absent → null (never a fabricated 0) and a genuine observed 0 kept as 0.
-//   4. headless-status venue-row shape — exact key set the popup renders
+//   4. headless-status venue-row shape — exact key set the suite surfaces
 //      from, plus the endpoint's lastMetricsAt merge.
-//   5. popup pure-storage-reader lock — the REAL popup.js runs in a vm
-//      sandbox; it may read ONLY the pinned chrome.storage keys, send ONLY
-//      the pinned read-only message actions, and never reference any storage
-//      area or key that could hold raw session material.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import vm from "node:vm"
 
 function makeReq(method, url, body, headers = {}) {
   const raw = body !== undefined ? JSON.stringify(body) : null
@@ -251,160 +246,5 @@ describe("capture contracts (T12 locks 1-4)", () => {
     expect(iq.lastMetricsAt).toBe("2026-08-30T12:00:00.000Z")
     expect(res.body.venues.expertoption.lastMetricsAt).toBeNull() // never observed → null
     expect(res.body.venues.expertoption.tokenChangedAt).toBeNull() // never captured → null, never a token
-  })
-})
-
-describe("popup is a pure storage reader (T12 lock 5)", () => {
-  const EXT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../extensions/picc-overlay")
-  const SOURCE = readFileSync(join(EXT_DIR, "popup.js"), "utf8")
-
-  function makeHarness() {
-    const recorded = {
-      localGet: [], // key-lists / keys passed to chrome.storage.local.get
-      localSet: [],
-      syncGet: [],
-      syncSet: [],
-      messages: [], // { action } objects passed to runtime.sendMessage
-      tabCreates: [],
-      storageAreas: [], // storage.* areas the popup actually touched
-      clicks: {} // element id → listeners
-    }
-    const els = new Map()
-    const stubEl = () => ({
-      textContent: "",
-      className: "",
-      title: "",
-      value: "",
-      children: [],
-      style: {},
-      disabled: false,
-      classList: { toggle() {}, add() {}, remove() {} },
-      listeners: {},
-      append(...kids) { this.children.push(...kids) },
-      addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn) },
-      setAttribute() {}
-    })
-    const getEl = (id) => {
-      if (!els.has(id)) els.set(id, stubEl())
-      return els.get(id)
-    }
-    const document = {
-      getElementById: (id) => getEl(id),
-      createElement: () => stubEl()
-    }
-    const storageArea = (kind, list) => ({
-      get: async (keys) => { list.push(keys); return {} },
-      set: async (entry) => { list.push(entry) }
-    })
-    const chrome = {
-      storage: new Proxy(
-        {
-          local: storageArea("local", recorded.localSet === undefined ? [] : []),
-          sync: storageArea("sync", recorded.syncSet === undefined ? [] : [])
-        },
-        {
-          get(target, prop) {
-            if (typeof prop === "string") recorded.storageAreas.push(prop)
-            return target[prop]
-          }
-        }
-      ),
-      runtime: {
-        sendMessage: async (msg) => { recorded.messages.push(msg); throw new Error("no listener") }
-      },
-      tabs: { create: async (t) => { recorded.tabCreates.push(t) } }
-    }
-    // wire storage `.get` recording into the areas
-    chrome.storage.local.get = async (keys) => { recorded.localGet.push(keys); return {} }
-    chrome.storage.local.set = async (entry) => { recorded.localSet.push(entry) }
-    chrome.storage.sync.get = async (keys) => { recorded.syncGet.push(keys); return { piccSettings: undefined } }
-    chrome.storage.sync.set = async (entry) => { recorded.syncSet.push(entry) }
-
-    const context = vm.createContext({
-      document,
-      chrome,
-      setInterval: () => 0, // capture nothing: the popup's 3s refresh loop must not run in the sandbox
-      clearInterval: () => {},
-      Date: globalThis.Date,
-      console: { log() {}, warn() {}, error() {} }
-    })
-    vm.runInContext(SOURCE, context)
-    const fire = (id, type = "click") => {
-      for (const fn of getEl(id).listeners[type] ?? []) fn()
-    }
-    return { recorded, els, fire }
-  }
-
-  async function settle() {
-    await new Promise((r) => setTimeout(r, 0))
-    await new Promise((r) => setTimeout(r, 0))
-  }
-
-  it("reads EXACTLY the pinned chrome.storage keys — the headless-status mirror, the two kill-switch flags, and nothing else", async () => {
-    const h = makeHarness()
-    await settle()
-    // Load-time refresh reads the T8 status mirror + the kill-switch flags — the
-    // ONLY local keys the popup may read.
-    expect(h.recorded.localGet).toEqual([
-      ["piccSensorStatus", "piccRelayEnabled", "piccSessionCapture", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"]
-    ])
-    h.fire("relay") // the relay toggle re-reads the one key it mutates, then re-renders
-    h.fire("capture") // the session-capture toggle re-reads the one key it mutates, then re-renders
-    await settle()
-    // Every local read is EITHER the T8 status mirror OR one of the two toggle keys —
-    // no third key list may ever appear.
-    const MIRROR = ["piccSensorStatus", "piccRelayEnabled", "piccSessionCapture", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"]
-    const TOGGLES = ["piccRelayEnabled", "piccSessionCapture"]
-    const isMirror = (keys) => JSON.stringify(keys) === JSON.stringify(MIRROR)
-    expect(h.recorded.localGet.length).toBeGreaterThanOrEqual(3)
-    for (const keys of h.recorded.localGet) {
-      expect(isMirror(keys) || (Array.isArray(keys) && keys.length === 1 && TOGGLES.includes(keys[0]))).toBe(true)
-    }
-    expect(h.recorded.localGet.filter((keys) => keys.length === 1).length).toBe(2) // exactly the two standalone toggle reads
-    // Sync is only the backend-url setting, in every interaction.
-    h.fire("open")
-    h.fire("save")
-    await settle()
-    expect(h.recorded.syncGet.length).toBeGreaterThanOrEqual(3)
-    for (const keys of h.recorded.syncGet) expect(keys).toEqual(["piccSettings"])
-    for (const entry of h.recorded.syncSet) expect(Object.keys(entry)).toEqual(["piccSettings"])
-    // Writes are limited to the two toggle flags + the settings save.
-    expect(h.recorded.localSet.map((e) => Object.keys(e))).toEqual([["piccRelayEnabled"], ["piccSessionCapture"]])
-  })
-
-  it("sends ONLY the three read-only probes — never a mutation or trading action", async () => {
-    const h = makeHarness()
-    await settle()
-    const actions = h.recorded.messages.map((m) => m.action)
-    expect(actions).toEqual(["server-status", "sensor-queue-depth", "capture-profiles"])
-    for (const m of h.recorded.messages) {
-      expect(Object.keys(m).sort()).toEqual(["action"]) // nothing but the action tag
-    }
-  })
-
-  it("never touches a storage area or key that could hold raw session material", async () => {
-    const h = makeHarness()
-    await settle()
-    h.fire("relay")
-    h.fire("open")
-    h.fire("save")
-    await settle()
-    // Only the local + sync areas exist for the popup; a session area (or any
-    // new area) is a contract violation.
-    const areas = h.recorded.storageAreas.filter((a) => a !== "local" && a !== "sync")
-    expect(areas).toEqual([])
-    const allKeys = [
-      ...h.recorded.localGet.flat(),
-      ...h.recorded.syncGet.flat(),
-      ...h.recorded.localSet.flatMap((e) => Object.keys(e)),
-      ...h.recorded.syncSet.flatMap((e) => Object.keys(e))
-    ]
-    // No key may name a token/credential surface — the popup renders engine
-    // state, it never holds raw session material. The two kill-switch flags
-    // (piccRelayEnabled, piccSessionCapture) are booleans, never credentials;
-    // a "PiccSessionCapture"-shaped key that could actually hold a session
-    // token is exactly what this guards against.
-    const rawMaterialMatch = (k) => /token|ssid|secret|password|session/i.test(k) && !/^(piccRelayEnabled|piccSessionCapture)$/.test(k)
-    expect(allKeys.some((k) => rawMaterialMatch(k))).toBe(false)
   })
 })
