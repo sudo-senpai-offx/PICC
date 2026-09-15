@@ -32,6 +32,52 @@ export interface TradingCredentials {
   expertoptionWsUrl: string
   paperStartingBalance: number
   riskPerTradePct: number
+  ccxtExchanges: CcxtExchangePair[]
+}
+
+/**
+ * A single read-only CCXT market-data pair. Each entry must name an exchange
+ * and a symbol; timeframe/limit are optional. Shape mirrors what the server
+ * sanitizer (trading.mjs) accepts and persists.
+ */
+export interface CcxtExchangePair {
+  exchange: string
+  symbol: string
+  timeframe?: string
+  limit?: number
+}
+
+/**
+ * Parse the Settings editor's JSON text into CCXT pairs using the SAME rules
+ * the server sanitizer applies (trading.mjs sanitizePatch): entries must be
+ * objects with a non-blank exchange + symbol, exchange is lowercased, the
+ * list is capped at 12. Returns { ok: false, error } for unparseable input
+ * so the UI can refuse to save instead of silently dropping a typo.
+ */
+export function parseCcxtPairsJson(text: string): { ok: true; pairs: CcxtExchangePair[] } | { ok: false; error: string } {
+  const trimmed = String(text ?? "").trim()
+  if (!trimmed) return { ok: true, pairs: [] }
+  let raw: unknown
+  try {
+    raw = JSON.parse(trimmed)
+  } catch (e) {
+    return { ok: false, error: `Not valid JSON: ${(e as Error).message}` }
+  }
+  if (!Array.isArray(raw)) return { ok: false, error: "CCXT pairs must be a JSON array of objects." }
+  const pairs: CcxtExchangePair[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return { ok: false, error: "Each CCXT pair must be an object like { exchange, symbol, timeframe? }" }
+    const obj = entry as Record<string, unknown>
+    const exchange = String(obj.exchange ?? "").trim().toLowerCase()
+    const symbol = String(obj.symbol ?? "").trim()
+    if (!exchange || !symbol) return { ok: false, error: "Each CCXT pair needs a non-blank exchange and symbol." }
+    const pair: CcxtExchangePair = { exchange, symbol }
+    if (obj.timeframe != null && String(obj.timeframe).trim()) pair.timeframe = String(obj.timeframe).trim()
+    if (obj.limit != null) pair.limit = Math.max(1, Math.min(Number(obj.limit) || 200, 1000))
+    pairs.push(pair)
+    if (pairs.length >= 12) break
+  }
+  return { ok: true, pairs }
 }
 
 export interface PaperOverview {
@@ -402,6 +448,14 @@ export function normalizeAutopilotAssets(raw: unknown): AutopilotAssetTarget[] {
     }))
 }
 
+export interface ScopeHealthRow {
+  assetId: string
+  resolvable: boolean
+  via: "catalog" | "feed" | null
+  problem: string | null
+  evaluatedAt: string
+}
+
 export interface BrokerDemoStatus {
   ok: boolean
   configured: boolean
@@ -419,6 +473,12 @@ export interface BrokerDemoStatus {
   autopilot: AutopilotConfig & {
     running: boolean
     assetScope?: AutopilotAssetTarget[]
+    scopeHealth?: {
+      ok: boolean
+      rows: ScopeHealthRow[]
+      problems: string[]
+      healthy: string[]
+    }
     lastRun: Record<string, unknown> | null
     lastDecision: string | null
     decisionWindow?: { size: number; trades: number; skips: number }

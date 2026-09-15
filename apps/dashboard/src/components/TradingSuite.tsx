@@ -84,7 +84,7 @@ import type {
   TradingSignal,
   WatchlistQuote
 } from "@/lib/trading"
-import { normalizeAutopilotAssets } from "@/lib/trading"
+import { normalizeAutopilotAssets, parseCcxtPairsJson } from "@/lib/trading"
 
 const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", EUR: "\u20AC", GBP: "\u00A3", JPY: "\u00A5", CNY: "\u00A5", KRW: "\u20A9", INR: "\u20B9", BRL: "R$", RUB: "\u20BD", AUD: "A$", CAD: "C$", CHF: "CHF ", NGN: "\u20A6", PHP: "\u20B1", THB: "\u0E3F", VND: "\u20AB", MYR: "RM", IDR: "Rp" }
 function fmtMoney(n: number | null | undefined, currency?: string | null): string {
@@ -298,7 +298,12 @@ export function AutopilotSuite() {
   const [demo, setDemo] = useState<BrokerDemoStatus | null>(null)
   const [analytics, setAnalytics] = useState<DemoAnalyticsResult | null>(null)
   const [extension, setExtension] = useState<ExtensionStatus | null>(null)
-  const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number }>({ token: "", demo: true, riskPct: 2 })
+  const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number; ccxtJson: string }>({
+    token: "",
+    demo: true,
+    riskPct: 2,
+    ccxtJson: ""
+  })
   const [credsMsg, setCredsMsg] = useState<string | null>(null)
   const [brokers, setBrokers] = useState<BrokersResult | null>(null)
   const [venues, setVenues] = useState<TradingVenuesResult | null>(null)
@@ -333,7 +338,11 @@ export function AutopilotSuite() {
           ...prev,
           demo: raw.expertoptionDemo !== false,
           riskPct: Number(raw.riskPerTradePct) || 2,
-          token: masked && !masked.includes("•") ? masked : ""
+          token: masked && !masked.includes("•") ? masked : "",
+          ccxtJson:
+            Array.isArray(raw.ccxtExchanges) && raw.ccxtExchanges.length
+              ? JSON.stringify(raw.ccxtExchanges, null, 2)
+              : prev.ccxtJson
         }))
       }
     } catch (e) {
@@ -418,9 +427,16 @@ export function AutopilotSuite() {
     setBusy(true)
     setCredsMsg(null)
     try {
+      const parsed = parseCcxtPairsJson(creds.ccxtJson)
+      if (!parsed.ok) {
+        setCredsMsg(parsed.error)
+        setBusy(false)
+        return
+      }
       const patch: Partial<TradingCredentials> = {
         expertoptionDemo: creds.demo,
-        riskPerTradePct: Math.min(20, Math.max(1, Number(creds.riskPct) || 2))
+        riskPerTradePct: Math.min(20, Math.max(1, Number(creds.riskPct) || 2)),
+        ccxtExchanges: parsed.pairs
       }
       // Only send the token when the user typed a NEW one (masked reads stay untouched).
       if (creds.token.trim()) patch.expertoptionToken = creds.token.trim()
@@ -611,6 +627,24 @@ export function AutopilotSuite() {
             The engine evaluates every ENABLED asset on every tick. Empty fields inherit the global defaults;
             filled values override them for that asset only.
           </p>
+          {((demo?.autopilot?.scopeHealth?.problems?.length ?? 0) > 0) ? (
+            <div
+              className="card pad"
+              style={{ border: "1px solid var(--danger, #e5484d)", color: "var(--danger, #e5484d)" }}
+              data-testid="scope-health-warning"
+            >
+              <strong>Unresolvable assets in scope</strong>
+              <ul className="small" style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {(demo?.autopilot?.scopeHealth?.rows ?? [])
+                  .filter((r) => !r.resolvable)
+                  .map((r) => (
+                    <li key={r.assetId}>
+                      <code>{r.assetId}</code> — {r.problem}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          ) : null}
           {cfg ? (
             <div className="stack">
               {(assets.length ? assets : [{ assetId: cfg.assetId, enabled: true, duration: null, amount: null, minConfidence: null }]).map((a) => (
@@ -775,6 +809,21 @@ export function AutopilotSuite() {
             <Button variant="secondary" disabled={busy} onClick={saveCredentials}>Save credentials</Button>
           </div>
         </div>
+        <div className="stack">
+          <p className="muted small">
+            CCXT market-data pairs (public, no key) — the spread route and order rail use these for cross-venue
+            OHLCV/ticker reads. Format: JSON array of {"{"} exchange, symbol, timeframe? {"}"}. Up to 12 pairs;
+            validated locally before saving.
+          </p>
+          <Textarea
+            rows={4}
+            spellCheck={false}
+            style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}
+            value={creds.ccxtJson}
+            placeholder={"[\n  { \"exchange\": \"binance\", \"symbol\": \"BTCUSDT\", \"timeframe\": \"5m\" }\n]"}
+            onChange={(e) => setCreds((p) => ({ ...p, ccxtJson: e.target.value }))}
+          />
+        </div>
         {!demo?.configured ? (
           <p className="muted small">No token configured yet — autopilot ticks will report “no token configured” until saved.</p>
         ) : null}
@@ -842,7 +891,9 @@ export function AutopilotSuite() {
                     <div
                       key={i}
                       title={`${p.t ?? "start"} · ${fmtMoney(p.equity, demo?.currency)}`}
-                      className={p.pnl >= 0 ? "bar-fill" : "bar-fill bar-danger"}
+                      className={
+                        p.pnl > 0 ? "bar-fill" : p.pnl < 0 ? "bar-fill bar-danger" : "bar-fill bar-flat"
+                      }
                       style={{ height: `${Math.max(4, ((p.equity - min) / range) * 100)}%`, flex: 1, minWidth: 3 }}
                     />
                   ))
@@ -1506,9 +1557,14 @@ export function PaperTradingCard({
 }) {
   const [symbol, setSymbol] = useState("EURUSD")
   const [side, setSide] = useState<"up" | "down">("up")
-  const [entry, setEntry] = useState("1.0000")
+  // No price pre-fill: the default "1.0000" wrote unobserved entries into the
+  // ledger (3 of the 7 zero-PnL paper trades opened at the sentinel 1.0).
+  // The operator types the price they actually observe, or the open is blocked.
+  const [entry, setEntry] = useState("")
   const [amount, setAmount] = useState("100")
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const entryNum = Number(entry)
+  const openValid = Number.isFinite(entryNum) && entryNum > 0 && Number.isFinite(Number(amount)) && Number(amount) > 0
 
   const open = async () => {
     try {
@@ -1543,13 +1599,13 @@ export function PaperTradingCard({
           </Select>
         </Field>
         <Field label="Entry price">
-          <Input value={entry} onChange={(e) => setEntry(e.target.value)} />
+          <Input placeholder="observed price" value={entry} onChange={(e) => setEntry(e.target.value)} />
         </Field>
         <Field label="Amount">
           <Input type="number" min={1} value={amount} onChange={(e) => setAmount(e.target.value)} />
         </Field>
       </div>
-      <Button onClick={open}>Open paper position</Button>
+      <Button disabled={!openValid} onClick={open}>Open paper position</Button>
       {msg ? <p className={msg.ok ? "muted" : "danger-text"}>{msg.text}</p> : null}
 
       <div className="stack">
@@ -1566,8 +1622,10 @@ export function PaperTradingCard({
               <div className="muted small">
                 {c.symbol} {c.side.toUpperCase()} · {fmtMoney(c.amount)} @ {c.entry}
               </div>
-              <Badge tone={c.pnl >= 0 ? "success" : "danger"}>
-                {c.pnl >= 0 ? "+" : ""}{c.pnl.toFixed(2)}
+              {/* Zero PnL (breakeven close) is NOT a success — render it neutral,
+                  not green, so a flat close never reads as a win. */}
+              <Badge tone={c.pnl > 0 ? "success" : c.pnl < 0 ? "danger" : "muted"}>
+                {c.pnl > 0 ? "+" : ""}{c.pnl.toFixed(2)}
               </Badge>
             </div>
           ))}
@@ -1677,15 +1735,20 @@ function ExitRow({
   position: PaperPosition
   onClose: (id: string, exit: string) => void
 }) {
-  const [exit, setExit] = useState(String(position.entry))
+  // Deliberately NO pre-fill of the entry price. A close input seeded with the
+  // entry makes a click-through Close record a fake breakeven (pnl 0) instead
+  // of the price actually observed — the operator must type the exit they saw.
+  const [exit, setExit] = useState("")
+  const exitNum = Number(exit)
+  const valid = Number.isFinite(exitNum) && exitNum > 0
   return (
     <div className="row-between">
       <div className="muted small">
         {position.symbol} {position.side.toUpperCase()} · {fmtMoney(position.amount)} @ {position.entry}
       </div>
       <div className="row gap">
-        <Input className="input-sm" value={exit} onChange={(e) => setExit(e.target.value)} />
-        <Button variant="secondary" onClick={() => onClose(position.id, exit)}>
+        <Input className="input-sm" placeholder="exit price" value={exit} onChange={(e) => setExit(e.target.value)} />
+        <Button variant="secondary" disabled={!valid} onClick={() => onClose(position.id, exit)}>
           Close
         </Button>
       </div>
@@ -1972,7 +2035,9 @@ export function PaperAnalyticsCard() {
                     <div
                       key={i}
                       title={`${p.t ?? "start"} · ${fmtMoney(p.equity)}`}
-                      className={p.pnl >= 0 ? "bar-fill" : "bar-fill bar-danger"}
+                      className={
+                        p.pnl > 0 ? "bar-fill" : p.pnl < 0 ? "bar-fill bar-danger" : "bar-fill bar-flat"
+                      }
                       style={{ height: `${Math.max(4, ((p.equity - min) / range) * 100)}%`, flex: 1, minWidth: 3 }}
                     />
                   ))
@@ -2066,7 +2131,11 @@ export function SignalsCard({ signals, refresh }: { signals: TradingSignal[]; re
     }
   }
 
-  const pending = signals.filter((s) => s.status !== "resolved")
+  // Only genuinely pending signals get a resolve input. Signals the server
+  // flushed as "unresolved" (stale or entryless) are shown as such and CANNOT
+  // be resolved — offering an input for them would promise a resolution that
+  // the engine will refuse (honesty: no entry price, no fabricated outcome).
+  const pending = signals.filter((s) => s.status === "pending")
 
   return (
     <Card className="pad stack">
@@ -2079,16 +2148,22 @@ export function SignalsCard({ signals, refresh }: { signals: TradingSignal[]; re
         ) : null}
       </div>
       {signals.length === 0 ? <p className="muted small">No signals recorded yet. Run a prediction to log one.</p> : null}
-      {signals.slice(0, 8).map((s) => (
-        <div key={s.id} className="row-between">
-          <span className="muted small">
-            {String(s.symbol ?? "")} {String(s.direction ?? "").toUpperCase()}
-          </span>
-          <Badge tone={Number(s.confidence) >= 60 ? "success" : "muted"}>
-            conf {Number(s.confidence ?? 0)}%
-          </Badge>
-        </div>
-      ))}
+      {signals.slice(0, 8).map((s) => {
+        const status = s.status === "pending" ? "pending" : s.status === "unresolved" ? "unresolved" : "resolved"
+        return (
+          <div key={s.id} className="row-between">
+            <span className="muted small">
+              {String(s.symbol ?? "")} {String(s.direction ?? "").toUpperCase()}
+              <Badge tone={status === "resolved" ? "success" : status === "unresolved" ? "warn" : "muted"}>
+                {status}
+              </Badge>
+            </span>
+            <Badge tone={Number(s.confidence) >= 60 ? "success" : "muted"}>
+              conf {Number(s.confidence ?? 0)}%
+            </Badge>
+          </div>
+        )
+      })}
       {accuracy && Array.isArray(accuracy.byDirection) && accuracy.byDirection.length > 0 ? (
         <div className="stack">
           <h4>Accuracy by direction</h4>

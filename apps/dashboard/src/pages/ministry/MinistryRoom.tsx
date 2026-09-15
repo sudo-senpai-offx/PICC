@@ -1,4 +1,6 @@
+import { useEffect } from "react"
 import { useParams } from "react-router-dom"
+import { rememberRoom } from "@/lib/ministryNav"
 import { DashboardRoom } from "./DashboardRoom"
 import { MarketsRoom } from "./MarketsRoom"
 import { PaperRoom } from "./PaperRoom"
@@ -42,6 +44,15 @@ export function MinistryRoom() {
   const { suiteId, "*": roomPath } = useParams<{ suiteId: string; "*": string }>()
   const rooms = MINISTRY_ROOMS[suiteId ?? ""]
   const Room = rooms?.[roomPath ?? ""]
+  // Record the resolved room so opening the suite again resumes where the
+  // user left off (per-suite lastRoom preference). Only resolved rooms are
+  // remembered — a bogus path never persists. (Boolean flag: truthiness on
+  // a function-typed value inside a closure hits TS2774.)
+  const resolved = Room !== undefined
+  useEffect(() => {
+    if (resolved) rememberRoom(suiteId, roomPath)
+  }, [suiteId, roomPath, resolved])
+
   if (!Room) return null
   return <Room />
 }

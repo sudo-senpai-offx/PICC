@@ -76,10 +76,10 @@ export function PortfolioAggregatePanel({ paperAvailable }: { paperAvailable: bo
               <div style={{ fontSize: 14, fontWeight: 700 }}>{model.totals.instruments}</div>
             </div>
             {model.todayPnl && (
-              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.pnl >= 0 ? "#4ade80" : "#ff6b6b"}` }}>
+              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.pnl > 0 ? "#4ade80" : model.todayPnl.pnl < 0 ? "#ff6b6b" : "var(--border)"}` }}>
                 <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Today P&L</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.pnl >= 0 ? "#4ade80" : "#ff6b6b" }}>
-                  {model.todayPnl.pnl >= 0 ? "+" : ""}${model.todayPnl.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.trades} trades)</span>
+                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.pnl > 0 ? "#4ade80" : model.todayPnl.pnl < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
+                  {model.todayPnl.pnl > 0 ? "+" : ""}${model.todayPnl.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.trades} trades)</span>
                 </div>
               </div>
             )}

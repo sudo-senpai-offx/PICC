@@ -120,6 +120,13 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
     const text = m.host.textContent ?? ""
     expect(text).toContain("GLOBAL KILL ACTIVE")
     expect(text).toContain("BLOCKED")
+    // the ON state is visible: both toggles carry the toggle-on class (the
+    // shared Toggle's knob translation is that class — previously the hand-rolled
+    // buttons never applied it, so "kill on" looked identical to "kill off")
+    const globalToggle = m.host.querySelector('button[aria-label="global kill switch"]')
+    expect(globalToggle?.className).toContain("toggle-on")
+    const siteToggle = m.host.querySelector('button[aria-label="kill switch trading:ccxt"]')
+    expect(siteToggle?.className).toContain("toggle-on")
     m.unmount()
   })
 
@@ -326,6 +333,9 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     flushSync(() => {})
     const input = m.host.querySelector('input[aria-label="venue order id for picc-ord-1"]') as HTMLInputElement
     expect(input).toBeTruthy()
+    // the field is styled with the shared .input class (dark-theme bg/border),
+    // not a bare native input on the light default
+    expect(input.className).toContain("input")
     const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set
     valueSetter?.call(input, "venue-314")
     input.dispatchEvent(new Event("input", { bubbles: true }))

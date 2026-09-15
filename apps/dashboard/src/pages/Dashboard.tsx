@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from "react-router-dom"
 import { Card, Badge, Spinner } from "@/components/ui"
 import { useUser } from "@/hooks/useAuth"
 import { getHealth, getBtcpayStatus, getExtensionStatus } from "@/lib/api"
-import type { HealthInfo } from "@/lib/api"
+import type { HealthInfo, SerperVerdictInfo } from "@/lib/api"
 import { listData } from "@/lib/localdata"
 import type { AgentLog, SimulationRow } from "@/lib/types"
 import { formatMoney, listAccounts, listTransactions, netWorthTotals, syncTradingAccount } from "@/lib/finance"
@@ -39,9 +39,7 @@ function SystemStatus() {
     ["PICC Extension", extStatus?.installed ?? false, extStatus?.installed ? "connected — providing live metrics" : "install from extensions/picc-overlay/"],
     ["Yahoo Finance", health?.providers.yahoo ?? false, "real market data"],
     ["LLM rotation", health?.providers.llm ?? false, "Gemini/Groq/Mistral/Cerebras/OpenAI + more"],
-    ["Serper research", health?.providers.serper ?? false, "live news + search"],
     ["Stripe", health?.providers.stripe ?? false, "card billing"],
-    ["PayPal", health?.providers.paypal ?? false, "no-business checkout"],
     ["BTCPay", health?.providers.btcpay ?? false, "self-hosted crypto checkout"],
     ["eWallet (TNG)", health?.providers.ewallet ?? true, "manual payment"],
     ["CoinGecko", health?.providers.crypto ?? true, "free crypto market data"],
@@ -89,6 +87,7 @@ function SystemStatus() {
                 {btcpay ? (btcpay.reachable ? (btcpay.synchronized ? "ready to take invoices" : "node still syncing blockchain") : "set BTCPAY_URL in apps/dashboard/.env") : "probing…"}
               </td>
             </tr>
+            <SerperHealthRow serper={health?.serper} />
           </tbody>
         </table>
       </div>
@@ -96,6 +95,45 @@ function SystemStatus() {
         Configure keys in <code>apps/dashboard/.env</code>.
       </p>
     </Card>
+  )
+}
+
+/**
+ * Serper status row. Reports OBSERVED verdict (serperVerdict from /api/health),
+ * never key presence: a set-but-rejected key must show as rejected, a key that
+ * passed once but aged past the freshness window as stale, and an unused key as
+ * unverified. providers().serper stays out of this row on purpose.
+ */
+function SerperHealthRow({ serper }: { serper: SerperVerdictInfo | undefined }) {
+  if (!serper) return <tr><td>Serper research</td><td><Badge tone="muted">unknown</Badge></td><td className="muted small">probing…</td></tr>
+  if (!serper.configured) {
+    return <tr><td>Serper research</td><td><Badge tone="muted">off</Badge></td><td className="muted small">set SERPER_API_KEY in apps/dashboard/.env for live news + search</td></tr>
+  }
+  const o = serper.observed
+  if (!o) {
+    return <tr><td>Serper research</td><td><Badge tone="warn">configured · unverified</Badge></td><td className="muted small">key is set but no live request has succeeded yet</td></tr>
+  }
+  if (o.probe === "ok") {
+    return (
+      <tr>
+        <td>Serper research</td>
+        <td><Badge tone={serper.stale ? "warn" : "success"}>{serper.stale ? "verified · stale" : "verified"}</Badge></td>
+        <td className="muted small">
+          {serper.stale
+            ? "last live request succeeded, but more than 10 minutes ago — not currently verified"
+            : "live news + search verified against Serper"}
+        </td>
+      </tr>
+    )
+  }
+  return (
+    <tr>
+      <td>Serper research</td>
+      <td><Badge tone="danger">{o.probe === "rejected" ? `rejected (${String(o.status)})` : "error"}</Badge></td>
+      <td className="muted small">
+        {o.probe === "rejected" ? `${o.message} · ` : ""}check SERPER_API_KEY
+      </td>
+    </tr>
   )
 }
 

@@ -238,6 +238,8 @@ function DockContent({ dockId, config }: { dockId: string; config: DockableConfi
     case "autopilot": {
       const ap = feed.autopilot
       const running = Boolean(ap?.enabled)
+      const scopeProblems =
+        ((feed.demo?.autopilot as { scopeHealth?: { problems?: string[] } } | undefined)?.scopeHealth?.problems ?? [])
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -247,6 +249,11 @@ function DockContent({ dockId, config }: { dockId: string; config: DockableConfi
           {Array.isArray(ap?.assetScope) && ap.assetScope.length ? (
             row("Scope", ap.assetScope.map((a: { assetId: string }) => a.assetId).join(", "), "#6c63ff")
           ) : ap?.assetId ? row("Asset", String(ap.assetId)) : null}
+          {scopeProblems.length ? (
+            <div style={{ fontSize: 9, color: "#ff6b6b", padding: 3, background: "#ff6b6b10", borderRadius: 3, border: "1px solid #ff6b6b", wordBreak: "break-word" }}>
+              Unresolvable: {scopeProblems.join(", ")} — remove from scope
+            </div>
+          ) : null}
           {ap?.lastDecision ? (
             <div style={{ fontSize: 9, color: "#9aa0c0", padding: 3, background: "#0d0d1a", borderRadius: 3, borderLeft: "2px solid #6c63ff", wordBreak: "break-word" }}>
               {String(ap.lastDecision)}

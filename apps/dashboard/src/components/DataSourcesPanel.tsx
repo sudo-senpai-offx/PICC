@@ -167,7 +167,7 @@ export function DataSourcesPanel() {
                           whiteSpace: "pre"
                         }}
                       >
-{`Add in Settings → Trading → CCXT exchanges (public, no key):
+{`Add in Trading Suite → Broker Connection → CCXT pairs (public, no key):
 [
  { "exchange": "binance", "symbol": "BTCUSDT", "timeframe": "5m" },
  { "exchange": "coinbase", "symbol": "ETH/USD", "timeframe": "5m" },

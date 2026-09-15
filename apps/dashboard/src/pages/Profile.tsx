@@ -132,9 +132,7 @@ export function Profile() {
         </div>
         <div className="row-pad" style={{ gap: 8, alignItems: "baseline" }}>
           <span className="muted">Serper research:</span>
-          <span className={`badge ${p?.serper ? "badge-success" : "badge-muted"}`}>
-            {p?.serper ? "ok" : "unavailable"}
-          </span>
+          <SerperBadge serper={health?.serper} />
         </div>
         <div className="row-pad" style={{ gap: 8, alignItems: "baseline" }}>
           <span className="muted">BTCPay:</span>
@@ -187,7 +185,7 @@ export function Profile() {
       </div>
 
       {/* Sign out */}
-      <button style={{ marginTop: 16 }} onClick={signOut}>
+      <button className="btn btn-danger" style={{ marginTop: 16 }} onClick={signOut}>
         Sign out
       </button>
 
@@ -195,4 +193,27 @@ export function Profile() {
       <FinanceTracker />
     </div>
   )
+}
+
+/**
+ * Serper health badge — observed verdict, never key presence. A set-but-rejected
+ * key reads as rejected, an unprobed key as unverified, and an aged success as
+ * stale (matching the Dashboard's SerperHealthRow).
+ */
+function SerperBadge({ serper }: { serper: HealthInfo["serper"] | undefined }) {
+  if (!serper) {
+    return <span className="badge badge-muted">unknown</span>
+  }
+  if (!serper.configured) return <span className="badge badge-muted">unavailable</span>
+  const o = serper.observed
+  if (!o) return <span className="badge badge-warn">configured · unverified</span>
+  if (o.probe === "ok") {
+    return (
+      <span className={serper.stale ? "badge badge-warn" : "badge badge-success"}>
+        {serper.stale ? "verified · stale" : "ok"}
+      </span>
+    )
+  }
+  const text = o.probe === "rejected" ? `rejected (${String(o.status)})` : "error"
+  return <span className="badge badge-danger">{text}</span>
 }

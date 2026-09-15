@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useParams } from "react-router-dom"
 import { suiteMeta } from "@/lib/suites"
 
-const INNER_NAV: Record<string, { to: string; label: string }[]> = {
+export const INNER_NAV: Record<string, { to: string; label: string }[]> = {
   trading: [
     { to: "dashboard", label: "Dashboard" },
     { to: "markets", label: "Markets" },

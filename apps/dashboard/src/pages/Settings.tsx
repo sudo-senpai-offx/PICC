@@ -10,8 +10,11 @@ import {
   testLLMProvider
 } from "@/lib/api"
 import type { LLMSettingsView, LLMTestResult } from "@/lib/api"
+import { getSessionCaptureSettings, saveSessionCaptureSettings } from "@/lib/api"
+import type { SessionCaptureSettingsView } from "@/lib/api"
 import { FEATURES, getFeatureFlags, setFeatureFlag } from "@/lib/settings"
 import type { FeatureKey } from "@/lib/settings"
+import { ResourceGovernorPanel } from "@/components/ResourceGovernorPanel"
 
 export function Settings() {
   const [flags, setFlags] = useState(getFeatureFlags())
@@ -30,6 +33,9 @@ export function Settings() {
   const [llmOrder, setLlmOrder] = useState<string[]>([])
   const [llmTests, setLlmTests] = useState<Record<string, LLMTestResult | "busy">>({})
   const [llmMsg, setLlmMsg] = useState<string | null>(null)
+  const [sessionCapture, setSessionCapture] = useState<SessionCaptureSettingsView | null>(null)
+  const [scBusy, setScBusy] = useState(false)
+  const [scMsg, setScMsg] = useState<string | null>(null)
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => {})
@@ -54,6 +60,9 @@ export function Settings() {
         setLlmModels(models)
         setLlmBaseUrls(baseUrls)
       })
+      .catch(() => {})
+    getSessionCaptureSettings()
+      .then(setSessionCapture)
       .catch(() => {})
   }, [])
 
@@ -133,6 +142,24 @@ export function Settings() {
     })
   }
 
+  const saveSessionCapture = async (enabled: boolean) => {
+    setScBusy(true)
+    setScMsg(null)
+    try {
+      const saved = await saveSessionCaptureSettings(enabled)
+      setSessionCapture({ ok: true, ...saved.settings })
+      setScMsg(
+        enabled
+          ? "Session capture enabled — the extension capture leg resumes on the next pass."
+          : "Session capture disabled — the capture leg is skipped and prompts to re-enable here."
+      )
+    } catch (err) {
+      setScMsg(`Failed to save: ${String(err)}`)
+    } finally {
+      setScBusy(false)
+    }
+  }
+
   return (
     <div className="page">
       <h1>Settings</h1>
@@ -168,6 +195,38 @@ export function Settings() {
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
+        <h2>Session capture</h2>
+        <p className="muted">
+          PICC-side kill-switch for broker session capture (PICC-wide, generalized). When OFF it
+          overrides the extension toggle — capture does not occur even if the extension says enabled,
+          and the packs strip prompts you to re-enable it here. When ON, the extension's own session-capture
+          toggle still applies in extension-only mode (no server reachable).
+        </p>
+        {!sessionCapture ? (
+          <p className="muted small">Loading session-capture setting…</p>
+        ) : (
+          <div className="stack">
+            <label className="row" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <input
+                type="checkbox"
+                checked={sessionCapture.enabled}
+                onChange={(e) => saveSessionCapture(e.target.checked)}
+                disabled={scBusy}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                <strong>Allow broker session capture</strong>
+                {!sessionCapture.configured && (
+                  <span className="muted"> — never changed (default ON; absent is never treated as off)</span>
+                )}
+              </span>
+            </label>
+            {scMsg && <p className="muted">{scMsg}</p>}
+          </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <h2>Agents — LLM provider</h2>
         <p className="muted">
           The crews run on a free OpenAI-compatible endpoint by default (Groq). Switch model or base
@@ -176,15 +235,16 @@ export function Settings() {
         <div className="stack">
           <label>
             Model
-            <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="openai/llama-3.3-70b-versatile" />
+            <input className="input" value={model} onChange={(e) => setModel(e.target.value)} placeholder="openai/llama-3.3-70b-versatile" />
           </label>
           <label>
             Base URL
-            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.groq.com/openai/v1" />
+            <input className="input" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.groq.com/openai/v1" />
           </label>
           <label>
             API key
             <input
+              className="input"
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -196,7 +256,7 @@ export function Settings() {
             <span>Run live crews (off = local fallback responses)</span>
           </label>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <button onClick={saveAgent} disabled={busy}>
+            <button className="btn btn-primary" onClick={saveAgent} disabled={busy}>
               {busy ? "Saving…" : "Save agent settings"}
             </button>
             {health && <span className="muted">Agents service: {health.agents?.ok ? "online" : "offline"}</span>}
@@ -230,6 +290,7 @@ export function Settings() {
                     <label style={{ flex: "1 1 220px" }}>
                       Model
                       <input
+                        className="input"
                         value={llmModels[p.id] ?? p.model}
                         onChange={(e) => setLlmModels((m) => ({ ...m, [p.id]: e.target.value }))}
                         placeholder="model id"
@@ -238,6 +299,7 @@ export function Settings() {
                     <label style={{ flex: "1 1 260px" }}>
                       API key
                       <input
+                        className="input"
                         type="password"
                         value={llmKeys[p.id] ?? ""}
                         onChange={(e) => setLlmKeys((k) => ({ ...k, [p.id]: e.target.value }))}
@@ -248,6 +310,7 @@ export function Settings() {
                       <label style={{ flex: "1 1 280px" }}>
                         Base URL (OpenAI-compatible)
                         <input
+                          className="input"
                           value={llmBaseUrls[p.id] ?? p.baseUrl ?? ""}
                           onChange={(e) => setLlmBaseUrls((b) => ({ ...b, [p.id]: e.target.value }))}
                           placeholder="https://host/v1"
@@ -256,7 +319,7 @@ export function Settings() {
                     )}
                   </div>
                   <div className="row" style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                    <button onClick={() => runLLMTest(p.id)} disabled={test === "busy"}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => runLLMTest(p.id)} disabled={test === "busy"}>
                       {test === "busy" ? "Testing…" : "Test"}
                     </button>
                     {test === "busy" ? null : test ? (
@@ -283,10 +346,10 @@ export function Settings() {
                         {i + 1}.
                       </span>
                       <span style={{ flex: 1 }}>{p?.label ?? id}</span>
-                      <button onClick={() => moveOrder(id, -1)} disabled={i === 0}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => moveOrder(id, -1)} disabled={i === 0}>
                         ↑
                       </button>
-                      <button onClick={() => moveOrder(id, 1)} disabled={i === llmOrder.length - 1}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => moveOrder(id, 1)} disabled={i === llmOrder.length - 1}>
                         ↓
                       </button>
                     </div>
@@ -296,11 +359,20 @@ export function Settings() {
             </div>
 
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <button onClick={saveLLM}>Save AI provider settings</button>
+              <button className="btn btn-primary" onClick={saveLLM}>Save AI provider settings</button>
             </div>
             {llmMsg && <p className="muted">{llmMsg}</p>}
           </div>
         )}
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>AI resource usage &amp; ledger</h2>
+        <p className="muted">
+          Every governed LLM call is routed (T0/T1 local-first, T2 burst, T3 overflow) and its verdict
+          lands in the observability ledger below. Unobserved metrics render "—", never zero.
+        </p>
+        <ResourceGovernorPanel />
       </div>
     </div>
   )

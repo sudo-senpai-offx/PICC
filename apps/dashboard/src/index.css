@@ -116,12 +116,19 @@ body {
 
 .shell.collapsed .brand-text,
 .shell.collapsed .nav-section-title,
-.shell.collapsed .nav-label,
 .shell.collapsed .sidebar-footer .badge {
   display: none;
 }
 
-.shell.collapsed .nav-link {
+/* Collapse-hiding is scoped to the OUTER rail (.sidebar). The ministry/room
+   inner sidebars are also descendants of .shell (AppShell <Outlet> →
+   MinistryShell), so an unscoped .nav-label/.nav-link rule would hide their
+   labels too and shrink the inner nav to empty rows (desktop-only bug). */
+.shell.collapsed .sidebar .nav-label {
+  display: none;
+}
+
+.shell.collapsed .sidebar .nav-link {
   justify-content: center;
   padding-left: 0;
   padding-right: 0;
@@ -621,6 +628,13 @@ textarea.input {
 
 .bar-danger {
   background: linear-gradient(90deg, var(--danger), #ff9b9b);
+}
+
+/* Breakeven (pnl === 0) is neither a gain nor a loss — render neutral so a
+   flat point in an equity/trade series never reads as a win. */
+.bar-flat {
+  background: linear-gradient(90deg, var(--text-muted), #9aa0a6) !important;
+  opacity: 0.6;
 }
 
 /* ---------- Badges ---------- */
@@ -1426,11 +1440,12 @@ kbd {
     display: block;
   }
 
-  .shell.collapsed .nav-label {
+  /* Mirrored scoping: only the outer rail re-shows labels at mobile. */
+  .shell.collapsed .sidebar .nav-label {
     display: inline;
   }
 
-  .shell.collapsed .nav-link {
+  .shell.collapsed .sidebar .nav-link {
     justify-content: flex-start;
   }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { Badge, Button, Card, Skeleton } from "@/components/ui"
+import { Badge, Button, Card, Skeleton, Toggle } from "@/components/ui"
 import {
   executeCommandCentreOrder,
   getCommandCentreOrders,
@@ -184,15 +184,11 @@ export function CommandCentrePanel() {
         </div>
         <div className="row gap" style={{ alignItems: "center" }}>
           <span className="muted small">Global kill switch</span>
-          <button
-            type="button"
-            className="toggle"
-            aria-label="global kill switch"
-            aria-pressed={globalKill}
-            onClick={() => toggleKill("global", !globalKill)}
-          >
-            <span className="toggle-knob" />
-          </button>
+          <Toggle
+            checked={globalKill}
+            onChange={(v) => toggleKill("global", v)}
+            label="global kill switch"
+          />
           <Button variant="primary" onClick={refresh} disabled={loading} style={{ fontSize: 10, padding: "3px 10px" }}>
             {loading ? "..." : "Refresh"}
           </Button>
@@ -283,15 +279,11 @@ function SiteCard({
             </span>
           )}
           <span className="muted small">kill</span>
-          <button
-            type="button"
-            className="toggle"
-            aria-label={`kill switch ${site.site}`}
-            aria-pressed={siteKill}
-            onClick={() => onToggleKill(site.site, !siteKill)}
-          >
-            <span className="toggle-knob" />
-          </button>
+          <Toggle
+            checked={siteKill}
+            onChange={(v) => onToggleKill(site.site, v)}
+            label={`kill switch ${site.site}`}
+          />
           {globalKill && <span className="muted small">(global)</span>}
         </div>
       </div>
@@ -376,6 +368,7 @@ function OrdersBlock({
         <span className="muted small">propose (gate-check only — the venue is NOT touched):</span>
         <input
           aria-label="order exchange"
+          className="input"
           value={draft.exchange}
           onChange={(e) => onDraftChange({ ...draft, exchange: e.target.value })}
           placeholder="exchange"
@@ -383,6 +376,7 @@ function OrdersBlock({
         />
         <input
           aria-label="order symbol"
+          className="input"
           value={draft.symbol}
           onChange={(e) => onDraftChange({ ...draft, symbol: e.target.value })}
           placeholder="BTC/USDT"
@@ -390,6 +384,7 @@ function OrdersBlock({
         />
         <select
           aria-label="order side"
+          className="input"
           value={draft.side}
           onChange={(e) => onDraftChange({ ...draft, side: e.target.value })}
           style={{ fontSize: 11, padding: "2px 4px" }}
@@ -399,6 +394,7 @@ function OrdersBlock({
         </select>
         <input
           aria-label="order amount"
+          className="input"
           value={draft.amount}
           onChange={(e) => onDraftChange({ ...draft, amount: e.target.value })}
           placeholder="amount"
@@ -406,6 +402,7 @@ function OrdersBlock({
         />
         <input
           aria-label="order price"
+          className="input"
           value={draft.price}
           onChange={(e) => onDraftChange({ ...draft, price: e.target.value })}
           placeholder="price"
@@ -449,6 +446,7 @@ function OrdersBlock({
               <span className="muted small">or</span>
               <input
                 aria-label={`venue order id for ${o.clientOrderId}`}
+                className="input"
                 placeholder="venue order id"
                 value={venueOrderIds[o.clientOrderId] ?? ""}
                 onChange={(e) => onVenueOrderIdChange(o.clientOrderId, e.target.value)}

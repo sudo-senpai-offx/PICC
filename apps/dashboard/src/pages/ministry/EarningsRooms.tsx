@@ -85,11 +85,6 @@ const PROVIDER_CARDS: Omit<ProviderCard, "configured">[] = [
     hint: "add EWALLET_TNG_NUMBER to .env to enable"
   },
   {
-    key: "paypal",
-    title: "PayPal",
-    description: "Optional channel. Add a PayPal API key to accept card/PayPal payments."
-  },
-  {
     key: "stripe",
     title: "Stripe",
     description: "Accept card payments via Stripe. Configure STRIPE_SECRET_KEY in .env."

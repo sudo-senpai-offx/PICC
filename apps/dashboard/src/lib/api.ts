@@ -13,6 +13,18 @@ import type {
 // Same-origin backend: Vite dev middleware in dev, `node server/index.mjs` in prod.
 const BASE = "/api"
 
+export interface SerperVerdictInfo {
+  configured: boolean
+  observed: {
+    probe: "ok" | "rejected" | "error"
+    status: number | null
+    message: string
+    at: number
+  } | null
+  ageMs: number | null
+  stale: boolean
+}
+
 export interface HealthInfo {
   ok: boolean
   version: string
@@ -22,13 +34,15 @@ export interface HealthInfo {
     llmProviders: string[]
     serper: boolean
     stripe: boolean
-    paypal: boolean
     btcpay: boolean
     ewallet: boolean
     crypto: boolean
     agents: boolean
     amazon: boolean
   }
+  // Observed health of the Serper key: presence says nothing about whether the
+  // key was accepted. Badges must read this, not providers.serper.
+  serper: SerperVerdictInfo
   agents?: { ok: boolean; agents?: string[] } | null
 }
 
@@ -237,6 +251,72 @@ export function saveLLMSettings(input: LLMSaveInput): Promise<{ ok: boolean; set
 
 export function testLLMProvider(providerId: string): Promise<LLMTestResult> {
   return post("/settings/llm/test", { provider: providerId })
+}
+
+// ── Session capture (S6/T6.2 — PICC-side kill-switch, owner decision 2026-09-15) ──
+
+export interface SessionCaptureSettingsView {
+  ok: boolean
+  enabled: boolean
+  configured: boolean
+}
+
+export interface SessionCaptureSaveResult {
+  ok: boolean
+  settings: { enabled: boolean; configured: boolean }
+}
+
+export function getSessionCaptureSettings(): Promise<SessionCaptureSettingsView> {
+  return request<SessionCaptureSettingsView>("/settings/session-capture")
+}
+
+export function saveSessionCaptureSettings(enabled: boolean): Promise<SessionCaptureSaveResult> {
+  return post("/settings/session-capture", { enabled })
+}
+
+// ── Resource governor (G3 — PICC_RESOURCE_GOVERNOR_v1.md §7) ───────────────
+
+export interface ResourceLedgerRow {
+  id?: string
+  created_at: string
+  day?: string
+  feature: string
+  tier: string
+  verdict: "accepted" | "throttled" | "failed" | string
+  tokens?: number
+  latencyMs?: number
+  model?: string
+  degraded?: boolean
+  error?: string
+}
+
+export interface ResourceOverview {
+  ok: boolean
+  /** The real process flag at request time — governor enforcement is ON or OFF. */
+  enabled: boolean
+  budgets: {
+    t0ConfidenceThreshold: number
+    t1MaxTokens: number
+    t2BurstPerHour: number
+    maxLedgerEntriesPerDay: number
+  }
+  verdicts: { accepted: number; throttled: number; failed: number }
+  perTier: Record<
+    string,
+    {
+      calls: number
+      tokens: number
+      latencyMs: number
+      verdicts: { accepted: number; throttled: number; failed: number }
+    }
+  >
+  burst: { hour: string | null; T2: { callsThisHour: number; limitPerHour: number } }
+  ledger: { entriesToday: number; capped: boolean; days: string[] }
+  rows: ResourceLedgerRow[]
+}
+
+export function getResourceOverview(): Promise<ResourceOverview> {
+  return request<ResourceOverview>("/settings/llm/resource")
 }
 
 /**

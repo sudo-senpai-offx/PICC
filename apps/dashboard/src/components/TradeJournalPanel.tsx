@@ -159,11 +159,11 @@ export function TradeJournalPanel() {
                 </td>
                 <td style={{ textAlign: "right", padding: "2px 4px" }}>{e.entryPrice.toFixed(4)}</td>
                 <td style={{ textAlign: "right", padding: "2px 4px" }}>{e.exitPrice?.toFixed(4) ?? "-"}</td>
-                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.pnl ?? 0) >= 0 ? "#4ade80" : "#ff6b6b", fontWeight: 600 }}>
-                  {e.pnl != null ? `${e.pnl >= 0 ? "+" : ""}${e.pnl.toFixed(2)}` : "-"}
+                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.pnl ?? 0) > 0 ? "#4ade80" : (e.pnl ?? 0) < 0 ? "#ff6b6b" : "var(--text-muted)", fontWeight: 600 }}>
+                  {e.pnl != null ? `${e.pnl > 0 ? "+" : ""}${e.pnl.toFixed(2)}` : "-"}
                 </td>
-                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.rMultiple ?? 0) >= 0 ? "#4ade80" : "#ff6b6b" }}>
-                  {e.rMultiple != null ? `${e.rMultiple >= 0 ? "+" : ""}${e.rMultiple.toFixed(1)}R` : "-"}
+                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.rMultiple ?? 0) > 0 ? "#4ade80" : (e.rMultiple ?? 0) < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
+                  {e.rMultiple != null ? `${e.rMultiple > 0 ? "+" : ""}${e.rMultiple.toFixed(1)}R` : "-"}
                 </td>
                 <td style={{ textAlign: "center", padding: "2px 4px" }}>
                   <Badge tone={e.status === "open" ? "warn" : "muted"}>{e.status}</Badge>

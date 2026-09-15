@@ -81,9 +81,9 @@ function useRailState(key: string) {
       return false
     }
   })
-  const toggle = () => {
+  const toggle = (force?: boolean) => {
     setCollapsed((c) => {
-      const next = !c
+      const next = force ?? !c
       try {
         localStorage.setItem(key, next ? "1" : "0")
       } catch {
@@ -135,8 +135,11 @@ export function AppShell() {
   const inMinistry = location.pathname.startsWith("/suites/")
   useEffect(() => {
     if (inMinistry) {
-      // entering a suite: collapse the outer rail; the inner rail stays expanded
-      if (!outer.collapsed) outer.toggle()
+      // entering a suite: collapse the outer rail; the inner rail stays expanded.
+      // Force-targetted (not a toggle): idempotent under StrictMode's dev
+      // double-effect, so dev and prod behave identically — a second run must
+      // not undo the collapse.
+      outer.toggle(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inMinistry])
