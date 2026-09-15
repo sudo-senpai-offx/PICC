@@ -3,7 +3,6 @@
 // cloud+local LLM (groq/others with automatic failover), Stripe billing,
 // local JSON billing/subscription sync (Supabase removed — D8). Every
 // provider degrades with an honest fallback.
-import { createHash } from "node:crypto"
 import { env, providers } from "./config.mjs"
 import { errorLogEnabled, recordClientReport } from "./errorLog.mjs"
 import { assetsEquivalent } from "./services/assetCatalog.mjs"
@@ -13,7 +12,6 @@ import { chatJSON, chatText, asSuggestionArray, provider, llmConfigured } from "
 import { defaultBudgets, governorStats, recentRows } from "./services/resourceGovernor.mjs"
 import { ackStep, getRegistry, resourceCaps } from "./services/packRegistry.mjs"
 import { webfetchLimits, webFetchStats, resetWebFetchLimits } from "./services/webfetch.mjs"
-import { suggestPrompt } from "./services/prompts.mjs"
 import { createCheckoutSession, createPortalSession, constructWebhookEvent, hasStripe } from "./services/stripe.mjs"
 
 import { createEwalletOrder, submitEwalletOrder, walletInfo, WALLET_IDS } from "./services/ewallet.mjs"
@@ -113,10 +111,7 @@ import {
   openLiveSession,
   subscribeLive,
   closeLiveSession,
-  liveSubscriberCount,
-  snapshotForExtension,
-  normalizeExtensionPayload,
-  getConnectorByOrigin
+  liveSubscriberCount
 } from "./services/connectors.mjs"
 import { fingerprint } from "./services/autodetect.mjs"
 import { browserAvailable, realProfileState, importRealProfile } from "./services/browserBridge.mjs"
@@ -214,18 +209,6 @@ import * as interventions from "./services/interventions.mjs"
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
-
-function platformOf(url) {
-  try {
-    const host = new URL(url).hostname
-    if (host.includes("amazon")) return "amazon"
-    if (host.includes("youtube")) return "youtube"
-    if (host.includes("fidelity") || host.includes("schwab") || host.includes("etrade")) return "brokerage"
-  } catch {
-    /* ignore */
-  }
-  return null
-}
 
 function validTier(tier) {
   return tier === "pro" || tier === "business" ? tier : null
@@ -353,7 +336,7 @@ function throttledWarn(message, cooldownMs = 60_000) {
   console.warn(message)
 }
 
-/** True when the TCP connection originates from localhost (the extension's background.js). */
+/** True when the TCP connection originates from localhost (studio + dev-loopback routes). */
 function isLocalhostRequest(req) {
   const ip = clientIp(req).replace(/^::ffff:/, "")
   return ip === "127.0.0.1" || ip === "::1" || ip === "localhost"
@@ -487,55 +470,6 @@ function ruleBasedContent(kind, topic, tone = "professional", length = "standard
   return { headline, script, tags: tagList, cta, estimatedReadMinutes: readMinutes }
 }
 
-function ruleBasedExtensionSuggestions(platform, pageTitle) {
-  if (platform === "amazon") {
-    return [
-      {
-        id: "amz-title",
-        title: "Optimize listing title",
-        body: `Based on "${pageTitle}", front-load the top search keyword and move brand/colour to the middle to lift CTR.`,
-        confidence: 0.7
-      },
-      {
-        id: "amz-bullets",
-        title: "Lead with a benefit bullet",
-        body: "Reorder bullets so the first states the #1 customer benefit, not a spec. Keep each under 200 characters.",
-        confidence: 0.64
-      }
-    ]
-  }
-  if (platform === "youtube") {
-    return [
-      {
-        id: "yt-title",
-        title: "Stronger title pattern",
-        body: `Titles that start with a concrete outcome or number outperform. Try a variant of: "${pageTitle}" → outcome-first phrasing.`,
-        confidence: 0.66
-      },
-      {
-        id: "yt-tags",
-        title: "Expand tag coverage",
-        body: "Add 3-5 long-tail tags from the passive income niche plus a competitor channel name (tag) to broaden discovery.",
-        confidence: 0.58
-      }
-    ]
-  }
-  return [
-    {
-      id: "brk-rebalance",
-      title: "Re-balance check",
-      body: "Page detected as a brokerage. Compare current holdings against a 60/30/10 equity/bond/cash target; rebalance only if drift exceeds 5%.",
-      confidence: 0.62
-    },
-    {
-      id: "brk-dca",
-      title: "Dollar-cost averaging",
-      body: "Historical data suggests regular contributions beat lump-sum timing. Set an auto-invest schedule at your own brokerage.",
-      confidence: 0.6
-    }
-  ]
-}
-
 // ---------------------------------------------------------------------
 // Lightweight schema validation (zod-free)
 // ---------------------------------------------------------------------
@@ -632,10 +566,6 @@ const SCHEMAS = {
     kind: [oneOf("blog", "youtube_script", "short_video", "tiktok_script", "x_thread", "newsletter", "affiliate_review", "social")],
     tone: [oneOf("professional", "casual", "hype", "minimal")],
     length: [oneOf("short", "standard", "long")]
-  },
-  extensionSuggest: {
-    platform: [oneOf("amazon", "youtube", "brokerage")],
-    url: [(v) => v != null && typeof v === "string" && v.length > 2000 ? "max 2000 chars" : null]
   },
   predict: {
     symbol: [required, isString(), maxLength(10)],
@@ -941,31 +871,6 @@ async function handleContentGenerate(body) {
   return { source: "local", kind, topic, draft: ruleBasedContent(kind, topic, tone, length), research }
 }
 
-async function handleExtensionSuggest(body) {
-  const platform = body.platform ?? platformOf(body.url ?? "")
-  const pageTitle = body.pageTitle ?? ""
-  const pageData = body.pageData ?? {}
-
-  if (!platform) return { suggestions: [], source: "unsupported" }
-
-  if (llmConfigured() && pageData && (pageData.title || pageData.videoTitle)) {
-    try {
-      // Versioned prompt template (docs/PROMPT_PATTERNS.md P3/P4): role/task
-      // schema contract, platform guidance, explicit empty-result refusal path.
-      const p = suggestPrompt({ platform, pageTitle, pageData })
-      const parsed = await withTimeout(
-        chatJSON(p.system, p.user, { maxTokens: 1000 }),
-        25000
-      )
-      return { suggestions: asSuggestionArray(parsed.suggestions), source: provider() }
-    } catch (err) {
-      console.warn("[picc] extension AI failed, using rule engine:", err.message)
-    }
-  }
-
-  return { suggestions: ruleBasedExtensionSuggestions(platform, pageTitle), source: "local" }
-}
-
 // ---------------------------------------------------------------------
 // Unified income summary (Q5, Task 11)
 // ---------------------------------------------------------------------
@@ -1067,17 +972,8 @@ async function _handleApiInner(req, res, url, reqId) {
   const auth = req.headers.authorization
 
   // General rate limit: 60 requests per 60 seconds per IP for all POST endpoints.
-  // Checked BEFORE consuming the body so a 429 never pays the read cost, and
-  // exempting the extension's own high-frequency routes — their dedicated
-  // buckets apply instead (otherwise an ingest burst locks out logins/autopilot).
-  const EXTENSION_POLL_ROUTES = new Set([
-    "/api/extension/ingest",
-    "/api/extension/heartbeat",
-    "/api/extension/tab-changed",
-    "/api/browser/metrics",
-    "/api/extension/trading-data"
-  ])
-  if (["POST", "PUT", "PATCH"].includes(req.method) && !EXTENSION_POLL_ROUTES.has(path)) {
+  // Checked BEFORE consuming the body so a 429 never pays the read cost.
+  if (["POST", "PUT", "PATCH"].includes(req.method)) {
     const generalKey = `general:${clientIp(req)}`
     if (rateLimited(generalKey, 60, 60_000)) {
       writeJson(res, 429, { error: "rate limit exceeded — try again later" })
@@ -2001,7 +1897,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // S0/T0.3 — PICC_PACK1_LOCAL_TRADING_CORE_v1.md: pack registry read surface.
   // Observational only: per-step status, envelope, evidence. Rows store
   // presence flags only, never credential values ("never echoed back in full").
-  // Rate limited like sibling extension routes. The §8.5 caps ride along:
+  // Rate limited like sibling read surfaces. The §8.5 caps ride along:
   // server env truth, read-only — a browser client must never guess them.
   if (path === "/api/packs/registry" && req.method === "GET") {
     if (rateLimited("packs", 30, 60_000)) {
@@ -2044,7 +1940,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // capability's fair-use surface. GET reads the current per-host sliding-window
   // limits + observed stats (no mutation, rate limited like sibling read
   // routes); POST resets the in-memory windows (auth-gated — clearing a
-  // limiter is an administrative action, like the extension routes).
+  // limiter is an administrative action).
   if (path === "/api/webfetch/limits" && req.method === "GET") {
     if (rateLimited("webfetch-limits", 30, 60_000)) {
       writeJson(res, 429, { error: "rate limited" })
@@ -3116,12 +3012,6 @@ async function _handleApiInner(req, res, url, reqId) {
         webpush: Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
       }
 
-      const hb = globalThis.__picc_ext_heartbeat || null
-      const extensionSensor = {
-        seen: Boolean(hb && (Date.now() - hb.timestamp < 30_000)),
-        lastSeen: hb?.timestamp || null,
-      }
-
       let browserFound = false
       try {
         const { browserAvailable } = await import("./services/browserBridge.mjs")
@@ -3134,7 +3024,6 @@ async function _handleApiInner(req, res, url, reqId) {
         platform: process.platform,
         node: process.version,
         browserFound,
-        extensionSensor,
         notifierChannels,
         signalEngine: process.env.PICC_SIGNAL_ENGINE !== "0",
         uptime: Math.floor(process.uptime()),
@@ -3858,18 +3747,6 @@ const creds = await getVenueCredentials()
     return
   }
 
-  if (path === "/api/extension/suggest" && req.method === "POST") {
-    writeJson(res, 200, await handleExtensionSuggest(body))
-    return
-  }
-
-  if (path === "/api/extension/confirm" && req.method === "POST") {
-    const id = createHash("sha1").update(`${Date.now()}:${JSON.stringify(body)}`).digest("hex").slice(0, 10)
-    console.log(`[picc-confirm] ${id}`, body)
-    writeJson(res, 200, { ok: true, id })
-    return
-  }
-
   // Client error reports (web dashboard browser console + extension contexts).
   // Gated by PICC_ERROR_LOG — when disabled, reports are acknowledged but
   // dropped so clients stop buffering.
@@ -4104,13 +3981,6 @@ const creds = await getVenueCredentials()
   // Read-only by design: PICC never executes on external platforms.
   // -------------------------------------------------------------------
   if (path === "/api/connectors" && (req.method === "GET" || req.method === "POST")) {
-    // Extension-facing registry snapshot (Task 4): key NAMES only — never
-    // extractor values, teeth, or the user's latest snapshots. This is the
-    // config source the extension broadcasts to income venues (background.js).
-    if (parsed.searchParams.get("forExtension") === "1") {
-      writeJson(res, 200, { ok: true, ...snapshotForExtension() })
-      return
-    }
     const connectors = listConnectors().map((c) => ({
       slug: c.slug,
       label: c.label,
@@ -4285,158 +4155,6 @@ const creds = await getVenueCredentials()
     // table), attempting a second write would throw ERR_HTTP_HEADERS_SENT and
     // take the whole process down — stop here instead.
     if (res.headersSent) return
-  }
-
-  // ── Consolidated extension trading-data endpoint ──────────────────────────
-  // Single call that returns all data the overlay dockables need.
-  // Auth-free for localhost extension requests.
-  if (path === "/api/extension/trading-data" && req.method === "POST") {
-    if (!isLocalhostRequest(req) && !(await requireAuth(req, res))) return true
-    try {
-      const primaryRaw = String(body?.assetId || "EURUSD").trim()
-      const primaryAsset = primaryRaw.toUpperCase() || "EURUSD"
-      const candleCount = Math.min(Math.max(Number(body?.candleCount) || 100, 30), 300)
-
-      const [status, autopilot, demo, decisions] = await Promise.allSettled([
-        withTimeout(tradingStatus(), 6000),
-        getAutopilotConfig(),
-        withTimeout(expertOptionDemoStatus(), 6000),
-        withTimeout(getDecisions(), 20000)
-      ])
-
-      const statusVal = status.status === "fulfilled" ? status.value : null
-      const autopilotVal = autopilot.status === "fulfilled" ? autopilot.value : null
-      const demoVal = demo.status === "fulfilled" ? demo.value : null
-      const decisionsVal = decisions.status === "fulfilled" ? decisions.value : null
-
-      let candles = []
-      let candleSource = "none"
-      let eoBalance = null
-      let viewedAsset = primaryAsset
-      try {
-        const { liveEOData, fetchAssetCandles, fetchFreshAccount, ensureWatchingAsset } = await import("./services/liveEO.mjs")
-        const eoData = liveEOData()
-        if (eoData.viewed) viewedAsset = eoData.viewed
-        const asset = eoData.assets.find((a) => eoAssetMatches(a, primaryAsset))
-        if (asset && asset.periods[60]?.length) {
-          candles = asset.periods[60].slice(-candleCount)
-          candleSource = "buffer"
-        }
-        if (!candles.length) {
-          const resolved = await ensureWatchingAsset(primaryAsset).catch(() => null)
-          if (resolved) {
-            const result = await withTimeout(fetchAssetCandles(primaryAsset, 60, candleCount), 10000).catch(() => ({ ohlc: [], source: null }))
-            if (result.ohlc?.length) {
-              candles = result.ohlc
-              candleSource = result.source
-            }
-          }
-        }
-        const freshAcc = await withTimeout(fetchFreshAccount(), 5000).catch(() => null)
-        if (freshAcc?.balance != null) {
-          eoBalance = { balance: freshAcc.balance, currency: freshAcc.currency, demo: freshAcc.demo, demoWallet: freshAcc.demoWallet, realWallet: freshAcc.realWallet }
-        }
-      } catch { /* liveEO not available */ }
-      if (!candles.length) {
-        try {
-          const { getHistory } = await import("./services/yahoo.mjs")
-          throttledWarn(`[picc] ${primaryAsset}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
-          const history = await withTimeout(getHistory(primaryAsset, "6mo"), 10000)
-          candles = (history.dates ?? []).map((ts, i) => ({
-            time: Math.floor(ts / 1000),
-            open: Number(history.opens?.[i]) || 0,
-            high: Number(history.highs?.[i]) || 0,
-            low: Number(history.lows?.[i]) || 0,
-            close: Number(history.closes?.[i]) || 0,
-            timeframe: 86400
-          })).filter((c) => c.close > 0 && c.time > 0).slice(-candleCount)
-          candleSource = "yahoo"
-        } catch { /* Yahoo failed too */ }
-      }
-
-      const kellyProm = withTimeout((async () => {
-        const { kellySnapshot } = await import("./services/kellyCriterion.mjs")
-        return kellySnapshot()
-      })(), 4000).catch(() => null)
-
-      const regimeProm = candles.length ? withTimeout((async () => {
-        const { detectRegime } = await import("./services/regimeDetection.mjs")
-        return detectRegime(candles, body?.timeframe)
-      })(), 4000).catch(() => null) : Promise.resolve(null)
-
-      const expiryProm = candles.length ? withTimeout((async () => {
-        const { optimizeExpiry } = await import("./services/expiryOptimizer.mjs")
-        return optimizeExpiry(candles)
-      })(), 4000).catch(() => null) : Promise.resolve(null)
-
-      const sentimentProm = withTimeout((async () => {
-        const { getSentiment } = await import("./services/sentimentEngine.mjs")
-        return getSentiment(primaryAsset)
-      })(), 4000).catch(() => null)
-
-      const orderFlowProm = candles.length ? withTimeout((async () => {
-        const { analyzeOrderFlow } = await import("./services/orderFlow.mjs")
-        return analyzeOrderFlow(candles)
-      })(), 4000).catch(() => null) : Promise.resolve(null)
-
-      // Ideal buy/sell price points for the ACTIVE asset near its timeframe.
-      const levelsProm = candles.length ? withTimeout((async () => {
-        const { computeEntryLevels } = await import("./services/entryLevels.mjs")
-        return computeEntryLevels(candles, { timeframe: 60 })
-      })(), 4000).catch(() => null) : Promise.resolve(null)
-
-      // Multiplexing model-matrix consensus for the ACTIVE asset.
-      const modelsProm = candles.length ? withTimeout((async () => {
-        const { computeModelMatrix } = await import("./services/modelMatrix.mjs")
-        return computeModelMatrix(candles)
-      })(), 4000).catch(() => null) : Promise.resolve(null)
-
-      const [kelly, regime, expiry, sentiment, orderFlow, entryLevels, models] = await Promise.all([
-        kellyProm, regimeProm, expiryProm, sentimentProm, orderFlowProm, levelsProm, modelsProm
-      ])
-
-      if (eoBalance && statusVal?.expertOption) {
-        statusVal.expertOption.balance = eoBalance.balance
-        statusVal.expertOption.currency = eoBalance.currency
-        statusVal.expertOption.demo = eoBalance.demo
-        statusVal.expertOption.demoWallet = eoBalance.demoWallet
-        statusVal.expertOption.realWallet = eoBalance.realWallet
-      }
-
-      const openDeals = demoVal?.openDeals || []
-      const openDealsWithPnl = openDeals.map((d) => {
-        const lastPrice = d.lastPrice ?? d.currentPrice ?? null
-        const strike = d.strike ?? d.entryPrice ?? null
-        const diff = lastPrice != null && strike != null ? lastPrice - strike : null
-        const direction = (d.direction || d.type || "").toLowerCase()
-        const pnl = diff != null ? (direction === "call" ? diff : direction === "put" ? -diff : diff) : null
-        return { ...d, livePnl: pnl, strike, lastPrice }
-      })
-
-      writeJson(res, 200, {
-        ok: true,
-        viewed: viewedAsset,
-        status: statusVal,
-        autopilot: autopilotVal,
-        demo: demoVal,
-        openDeals: openDealsWithPnl,
-        decisions: decisionsVal?.decisions ?? decisionsVal,
-        candles,
-        candleSource,
-        candleTimeframe: candles[0]?.timeframe ?? 60,
-        kelly,
-        regime,
-        expiry,
-        sentiment,
-        orderFlow,
-        entryLevels,
-        models
-      })
-    } catch (err) {
-      log.warn("extension trading-data failed", { error: err.message })
-      writeJson(res, 500, { ok: false, error: err.message })
-    }
-    return
   }
 
   // ── Prometheus metrics endpoint ───────────────────────────────────────────
@@ -4865,195 +4583,7 @@ const BROWSER_ROUTES = {
     return true
   },
 
-  // Extension-supplied page metrics (received from content script via background)
-  "/api/browser/metrics": async (req, res, parsed) => {
-    if (req.method !== "POST") return false
-    const ip = clientIp(req)
-    if (rateLimited(`ext-metrics:${ip}`, 60, 60_000)) {
-      writeJson(res, 429, { error: "rate limited" })
-      return true
-    }
-    const body = parsed.body || {}
-    // Bound metrics to prevent memory exhaustion — max 50 tracked tabs
-    if (!globalThis.__picc_ext_metrics) globalThis.__picc_ext_metrics = {}
-    const metrics = globalThis.__picc_ext_metrics
-    const key = String(body.tabId || "active").slice(0, 64)
-    metrics[key] = {
-      url: String(body.url || "").slice(0, 2048),
-      title: String(body.title || "").slice(0, 256),
-      timestamp: Number(body.timestamp) || Date.now(),
-      viewport: body.viewport || null,
-      resources: Number(body.resources) || 0,
-      receivedAt: Date.now()
-    }
-    // Evict oldest if exceeding 50 tabs
-    const keys = Object.keys(metrics)
-    if (keys.length > 50) {
-      const sorted = keys.sort((a, b) => (metrics[a].receivedAt || 0) - (metrics[b].receivedAt || 0))
-      for (let i = 0; i < keys.length - 50; i++) delete metrics[sorted[i]]
-    }
-    writeJson(res, 200, { ok: true })
-    return true
-  },
-
-  // Screen casting frame ingestion (from extension)
-  "/api/casting/frame": async (req, res, parsed) => {
-    if (req.method !== "POST") return false
-    // Casting frames render inside the trusted dashboard — localhost only.
-    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
-    const body = parsed.body || {}
-    if (!body.image) { writeJson(res, 400, { error: "missing image" }); return true }
-    if (!globalThis.__picc_casting) globalThis.__picc_casting = { active: false, frames: [], maxFrames: 10, lastFrame: null }
-    const casting = globalThis.__picc_casting
-    casting.active = true
-    const frame = {
-      image: String(body.image).slice(0, 4_000_000),
-      site: String(body.site || "").slice(0, 128),
-      url: String(body.url || "").slice(0, 2048),
-      frameIndex: Number(body.frameIndex) || 0,
-      timestamp: Number(body.timestamp) || Date.now(),
-      receivedAt: Date.now()
-    }
-    casting.lastFrame = frame
-    casting.frames.push(frame)
-    if (casting.frames.length > casting.maxFrames) casting.frames.shift()
-    writeJson(res, 200, { ok: true, frameIndex: frame.frameIndex })
-    return true
-  },
-
-  // Casting status
-  "/api/casting/status": async (req, res, parsed) => {
-    const casting = globalThis.__picc_casting || { active: false, frames: [], lastFrame: null }
-    writeJson(res, 200, {
-      ok: true,
-      active: casting.active,
-      frameCount: casting.frames.length,
-      lastFrame: casting.lastFrame ? { site: casting.lastFrame.site, frameIndex: casting.lastFrame.frameIndex, timestamp: casting.lastFrame.timestamp } : null
-    })
-    return true
-  },
-
-  // Extension installation status
-  "/api/extension/status": async (req, res) => {
-    // Heartbeat carries the user's browsing URLs/titles — localhost only.
-    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
-    const lastHeartbeat = globalThis.__picc_ext_heartbeat || null
-    const isAlive = lastHeartbeat && (Date.now() - lastHeartbeat.timestamp < 30_000)
-    writeJson(res, 200, {
-      installed: isAlive,
-      lastSeen: lastHeartbeat?.timestamp || null,
-      lastHeartbeat: lastHeartbeat || null,
-      metrics: globalThis.__picc_ext_metrics || {}
-    })
-    return true
-  },
-
-  // Upstream bridge: broker frames sniffed by the extension in the user's own
-  // browser session. Feeds the SAME candle buffers as the studio bridge, so
-  // whichever source is live (studio browser or user's real browser) drives
-  // realtime data. Localhost-only + rate limited; each frame is validated.
-  "/api/extension/ingest": async (req, res, parsed) => {
-    if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }
-    if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
-    const ip = clientIp(req)
-    if (rateLimited(`ext-ingest:${ip}`, 240, 60_000)) {
-      writeJson(res, 429, { error: "rate limited" })
-      return true
-    }
-    const body = parsed?.body || {}
-
-    // Income-observation branch (Task 5): a config-driven read-only capture
-    // from an income venue — { origin, slug?, frames?, storage? }. Routed by
-    // origin to the matching connector's declarative normalizer, then persisted
-    // as an Earnings snapshot. Honest: an observation with no usable value
-    // reports status "unconfigured" and is NOT fabricated as a zero balance.
-    if (typeof body.origin === "string" && body.origin) {
-      try {
-        const connector = (body.slug && getConnector(body.slug)) || getConnectorByOrigin(body.origin)
-        if (!connector) {
-          writeJson(res, 404, { ok: false, error: `no income adaptor for origin "${body.origin}"` })
-          return true
-        }
-        const snapshot = normalizeExtensionPayload(connector, {
-          origin: body.origin,
-          slug: body.slug,
-          frames: Array.isArray(body.frames) ? body.frames : [],
-          storage: Array.isArray(body.storage) ? body.storage : []
-        })
-        await persistSnapshot(snapshot).catch(() => {})
-        writeJson(res, 200, { ok: true, income: true, slug: connector.slug, status: snapshot.status, snapshot })
-        return true
-      } catch (err) {
-        writeJson(res, 500, { error: String(err?.message ?? err).slice(0, 200) })
-        return true
-      }
-    }
-
-    const frames = Array.isArray(body.frames) ? body.frames : (body.frame ? [body.frame] : [])
-    if (!frames.length) { writeJson(res, 400, { error: "no frames" }); return true }
-    if (frames.length > 200) { writeJson(res, 413, { error: "batch too large" }); return true }
-    let accepted = 0
-    try {
-      const { ingestAppFrame } = await import("./services/liveEO.mjs")
-      for (const f of frames) {
-        // Only broker-shaped frames are processed; ingestAppFrame validates.
-        if (f && typeof f === "object" && ingestAppFrame(f)) accepted += 1
-      }
-    } catch (err) {
-      writeJson(res, 500, { error: String(err?.message ?? err).slice(0, 200), accepted })
-      return true
-    }
-    writeJson(res, 200, { ok: true, accepted, received: frames.length })
-    return true
-  },
-
-  // Extension heartbeat (background.js calls this every ~12s)
-  "/api/extension/heartbeat": async (req, res, parsed) => {
-    if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }
-    const ip = clientIp(req)
-    if (rateLimited(`ext-heartbeat:${ip}`, 30, 60_000)) {
-      writeJson(res, 429, { error: "rate limited" })
-      return true
-    }
-    const body = parsed?.body || {}
-    // Bound the data to prevent memory exhaustion
-    globalThis.__picc_ext_heartbeat = {
-      version: String(body.extensionVersion || "unknown").slice(0, 32),
-      installTime: Number(body.installTime) || null,
-      activeTab: body.activeTab ? {
-        id: Number(body.activeTab.id) || null,
-        url: String(body.activeTab.url || "").slice(0, 2048),
-        title: String(body.activeTab.title || "").slice(0, 256)
-      } : null,
-      cookieCount: Math.min(Number(body.cookieCount) || 0, 10000),
-      // T6.2 — relay the extension's session-capture kill-switch. Only
-      // boolean true/false accepted; anything else = honest null (not observed,
-      // default-ON assumed by the observer).
-      captureEnabled: typeof body.captureEnabled === "boolean" ? body.captureEnabled : null,
-      timestamp: Date.now(),
-      receivedAt: Date.now()
-    }
-    writeJson(res, 200, { ok: true })
-    return true
-  },
-
-  // Extension tab-changed event
-  "/api/extension/tab-changed": async (req, res, parsed) => {
-    if (req.method !== "POST") { writeJson(res, 405, { error: "POST required" }); return true }
-    const body = parsed?.body || {}
-    // Update heartbeat with current tab (bounded)
-    if (globalThis.__picc_ext_heartbeat) {
-      globalThis.__picc_ext_heartbeat.activeTab = {
-        id: Number(body.id) || null,
-        url: String(body.url || "").slice(0, 2048),
-        title: String(body.title || "").slice(0, 256)
-      }
-      globalThis.__picc_ext_heartbeat.receivedAt = Date.now()
-    }
-    writeJson(res, 200, { ok: true })
-    return true
   }
-}
 
 async function requireAuth(req, res) {
   if (isLocalhostRequest(req)) return true

@@ -348,12 +348,9 @@ every(
 // (token PRESENCE only — the value never leaves trading.mjs). The mapping lives
 // in packObservers.mjs (pure, table-tested); the pack runner applies the envelope
 // gate. Observation NEVER resumes stopped-at-human — that is the human ack's job.
-// T6.2 kill-switch relay: background.js mirrors piccSessionCapture (client-side
-// chrome.storage, default ON) into the heartbeat; the handler stores tri-state
-// captureEnabled on __picc_ext_heartbeat. Only boolean false (actually relayed)
-// skips p1-1 — null stays "not-observed, default-ON assumed". S6: the PICC-side
-// settings toggle (sessionCaptureEnabled store) is read HERE and ANDs against
-// the extension relay — either OFF observed skips, PICC-side reason wins.
+// S6: the PICC-side settings toggle (sessionCaptureEnabled store) is read HERE —
+// an observed OFF skips p1-1. (The extension relay is gone; the captureEnabled
+// input is read as null = "not observed, default-ON assumed".)
 every(
   "pack-observation",
   60 * 1000,

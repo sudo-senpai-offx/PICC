@@ -8,7 +8,7 @@
 //   - observations/acks land evidence rows with ts — the endpoint never
 //     fabricates a status;
 //   - credentials stay off the wire (no token values in the JSON);
-//   - the route is rate limited (30/60s) like sibling extension routes.
+//   - the route is rate limited (30/60s) like sibling read surfaces.
 // Hermetic: PICC_DATA_DIR → tmp dir, handlers imported fresh (same idiom as
 // resourceGovernorApi.test.mjs). No network, no credentials.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -153,32 +153,6 @@ describe("GET /api/packs/registry (S0/T0.3)", () => {
     const step = res.body.registry.packs[0].steps.find((s) => s.id === "p1-3-news-digest")
     expect(step.status).toBe("skipped-unconfigured")
     expect(step.detail).toBe("no-news-source-configured")
-  })
-
-  it("T6.2 kill-switch relay: heartbeat stores boolean-only captureEnabled; false relays to honest skip-unconfigured", async () => {
-    // absent/string → honest null (never assumed false)
-    let res = await call(handleApi, "POST", "/api/extension/heartbeat", { body: { extensionVersion: "1.0.0" } })
-    expect(res.status).toBe(200)
-    expect(globalThis.__picc_ext_heartbeat.captureEnabled).toBeNull()
-    await call(handleApi, "POST", "/api/extension/heartbeat", { body: { captureEnabled: "false" } })
-    expect(globalThis.__picc_ext_heartbeat.captureEnabled).toBeNull()
-    // boolean true relayed
-    await call(handleApi, "POST", "/api/extension/heartbeat", { body: { captureEnabled: true } })
-    expect(globalThis.__picc_ext_heartbeat.captureEnabled).toBe(true)
-    // boolean false relayed → scheduler seam reads it → observeEoCapture skips (observer owns the SKIP_REASON string)
-    await call(handleApi, "POST", "/api/extension/heartbeat", { body: { captureEnabled: false } })
-    expect(globalThis.__picc_ext_heartbeat.captureEnabled).toBe(false)
-    const seamValue = globalThis.__picc_ext_heartbeat?.captureEnabled ?? null
-    const { observeEoCapture } = await import("../services/packObservers.mjs")
-    const obs = observeEoCapture({ captureEnabled: seamValue })
-    expect(obs.status).toBe("skipped-unconfigured")
-    expect(obs.detail).toBe("extension-capture-disabled")
-    expect(obs.observed).toEqual({
-      captureEnabled: false,
-      source: "extension kill-switch",
-      sessionCaptureEnabled: null
-    })
-    delete globalThis.__picc_ext_heartbeat
   })
 
   it("is rate limited (429) beyond 30 reads per 60s", async () => {

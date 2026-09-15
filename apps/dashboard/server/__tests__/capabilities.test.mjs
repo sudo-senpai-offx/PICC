@@ -46,10 +46,6 @@ describe("POST /api/system/capabilities", () => {
     // Browser bridge — boolean, never throws
     expect(typeof b.browserFound).toBe("boolean")
 
-    // Extension sensor — shape present even when no extension seen
-    expect(b.extensionSensor).toBeDefined()
-    expect(typeof b.extensionSensor.seen).toBe("boolean")
-
     // Notifier channels — shape present; inApp always true; exactly the three
     // shipping channels, no email row (T9 removed the email channel).
     expect(b.notifierChannels).toBeDefined()

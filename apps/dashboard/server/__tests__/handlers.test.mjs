@@ -111,18 +111,6 @@ describe("PICC API handlers", () => {
     expect(res.body.projection.simulatedPaths).toBe(20000)
   })
 
-  it("extension suggest returns honest local suggestions without keys", async () => {
-    const res = await call("POST", "/api/extension/suggest", {
-      url: "https://www.amazon.com/dp/B0EXAMPLE",
-      pageTitle: "Test Product",
-      pageData: { title: "Test Product", bullets: ["a", "b", "c"] }
-    })
-    expect(res.status).toBe(200)
-    expect(res.body.source).toBe("local")
-    expect(Array.isArray(res.body.suggestions)).toBe(true)
-    expect(res.body.suggestions.length).toBeGreaterThan(0)
-  })
-
   it("content generate returns a structured draft via the rule engine", async () => {
     const res = await call("POST", "/api/content/generate", { kind: "youtube_script", topic: "REIT investing" })
     expect(res.status).toBe(200)
@@ -313,20 +301,6 @@ describe("PICC API handlers", () => {
     expect(res.body.result.slug).toBe("expertoption")
     expect(res.body.result.tuned).toBe(false)
     rmSync(dir, { recursive: true, force: true })
-  })
-
-  it("GET /api/connectors?forExtension=1 returns a safe registry snapshot", async () => {
-    const res = makeRes()
-    await handleApi(makeReq("GET", "/api/connectors?forExtension=1", undefined, {}), res, "/api/connectors?forExtension=1")
-    expect(res.status).toBe(200)
-    expect(Array.isArray(res.body.registry)).toBe(true)
-    const eo = res.body.registry.find((c) => c.slug === "expertoption")
-    expect(eo).toBeTruthy()
-    expect(eo.origins).toContain("app.expertoption.finance")
-    // extension must never receive teeth/selectors/latest
-    expect(eo.selectors).toBeUndefined()
-    expect(eo.url).toBeUndefined()
-    expect(res.body.latest).toBeUndefined()
   })
 
   it("trading/venues returns redirect metadata with asset deep-links", async () => {
