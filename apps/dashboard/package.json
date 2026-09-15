@@ -16,7 +16,6 @@
     },
     "dependencies": {
         "@railpath/finance-toolkit": "0.5.4",
-        "@supabase/supabase-js": "^2.49.4",
         "ccxt": "^4.5.75",
         "lightweight-charts": "^5.2.1",
         "playwright-core": "^1.49.1",

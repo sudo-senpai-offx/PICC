@@ -111,6 +111,53 @@ describe("credentials endpoints", () => {
     })
     expect(authed.status).toBe(200)
   })
+
+  it("round-trips CCXT pairs: sanitized save, masked token read, persisted GET", async () => {
+    const acct = await createAccount({ email: "ccxt@x.com", password: "password123", name: "CCXT" })
+    const auth = { authorization: `Bearer ${acct.token}` }
+
+    // Save pairs alongside a fresh token — the sanitizer must keep the two
+    // well-formed entries, lowercase the exchange, and drop the malformed one.
+    const save = await call("POST", "/api/trading/credentials", {
+      expertoptionToken: "eo-tok-ccxt",
+      ccxtExchanges: [
+        { exchange: "Binance", symbol: "BTCUSDT", timeframe: "5m" },
+        { exchange: "coinbase", symbol: "ETH/USD", limit: 400 },
+        { symbol: "NO-EXCHANGE" }
+      ]
+    }, auth)
+    expect(save.status).toBe(200)
+    expect(save.body.expertoptionToken).not.toBe("eo-tok-ccxt")
+    expect(save.body.ccxtExchanges).toEqual([
+      { exchange: "binance", symbol: "BTCUSDT", timeframe: "5m" },
+      { exchange: "coinbase", symbol: "ETH/USD", limit: 400 }
+    ])
+
+    const read = await call("GET", "/api/trading/credentials", undefined, auth)
+    expect(read.status).toBe(200)
+    const pairs = read.body.ccxtExchanges ?? []
+    expect(pairs).toHaveLength(2)
+    expect(pairs[0]).toMatchObject({ exchange: "binance", symbol: "BTCUSDT" })
+  })
+
+  it("replaces the CCXT pair list wholesale on a settings-only save", async () => {
+    const acct = await createAccount({ email: "ccxt2@x.com", password: "password123", name: "CCXT2" })
+    const auth = { authorization: `Bearer ${acct.token}` }
+
+    await call("POST", "/api/trading/credentials", {
+      ccxtExchanges: [{ exchange: "binance", symbol: "BTCUSDT" }, { exchange: "binance", symbol: "ETHUSDT" }]
+    }, auth)
+
+    // Saving settings WITHOUT ccxtExchanges must keep the current pair list…
+    const settingsOnly = await call("POST", "/api/trading/credentials", { riskPerTradePct: 7 }, auth)
+    expect(settingsOnly.status).toBe(200)
+    expect(settingsOnly.body.ccxtExchanges).toHaveLength(2)
+
+    // …while an explicit empty array clears it.
+    const cleared = await call("POST", "/api/trading/credentials", { ccxtExchanges: [] }, auth)
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.ccxtExchanges).toEqual([])
+  })
 })
 
 describe("data store row isolation", () => {

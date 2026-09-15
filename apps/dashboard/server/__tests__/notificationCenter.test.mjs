@@ -63,13 +63,21 @@ describe("notificationCenter.notify / getNotifications", () => {
     expect(limited).toHaveLength(3)
   })
 
-  it("caps the store at MAX_NOTIFICATIONS", async () => {
-    for (let i = 0; i < 600; i++) {
-      await nc.notify({ title: `flood-${i}` })
-    }
-    const all = await nc.getNotifications({ limit: 1000 })
-    expect(all.length).toBeLessThanOrEqual(500)
-  })
+  // 600 sequential full-file persists is I/O-bound; under parallel-suite
+  // load it has crossed vitest's default 5000ms test timeout, which fails
+  // the test but leaves the loop running in the background and corrupts the
+  // shared in-memory store for the tests that follow. Give it real headroom.
+  it(
+    "caps the store at MAX_NOTIFICATIONS",
+    async () => {
+      for (let i = 0; i < 600; i++) {
+        await nc.notify({ title: `flood-${i}` })
+      }
+      const all = await nc.getNotifications({ limit: 1000 })
+      expect(all.length).toBeLessThanOrEqual(500)
+    },
+    20000
+  )
 })
 
 describe("notificationCenter.read tracking", () => {

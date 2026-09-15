@@ -332,7 +332,10 @@ describe("GET /api/trading/capture-profiles (T13 scanner config)", () => {
 
   it("service view and endpoint view agree (one source of truth)", () => {
     const service = extensionCaptureConfigs().map((v) => v.venueId)
-    const ids = ["expertoption", "iqoption"]
+    // Capture venues + recognized (identity-only) venue hosts — the extension's
+    // host catalog IS the served list; terminal-ccxt is recognized but has no
+    // capture leg (never scannable).
+    const ids = ["expertoption", "iqoption", "terminal-ccxt"]
     expect(service).toEqual(ids)
   })
 })

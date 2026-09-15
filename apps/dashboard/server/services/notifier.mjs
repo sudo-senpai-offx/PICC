@@ -20,21 +20,43 @@ const DATA_DIR =
 const STATE_FILE = join(DATA_DIR, "notifications.json")
 
 // ── persisted state: push subscriptions + user prefs ────────────────────────
+const DEFAULT_STATE = () => ({
+  prefs: {
+    minConfidence: 65,
+    leadMinutes: 3,
+    windowMinutes: 15,
+    channels: { inApp: true, webpush: true, webhook: true },
+  },
+  subscriptions: [], // web-push subscription objects
+  recent: [],        // last 20 alert records (payload + per-channel results)
+  snoozes: {}        // T4: { [tag]: { dueAt, count, ts, payload } } — one-shot in-flight snoozes
+})
+
+// Migration: persisted files written by OLDER builds may lack newer keys (the
+// T4 snooze ledger, for one) or use legacy channel names (email). Never clobber
+// the user's persisted prefs — merge the defaults UNDER them and normalize the
+// top-level collections so every consumer (notifierStatus, snoozeAlert,
+// flushSnoozes) sees the shape it expects. Without this, the scheduler's
+// pack-observation job crashed notifierStatus() with "Cannot convert undefined
+// or null to object" (Object.keys(state.snoozes) on a missing key).
 function loadState() {
   try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf8"))
-  } catch {
+    const parsed = JSON.parse(readFileSync(STATE_FILE, "utf8"))
+    const d = DEFAULT_STATE()
     return {
       prefs: {
-        minConfidence: 65,
-        leadMinutes: 3,
-        windowMinutes: 15,
-        channels: { inApp: true, webpush: true, webhook: true },
+        ...d.prefs,
+        ...(parsed.prefs ?? {}),
+        channels: { ...d.prefs.channels, ...(parsed.prefs?.channels ?? {}) }
       },
-      subscriptions: [], // web-push subscription objects
-      recent: [],        // last 20 alert records (payload + per-channel results)
-      snoozes: {}        // T4: { [tag]: { dueAt, count, ts, payload } } — one-shot in-flight snoozes
+      subscriptions: Array.isArray(parsed.subscriptions) ? parsed.subscriptions : d.subscriptions,
+      recent: Array.isArray(parsed.recent) ? parsed.recent : d.recent,
+      snoozes: parsed.snoozes && typeof parsed.snoozes === "object" && !Array.isArray(parsed.snoozes)
+        ? parsed.snoozes
+        : d.snoozes
     }
+  } catch {
+    return DEFAULT_STATE()
   }
 }
 let state = loadState()

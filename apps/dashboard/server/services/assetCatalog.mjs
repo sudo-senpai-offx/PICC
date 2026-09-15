@@ -115,6 +115,18 @@ export function assetsEquivalent(a, b) {
 }
 
 /**
+ * True when a raw label names a KNOWN instrument — either a canonical asset
+ * id or one of its aliases. Unlike canonicalAssetId (which returns unknown
+ * strings untouched), this answers "is this actually a PICC instrument at
+ * all?" → false for junk ids like "240".
+ */
+export function isKnownAsset(raw) {
+  if (!raw) return false
+  const canon = canonicalAssetId(raw)
+  return Boolean(canon) && LOOKUP.has(canon)
+}
+
+/**
  * Map a canonical PICC asset id to a tradable Yahoo Finance symbol.
  * Falls through to forex/crypto pair conventions for unknown 6-letter ids.
  */

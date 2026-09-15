@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { env } from "../config.mjs"
-import { news, productSearch, researchTopic } from "../services/serper.mjs"
+import {
+  news,
+  productSearch,
+  researchTopic,
+  serperVerdict,
+  _resetSerperVerdict
+} from "../services/serper.mjs"
 
 function resetEnv() {
   env.serperApiKey = ""
@@ -84,5 +90,104 @@ describe("Serper service error attribution", () => {
     })
     // The untrimmed (no-title) entry is dropped.
     expect(results.some((r) => r.link === "https://x/c")).toBe(false)
+  })
+})
+
+describe("Serper observed verdict (presence ≠ health)", () => {
+  let envSnap
+  beforeEach(() => {
+    envSnap = { ...env }
+    resetEnv()
+    _resetSerperVerdict()
+  })
+  afterEach(() => {
+    for (const k of Object.keys(envSnap)) env[k] = envSnap[k]
+    vi.unstubAllGlobals()
+  })
+
+  function okRes() {
+    return vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ news: [{ title: "A", link: "https://x/a" }] })
+    }))
+  }
+
+  it("no key → configured:false and observed:null (never a guessed verdict)", () => {
+    expect(serperVerdict()).toEqual({
+      configured: false,
+      observed: null,
+      ageMs: null,
+      stale: false
+    })
+  })
+
+  it("key set but never probed → configured:true, observed:null (honest unverified)", () => {
+    env.serperApiKey = "key"
+    expect(serperVerdict()).toEqual({
+      configured: true,
+      observed: null,
+      ageMs: null,
+      stale: false
+    })
+  })
+
+  it("a rejected key records a rejected verdict with the HTTP status", async () => {
+    env.serperApiKey = "key"
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({ message: "Invalid API key" })
+      }))
+    )
+    await expect(news("bitcoin", 3)).rejects.toThrow(/400/)
+    const v = serperVerdict()
+    expect(v.configured).toBe(true)
+    expect(v.observed).toMatchObject({ probe: "rejected", status: 400, message: "Invalid API key" })
+    expect(v.stale).toBe(false)
+  })
+
+  it("an accepted key records an ok verdict", async () => {
+    env.serperApiKey = "key"
+    vi.stubGlobal("fetch", okRes())
+    await news("bitcoin", 3)
+    const v = serperVerdict()
+    expect(v.observed).toMatchObject({ probe: "ok", status: 200 })
+    expect(v.stale).toBe(false)
+  })
+
+  it("a transport failure records error (the key may be fine — no key blame)", async () => {
+    env.serperApiKey = "key"
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("ECONNRESET"))))
+    await expect(news("bitcoin", 3)).rejects.toThrow(/ECONNRESET/)
+    const v = serperVerdict()
+    expect(v.observed).toMatchObject({ probe: "error", status: null, message: "ECONNRESET" })
+  })
+
+  it("an old success verdict goes stale instead of claiming currently-verified", async () => {
+    env.serperApiKey = "key"
+    vi.stubGlobal("fetch", okRes())
+    await news("bitcoin", 3)
+    const now = Date.now()
+    const older = now + 11 * 60 * 1000
+    expect(serperVerdict({ now }).stale).toBe(false)
+    expect(serperVerdict({ now: older }).stale).toBe(true)
+  })
+
+  it("an old rejected verdict stays rejected (a rejection is sticky until re-observed)", async () => {
+    env.serperApiKey = "key"
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({ message: "Unauthorized" })
+      }))
+    )
+    await expect(news("bitcoin", 3)).rejects.toThrow(/401/)
+    const older = Date.now() + 11 * 60 * 1000
+    expect(serperVerdict({ now: older }).observed).toMatchObject({ probe: "rejected", status: 401 })
   })
 })

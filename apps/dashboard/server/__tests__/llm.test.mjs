@@ -56,6 +56,9 @@ describe("cloud LLM orchestrator", () => {
     saved = snapshot()
     env.geminiApiKey = env.geminiServiceAccountFile = env.geminiProjectId = env.geminiLocation = env.groqApiKey = env.mistralApiKey = env.cerebrasApiKey = env.openaiApiKey = ""
     env.llmProviders = ""
+    // Governor stays OFF for these tests (the .env flag is ambient once
+    // config.mjs loads it; PICC_ENV_LOADED prevents a reload after deletion).
+    delete process.env.PICC_RESOURCE_GOVERNOR
   })
   afterEach(() => {
     restore(saved)

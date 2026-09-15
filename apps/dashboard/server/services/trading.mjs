@@ -785,9 +785,47 @@ async function recordSignalLocked(signal) {
   return entry
 }
 
-export async function recentSignals(limit = 20) {
+export function recentSignals(limit = 20) {
+  return withLedgerLock(async () => {
+    await flushStaleSignalsLocked()
+    const ledger = await getLedger()
+    return ledger.signals.slice(-limit).reverse()
+  })
+}
+
+/**
+ * The signal ledger's staleness policy — mirror of accuracyLedger's
+ * MAX_PENDING_MS → unresolved cap. A pending signal that never got resolved
+ * within the cap is marked unresolvable HONESTLY (status "unresolved") rather
+ * than lingering as "pending" forever and inflating the pending count. We
+ * never guess a win/loss for it — that would be fabricating outcomes.
+ */
+export const MAX_SIGNAL_PENDING_MS = 30 * 60 * 1000
+
+export async function flushStaleSignals({ now = Date.now() } = {}) {
+  return withLedgerLock(() => flushStaleSignalsLocked({ now }))
+}
+
+async function flushStaleSignalsLocked({ now = Date.now() } = {}) {
   const ledger = await getLedger()
-  return ledger.signals.slice(-limit).reverse()
+  const staleAt = Number(now) - MAX_SIGNAL_PENDING_MS
+  let flushed = 0
+  for (const s of ledger.signals) {
+    if (s.status !== "pending") continue
+    const createdMs = new Date(s.createdAt ?? 0).getTime()
+    if (!Number.isFinite(createdMs) || createdMs > staleAt) continue
+    s.status = "unresolved"
+    s.resolution = "unresolved"
+    s.outcomePct = null
+    s.resolvedAt = new Date(Number(now)).toISOString()
+    s.flushReason =
+      s.entry == null
+        ? "signal recorded with no entry price — cannot be resolved against a result price"
+        : "no result price arrived within the pending window — left unresolved rather than guessed"
+    flushed += 1
+  }
+  if (flushed > 0) await saveLedger(ledger)
+  return flushed
 }
 
 export function resolveSignal(input) {
@@ -832,48 +870,51 @@ async function resolveSignalLocked({ id, resultPrice, resolvedAt }) {
  * direction, symbol and horizon, so a strategy's edge (or lack of one) is
  * visible instead of buried in a raw signal list.
  */
-export async function signalAccuracy() {
-  const ledger = await getLedger()
-  const resolved = ledger.signals.filter((s) => s.status === "resolved")
-  const total = resolved.length
-  const wins = resolved.filter((s) => s.resolution === "win").length
-  const losses = resolved.filter((s) => s.resolution === "loss").length
-  const draws = resolved.filter((s) => s.resolution === "draw").length
-  const winRate = total ? Math.round((wins / total) * 100) : null
+export function signalAccuracy() {
+  return withLedgerLock(async () => {
+    await flushStaleSignalsLocked()
+    const ledger = await getLedger()
+    const resolved = ledger.signals.filter((s) => s.status === "resolved")
+    const total = resolved.length
+    const wins = resolved.filter((s) => s.resolution === "win").length
+    const losses = resolved.filter((s) => s.resolution === "loss").length
+    const draws = resolved.filter((s) => s.resolution === "draw").length
+    const winRate = total ? Math.round((wins / total) * 100) : null
 
-  const bucket = (acc, key, s) => {
-    const k = String(key)
-    if (!acc[k]) acc[k] = { key: k, total: 0, wins: 0, losses: 0, draws: 0 }
-    acc[k].total += 1
-    if (s.resolution === "win") acc[k].wins += 1
-    else if (s.resolution === "loss") acc[k].losses += 1
-    else acc[k].draws += 1
-  }
-  const byDirection = {}
-  const bySymbol = {}
-  const byHorizon = {}
-  for (const s of resolved) {
-    bucket(byDirection, s.direction, s)
-    bucket(bySymbol, s.symbol || "UNKNOWN", s)
-    bucket(byHorizon, String(s.horizonDays ?? "?"), s)
-  }
-  const finalize = (map) =>
-    Object.values(map)
-      .map((b) => ({ ...b, winRate: b.total ? Math.round((b.wins / b.total) * 100) : null }))
-      .sort((a, b) => b.total - a.total || b.winRate - a.winRate)
+    const bucket = (acc, key, s) => {
+      const k = String(key)
+      if (!acc[k]) acc[k] = { key: k, total: 0, wins: 0, losses: 0, draws: 0 }
+      acc[k].total += 1
+      if (s.resolution === "win") acc[k].wins += 1
+      else if (s.resolution === "loss") acc[k].losses += 1
+      else acc[k].draws += 1
+    }
+    const byDirection = {}
+    const bySymbol = {}
+    const byHorizon = {}
+    for (const s of resolved) {
+      bucket(byDirection, s.direction, s)
+      bucket(bySymbol, s.symbol || "UNKNOWN", s)
+      bucket(byHorizon, String(s.horizonDays ?? "?"), s)
+    }
+    const finalize = (map) =>
+      Object.values(map)
+        .map((b) => ({ ...b, winRate: b.total ? Math.round((b.wins / b.total) * 100) : null }))
+        .sort((a, b) => b.total - a.total || b.winRate - a.winRate)
 
-  return {
-    ok: true,
-    total,
-    wins,
-    losses,
-    draws,
-    winRate,
-    byDirection: finalize(byDirection),
-    bySymbol: finalize(bySymbol).slice(0, 20),
-    byHorizon: finalize(byHorizon),
-    recent: resolved.slice(-20).reverse()
-  }
+    return {
+      ok: true,
+      total,
+      wins,
+      losses,
+      draws,
+      winRate,
+      byDirection: finalize(byDirection),
+      bySymbol: finalize(bySymbol).slice(0, 20),
+      byHorizon: finalize(byHorizon),
+      recent: resolved.slice(-20).reverse()
+    }
+  })
 }
 
 /** Test hook — wipe ledger, credentials, venue tokens and watchlist back to defaults. */
@@ -882,6 +923,18 @@ export async function _resetTradingData() {
   await writeJSON(LEDGER_FILE, { ...DEFAULT_LEDGER })
   await writeJSON(WATCHLIST_FILE, [])
   await writeJSON(VENUE_TOKENS_FILE, {})
+}
+
+/**
+ * Test hook — replace the whole signals array (used to back-date entries for
+ * staleness tests, mirroring accuracyLedger's entryTs manipulation).
+ */
+export async function _overwriteSignals(signals) {
+  return withLedgerLock(async () => {
+    const ledger = await getLedger()
+    ledger.signals = signals
+    await saveLedger(ledger)
+  })
 }
 
 // ---------------------------------------------------------------------

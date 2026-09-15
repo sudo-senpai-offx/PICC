@@ -431,3 +431,57 @@ export async function observeCcxtEquity({ exchange, now = Date.now() } = {}) {
     fresh: true
   }
 }
+
+// Scheduled-sweep guard: the 4 min job cadence already spaces passes, so a
+// store record younger than this window means a rail action observed the
+// wallet moments ago — skip it instead of hammering the venue with a
+// duplicate fetchBalance.
+const CCXT_EQUITY_MIN_OBSERVE_GAP_MS = 60_000
+
+/**
+ * Exchange ids that have ordering credentials configured in the environment —
+ * either the wallet-key pair (PICC_CCXT_WALLETADDRESS_<EX> + PRIVATEKEY) or
+ * the CEX-style pair (PICC_CCXT_APIKEY_<EX> + SECRET) marks the exchange as
+ * keyed. The scan needs only ONE of the pair's keys present to NAME the
+ * exchange; observeCcxtEquity then refuses honestly if the pair is incomplete
+ * (ccxt-keys-not-configured) instead of silently skipping it.
+ */
+export function ccxtKeyedExchangeIds() {
+  const ids = new Set()
+  for (const key of Object.keys(process.env)) {
+    const m = /^PICC_CCXT_(?:WALLETADDRESS|APIKEY)_(.+)$/.exec(key)
+    if (!m) continue
+    ids.add(m[1].trim().toLowerCase())
+  }
+  return [...ids].sort()
+}
+
+/**
+ * The overview's freshness driver: observe equity on every keyed exchange and
+ * fold each result into the persisted day baseline. Never throws — a failing
+ * exchange is reported honestly (and stored nothing, so the 5E gate keeps
+ * denying on its stale data instead of fabricating) and never starves the
+ * other exchanges. `now` is injectable for tests.
+ */
+export async function refreshAllCcxtEquity({ now = Date.now() } = {}) {
+  const keyedExchanges = ccxtKeyedExchangeIds()
+  const observed = []
+  const skipped = []
+  let okCount = 0
+  for (const exchange of keyedExchanges) {
+    const prev = equityStore[exchange]
+    if (prev?.at && now - Date.parse(prev.at) < CCXT_EQUITY_MIN_OBSERVE_GAP_MS) {
+      skipped.push({ exchange, reason: "observed-recently" })
+      continue
+    }
+    const obs = await observeCcxtEquity({ exchange, now })
+    observed.push({
+      exchange,
+      ok: obs.ok,
+      equityUsd: obs.ok ? (Number(obs.equityUsd) || null) : null,
+      reason: obs.ok ? null : (obs.reason ?? "balance-unobservable")
+    })
+    if (obs.ok) okCount += 1
+  }
+  return { keyedExchanges, observed, skipped, okCount, at: new Date(now).toISOString() }
+}

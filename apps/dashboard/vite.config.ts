@@ -5,6 +5,7 @@ import { handleApi, isApiRequest, writeJson } from "./server/handlers.mjs"
 import { startTradingHud } from "./server/services/tradingHud.mjs"
 import { startLedger } from "./server/services/accuracyLedger.mjs"
 import { initErrorLog } from "./server/errorLog.mjs"
+import { startLivenessMonitor, startScheduler } from "./server/services/scheduler.mjs"
 
 startTradingHud()
 startLedger()
@@ -14,6 +15,14 @@ startLedger()
 // Skipped under vitest — tests must not rewrite the real session log.
 if (!process.env.VITEST) {
   initErrorLog()
+  // Dev mode is a first-class boot: without this the scheduler registers its
+  // jobs but NEVER runs them (index.mjs does this for the standalone entry,
+  // vite dev was missing it) — ccxt equity polling, EO staleness/liveness,
+  // headless session refresh and paper marking all silently stay dormant.
+  // Liveness monitor FIRST: it registers the eo-liveness job, and jobs added
+  // after startScheduler() never get an interval.
+  startLivenessMonitor()
+  startScheduler()
 }
 
 export default defineConfig(({ mode }) => {

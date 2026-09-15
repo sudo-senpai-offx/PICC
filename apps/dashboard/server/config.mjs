@@ -34,7 +34,7 @@ export const env = {
   geminiLocation: process.env.GEMINI_LOCATION ?? "",
   geminiModel: process.env.GEMINI_MODEL ?? "gemini-3.6-flash",
   groqApiKey: process.env.GROQ_API_KEY ?? "",
-  groqModel: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+  groqModel: process.env.GROQ_MODEL ?? "groq/compound-mini",
   mistralApiKey: process.env.MISTRAL_API_KEY ?? "",
   mistralModel: process.env.MISTRAL_MODEL ?? "open-mistral-nemo",
   cerebrasApiKey: process.env.CEREBRAS_API_KEY ?? "",
@@ -51,15 +51,10 @@ export const env = {
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
   stripePricePro: process.env.STRIPE_PRICE_PRO ?? "",
   stripePriceBusiness: process.env.STRIPE_PRICE_BUSINESS ?? "",
-  paypalClientId: process.env.PAYPAL_CLIENT_ID ?? "",
-  paypalClientSecret: process.env.PAYPAL_CLIENT_SECRET ?? "",
-  paypalMode: process.env.PAYPAL_MODE ?? "sandbox",
   btcpayUrl: process.env.BTCPAY_URL ?? "",
   btcpayApiKey: process.env.BTCPAY_API_KEY ?? "",
   btcpayStoreId: process.env.BTCPAY_STORE_ID ?? "",
   ewalletTngNumber: process.env.EWALLET_TNG_NUMBER ?? "",
-  supabaseUrl: process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "",
-  supabaseServiceKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
   agentsUrl: (process.env.PICC_AGENTS_URL ?? "").replace(/\/+$/, ""),
   // Amazon SP-API (LWA application + IAM SigV4 keys). See docs/SETUP.md.
   amazonClientId: process.env.SP_AMAZON_CLIENT_ID ?? "",
@@ -92,7 +87,6 @@ export function providers() {
     llmProviders: configuredLLMProviders(),
     serper: Boolean(env.serperApiKey),
     stripe: Boolean(env.stripeSecretKey),
-    paypal: Boolean(env.paypalClientId && env.paypalClientSecret),
     btcpay: Boolean(env.btcpayUrl && env.btcpayApiKey && env.btcpayStoreId),
     ewallet: Boolean(env.ewalletTngNumber), // manual Touch 'n Go orders need a real TNG number
     crypto: true, // CoinGecko public API — free, no key required

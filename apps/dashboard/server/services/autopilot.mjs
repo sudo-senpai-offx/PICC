@@ -24,6 +24,7 @@ import { getBrokerData, getBrokerStats } from "./brokers/index.mjs"
 import { detectRegime } from "./regimeDetection.mjs"
 import { computeModelMatrix, recordModelOutcomes } from "./modelMatrix.mjs"
 import { aiGatePrompts, GATE_PROMPT_VERSION } from "./prompts.mjs"
+import { canonicalAssetId, isKnownAsset } from "./assetCatalog.mjs"
 
 const DATA_DIR =
   process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -259,6 +260,49 @@ export function enabledAssetTargets(config) {
     amount: null,
     minConfidence: null
   }]
+}
+
+/**
+ * Classify each ENABLED scope entry against the two things that can back it:
+ *   1. the static PICC asset catalog (canonicalAssetId resolves it to a
+ *      known canonical instrument — i.e. the raw id is an alias of one);
+ *   2. the live broker feed's asset list (id OR name match).
+ * An entry that matches neither is UNRESOLVABLE — the engine burns a candle
+ * fetch on it every tick and records a data-quality skip. We do NOT silently
+ * drop it (the operator owns the config); we surface it so the junk is
+ * visible and removable. `resolvable` is a property of current evidence,
+ * not of the id's "type": a numeric id like "240" becomes resolvable the
+ * moment the live feed actually carries it.
+ */
+export function scopeHealth(config, { feedAssets = [], now = Date.now() } = {}) {
+  const feedIds = new Set()
+  const feedNames = new Set()
+  for (const a of Array.isArray(feedAssets) ? feedAssets : []) {
+    if (a?.id != null) feedIds.add(String(a.id).trim().toUpperCase())
+    if (a?.name != null) feedNames.add(String(a.name).trim().toUpperCase())
+  }
+  const rows = enabledAssetTargets(config).map((t) => {
+    const id = String(t.assetId).trim().toUpperCase()
+    const canon = canonicalAssetId(id)
+    const known = isKnownAsset(id)
+    const inFeed = feedIds.has(id) || feedNames.has(id) || (Boolean(canon) && (feedIds.has(canon) || feedNames.has(canon)))
+    const resolvable = known || inFeed
+    return {
+      assetId: id,
+      resolvable,
+      via: known ? "catalog" : inFeed ? "feed" : null,
+      problem: resolvable
+        ? null
+        : "not in the asset catalog and absent from the live broker feed — every tick burns a candle fetch; remove it from scope",
+      evaluatedAt: new Date(now).toISOString()
+    }
+  })
+  return {
+    ok: true,
+    rows,
+    problems: rows.filter((r) => !r.resolvable).map((r) => r.assetId),
+    healthy: rows.filter((r) => r.resolvable).map((r) => r.assetId)
+  }
 }
 
 /** Per-asset overrides merged over the global config for decision purposes. */
@@ -971,6 +1015,9 @@ export async function demoStatus() {
         amount: t.amount ?? config.amount,
         minConfidence: t.minConfidence ?? config.minConfidence
       })),
+      // Scope health: which scoped assets are actually resolvable against
+      // the asset catalog and the live broker feed (junk ids surface here).
+      scopeHealth: scopeHealth(config, { feedAssets: getBrokerData()?.assets ?? [] }),
       lastRun: state.lastRun,
       lastDecision: state.lastDecision,
       decisionWindow: getAutopilotDecisions(50).window,

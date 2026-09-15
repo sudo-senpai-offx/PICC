@@ -276,7 +276,9 @@ describe("popup is a pure storage reader (T12 lock 5)", () => {
       title: "",
       value: "",
       children: [],
-      classList: { toggle() {}, add() {} },
+      style: {},
+      disabled: false,
+      classList: { toggle() {}, add() {}, remove() {} },
       listeners: {},
       append(...kids) { this.children.push(...kids) },
       addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn) },
@@ -338,25 +340,27 @@ describe("popup is a pure storage reader (T12 lock 5)", () => {
     await new Promise((r) => setTimeout(r, 0))
   }
 
-  it("reads EXACTLY the pinned chrome.storage keys — the headless-status mirror and nothing else", async () => {
+  it("reads EXACTLY the pinned chrome.storage keys — the headless-status mirror, the two kill-switch flags, and nothing else", async () => {
     const h = makeHarness()
     await settle()
-    // Load-time refresh reads the T8 status mirror — the ONLY local keys the
-    // popup may read.
+    // Load-time refresh reads the T8 status mirror + the kill-switch flags — the
+    // ONLY local keys the popup may read.
     expect(h.recorded.localGet).toEqual([
-      ["piccSensorStatus", "piccRelayEnabled", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"]
+      ["piccSensorStatus", "piccRelayEnabled", "piccSessionCapture", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"]
     ])
     h.fire("relay") // the relay toggle re-reads the one key it mutates, then re-renders
+    h.fire("capture") // the session-capture toggle re-reads the one key it mutates, then re-renders
     await settle()
-    // Every local read is EITHER the T8 status mirror OR the relay toggle key —
+    // Every local read is EITHER the T8 status mirror OR one of the two toggle keys —
     // no third key list may ever appear.
-    const MIRROR = ["piccSensorStatus", "piccRelayEnabled", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"]
+    const MIRROR = ["piccSensorStatus", "piccRelayEnabled", "piccSessionCapture", "piccServerOnline", "piccServerPort", "piccHeadlessStatus"]
+    const TOGGLES = ["piccRelayEnabled", "piccSessionCapture"]
     const isMirror = (keys) => JSON.stringify(keys) === JSON.stringify(MIRROR)
-    expect(h.recorded.localGet.length).toBeGreaterThanOrEqual(2)
+    expect(h.recorded.localGet.length).toBeGreaterThanOrEqual(3)
     for (const keys of h.recorded.localGet) {
-      expect(isMirror(keys) || (Array.isArray(keys) && keys.length === 1 && keys[0] === "piccRelayEnabled")).toBe(true)
+      expect(isMirror(keys) || (Array.isArray(keys) && keys.length === 1 && TOGGLES.includes(keys[0]))).toBe(true)
     }
-    expect(h.recorded.localGet.filter((keys) => keys.length === 1).length).toBe(1) // exactly one standalone toggle read
+    expect(h.recorded.localGet.filter((keys) => keys.length === 1).length).toBe(2) // exactly the two standalone toggle reads
     // Sync is only the backend-url setting, in every interaction.
     h.fire("open")
     h.fire("save")
@@ -364,15 +368,15 @@ describe("popup is a pure storage reader (T12 lock 5)", () => {
     expect(h.recorded.syncGet.length).toBeGreaterThanOrEqual(3)
     for (const keys of h.recorded.syncGet) expect(keys).toEqual(["piccSettings"])
     for (const entry of h.recorded.syncSet) expect(Object.keys(entry)).toEqual(["piccSettings"])
-    // Writes are limited to the relay toggle + the settings save.
-    expect(h.recorded.localSet.map((e) => Object.keys(e))).toEqual([["piccRelayEnabled"]])
+    // Writes are limited to the two toggle flags + the settings save.
+    expect(h.recorded.localSet.map((e) => Object.keys(e))).toEqual([["piccRelayEnabled"], ["piccSessionCapture"]])
   })
 
-  it("sends ONLY the two read-only probes — never a mutation or trading action", async () => {
+  it("sends ONLY the three read-only probes — never a mutation or trading action", async () => {
     const h = makeHarness()
     await settle()
     const actions = h.recorded.messages.map((m) => m.action)
-    expect(actions).toEqual(["server-status", "sensor-queue-depth"])
+    expect(actions).toEqual(["server-status", "sensor-queue-depth", "capture-profiles"])
     for (const m of h.recorded.messages) {
       expect(Object.keys(m).sort()).toEqual(["action"]) // nothing but the action tag
     }
@@ -396,7 +400,11 @@ describe("popup is a pure storage reader (T12 lock 5)", () => {
       ...h.recorded.syncSet.flatMap((e) => Object.keys(e))
     ]
     // No key may name a token/credential surface — the popup renders engine
-    // state, it never holds raw session material.
-    expect(allKeys.some((k) => /token|ssid|secret|password|session/i.test(k))).toBe(false)
+    // state, it never holds raw session material. The two kill-switch flags
+    // (piccRelayEnabled, piccSessionCapture) are booleans, never credentials;
+    // a "PiccSessionCapture"-shaped key that could actually hold a session
+    // token is exactly what this guards against.
+    const rawMaterialMatch = (k) => /token|ssid|secret|password|session/i.test(k) && !/^(piccRelayEnabled|piccSessionCapture)$/.test(k)
+    expect(allKeys.some((k) => rawMaterialMatch(k))).toBe(false)
   })
 })

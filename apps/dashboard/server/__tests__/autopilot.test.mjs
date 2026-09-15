@@ -123,3 +123,57 @@ describe("advisory scope config (multi-asset targets)", () => {
     expect(why.gates.some((g) => g.name === "token" && g.pass === false)).toBe(true)
   })
 })
+
+describe("scopeHealth (asset-scope resolvability)", () => {
+  const scoped = {
+    assets: [
+      { assetId: "BTCUSD", enabled: true }, // canonical catalog id
+      { assetId: "BITCOIN", enabled: true }, // catalog alias → BTCUSD
+      { assetId: "240", enabled: true } // junk: nothing backs it
+    ],
+    assetId: "BTCUSD"
+  }
+
+  it("flags an id backed by neither catalog nor feed as unresolvable", () => {
+    const h = autopilot.scopeHealth(scoped, { feedAssets: [] })
+    const row = h.rows.find((r) => r.assetId === "240")
+    expect(row.resolvable).toBe(false)
+    expect(row.via).toBeNull()
+    expect(row.problem).toMatch(/remove it from scope/)
+    expect(h.problems).toContain("240")
+    expect(h.healthy).not.toContain("240")
+  })
+
+  it("resolves canonical ids and aliases from the static catalog", () => {
+    const h = autopilot.scopeHealth(scoped, { feedAssets: [] })
+    expect(h.rows.find((r) => r.assetId === "BTCUSD").resolvable).toBe(true)
+    expect(h.rows.find((r) => r.assetId === "BTCUSD").via).toBe("catalog")
+    expect(h.rows.find((r) => r.assetId === "BITCOIN").resolvable).toBe(true)
+    expect(h.rows.find((r) => r.assetId === "BITCOIN").via).toBe("catalog")
+    expect(h.problems).toEqual(["240"])
+  })
+
+  it("resolves a numeric id present in the live broker feed", () => {
+    const h = autopilot.scopeHealth(scoped, {
+      feedAssets: [{ id: 240, name: "BTC/USD" }]
+    })
+    expect(h.rows.find((r) => r.assetId === "240").resolvable).toBe(true)
+    expect(h.rows.find((r) => r.assetId === "240").via).toBe("feed")
+    expect(h.problems).toEqual([])
+    expect(h.healthy).toContain("240")
+  })
+
+  it("matches feed assets by name too (not only id)", () => {
+    const cfg = { assets: [{ assetId: "GOLD/USD", enabled: true }], assetId: "GOLD/USD" }
+    const h = autopilot.scopeHealth(cfg, { feedAssets: [{ id: 9, name: "Gold" }] })
+    expect(h.rows[0].resolvable).toBe(true)
+    expect(h.rows[0].via).toBe("catalog") // GOLD/USD is a catalog alias for GOLD
+  })
+
+  it("unknown junk ids stay flagged even when feed is empty", () => {
+    const cfg = { assets: [{ assetId: "QQQJUNK", enabled: true }], assetId: "QQQJUNK" }
+    const h = autopilot.scopeHealth(cfg, { feedAssets: [] })
+    expect(h.rows[0].resolvable).toBe(false)
+    expect(h.problems).toEqual(["QQQJUNK"])
+  })
+})

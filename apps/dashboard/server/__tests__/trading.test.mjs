@@ -171,6 +171,70 @@ describe("status + signals", () => {
     expect(signals[0].direction).toBe("up")
   })
 
+  describe("stale pending signal flush", () => {
+    it("marks pending signals past the cap as unresolved — never guessed as wins/losses", async () => {
+      const MAX = mod.MAX_SIGNAL_PENDING_MS
+      await mod.recordSignal({ symbol: "EURUSD", direction: "up", confidence: 62 })
+      const fresh = await mod.recordSignal({ symbol: "GBPUSD", direction: "down", confidence: 70 })
+      // Back-date the fresh one past the cap, same as accuracyLedger's approach.
+      const now = Date.now()
+      const stale = { ...fresh, createdAt: new Date(now - MAX - 60_000).toISOString() }
+      await mod._overwriteSignals([stale])
+      const flushed = await mod.flushStaleSignals({ now })
+      expect(flushed).toBe(1)
+      const signals = await mod.recentSignals()
+      const staleRow = signals.find((s) => s.id === fresh.id)
+      expect(staleRow.status).toBe("unresolved")
+      expect(staleRow.resolution).toBe("unresolved")
+      expect(staleRow.resolvedAt).toBeTruthy()
+      // The honest contract: an unresolved signal never fabricates a result.
+      expect(staleRow.resolution).not.toBe("win")
+      expect(staleRow.resolution).not.toBe("loss")
+    })
+
+    it("explains WHY it could not resolve: signals without an entry price can never be resolved", async () => {
+      const MAX = mod.MAX_SIGNAL_PENDING_MS
+      await mod.recordSignal({ symbol: "EURUSD", direction: "up", confidence: 62 })
+      const signals = await mod.recentSignals()
+      const now = Date.now()
+      // Simulate the adaptive-confluence case: no entry price was ever captured.
+      await mod._overwriteSignals([
+        { ...signals[0], createdAt: new Date(now - MAX - 60_000).toISOString() }
+      ])
+      await mod.flushStaleSignals({ now })
+      const after = await mod.recentSignals()
+      expect(after[0].status).toBe("unresolved")
+      expect(after[0].flushReason).toMatch(/no entry price/i)
+    })
+
+    it("keeps signals inside the cap pending — flush touches only what aged out", async () => {
+      await mod.recordSignal({ symbol: "EURUSD", direction: "up", confidence: 62 })
+      const now = Date.now()
+      expect(await mod.flushStaleSignals({ now })).toBe(0)
+      const signals = await mod.recentSignals()
+      expect(signals).toHaveLength(1)
+      expect(signals[0].status).toBe("pending")
+    })
+
+    it("recentSignals and signalAccuracy flush stale entries on read — the surface is always honest", async () => {
+      const MAX = mod.MAX_SIGNAL_PENDING_MS
+      const now = Date.now()
+      const fresh = await mod.recordSignal({ symbol: "EURUSD", direction: "up", confidence: 62 })
+      await mod._overwriteSignals([
+        { ...fresh, createdAt: new Date(now - MAX - 60_000).toISOString() }
+      ])
+      // recentSignals itself ages the entry out before returning it.
+      const listed = await mod.recentSignals()
+      expect(listed).toHaveLength(1)
+      expect(listed[0].status).toBe("unresolved")
+      // signalAccuracy excludes it from the win/loss math (honest denominator).
+      const acc = await mod.signalAccuracy()
+      expect(acc.total).toBe(0)
+      expect(acc.wins).toBe(0)
+      expect(acc.losses).toBe(0)
+    })
+  })
+
   it("assist falls back to local guidance without an LLM", async () => {
     const r = await mod.tradingAssist("Should I risk 50%?")
     expect(r.ok).toBe(true)

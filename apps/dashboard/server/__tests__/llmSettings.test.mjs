@@ -35,7 +35,7 @@ describe("llmSettings runtime provider store", () => {
     env.llmProviders = "groq,gemini"
     expect(configuredLLMProviders()).toEqual(["groq"])
     expect(llmProviderConfig("groq").hasKey).toBe(true)
-    expect(llmProviderConfig("groq").model).toBe("llama-3.3-70b-versatile")
+    expect(llmProviderConfig("groq").model).toBe("groq/compound-mini")
   })
 
   it("persists a model override and merges it over env", () => {

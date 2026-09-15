@@ -48,18 +48,96 @@ async function runAll(mode, system, user, opts) {
       "no LLM provider configured (set a key in Settings or GEMINI_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, OPENAI_API_KEY or CUSTOM_LLM_* in .env)"
     )
   }
-  const errors = []
-  for (const id of order) {
-    try {
-      const out = await PROVIDERS[id](mode, system, user, opts)
-      lastProviderId = id
-      return out
-    } catch (err) {
-      errors.push(`${id}: ${err.message}`)
-      console.warn(`[picc] llm "${id}" failed, trying next:`, err.message)
+  const o = opts ?? {}
+
+  // Resource governor (G2, PICC_RESOURCE_GOVERNOR_v1.md §3.2/§4.2): when on,
+  // every call is routed by routeTask BEFORE any provider is tried. Q3
+  // throttle behavior — budget exceeded: (b) soft-degrade (T2 burst spent →
+  // T3 overflow, still served, recorded "throttled") then (a) hard-stop
+  // (overflow disabled → honest throw, recorded "failed"). Every verdict lands
+  // in the observability ledger; provider failover stays beneath unchanged.
+  const governorOn =
+    o.governor === true || (o.governor !== false && process.env.PICC_RESOURCE_GOVERNOR === "on")
+  const feature = String(o.feature || "llm")
+  const maxTokens = Number(o.maxTokens) > 0 ? Number(o.maxTokens) : 0
+  const task = {
+    taskKind: o.task?.taskKind ?? (maxTokens > 500 ? "text-gen" : "summary"),
+    maxTokens,
+    confidence: o.task?.confidence,
+    deadlineMs: o.task?.deadlineMs,
+    toolCall: o.task?.toolCall
+  }
+  let route = null
+  if (governorOn) {
+    const { routeTask, governorStats } = await import("./resourceGovernor.mjs")
+    const stats = await governorStats()
+    route = routeTask(task, {
+      usedT2: stats.burst.T2.callsThisHour,
+      t2BurstLimit: stats.burst.T2.limitPerHour,
+      overflowEnabled: o.governorOverflow !== false
+    })
+    if (route.tier === "unavailable") {
+      await recordGovernorCall({
+        feature,
+        tier: "T2",
+        tokens: maxTokens,
+        verdict: "failed",
+        error: route.reasons.join("; ")
+      })
+      throw new Error(`resource governor: ${route.reasons.join("; ")} (feature "${feature}")`)
     }
   }
-  throw new Error(errors.join(" | "))
+
+  const errors = []
+  const started = Date.now()
+  try {
+    for (const id of order) {
+      try {
+        const out = await PROVIDERS[id](mode, system, user, o)
+        lastProviderId = id
+        if (governorOn && route) {
+          await recordGovernorCall({
+            feature,
+            tier: route.tier,
+            tokens: maxTokens,
+            latencyMs: Date.now() - started,
+            model: id,
+            verdict: route.tier === "T3" ? "throttled" : "accepted",
+            degraded: route.tier === "T3",
+            error: null
+          })
+        }
+        return out
+      } catch (err) {
+        errors.push(`${id}: ${err.message}`)
+        console.warn(`[picc] llm "${id}" failed, trying next:`, err.message)
+      }
+    }
+    throw new Error(errors.join(" | "))
+  } catch (err) {
+    if (governorOn && route) {
+      await recordGovernorCall({
+        feature,
+        tier: route.tier,
+        tokens: maxTokens,
+        latencyMs: Date.now() - started,
+        verdict: "failed",
+        error: String(err?.message ?? err).slice(0, 200)
+      })
+    }
+    throw err
+  }
+}
+
+/** Ledger write — never allowed to break the call path itself. */
+async function recordGovernorCall(entry) {
+  const { recordCall } = await import("./resourceGovernor.mjs")
+  try {
+    return await recordCall(entry)
+  } catch (err) {
+    console.warn("[picc] resource governor ledger write failed:", err.message)
+    return null
+  }
 }
 
 // ---------------------------------------------------------------------

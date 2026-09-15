@@ -24,7 +24,7 @@ export const PROVIDER_LABELS = {
 
 export const PROVIDER_DEFAULT_MODELS = {
   gemini: "gemini-3.6-flash",
-  groq: "llama-3.3-70b-versatile",
+  groq: "groq/compound-mini",
   mistral: "open-mistral-nemo",
   cerebras: "llama-3.3-70b",
   openai: "gpt-4o-mini",

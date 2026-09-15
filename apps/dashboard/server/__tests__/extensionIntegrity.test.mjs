@@ -211,14 +211,16 @@ describe("sensor extension integrity", () => {
   it("T13 vault-rule guard: the venue session token is TRANSIENT — never a chrome.storage value", () => {
     const bg = readFileSync(join(EXT_DIR, "background.js"), "utf8")
     const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
-    // The capture leg adds NO storage surface: the worker's chrome.storage CALL
-    // count is pinned (heartbeat + port + install + headless-status mirror +
-    // auth read) once comments are stripped (prose may name the API). An
-    // observation stored is an observation that can leak to any extension
-    // context / UI — the token rides content→worker→server only.
+    // The capture leg adds NO token storage surface: the worker's chrome.storage
+    // CALL count is pinned (heartbeat + port + install + headless-status mirror +
+    // auth read + T6.2 kill-switch relay read) once comments are stripped (prose
+    // may name the API). The 8th call (added 2026-09-14) is the boolean
+    // user-kill-switch `piccSessionCapture` relay — a preference, never a
+    // credential; the venue token still rides content→worker→server only.
     const bgCodeOnly = bg.replace(/\/\/[^\n]*/g, "")
     const bgStorageCalls = bgCodeOnly.match(/chrome\.storage/g) ?? []
-    expect(bgStorageCalls.length).toBe(7)
+    expect(bgStorageCalls.length).toBe(8)
+    expect(bg.includes("piccSessionCapture")).toBe(true) // T6.2 kill-switch relay (boolean, default ON)
     // The scanner keeps exactly the two guard-wrapped `store` helper hits that
     // the chromeGuard lock above pins (set/get) — the observed token never
     // enters extension storage by any route.
@@ -263,6 +265,25 @@ describe("sensor extension integrity", () => {
       "cookie:token", "cookie:tokenDemo", "localStorage:token", "sessionStorage:token"
     ])
     expect(served.profileKeys).toBe("user|account|profile|auth|session|current|me$|identity")
+  })
+
+  it("recognized venue hosts are identity-only — never a scan surface (terminal.ccxt.com)", async () => {
+    const content = readFileSync(join(EXT_DIR, "content.js"), "utf8")
+    const { extensionCaptureConfigs } = await import("../services/captureProfiles.mjs")
+    const served = extensionCaptureConfigs().find((v) => v.venueId === "terminal-ccxt")
+    expect(served).toBeTruthy()
+    // Recognized for the popup/worker (host identity) but deliberately WITHOUT
+    // a scan leg: no via, no keys — the content script no-ops on such a row.
+    expect(served.hostRe).toBe("terminal\\.ccxt\\.com")
+    expect(served.via).toBeNull()
+    expect(served.keys).toEqual([])
+    expect(served.status).toBe("limited") // never claims "full" — nothing captured here
+    expect(served.enabled).toBe(true)
+    // The scanner structurally cannot relay from a keys-less venue: the
+    // storageScan path needs venue.keys (guarded by `keys || []`), so a
+    // recognized-but-unsacannable row can never produce a capture-session call.
+    expect(content.includes("readStoredKeys(venue.keys)[0]")).toBe(true)
+    expect(content.includes("for (const want of keys || [])")).toBe(true)
   })
 
   it("income leg is fully stripped: no wsFrames/income relay surface remains anywhere (bandwidth contract)", () => {

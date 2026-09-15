@@ -17,6 +17,7 @@ const TABLES = new Set([
   "simulations",
   "listing_analyses",
   "billing",
+  "payment_orders",
   // v2 schema (infra/supabase/v2.sql) — income-classification model
   "financial_accounts",
   "transactions",

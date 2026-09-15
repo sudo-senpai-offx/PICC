@@ -1008,6 +1008,14 @@ export async function softReconnectLiveEO() {
    // while the new session seeds fresh candles.
    startedAt = 0
    staleFlag = false
+   // BUG FIX: A stale degraded flag from a previous auth failure survives
+   // across token changes because softReconnectLiveEO never cleared it
+   // (unlike stopLiveEO). This caused currentStatus() to return the OLD
+   // error even after a fresh token arrived — the observer perpetually
+   // reported stopped-at-human despite a valid session. Clear both so the
+   // fresh token gets a clean connection attempt.
+   degraded = null
+   lastError = null
    emit("status", { status: "reconnecting" })
   void startLiveEO()
 }

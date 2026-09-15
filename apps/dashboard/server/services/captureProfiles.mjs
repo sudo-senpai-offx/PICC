@@ -711,8 +711,28 @@ function sanitizeExtensionAccount(account) {
  */
 const EXT_PROFILE_KEYS_RE = "user|account|profile|auth|session|current|me$|identity"
 
+/**
+ * Venue HOSTS the extension must recognize even though nothing honest is
+ * readable on them yet — identity only, never a scan surface. A row here has
+ * NO via and NO keys, so content.js's scan path no-ops by construction
+ * (`readStoredKeys(undefined)` → null → nothing relayed) while the popup and
+ * the worker still recognize the host as a PICC venue. terminal.ccxt.com is
+ * the official CCXT web terminal — the venue surface of the trading:ccxt
+ * site's carrier-B verify flow. Credentials stored by CCXT Terminal are our
+ * OWN exchange API keys — reading them would be a credential-capture surface,
+ * not a session observation, so they stay deliberately untouched.
+ */
+const EXT_RECOGNIZED_VENUE_HOSTS = [
+  {
+    venueId: "terminal-ccxt",
+    name: "CCXT Terminal",
+    hostRe: "terminal\\.ccxt\\.com",
+    loginPage: "https://terminal.ccxt.com/"
+  }
+]
+
 export function extensionCaptureConfigs() {
-  return CAPTURE_PROFILES.filter((p) => p.capture?.via && p.capture?.hostRe)
+  const captureRows = CAPTURE_PROFILES.filter((p) => p.capture?.via && p.capture?.hostRe)
     .map((p) => {
       const cfg = {
         venueId: p.id,
@@ -741,6 +761,21 @@ export function extensionCaptureConfigs() {
       return cfg
     })
     .filter((c) => Array.isArray(c.keys) && c.keys.length > 0)
+  return [
+    ...captureRows,
+    ...EXT_RECOGNIZED_VENUE_HOSTS.map((v) => ({
+      venueId: v.venueId,
+      name: v.name,
+      ministry: "trading",
+      status: "limited", // recognized host, no capture leg — never claims "full"
+      enabled: true,
+      hostRe: v.hostRe,
+      loginPage: v.loginPage ?? null,
+      profileKeys: EXT_PROFILE_KEYS_RE,
+      via: null,
+      keys: []
+    }))
+  ]
 }
 
 /** REQ-14: per-ministry view of the extension capture catalog. A ministry with no

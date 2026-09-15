@@ -417,3 +417,101 @@ describe("ccxtOrdering — equity observation + persisted day baseline", () => {
     expect(mod.ccxtEquityLastObserved().exchange).toBe("binance")
   })
 })
+
+describe("refreshAllCcxtEquity — the scheduled sweep that keeps the overview feed fresh", () => {
+  let dir
+  let mod
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "picc-ccxt-sweep-"))
+    process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
+    vi.resetModules()
+    mod = await import("../services/ccxtOrdering.mjs")
+    mod._resetCcxtOrderingState()
+  })
+  afterEach(() => {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith("PICC_CCXT_")) delete process.env[k]
+    }
+    delete process.env.PICC_COMMAND_CENTRE_DATA_DIR
+    vi.resetModules()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("no keyed exchanges in the env → an honest empty sweep that observes nothing", async () => {
+    const report = await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T12:00:00Z") })
+    expect(report).toMatchObject({ keyedExchanges: [], observed: [], skipped: [], okCount: 0 })
+    expect(typeof report.at).toBe("string")
+    expect(mod.ccxtEquityLastObserved()).toBeNull() // nothing fabricated into the store
+  })
+
+  it("polls EVERY exchange with credentials (env key suffixes) and folds each observation into the store", async () => {
+    Object.assign(process.env, BINANCE_KEYS, HYPERLIQUID_KEYS)
+    const binance = makeExchange({ balance: { USDT: 50 } })
+    const hyperliquid = makeExchange({ balance: { USDT: 123 } })
+    mod._setCcxtLibForTests(fakeLib({ binance, hyperliquid }))
+    const report = await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T12:00:00Z") })
+    expect(report.keyedExchanges).toEqual(["binance", "hyperliquid"])
+    expect(report.observed).toHaveLength(2)
+    expect(report.okCount).toBe(2)
+    expect(binance.calls.fetchBalance).toBe(1)
+    expect(hyperliquid.calls.fetchBalance).toBe(1)
+    const last = mod.ccxtEquityLastObserved()
+    expect(last).not.toBeNull()
+    expect(["binance", "hyperliquid"]).toContain(last.exchange)
+    // both exchanges were observed at the SAME injected instant — the freshness
+    // view reports that exact at; ageSec ages against the real clock by design
+    expect(last.lastObservedAt).toBe("2026-09-05T12:00:00.000Z")
+  })
+
+  it("an incomplete env pair is reported (never silently skipped) — keys-not-configured, nothing stored", async () => {
+    // APIKEY without SECRET: the env scan lists the exchange, the observe
+    // refuses honestly, and the failure is left for the next pass.
+    process.env.PICC_CCXT_APIKEY_BINANCE = "key-binance"
+    const report = await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T12:00:00Z") })
+    expect(report.observed).toEqual([
+      { exchange: "binance", ok: false, equityUsd: null, reason: "ccxt-keys-not-configured" }
+    ])
+    expect(mod.ccxtEquityLastObserved()).toBeNull()
+  })
+
+  it("one exchange failing never starves the sweep — honest per-exchange report, nothing stored for the failure", async () => {
+    Object.assign(process.env, BINANCE_KEYS, { PICC_CCXT_APIKEY_KRAKEN: "k", PICC_CCXT_SECRET_KRAKEN: "s" })
+    const binance = makeExchange({ balance: { USDT: 50 } })
+    const kraken = makeExchange({ balance: null })
+    kraken.fetchBalance = async () => { throw new Error("network down") }
+    mod._setCcxtLibForTests(fakeLib({ binance, kraken }))
+    const report = await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T12:00:00Z") })
+    expect(report.observed).toEqual([
+      { exchange: "binance", ok: true, equityUsd: 50, reason: null },
+      { exchange: "kraken", ok: false, equityUsd: null, reason: "balance-unobservable" }
+    ])
+    expect(report.okCount).toBe(1)
+    expect(mod.ccxtEquityLastObserved().exchange).toBe("binance") // the failure stored nothing
+  })
+
+  it("a recently-observed exchange is skipped (min-gap guard) — no duplicate fetchBalance churn", async () => {
+    Object.assign(process.env, BINANCE_KEYS)
+    const binance = makeExchange({ balance: { USDT: 50 } })
+    mod._setCcxtLibForTests(fakeLib({ binance }))
+    await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T12:00:00Z") })
+    const countAfterFirst = binance.calls.fetchBalance
+    const second = await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T12:00:20Z") }) // 20 s later
+    expect(second.skipped).toEqual([{ exchange: "binance", reason: "observed-recently" }])
+    expect(binance.calls.fetchBalance).toBe(countAfterFirst) // no re-observe inside the gap
+  })
+
+  it("once the min-gap expires the sweep observes again — same-day baseline preserved, never re-seeded", async () => {
+    Object.assign(process.env, BINANCE_KEYS)
+    const binance = makeExchange({ balance: { USDT: 100 } })
+    mod._setCcxtLibForTests(fakeLib({ binance }))
+    await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T08:00:00Z") })
+    binance.balance = { USDT: 90 }
+    const later = await mod.refreshAllCcxtEquity({ now: Date.parse("2026-09-05T08:05:00Z") }) // 5 min > 60 s gap
+    expect(later.skipped).toEqual([])
+    expect(later.observed[0]).toMatchObject({ exchange: "binance", ok: true, equityUsd: 90 })
+    expect(binance.calls.fetchBalance).toBe(2)
+    const after = await mod.observeCcxtEquity({ exchange: "binance", now: Date.parse("2026-09-05T08:10:00Z") })
+    expect(after.dayStartEquityUsd).toBe(100) // the sweep's first observation seeded the day baseline
+    expect(after.dayLossPct).toBe(10)
+  })
+})

@@ -26,6 +26,7 @@ describe("scheduler (slice 5d coverage)", () => {
     const names = status.jobs.map((j) => j.name)
     expect(names).toContain("ccxt-market-data")
     expect(names).toContain("headless-session-refresh")
+    expect(names).toContain("ccxt-equity-refresh")
     // Nothing has run yet — honest nulls, not fabricated zeros.
     for (const j of status.jobs) {
       expect(j.lastRunAt).toBeNull()

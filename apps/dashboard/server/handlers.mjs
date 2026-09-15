@@ -1,17 +1,21 @@
 // Shared API handlers for the PICC dashboard server (dev middleware + prod).
-// Real data path: Yahoo Finance -> Monte Carlo, Serper research, hybrid cloud LLM
-// (gemini/groq/mistral/cerebras/openai with automatic failover), Stripe billing,
-// Supabase sync. Every provider degrades with an honest fallback.
+// Real data path: Yahoo Finance -> Monte Carlo, free-source research, hybrid
+// cloud+local LLM (groq/others with automatic failover), Stripe billing,
+// local JSON billing/subscription sync (Supabase removed — D8). Every
+// provider degrades with an honest fallback.
 import { createHash } from "node:crypto"
 import { env, providers } from "./config.mjs"
 import { errorLogEnabled, recordClientReport } from "./errorLog.mjs"
 import { assetsEquivalent } from "./services/assetCatalog.mjs"
 import { getHistory, statsFromHistory, downsample, clampDrift, clampVol, getQuote } from "./services/yahoo.mjs"
-import { researchTopic } from "./services/serper.mjs"
+import { researchTopic, serperVerdict } from "./services/serper.mjs"
 import { chatJSON, chatText, asSuggestionArray, provider, llmConfigured } from "./services/llm.mjs"
+import { defaultBudgets, governorStats, recentRows } from "./services/resourceGovernor.mjs"
+import { ackStep, getRegistry, resourceCaps } from "./services/packRegistry.mjs"
+import { webfetchLimits, webFetchStats, resetWebFetchLimits } from "./services/webfetch.mjs"
 import { suggestPrompt } from "./services/prompts.mjs"
 import { createCheckoutSession, createPortalSession, constructWebhookEvent, hasStripe } from "./services/stripe.mjs"
-import { createPayPalOrder, capturePayPalOrder, hasPayPal } from "./services/paypal.mjs"
+
 import { createEwalletOrder, submitEwalletOrder, walletInfo, WALLET_IDS } from "./services/ewallet.mjs"
 import { createBtcpayInvoice, btcpayInvoiceStatus, hasBtcpay, btcpayNodeHealth } from "./services/btcpay.mjs"
 import { getCompetitorData } from "./services/amazon.mjs"
@@ -43,7 +47,7 @@ import {
   completeGithubOauth
 } from "./services/profile.mjs"
 import { isTable, listRows, appendRow, upsertRow, removeRow } from "./services/localstore.mjs"
-import { syncSubscription, admin } from "./services/supabase.mjs"
+import { syncSubscription } from "./services/billing.mjs"
 import { runMonteCarlo } from "./monteCarlo.mjs"
 import { log, createRequestId, bindRequest, unbindRequest, recordRequest, getMetrics, prometheusMetrics } from "./logger.mjs"
 import {
@@ -84,6 +88,11 @@ import {
   PROVIDER_IDS
 } from "./services/llmSettings.mjs"
 import { testLLMProvider } from "./services/llm.mjs"
+import {
+  sessionCaptureEnabled,
+  saveSessionCaptureSetting,
+  sessionCaptureSettingsView
+} from "./services/sessionCaptureSettings.mjs"
 import {
   demoStatus as expertOptionDemoStatus,
   demoDeals,
@@ -231,20 +240,11 @@ export function round2(v) {
 /**
  * Resolve the Stripe customer tied to a user WITHOUT trusting any
  * client-supplied value. Reads the profile's stripe_customer_id from the
- * Supabase `profiles` table (admin mode) or the local `billing` store.
- * Returns null when the user has no Stripe customer on file.
+ * local `billing` store (Supabase removed — D8). stripe_customer_id is
+ * written by syncSubscription. Returns null when the user has no Stripe
+ * customer on file.
  */
 async function stripeCustomerForUser(userId) {
-  if (admin && env.supabaseUrl && env.supabaseServiceKey) {
-    const { data, error } = await admin
-      .from("profiles")
-      .select("stripe_customer_id")
-      .eq("id", userId)
-      .maybeSingle()
-    if (error) return null
-    return data?.stripe_customer_id ?? null
-  }
-  // Local mode: stripe_customer_id is written by syncSubscription.
   const rows = await listRows("billing")
   const row = rows.find((b) => b.user_id === userId)
   return row?.stripe_customer_id ?? null
@@ -269,7 +269,7 @@ const TRUSTED_ORIGINS = [
   "http://127.0.0.1:3000"
 ]
 
-// Allowed redirect destinations for Stripe/PayPal (prevents open redirect)
+// Allowed redirect destinations for Stripe (prevents open redirect)
 const ALLOWED_REDIRECT_HOSTS = ["localhost", "127.0.0.1"]
 
 /**
@@ -1105,7 +1105,7 @@ async function _handleApiInner(req, res, url, reqId) {
         agents = { url: env.agentsUrl, ok: false }
       }
     }
-    writeJson(res, 200, { ok: true, version: "0.2.0", providers: providers(), agents })
+    writeJson(res, 200, { ok: true, version: "0.2.0", providers: providers(), serper: serperVerdict(), agents })
     return
   }
 
@@ -1937,6 +1937,32 @@ async function _handleApiInner(req, res, url, reqId) {
     return true
   }
 
+  // S6/T6.2 — PICC-side session-capture kill-switch (owner decision 2026-09-15).
+  // GET stays public like sibling settings GET views (no secret material — just
+  // {enabled, configured}, default-ON when untouched). POST flips the switch and
+  // is auth-guarded like the other settings POST routes. The extension consumes
+  // the SAME boolean through GET /api/trading/capture-profiles.
+  if (path === "/api/settings/session-capture" && req.method === "GET") {
+    writeJson(res, 200, { ok: true, ...sessionCaptureSettingsView() })
+    return true
+  }
+
+  if (path === "/api/settings/session-capture" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      const enabled = body?.enabled
+      if (typeof enabled !== "boolean") {
+        writeJson(res, 400, { error: "enabled must be a boolean" })
+        return true
+      }
+      saveSessionCaptureSetting(enabled)
+      writeJson(res, 200, { ok: true, settings: sessionCaptureSettingsView() })
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err.message })
+    }
+    return true
+  }
+
   if (path === "/api/settings/llm/test" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return true
     const providerId = String(body?.provider ?? "").trim()
@@ -1948,6 +1974,101 @@ async function _handleApiInner(req, res, url, reqId) {
       writeJson(res, 200, await withTimeout(testLLMProvider(providerId), 20000))
     } catch (err) {
       writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // G3 — Resource tab source (PICC_RESOURCE_GOVERNOR_v1.md §7). Masked by
+  // construction: ledger rows are tokens+metrics only (prompt content is
+  // stripped at write time). GET mirrors the sibling /api/settings/llm read;
+  // no secrets cross this surface.
+  if (path === "/api/settings/llm/resource" && req.method === "GET") {
+    try {
+      const [stats, rows] = await Promise.all([governorStats(), recentRows({ limit: 50 })])
+      writeJson(res, 200, {
+        ok: true,
+        enabled: process.env.PICC_RESOURCE_GOVERNOR === "on",
+        budgets: defaultBudgets(),
+        ...stats,
+        rows
+      })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // S0/T0.3 — PICC_PACK1_LOCAL_TRADING_CORE_v1.md: pack registry read surface.
+  // Observational only: per-step status, envelope, evidence. Rows store
+  // presence flags only, never credential values ("never echoed back in full").
+  // Rate limited like sibling extension routes. The §8.5 caps ride along:
+  // server env truth, read-only — a browser client must never guess them.
+  if (path === "/api/packs/registry" && req.method === "GET") {
+    if (rateLimited("packs", 30, 60_000)) {
+      writeJson(res, 429, { error: "rate limited" })
+      return true
+    }
+    try {
+      writeJson(res, 200, { ok: true, registry: await getRegistry(), caps: resourceCaps() })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // S5/T5.1 — PICC_PACK1_LOCAL_TRADING_CORE_v1.md: the pack strip's human
+  // handoff. POST /api/packs/ack is the ONLY exit from stopped-at-human over
+  // HTTP: the server marks doneBy:"human", re-arms the step to idle, and the
+  // next observation tick may move it to running. Auth-gated (acknowledging a
+  // human handoff is administrative, like limiter resets) and rate limited.
+  if (path === "/api/packs/ack" && req.method === "POST") {
+    if (rateLimited("packs-ack", 10, 60_000)) {
+      writeJson(res, 429, { error: "rate limited" })
+      return true
+    }
+    if (!(await requireAuth(req, res))) return true
+    const { packId, stepId } = body ?? {}
+    if (!packId || !stepId) {
+      writeJson(res, 400, { ok: false, error: "packId and stepId are required" })
+      return true
+    }
+    try {
+      writeJson(res, 200, { ok: true, step: await ackStep(packId, stepId) })
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // S3/T3.1 — PICC_PACK1_LOCAL_TRADING_CORE_v1.md: the GLOBAL webfetch
+  // capability's fair-use surface. GET reads the current per-host sliding-window
+  // limits + observed stats (no mutation, rate limited like sibling read
+  // routes); POST resets the in-memory windows (auth-gated — clearing a
+  // limiter is an administrative action, like the extension routes).
+  if (path === "/api/webfetch/limits" && req.method === "GET") {
+    if (rateLimited("webfetch-limits", 30, 60_000)) {
+      writeJson(res, 429, { error: "rate limited" })
+      return true
+    }
+    try {
+      writeJson(res, 200, { ok: true, limits: webfetchLimits(), stats: webFetchStats() })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  if (path === "/api/webfetch/limits/reset" && req.method === "POST") {
+    if (rateLimited("webfetch-limits-reset", 10, 60_000)) {
+      writeJson(res, 429, { error: "rate limited" })
+      return true
+    }
+    if (!(await requireAuth(req, res))) return true
+    try {
+      resetWebFetchLimits()
+      writeJson(res, 200, { ok: true, limits: webfetchLimits(), stats: webFetchStats() })
+    } catch (err) {
+      writeJson(res, 500, { ok: false, error: err.message })
     }
     return true
   }
@@ -3297,7 +3418,7 @@ const creds = await getVenueCredentials()
     const balance = Number(body?.balance)
     try {
       const { signalAccuracy } = await import("./services/trading.mjs")
-      const acc = signalAccuracy()
+      const acc = await signalAccuracy()
       const wr = Number.isFinite(winRate) ? winRate : (acc.winRate ?? 50)
       const ap = Number.isFinite(avgPayout) ? avgPayout : 0.8
       const rp = Number.isFinite(riskPct) ? riskPct : 2
@@ -3877,49 +3998,6 @@ const creds = await getVenueCredentials()
     } catch (err) {
       console.error("[picc] stripe webhook error:", err)
       writeJson(res, 400, { error: "webhook failed", detail: err.message })
-    }
-    return
-  }
-
-  if (path === "/api/paypal/create-order" && req.method === "POST") {
-    if (!hasPayPal()) return writeJson(res, 503, { error: "PayPal not configured" })
-    const userId = await verifyUser(auth)
-    if (!userId) return writeJson(res, 401, { error: "authentication required" })
-    const tier = validTier(body.tier)
-    if (!tier) return writeJson(res, 400, { error: "tier must be 'pro' or 'business'" })
-    const returnUrl = body.returnUrl || "http://localhost:5173/profile?billing=success"
-    const cancelUrl = body.cancelUrl || "http://localhost:5173/pricing"
-    if (!isAllowedRedirect(returnUrl) || !isAllowedRedirect(cancelUrl)) {
-      return writeJson(res, 400, { error: "redirect URLs must point to localhost" })
-    }
-    try {
-      const result = await createPayPalOrder({
-        tier,
-        userId,
-        returnUrl,
-        cancelUrl
-      })
-      writeJson(res, 200, { orderId: result.orderId, url: result.url })
-    } catch (err) {
-      console.error("[picc] paypal create-order failed:", err)
-      writeJson(res, 400, { error: "paypal checkout failed" })
-    }
-    return
-  }
-
-  if (path === "/api/paypal/capture" && req.method === "POST") {
-    if (!hasPayPal()) return writeJson(res, 503, { error: "PayPal not configured" })
-    const userId = await verifyUser(auth)
-    if (!userId) return writeJson(res, 401, { error: "authentication required" })
-    const { orderId } = body
-    if (!orderId) return writeJson(res, 400, { error: "orderId required" })
-    try {
-      const result = await capturePayPalOrder(orderId)
-      await syncSubscription({ userId: result.userId, status: "active", tier: result.tier, stripeCustomerId: null })
-      writeJson(res, 200, { ok: true, tier: result.tier, captureId: result.captureId })
-    } catch (err) {
-      console.error("[picc] paypal capture failed:", err)
-      writeJson(res, 400, { error: "paypal capture failed", detail: err.message })
     }
     return
   }
@@ -4976,7 +5054,14 @@ const BROWSER_ROUTES = {
       return true
     }
     const { extensionCaptureConfigs } = await import("./services/captureProfiles.mjs")
-    writeJson(res, 200, { ok: true, venues: extensionCaptureConfigs() })
+    writeJson(res, 200, {
+      ok: true,
+      venues: extensionCaptureConfigs(),
+      // S6/T6.2 — PICC-side kill-switch folded into the EXISTING extension config
+      // channel (independence preserved: no server → built-in fallback → the
+      // extension toggle alone dictates). Same boolean as /api/settings/session-capture.
+      sessionCaptureEnabled: sessionCaptureEnabled()
+    })
     return true
   },
 
@@ -4999,6 +5084,10 @@ const BROWSER_ROUTES = {
         title: String(body.activeTab.title || "").slice(0, 256)
       } : null,
       cookieCount: Math.min(Number(body.cookieCount) || 0, 10000),
+      // T6.2 — relay the extension's session-capture kill-switch. Only
+      // boolean true/false accepted; anything else = honest null (not observed,
+      // default-ON assumed by the observer).
+      captureEnabled: typeof body.captureEnabled === "boolean" ? body.captureEnabled : null,
       timestamp: Date.now(),
       receivedAt: Date.now()
     }
@@ -5123,9 +5212,9 @@ function readBodyMax(req, maxBytes) {
 
 // Baseline hardening headers applied to every JSON response (F-04). The CSP
 // keeps the SPA self-only for scripts while allowing the real browser
-// surfaces the app uses (Supabase auth via https/wss, extension/dev
-// loopback feeds). frame-ancestors none + X-Frame-Options DENY stop
-// clickjacking of a page that touches payments and broker tokens.
+// surfaces the app uses (extension/dev loopback feeds + cloud data fetch
+// https/wss). frame-ancestors none + X-Frame-Options DENY stop clickjacking
+// of a page that touches payments and broker tokens.
 export const SECURITY_HEADERS = {
   "Content-Security-Policy": [
     "default-src 'self'",

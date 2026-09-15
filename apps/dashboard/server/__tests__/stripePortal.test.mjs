@@ -5,9 +5,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { env } from "../config.mjs"
 
-// Force the local (non-Supabase) billing path by making admin null, and mock
-// the Stripe service so no real SDK/network call occurs. We assert WHICH
-// customer createPortalSession sees — the IDOR fix must use the user's OWN.
+// Force the local billing path (Supabase removed — D8) and mock the Stripe
+// service so no real SDK/network call occurs. We assert WHICH customer
+// createPortalSession sees — the IDOR fix must use the user's OWN.
 const portalCalls = []
 vi.mock("../services/stripe.mjs", async (importOriginal) => {
   const actual = await importOriginal()
@@ -19,10 +19,6 @@ vi.mock("../services/stripe.mjs", async (importOriginal) => {
       return { url: `https://billing.stripe.com/${encodeURIComponent(customerId)}` }
     })
   }
-})
-vi.mock("../services/supabase.mjs", async (importOriginal) => {
-  const actual = await importOriginal()
-  return { ...actual, admin: null }
 })
 
 function makeReq(method, url, body, headers = {}) {

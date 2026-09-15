@@ -11,17 +11,64 @@ const SHOPPING_URL = "https://google.serper.dev/shopping"
 // POST. 401/403 are auth/plan problems; 429 is a plan quota/rate limit.
 const KEY_OR_QUOTA_STATUSES = new Set([400, 401, 403, 429])
 
+// ── Observed-health verdict ────────────────────────────────────────────────
+// Key presence (providers().serper) says nothing about whether Serper actually
+// accepted the key. Every real HTTP outcome is cached here so /api/health and
+// the status badges can report what was OBSERVED, not what is configured.
+// A verdict is only "fresh" for VERDICT_FRESH_MS — an old success must not read
+// as currently-verified.
+const VERDICT_FRESH_MS = 10 * 60 * 1000
+let lastObserved = null // { probe: "ok"|"rejected"|"error", status, message, at }
+
+/**
+ * The last observed Serper outcome.
+ *   configured: true when a key exists (env check — never a guess about health)
+ *   observed:   null until the first real call resolves (honest "unverified"):
+ *               then { probe, status, message, at }
+ *   stale:      true when the last probe is old enough that "verified" no longer
+ *               holds; the badge must downgrade, not keep claiming ok.
+ */
+export function serperVerdict({ now = Date.now() } = {}) {
+  const configured = Boolean(env.serperApiKey)
+  if (!configured) return { configured: false, observed: null, ageMs: null, stale: false }
+  if (!lastObserved) return { configured: true, observed: null, ageMs: null, stale: false }
+  const ageMs = Math.max(0, now - lastObserved.at)
+  return {
+    configured: true,
+    observed: lastObserved,
+    ageMs,
+    stale: ageMs > VERDICT_FRESH_MS
+  }
+}
+
+/** Test hook — hermetically clears the observed verdict. */
+export function _resetSerperVerdict() {
+  lastObserved = null
+}
+
+function recordVerdict(probe, status, message) {
+  lastObserved = { probe, status, message, at: Date.now() }
+}
+
 async function call(url, query, num = 5) {
   if (!env.serperApiKey) return null
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-KEY": env.serperApiKey
-    },
-    body: JSON.stringify({ q: query, num }),
-    signal: AbortSignal.timeout(15000)
-  })
+  let res
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": env.serperApiKey
+      },
+      body: JSON.stringify({ q: query, num }),
+      signal: AbortSignal.timeout(15000)
+    })
+  } catch (err) {
+    // Network/timeout — the key may be fine; record the transport failure
+    // honestly and rethrow so callers surface the real error.
+    recordVerdict("error", null, String(err?.message ?? err))
+    throw err
+  }
   if (!res.ok) {
     // Attribute the failure to the credential/plan BEFORE blaming the query.
     // A 400/401/403/429 on Serper means the X-API-KEY is missing, invalid,
@@ -39,8 +86,10 @@ async function call(url, query, num = 5) {
     const hint = KEY_OR_QUOTA_STATUSES.has(res.status)
       ? " (check SERPER_API_KEY: missing/invalid/expired key, out of quota, or rate-limited)"
       : ""
+    recordVerdict(KEY_OR_QUOTA_STATUSES.has(res.status) ? "rejected" : "error", res.status, detail.replace(/^ — /, ""))
     throw new Error(`Serper ${endpoint} ${res.status}${detail}${hint}`)
   }
+  recordVerdict("ok", res.status, "")
   const json = await res.json()
   return json
 }

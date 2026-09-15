@@ -47,10 +47,8 @@ describe("PICC API handlers", () => {
     env.geminiApiKey = env.geminiServiceAccountFile = env.groqApiKey = env.mistralApiKey = env.cerebrasApiKey = env.openaiApiKey = ""
     env.llmProviders = env.serperApiKey = ""
     env.stripeSecretKey = env.stripeWebhookSecret = env.stripePricePro = env.stripePriceBusiness = ""
-    env.paypalClientId = env.paypalClientSecret = ""
     env.btcpayUrl = env.btcpayApiKey = env.btcpayStoreId = ""
     env.ewalletTngNumber = ""
-    env.supabaseUrl = env.supabaseServiceKey = ""
     env.agentsUrl = ""
     env.amazonClientId = env.amazonClientSecret = env.amazonRefreshToken = ""
     env.amazonAccessKey = env.amazonSecretKey = ""
@@ -68,10 +66,22 @@ describe("PICC API handlers", () => {
     expect(res.body.providers).toHaveProperty("yahoo", true)
     expect(res.body.providers).toHaveProperty("llm", false)
     expect(res.body.providers.llmProviders).toEqual([])
-    expect(res.body.providers).toHaveProperty("paypal", false)
     expect(res.body.providers).toHaveProperty("btcpay", false)
     expect(res.body.providers).toHaveProperty("ewallet", false)
     expect(res.body.agents).toBeNull()
+  })
+
+  it("health reports the observed Serper verdict (never key presence alone)", async () => {
+    env.serperApiKey = ""
+    const res = await call("GET", "/api/health")
+    expect(res.status).toBe(200)
+    // No key → configured:false and observed:null; a badge must say "off", not "ok".
+    expect(res.body.serper).toEqual({
+      configured: false,
+      observed: null,
+      ageMs: null,
+      stale: false
+    })
   })
 
   it("twin falls back to local engine when market data is unreachable", async () => {
