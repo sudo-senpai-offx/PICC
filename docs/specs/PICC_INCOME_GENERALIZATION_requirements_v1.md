@@ -56,7 +56,7 @@ The "one-stop personal income command centre" aggregation of normalized Earnings
 
 ## Non-goals (explicitly out of scope)
 
-- No new payment channels (BTCPay/PayPal/Stripe/TNG already exist; not extended).
+- No new payment channels (e-wallet/BTCPay/Stripe already exist — PayPal removed per owner 2026-09-13; not extended).
 - No real-money trading execution, no new automation on external platforms.
 - No new marketplaces/catalog expansion beyond what the existing `streamCatalog.ts` and connector registry already seed.
 - No rewriting the MAIN-world WS-sniffer as config (it stays per-venue inject code — the documented `collect` exception).

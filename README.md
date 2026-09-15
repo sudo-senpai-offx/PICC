@@ -72,7 +72,7 @@ User → Dashboard (React) ──same-origin /api/*──▶ Node backend (93 se
                                                   │  Hybrid cloud LLM (Gemini → Groq → Mistral →
                                                   │    Cerebras → OpenAI, auto failover, no card)
                                                   │  Serper (live news + search research)
-                                                  │  Payments: PayPal | Touch 'n Go |
+                                                  │  Payments: Touch 'n Go |
                                                   │    BTCPay | Stripe (owner's wallet, no bank)
                                                   │  (optional) CrewAI microservice :8000
 Browser Extension (MV3) ◀── suggestions + live data ──┘
@@ -125,7 +125,7 @@ considerations are tracked in `PICC.md` §15 — verify with a qualified lawyer 
 | Trading Suite — ensemble, MTF, U4FA, paper ledger, EO demo bridge | ✅ |
 | Extension sensor relay + offline queue + live-probe status | ✅ |
 | Node backend, hybrid LLM failover, Serper | ✅ |
-| Payments — PayPal · TnG · BTCPay · Stripe | ✅ (live when keys set) |
+| Payments — TnG · BTCPay · Stripe | ✅ (live when keys set) |
 | Income connectors, Automator, Stream catalog, classifications | ✅ |
 | Finance tracker + Holdings editor | ✅ |
 | Production deployment (Docker · PM2 · systemd + reverse proxy) | ✅ |

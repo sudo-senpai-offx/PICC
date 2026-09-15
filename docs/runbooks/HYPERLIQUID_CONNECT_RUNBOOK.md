@@ -221,9 +221,115 @@ report gate truth. Carrier A per §5 if the owner chooses automation.
   blocked on ≥$10 USDC sitting on Arbitrum in Rabby.
 - ✅ **Funding route decided (2026-09-06):** Route B — owner's bank account rails for this one-time
   fund (§4). Scaling responsibility delegated to the PICC executor under §10 discipline.
-- ⏳ **Blocked on the owner:** (1) complete the chosen funding leg — Route D (Transak) or Route C
-  (Hata, after in-app USDC + network confirmation) — so ≥ $10 USDC sits on Arbitrum in Rabby;
-  (2) run the wizard (§6); (3) execute the rung-1 live verify (Carrier B per §5/§10).
+- ✅ **Hata KYC cleared + first funded balance (2026-09-11, user report):** the user deposited via
+  **eWallet** (worked flawlessly; the *bank* has issues with it — but the user does not need
+  bank↔eWallet transfers, so the bank is out of the loop entirely) and the wallet shows
+  **RM60.08**. This is the **first cleared rail** (Transak card rail was bank-blocked; Luno
+  verification is still queued). **Correction (2026-09-11):** the earlier claim that "the bank
+  accepted the FPX deposit on Hata" is WRONG — the funded rail was the eWallet, not FPX, and the
+  Transak-class bank-filter question is moot for funding because eWallet→Hata has no bank in the
+  loop. Future top-ups = eWallet deposits (RM2–1k, ~1.5% convenience fee), repeatable and cheap.
+- ⚠️ **Hata pair list observed (2026-09-11, user paste): ~90 MYR-fiat pairs, ZERO stablecoins.**
+  No USDC, no USDT, no DAI — the full list is XXX/MYR pairs (BTC, ETH, BNB, XRP, SOL, TRX, HYPE,
+  DOGE, LINK, ADA, … FIL; HYPE/MYR is listed). Route C's "buy USDC on Hata" branch is therefore
+  **dead at the asset level** — stablecoins are not listed at all, not just rotated out.
+  What survives is the **ETH-leg fallback on Hata** (buy ETH → withdraw → bridge → swap), which
+  becomes the **lead rail**: SC-regulated, eWallet-proven, KYC-clear. A 1% Instant Buy on ETH
+  (or 0.40% taker on the Exchange) + the ETH withdrawal network fee + mainnet→Arbitrum bridge
+  ($2–6 class via Across/CCTP per 2026 sources) + one Arbitrum DEX swap — see the
+  "ETH-leg landing math" entry below for the current numbers.
+  Third-party estimate (cryptowisser, 2026) puts Hata crypto-withdrawal fees in a ~$10–20/transaction
+  class — treat as an upper-bound caution, verify the actual ETH send fee in-app before buying
+  (superseded by in-app observation, see next entry).
+- ✅ **Hata ETH send page (2026-09-11, user report):** min withdrawal **0.00398508 ETH**
+  (≈ US$8.4), overall network fee **0.00036 ETH** (≈ US$0.76). The fee is far below the
+  cryptowisser $10–20 caution — that caution is now superseded for ETH by in-app observation.
+- ⚠️ **ETH-leg landing math (2026-09-11):** with RM60.08 (≈ US$12.6) buying ETH at Exchange
+  taker 0.40% → ~0.00598 ETH → −0.00036 ETH send fee → ~0.00562 ETH (≈ $11.1) → mainnet→Arbitrum
+  bridge + ETH→USDC swap (−$2…−$6) → **lands ~$5–9 native USDC on Arbitrum**. That clears the
+  5 USDC Hyperliquid deposit minimum in most fee scenarios but NOT the ~$10 venue-minimum order,
+  and leaves only ~2.4× the 0.00398508 ETH min-withdrawal. **Decision: top up ~RM35–40 via
+  eWallet to ~RM96–100 total** → ~0.0096 ETH ≈ $20 → lands ~$13–17 → deposit min ✓, venue-min
+  order ✓, buffer ✓ (matches §4 target ~US$12–15). Buy at Exchange taker 0.40%, NOT Instant Buy
+  1% (2.5× more).
+- ✅ **Top-up done (2026-09-11, user report):** balance now **RM100**; step 1 of the blocked list
+  below is complete. User confirmed the step-2 route: buy ETH on the Hata **Exchange/spot** at
+  taker 0.40% (not Instant Buy 1%), near-full balance (~RM96–99) — orderbook route recorded.
+- ✅ **Path 2 chosen (2026-09-11, owner decision):** the owner selected the **read-only proof
+  path** — buy ETH → withdraw → bridge → swap to native USDC, then wizard stage-4 read-only
+  proof (**propose, do NOT execute**). No live order this round; ~$13–17 stays as USDC on
+  Arbitrum; only $2–6 in bridge fees is spent. Live $10 order deferred until losing it is
+  comfortable for the owner (their only saved money; rung ladder protects scaling).
+- ✅ **Step 2 executed (2026-09-11, observed trade):** spot buy filled on Hata Exchange —
+  RM96.50 → **0.00946200 ETH** (display value ≈RM94.75). Effective rate ≈RM10,199/ETH vs the
+  ~RM10,004 in-app quote — an **≈1.9% slippage/fee band** (spread + taker; exact decomposition
+  UNVERIFIED — no per-line order ticket observed). Clears the 0.00398508 ETH withdrawal minimum
+  by >2×. Step 3 next: withdraw 0.00946200 ETH to Rabby Ethereum mainnet (observed send-page
+  fee 0.00036 ETH → expect ≈0.009102 ETH landing).
+- ✅ **Step 3 landed (2026-09-11, observed):** Rabby wallet shows **$22.44 ≈ 0.0091 ETH** on
+  Ethereum mainnet — withdrawal arrived, network fee charged (0.00946200 − 0.00036 ≈ 0.0091 ✓).
+  Implied ETH price ≈ $2,466 — above the runbook's conservative assumption, so the landing
+  estimate moves up: bridge + swap → **~$16–19 USDC** expected (comfortably above 5 USDC deposit
+  min and ~$10 venue-min order).
+- ⏳ **Step 4 (2026-09-11, refreshed process):** canonical deposit at **bridge.arbitrum.io**
+  (verified 2026-08 docs): Rabby → From Ethereum → To Arbitrum One → ETH → Move funds.
+  ⚠️ **Leave ~0.001–0.0015 ETH on mainnet for L1 gas** — the deposit tx is paid in mainnet ETH;
+  bridge ~0.0075–0.0081 ETH, keep the rest as the gas reserve. Then on Arbitrum swap ETH →**
+  native USDC** (contract `0xaf88d065e77c8cC2239327C5EDb3A432268e5831`) — NOT USDC.e
+  (`0xff970a61a04b1ca14834a43f5de4533ebddb5cc8`), per the USDC-on-Arbitrum-One doc.
+  **Direction trap (2026-09-11, observed):** Rabby's bridge panel defaulted the owner to
+  From=Arbitrum → To=Ethereum+USDC — the reverse of what we need. Use the official bridge
+  (bridge.arbitrum.io: From Ethereum → To Arbitrum One, ETH only), then swap on Arbitrum —
+  two separate steps so the USDC variant stays controlled.
+- ⏳ **Blocked on the owner (2026-09-11):** (4) bridge + swap (above); (5) run the wizard (§6) —
+  fund, API wallet, `.env`, read-only proof; (6) execute the rung-1 live verify (Carrier B
+  per §5/§10).
+- ⚠️ **Scam advisory (2026-09-11, observed):** Rabby received an **unsolicited token** whose
+  metadata points at **claim-usd.com** — a zero-footprint "claim USDC" domain (browser-integrity
+  wall, no search trail, unannounced). Matches the documented fake-airdrop/dusting + wallet-drainer
+  pattern (approve/Permit → sweep; e.g. $908K USDC delayed-drain case). Owner instructed: never
+  connect the funded wallet to it, never sign anything there, hide the token in Rabby, and use no
+  third-party revoke sites. Receiving the token is harmless; interacting is the entire attack.
+- 🔧 **"Must deposit before performing actions" diagnosed (2026-09-11, verified):** API-key
+  creation failed; Hyperliquid error cites `0xae1e1cc70f3207f6821f879d25c216f45fc4d6a2`.
+  Verified via Hyperliquid info API (spot balances = 0, ledger updates = empty) and Arbitrum RPC
+  (nonce = 0x1 = only the ETH→USDC swap; USDC balance 19.063422 present in Rabby). **The deposit
+  transaction was never sent** — swap ≠ deposit. Fix: deposit via app.hyperliquid.xyz Deposit
+  flow (Arbitrum, native USDC, same wallet), wait ~1 min, then re-create the API wallet. Do NOT
+  raw-transfer USDC to the Bridge2 contract address.
+- ✅ **Deposit done + API wallet created (2026-09-11, user report):** deposit executed via
+  app.hyperliquid.xyz (Arbitrum, native USDC); Rabby address auto-appeared in API wallet
+  settings. ⚠️ **API-wallet key TTL = 14 days (observed in app UI)** — the private key
+  self-expires; credential renewal (new API wallet → update
+  `PICC_CCXT_WALLETADDRESS_HYPERLIQUID`/`PICC_CCXT_PRIVATEKEY_HYPERLIQUID` → restart server)
+  is a scheduled ~14-day operation. Safety-positive (stolen keys self-expire), but the server
+  cannot run forever on one credential. **If the one-time private key was not captured at
+  creation, create a NEW API wallet** — the old key is unrecoverable. Verify Withdrawals = OFF
+  before `.env` (non-negotiable, §8).
+- 🔧 **"Cannot use existing user address as agent" (2026-09-11, observed):** using the Rabby main
+  address as the API-wallet (agent) address is rejected by Hyperliquid **by design** — an API
+  wallet is a separately generated keypair. At `app.hyperliquid.xyz/API` click **Generate**: the
+  app creates a fresh random agent address (the SDK asserts "you should not create an agent using
+  an agent"); copy the one-time private key immediately (shown once, unrecoverable). Any earlier
+  row whose "API Wallet Address" column shows your own Rabby address is a failed self-referential
+  attempt — revoke it and Generate. `.env` semantics: `PICC_CCXT_WALLETADDRESS_HYPERLIQUID` =
+  **main account** address (0xae1e1c…, "the account's public address must be used for info
+  requests"), `PICC_CCXT_PRIVATEKEY_HYPERLIQUID` = **agent** private key (view/trade only, never
+  withdraw). The Rabby wallet's own private key must never enter `.env` or any server; if it was
+  ever pasted anywhere, treat it as exposed.
+- ✅ **`.env` credential pair set (2026-09-11, verified):**
+  `PICC_CCXT_WALLETADDRESS_HYPERLIQUID` = main account `0xae1e1c…d6a2`;
+  `PICC_CCXT_PRIVATEKEY_HYPERLIQUID` = API wallet "PICC" agent key (agent address
+  `0xdD49AD…` is NOT stored — ccxt derives the signer from the key; only the main
+  account address goes in WALLETADDRESS, per the installed ccxt build where all
+  hyperliquid reads default to `this.walletAddress`). Read-only probe passed:
+  **equity read ok → 18.86 USDC** (Δ≈0.20 vs 19.0634 recorded right after the swap —
+  exact composition UNVERIFIED, no trade witnessed between observations); key derives
+  to the pasted agent address ✓. Server restart + wizard stage-4 read-only proof still
+  pending. Agent-key authorization on the venue is only provable by a signed write —
+  deferred to Carrier B live verify (path 2). **Security note: the agent key was
+  pasted into chat (2026-09-11); bounded risk (no-withdraw key, 14-day TTL); owner may
+  regenerate free at any time (Generate → update `.env` → restart).**
 - 🔲 Slice 7 (ExpertOption ExpertBot demo logic) remains a future post-brainstorm, tracked
   separately from this runbook.
 

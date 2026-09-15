@@ -118,8 +118,8 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                         │   Hybrid cloud LLM (Gemini→Groq→Mistral→
                                                         │     Cerebras→OpenAI failover, no card)
                                                         │   Serper (live news/search)
-                                                        │   Payments: PayPal | Touch 'n Go |
-                                                        │     BTCPay | Stripe (owner's wallet)
+│   Payments: Touch 'n Go |
+                                                         │     BTCPay | Stripe (owner's wallet)
                                                         │   107 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
 Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
@@ -153,7 +153,7 @@ realtime, spread, portfolio, session-policy, capture-session, capture-config, he
 account-metrics, health, ledger/stats, walk-forward, export, correlation, indicators, brokers,
 feed-mode, paper/overview, models/explain) · Command Centre `/api/command-centre/overview|
 kill-switch|claims|execute|orders` (orders family: GET list · POST propose · POST execute ·
-POST verify) · Billing `/api/stripe/*`, `/api/paypal/*`,
+POST verify) · Billing `/api/stripe/*`,
 `/api/billing/ewallet/*`, `/api/btcpay/*` · Automator `/api/automator/status|health|assist` ·
 Connectors `/api/connectors`, `/api/connectors/:slug/collect|history|stream` · Browser
 `/api/browser/capture-session|metrics` · Data `/api/data/financial_accounts|transactions` ·
@@ -169,7 +169,7 @@ Health `/api/health`.
   (`sanitizeUpstreamFrame`: action/asset/name caps, candle cap, size ≤ 4096) → `chromeGuard()`
   teardown → server discovery (`127.0.0.1` + `localhost`, :5173/:3000, every 15 s) → flush batches
   (≤120) every 2 s; offline → queue (cap 400), flush on reconnect.
-- **Billing** — PayPal (create→hosted approval→capture re-checks id/amount/tier) · TnG manual
+- **Billing** — TnG manual
   e-wallet (receipt self-confirm, owner-scoped, `selfApprove` only in single-owner demo mode) ·
   BTCPay (invoice metadata `{userId, tier}` → grant on settle) · Stripe (checkout + webhook →
   service-role profile sync). Every path writes `profiles.subscription_tier/status` + audit row in
@@ -257,7 +257,7 @@ unless `isDemo:true`).
 (versioned templates, see §21 patterns) · `llm` hybrid failover (LLM_PROVIDERS order) ·
 `llmSettings` · `forecast`.
 
-**Billing & payments (4):** `stripe` · `paypal` · `ewallet` · `btcpay` (metadata round-trip; tier
+**Billing & payments (3):** `stripe` · `ewallet` · `btcpay` (metadata round-trip; tier
 restricted to pro/business).
 
 **Observability & UI data (8):** `health`-equivalent status surfaces via handlers ·
@@ -316,17 +316,16 @@ compact mobile tier (≤560px), `prefers-reduced-motion`, full ARIA semantics (D
 
 ## §7 Payments & Billing
 
-Four paths, all Supabase-JWT-authed, money to the owner's own wallet (no bank account, no business
+Three paths, all Supabase-JWT-authed, money to the owner's own wallet (no bank account, no business
 registration):
 
-1. **PayPal** — create-order → hosted approval → server capture re-checks id/amount/tier → grants.
-2. **Touch 'n Go e-wallet (manual)** — order returns amount/instructions/`PICC-XXXX` ref; receipt
+1. **Touch 'n Go e-wallet (manual)** — order returns amount/instructions/`PICC-XXXX` ref; receipt
    self-confirm; owner-scoped; `selfApprove` only in single-owner/no-accounts demo mode (D3).
-3. **BTCPay** — self-hosted, no KYC; invoice metadata `{userId, tier}` round-trip (D4); local node
+2. **BTCPay** — self-hosted, no KYC; invoice metadata `{userId, tier}` round-trip (D4); local node
    bundled at `127.0.0.1:23000`; Oracle VPS mainnet option **abandoned** (region denies Always
    Free) — mainnet runs on own PC (`NBITCOIN_NETWORK=mainnet`, prune=50000, assumevalid v29.2
    block 886157).
-4. **Stripe** — checkout + webhook → profile sync via service-role; `stripeCustomerForUser()`
+3. **Stripe** — checkout + webhook → profile sync via service-role; `stripeCustomerForUser()`
    server-side resolution (D2 — client-supplied `customerId` never trusted).
 
 Audit posture: BTCPay grant branch was unreachable (`info.userId/tier` never returned) — fixed
@@ -764,7 +763,7 @@ labels; LiveBroker read-only contract vs (future) BrokerAdapter execution contra
 - Supabase: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
 - LLM: `GEMINI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`,
   `LLM_PROVIDERS` (default `gemini,groq,mistral,cerebras,openai`), `SERPER_API_KEY`.
-- Payments: `PAYPAL_CLIENT_ID/SECRET`, `PAYPAL_MODE` (sandbox default), `EWALLET_TNG_NUMBER`,
+- Payments: `EWALLET_TNG_NUMBER`,
   `BTCPAY_URL/API_KEY/STORE_ID`, `STRIPE_SECRET_KEY/WEBHOOK_SECRET/PRICE_PRO/PRICE_BUSINESS`.
 - Amazon SP-API: `SP_AMAZON_*` (CLIENT_ID/SECRET, REFRESH_TOKEN, ACCESS_KEY, SECRET_KEY,
   MARKETPLACE default US).
