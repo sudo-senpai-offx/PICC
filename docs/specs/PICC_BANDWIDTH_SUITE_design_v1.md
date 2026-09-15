@@ -1,6 +1,6 @@
 # Bandwidth Command-Centre Suite — Design v1
 
-**Status:** Draft for approval · **Date:** 2026-09-06
+**Status:** REJECTED (struck by owner decision 2026-09-15 — see [ADR-0002](../adr/0002-bandwidth-suite-rejected.md): not profitable in the user's real segment) · **Date:** 2026-09-06
 **Extends:** executed Q5 income generalization (`docs/specs/PICC_INCOME_GENERALIZATION_*`) · Command Centre slices 1–6 (`COMMAND_CENTRE_WEB_SPEC.md`) · Automator collectors (`apps/dashboard/server/services/automator.mjs`) · extension income leg (`apps/dashboard/extensions/picc-overlay/`)
 **Supersedes:** nothing destructive — extends only. Trading suite (`HYPERLIQUID_CONNECT_RUNBOOK.md`) is unaffected and stays in flight.
 **Grounding rule:** every claim carries a file:line read this session. Anything only seen via grep (function bodies not yet read) is marked **UNVERIFIED** and must be re-read at execution start.
