@@ -128,7 +128,6 @@ const deadline = started + 15000
       line("LLM rotation", p.llm, p.llmProviders?.join(", ") || "add any key in .env")
       line("Serper research", p.serper, "")
       line("Stripe", p.stripe, "")
-      line("PayPal", p.paypal, "")
       line("BTCPay checkout", p.btcpay, btcpay.ok ? "" : "node unreachable")
       line("eWallet (TNG)", p.ewallet, "")
       line("Agents", agentsProbe.ok, agentsUrl ? (agentsProbe.ok ? "online" : "not responding") : "not configured")

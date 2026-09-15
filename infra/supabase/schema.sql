@@ -202,11 +202,11 @@ create table if not exists public.depin_holdings (
 create index if not exists depin_holdings_user_idx on public.depin_holdings (user_id, created_at desc);
 
 -- ---------------------------------------------------------------------
--- Payment orders (PayPal, manual e-wallets, BTCPay — no bank needed)
--- provider: paypal | ewallet_gcash | ewallet_maya | ewallet_tng | btcpay
+-- Payment orders (manual e-wallets, BTCPay — no bank needed)
+-- provider: ewallet_gcash | ewallet_maya | ewallet_tng | btcpay
 -- status: awaiting_payment | submitted | granted | failed
--- reference: PayPal order id / e-wallet PICC-XXXX code / BTCPay invoice id
--- confirm_ref: PayPal capture id / e-wallet confirmation code / BTCPay invoice id
+-- reference: e-wallet PICC-XXXX code / BTCPay invoice id
+-- confirm_ref: e-wallet confirmation code / BTCPay invoice id
 -- ---------------------------------------------------------------------
 create table if not exists public.payment_orders (
   id uuid primary key default gen_random_uuid(),

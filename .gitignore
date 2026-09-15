@@ -32,6 +32,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+logs/
 
 # Runtime data (per-service data dirs: snapshots, command-centre state, credentials)
 apps/dashboard/server/data/
