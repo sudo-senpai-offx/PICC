@@ -9,21 +9,18 @@ export const INNER_NAV: Record<string, { to: string; label: string }[]> = {
     { to: "autopilot", label: "Autopilot" },
     { to: "command-centre", label: "Command Centre" },
     { to: "simulator", label: "Simulator" },
-    { to: "settings", label: "Settings" },
-    { to: "studio", label: "Browser Studio" }
+    { to: "settings", label: "Settings" }
   ],
   earnings: [
     { to: "dashboard", label: "Dashboard" },
     { to: "simulator", label: "Simulator" },
-    { to: "settings", label: "Settings" },
-    { to: "studio", label: "Browser Studio" }
+    { to: "settings", label: "Settings" }
   ],
   intelligence: [
     { to: "dashboard", label: "Dashboard" },
     { to: "governor", label: "Governor" },
     { to: "guidance", label: "Guidance" },
-    { to: "settings", label: "Settings" },
-    { to: "studio", label: "Browser Studio" }
+    { to: "settings", label: "Settings" }
   ]
 }
 

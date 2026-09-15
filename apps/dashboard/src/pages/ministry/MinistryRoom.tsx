@@ -10,7 +10,6 @@ import { SimulatorRoom } from "./SimulatorRoom"
 import { SettingsRoom } from "./SettingsRoom"
 import { EarningsDashboardRoom, EarningsSimulatorRoom, EarningsSettingsRoom } from "./EarningsRooms"
 import { IntelligenceDashboardRoom, IntelligenceGovernorRoom, IntelligenceGuidanceRoom, IntelligenceSettingsRoom } from "./IntelligenceRooms"
-import { StudioPage } from "@/pages/StudioPage"
 
 const TRADING_ROOMS: Record<string, React.FC> = {
   dashboard: DashboardRoom,
@@ -20,14 +19,12 @@ const TRADING_ROOMS: Record<string, React.FC> = {
   "command-centre": CommandCentreRoom,
   simulator: SimulatorRoom,
   settings: SettingsRoom,
-  studio: StudioPage,
 }
 
 const EARNINGS_ROOMS: Record<string, React.FC> = {
   dashboard: EarningsDashboardRoom,
   simulator: EarningsSimulatorRoom,
   settings: EarningsSettingsRoom,
-  studio: StudioPage,
 }
 
 const INTELLIGENCE_ROOMS: Record<string, React.FC> = {
@@ -35,7 +32,6 @@ const INTELLIGENCE_ROOMS: Record<string, React.FC> = {
   governor: IntelligenceGovernorRoom,
   guidance: IntelligenceGuidanceRoom,
   settings: IntelligenceSettingsRoom,
-  studio: StudioPage,
 }
 
 const MINISTRY_ROOMS: Record<string, Record<string, React.FC>> = {
