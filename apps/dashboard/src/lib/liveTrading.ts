@@ -315,6 +315,25 @@ export interface ConvergencePlane {
   votes: Record<string, ConvergenceDimensionVote>
 }
 
+/**
+ * The additive regime-engine block (B-REG-3): how the convergence read was
+ * modulated. `applied` false (or `mode: "off"`) with `labels: null` means the
+ * regime was advisory only — the weights/conservative flag shown came from the
+ * preset, NOT from this regime read (R1 honesty).
+ */
+export interface RegimeBlock {
+  regime: string
+  volatile: boolean
+  confidence: number | null
+  factors: string[]
+  perPlane?: Record<string, unknown>
+  latency?: { planes: number[]; minBars: number } | null
+  legacy?: string | null
+  mode: "soft" | "hard" | "off"
+  applied: boolean
+  labels: { suffix: string } | null
+}
+
 export interface ConvergenceResult {
   ok: boolean
   assetId?: string | null
@@ -339,6 +358,8 @@ export interface ConvergenceResult {
   state: ConvergenceState
   why: string | string[]
   planes: ConvergencePlane[]
+  /** Additive regime-engine block (B-REG-3/5) — absent on older snapshots. */
+  regime?: RegimeBlock | null
 }
 
 /**

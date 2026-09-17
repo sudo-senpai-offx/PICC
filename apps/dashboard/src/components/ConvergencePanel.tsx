@@ -5,10 +5,11 @@ import {
   fmt,
   headerMetric,
   NDA,
+  regimeBadge,
   stateTone,
   whyText
 } from "@/lib/convergenceDisplay"
-import type { ConvergenceState } from "@/lib/liveTrading"
+import type { ConvergenceState, RegimeBlock } from "@/lib/liveTrading"
 
 /**
  * MTF Convergence read for the viewed asset (spec 7c): per-plane matrix
@@ -25,6 +26,29 @@ function stateBadge(state: string) {
 function signCell(sign: "▲" | "▼" | "·" | "—", tone: "up" | "down" | "flat" | "none") {
   const color = tone === "up" ? "var(--success)" : tone === "down" ? "var(--danger)" : "var(--text-muted)"
   return <span style={{ color, fontWeight: 700 }}>{sign}</span>
+}
+
+/**
+ * The additive regime-engine chip (B-REG-5): regime + confidence + factor
+ * line, with an honest "advisory, not applied" tag whenever the regime read
+ * did NOT modulate the displayed weights. A missing/empty block renders as
+ * "unknown" — never a zero-confidence reading (R10).
+ */
+export function RegimeBadge({ block }: { block: RegimeBlock | null | undefined }) {
+  const b = regimeBadge(block)
+  return (
+    <div className="row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <Badge tone={b.tone}>{b.text}</Badge>
+        {b.tag && <Badge tone="muted">{b.tag}</Badge>}
+      </div>
+      {b.factors.length > 0 && (
+        <div className="muted small" style={{ flex: "1 1 auto", minWidth: 180, textAlign: "right" }}>
+          {b.factors.join(" · ")}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function ConvergencePanel() {
@@ -72,6 +96,13 @@ export function ConvergencePanel() {
           {whyText(c) !== NDA && (
             <div className="muted small" style={{ marginBottom: 8 }}>
               {whyText(c)}
+            </div>
+          )}
+
+          {/* Regime engine read (B-REG-5): additive, honest when absent/off */}
+          {c.regime !== undefined && (
+            <div style={{ marginBottom: 10, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+              <RegimeBadge block={c.regime} />
             </div>
           )}
 

@@ -107,6 +107,14 @@ let captureGate = null // { venueId, proposalId, status: "pending"|"approved"|"r
 // stays clean and the bell only ever sees the summary.
 let tradeGate = null // { proposalId, status: "pending"|"approved"|"rejected"|"interrupted", order }
 
+// B-EXE-1 (D4) — suite proposal anti-spam: one proposal per asset per 15
+// minutes, mirroring autopilot's cooldownMs (autopilot.mjs:49). The U4FA
+// factory needs no such map — its 10/day + post-loss throttles already live in
+// u4faRisk.mjs — the suite factory sizes from the user's riskPerTradePct
+// context instead, so it carries its own per-asset guard.
+const SUITE_PROPOSAL_COOLDOWN_MS = 15 * 60 * 1000
+let lastSuiteProposalAt = new Map() // assetId (upper) -> last proposal createdAt
+
 function currentState() {
   return {
     ok: true,
@@ -476,10 +484,118 @@ export async function proposeTrade(order = {}, opts = {}) {
   return { ok: true, id: p.id, status: "pending", amount, floorApplied: size.floorApplied, dayKey: gate.dayKey }
 }
 
+/**
+ * B-EXE-1 — SUITE proposal factory (D4), beside the U4FA path. A suite verdict
+ * (B-FUS confluence layers) proposes a PAPER trade through the SAME tradeGate
+ * machinery as proposeTrade above: approve → exactly one openPaperTrade,
+ * reject → zero, duplicate respond → loud throw (T11 semantics).
+ *
+ * Suite-specific guards (spec D4 glue + honesty contract):
+ *   - shape is `{ assetId, side, reason, verdict, entry, opts }` — assetId is
+ *     the suite catalog id, side is up|down;
+ *   - `reason` is a HUMAN-readable sentence from the suite report. Required:
+ *     a proposal without a readable reason is proposal spam and throws loudly
+ *     (never a silent skip);
+ *   - the verdict's own gates are NOT bypassed: only a tradeable BUY/SELL
+ *     suite read may propose. A NEUTRAL/ranging/absent verdict throws; the
+ *     side and the verdict must agree;
+ *   - an observable entry price is required (mirror proposeU4faTrades: "no
+ *     observable entry price -> no proposal");
+ *   - per-asset 15-min proposal cooldown (mirror cooldownMs autopilot.mjs:49)
+ *     stops the suite path from re-proposing to the same human on every poll;
+ *   - amount defaults from the user's `riskPerTradePct` context (trading.mjs
+ *     getCredentials, default 2, clamped 1..20), NOT the U4FA 0.5% knob, and
+ *     the u4faRisk quota ledger is NEVER consumed by this path.
+ */
+export async function proposeSuiteTrade(input = {}, opts = {}) {
+  const now = opts?.now ?? Date.now()
+  const symbol = String(input.assetId || "").toUpperCase()
+  const direction = String(input.side || "")
+  if (!symbol) throw new Error("suite trade proposal needs an assetId")
+  if (!["up", "down"].includes(direction)) throw new Error("suite trade proposal needs side up|down")
+  if (typeof input.reason !== "string" || !input.reason.trim()) throw new Error("suite trade proposal needs a human-readable reason")
+
+  const verdictText = String(input.verdict?.verdict ?? input.verdict ?? "").toUpperCase()
+  if (!["BUY", "SELL"].includes(verdictText)) {
+    throw new Error(`suite trade proposal needs a tradable verdict (got "${verdictText || "none"}")`)
+  }
+  if ((direction === "up") !== (verdictText === "BUY")) {
+    throw new Error(`suite trade proposal direction/verdict mismatch (side ${direction} vs verdict ${verdictText})`)
+  }
+
+  const entryPrice = Number(input.entry)
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+    throw new Error("suite trade proposal needs a valid entry price")
+  }
+
+  if (tradeGate && tradeGate.status === "pending") {
+    return { ok: true, id: tradeGate.proposalId, status: "pending", duplicate: true }
+  }
+
+  const lastAt = lastSuiteProposalAt.get(symbol) || 0
+  if (now - lastAt < SUITE_PROPOSAL_COOLDOWN_MS) {
+    const waited = Math.floor((now - lastAt) / 60000)
+    return {
+      ok: false,
+      status: "blocked",
+      reason: `per-asset suite proposal cooldown (${waited}m of 15m)`,
+      retryAfterMs: SUITE_PROPOSAL_COOLDOWN_MS - (now - lastAt)
+    }
+  }
+
+  const feeds = await tradeRiskFeeds()
+  if (!feeds) return { ok: false, status: "blocked", reason: "risk feed unavailable" }
+
+  let riskPct = 2
+  try {
+    const { getCredentials } = await import("./trading.mjs")
+    const creds = await getCredentials()
+    riskPct = Math.min(20, Math.max(1, Number(creds?.riskPerTradePct) || 2))
+  } catch {
+    /* default riskPerTradePct stands */
+  }
+  const balance = Number(feeds.balance) || 0
+  const defaultAmount = Math.max(1, Math.min(Math.round(balance * (riskPct / 100) * 100) / 100, balance))
+  const amount = opts?.amount != null && Number.isFinite(Number(opts.amount)) && Number(opts.amount) > 0
+    ? Math.round(Number(opts.amount) * 100) / 100
+    : defaultAmount
+
+  const detail = `${input.reason.trim()} — stake $${amount.toFixed(2)} (${riskPct}% riskPerTradePct of $${balance.toFixed(2)} paper). PAPER ONLY: approving places a demo order; nothing touches a real account.`
+  const p = newProposal({
+    workflow: { id: "suite-trade", name: "Suite signal" },
+    tabId: null,
+    step: {
+      type: "order",
+      label: `Suite ${direction} ${symbol}`,
+      risk: "high",
+      message: detail
+    },
+    stepIndex: 0
+  })
+  p.source = "trade" // pendingTradeProposals + bell filter both key on this
+  tradeGate = {
+    proposalId: p.id,
+    status: "pending",
+    order: {
+      symbol,
+      side: direction,
+      entry: Math.round(entryPrice * 1e6) / 1e6,
+      amount,
+      takeProfit: null,
+      stopLoss: null,
+      signalId: opts?.signalId || null
+    }
+  }
+  lastSuiteProposalAt.set(symbol, now)
+  emit()
+  return { ok: true, id: p.id, status: "pending", amount, source: "trade", workflowName: "Suite signal" }
+}
+
 /** Test seam + engine reset — drops the trade gate + its proposals. */
 export function _resetTradeGate() {
   tradeGate = null
   proposals = proposals.filter((x) => x.source !== "trade")
+  lastSuiteProposalAt = new Map()
 }
 
 /**

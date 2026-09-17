@@ -5,11 +5,13 @@ import {
   fmt,
   headerMetric,
   NDA,
+  regimeBadge,
+  regimeTone,
   stateTone,
   tfLabel,
   whyText
 } from "@/lib/convergenceDisplay"
-import type { ConvergencePlane, ConvergenceResult } from "@/lib/liveTrading"
+import type { ConvergencePlane, ConvergenceResult, RegimeBlock } from "@/lib/liveTrading"
 
 const plane = (overrides: Partial<ConvergencePlane>): ConvergencePlane => ({
   tf: 60,
@@ -123,5 +125,48 @@ describe("convergence display mapping (7c)", () => {
     expect(stateTone("NO TRADE")).toBe("muted")
     expect(stateTone("WAIT")).toBe("muted")
     expect(fmt(null, 2)).toBe(NDA)
+  })
+})
+
+describe("regime badge mapping (B-REG-5)", () => {
+  const block = (overrides: Partial<RegimeBlock>): RegimeBlock => ({
+    regime: "TRENDING",
+    volatile: false,
+    confidence: 100,
+    factors: ["plane 3600 choppiness: trend", "plane 3600 adx: trend"],
+    mode: "soft",
+    applied: true,
+    labels: { suffix: "regime:trending" },
+    ...overrides
+  })
+
+  it("renders regime + confidence (+volatile) and passes the factor line through", () => {
+    const b = regimeBadge(block({ volatile: true, confidence: 82 }))
+    expect(b.text).toBe("TRENDING · 82% · volatile")
+    expect(b.tone).toBe("success")
+    expect(b.factors).toHaveLength(2)
+    expect(b.tag).toBeNull()
+  })
+
+  it("null / missing / malformed blocks render as the status 'unknown' — never 0 or empty", () => {
+    expect(regimeBadge(null)).toMatchObject({ text: "unknown", tone: "muted", factors: [], tag: null })
+    expect(regimeBadge(undefined)).toMatchObject({ text: "unknown", tone: "muted" })
+    expect(regimeBadge(block({ regime: "", confidence: 100 }))).toMatchObject({ text: "unknown" })
+    expect(regimeBadge(block({ regime: "RANGING", confidence: null }))).toMatchObject({ text: "unknown" })
+    // a real read with confidence 0 is still a real read — shown as 0%, NOT erased
+    expect(regimeBadge(block({ regime: "RANGING", confidence: 0 })).text).toBe("RANGING · 0%")
+  })
+
+  it("mode off (or applied:false) surfaces the 'advisory, not applied' tag", () => {
+    expect(regimeBadge(block({ mode: "off", applied: false, labels: null })).tag).toBe("advisory, not applied")
+    expect(regimeBadge(block({ applied: false })).tag).toBe("advisory, not applied")
+    expect(regimeBadge(block({ mode: "soft", applied: true })).tag).toBeNull()
+  })
+
+  it("tone vocabulary is deterministic per regime label", () => {
+    expect(regimeTone("TRENDING")).toBe("success")
+    expect(regimeTone("RANGING")).toBe("muted")
+    expect(regimeTone("UNCERTAIN")).toBe("warn")
+    expect(regimeTone("unknown")).toBe("warn")
   })
 })

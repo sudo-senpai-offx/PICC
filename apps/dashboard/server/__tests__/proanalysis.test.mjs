@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { proAnalyzeCandles, summarizeProAnalysis } from "../services/proanalysis.mjs"
+import {
+  proAnalyzeCandles,
+  buildConfluence,
+  summarizeProAnalysis,
+  proAnalyzeSymbol,
+  proAnalyzeExpertOption
+} from "../services/proanalysis.mjs"
 import { chatText, llmConfigured } from "../services/llm.mjs"
+import { getHistory } from "../services/yahoo.mjs"
+import { getCredentials } from "../services/trading.mjs"
+import { connectSession } from "../services/expertoption.mjs"
 
 vi.mock("../services/llm.mjs", async (importOriginal) => {
   const actual = await importOriginal()
@@ -9,6 +18,16 @@ vi.mock("../services/llm.mjs", async (importOriginal) => {
     llmConfigured: vi.fn(() => false),
     chatText: vi.fn(async () => "Mocked LLM narrative.")
   }
+})
+
+// B-FUS-2 fixture sources: the entry points must never hit the real network.
+vi.mock("../services/yahoo.mjs", () => ({ getHistory: vi.fn() }))
+vi.mock("../services/trading.mjs", () => ({
+  getCredentials: vi.fn(async () => ({ expertoptionToken: "tok-demo", expertoptionDemo: true, expertoptionWsUrl: "ws://127.0.0.1:1" }))
+}))
+vi.mock("../services/expertoption.mjs", async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, connectSession: vi.fn() }
 })
 
 beforeEach(() => {
@@ -159,5 +178,239 @@ describe("summarizeProAnalysis", () => {
   it("rejects a malformed report", async () => {
     const out = await summarizeProAnalysis({ ok: false })
     expect(out.ok).toBe(false)
+  })
+})
+
+describe("buildConfluence fusion layers (B-FUS-1)", () => {
+  // Minimal but complete confluence input: every dashboard read the builder
+  // touches is present; analytics are null-ish so legacy items abstain honestly;
+  // the range phase exercises the isRange branches.
+  function confluenceInput(closes) {
+    const dash = {
+      linearRegression: { slopePct: null, r2: null },
+      alligator: { bull: null, label: "" },
+      macd: { line: null, zero: "", hist: null, cross: "" },
+      psar: { trend: "" },
+      aroon: { osc: 0, read: "" },
+      adx: { plusDI: null, minusDI: null },
+      rsi: { value: null, read: "" },
+      stochRSI: { k: null, read: "" },
+      stochastic: { cross: "" },
+      awesome: { value: 0, read: "" },
+      cci: { value20: null, read: "" },
+      williamsR: null,
+      cmo: null,
+      roc: null,
+      momentum: null,
+      apo: null,
+      bollinger: { percentB: null, bandwidth: null, lower: null, upper: null, mid: null },
+      atr: { value: null },
+      phase: { volatilityPercentile: null, persistenceLabel: "" }
+    }
+    return {
+      dash,
+      series: { closes, ema20: [], ema50: [], ema200: [], psarTrend: "", vwapNow: null },
+      phase: { phase: "quiet_range", label: "Range", strategy: {} },
+      last: closes.length - 1,
+      close: closes[closes.length - 1]
+    }
+  }
+
+  const closes = trendSeries(100, 0.002, 400)
+  const base = buildConfluence(confluenceInput(closes))
+  const regimeItems = [
+    { name: "regime 3600s", weight: 1, bull: 0.8, read: "TRENDING · conf 0.81 · volatile", source: "regimeEngine" },
+    { name: "regime 900s", weight: 1, bull: -0.4, read: "RANGING · conf 0.62", source: "regimeEngine" }
+  ]
+  const mtfItems = [
+    { name: "mtf 3600s", weight: 0.8, bull: 1, read: "composite LONG · score5 4/5", source: "liveEO-buffers" }
+  ]
+
+  it("without a layers argument keeps the legacy three groups and score", () => {
+    expect(base.groups.map((gr) => gr.id)).toEqual(["trend", "momentum", "volatility"])
+    expect(base.groups).toHaveLength(3)
+    expect(Number.isFinite(base.score)).toBe(true)
+  })
+
+  it("shows honest observed:false groups when layer input is absent", () => {
+    const r = buildConfluence({ ...confluenceInput(closes), layers: { regime: [], mtf: null } })
+    expect(r.groups.map((gr) => gr.id)).toEqual(["trend", "momentum", "volatility", "regimeLayer", "mtfLayer"])
+    for (const gr of r.groups.slice(3)) {
+      expect(gr).toMatchObject({ weight: 0, score: 0, evidence: [], observed: false })
+    }
+    // scoreGroup skips them — the blend sum is unchanged.
+    expect(r.score).toBe(base.score)
+    expect(r.direction).toBe(base.direction)
+  })
+
+  it("drops abstaining items into observed:false and never fakes a read", () => {
+    const r = buildConfluence({
+      ...confluenceInput(closes),
+      layers: {
+        regime: [{ name: "regime 3600s", weight: 1, bull: 0, read: "MIN_BARS abstention", source: "regimeEngine" }]
+      }
+    })
+    const layer = r.groups.find((gr) => gr.id === "regimeLayer")
+    expect(layer).toMatchObject({ score: 0, evidence: [], observed: false })
+    expect(r.score).toBe(base.score)
+  })
+
+  it("surfaces observed layer evidence with its source labels, documentary only", () => {
+    const r = buildConfluence({ ...confluenceInput(closes), layers: { regime: regimeItems, mtf: mtfItems } })
+    const regime = r.groups.find((gr) => gr.id === "regimeLayer")
+    const mtf = r.groups.find((gr) => gr.id === "mtfLayer")
+    expect(regime.observed).toBe(true)
+    expect(regime.score).toBeCloseTo(0.2) // (0.8 + (-0.4)) / 2
+    expect(regime.evidence).toEqual(regimeItems)
+    expect(regime.evidence.every((e) => e.source === "regimeEngine")).toBe(true)
+    expect(mtf.observed).toBe(true)
+    expect(mtf.score).toBeCloseTo(1)
+    expect(mtf.evidence[0].source).toBe("liveEO-buffers")
+    expect(mtf.evidence[0].read).toBe(mtfItems[0].read)
+    // The layers never enter the blend: the classic score stays put.
+    expect(r.score).toBe(base.score)
+  })
+})
+
+describe("fusion-layer wiring (B-FUS-2)", () => {
+  // Turn deterministic candles into the normalized shape yahoo.mjs getHistory
+  // returns, so the entry point stays fixture-driven — never the real network.
+  function historyFrom(candles, symbol = "TEST", name = "Test Asset") {
+    return {
+      closes: candles.map((c) => c.close),
+      opens: candles.map((c) => c.open),
+      highs: candles.map((c) => c.high),
+      lows: candles.map((c) => c.low),
+      volumes: candles.map((c) => c.volume),
+      dates: candles.map((c) => c.time),
+      symbol,
+      name,
+      currency: "USD",
+      lastPrice: candles[candles.length - 1]?.close ?? null
+    }
+  }
+
+  it("Yahoo path: wires regime + MTF layers from fetched history, one network call only", async () => {
+    const candles = candlesFromSeries(trendSeries(100, 0.002, 400))
+    vi.mocked(getHistory).mockResolvedValue(historyFrom(candles))
+
+    const r = await proAnalyzeSymbol("TEST")
+
+    expect(getHistory).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(true)
+    expect(r.platform).toBe("Yahoo")
+    expect(r.confluence.groups.map((g) => g.id)).toEqual(["trend", "momentum", "volatility", "regimeLayer", "mtfLayer"])
+
+    const regime = r.confluence.groups.find((g) => g.id === "regimeLayer")
+    expect(regime.observed).toBe(true)
+    expect(regime.evidence.map((e) => e.name)).toEqual(["regime 1d", "regime 5d"])
+    for (const e of regime.evidence) {
+      expect(e.source).toBe("regimeEngine")
+      expect(e.bull).toBeGreaterThan(0)
+      expect(e.bull).toBeLessThanOrEqual(1)
+      expect(e.read).toContain("TRENDING")
+    }
+
+    const mtf = r.confluence.groups.find((g) => g.id === "mtfLayer")
+    expect(mtf.observed).toBe(true)
+    expect(mtf.evidence.map((e) => e.name)).toEqual(["mtf 1d", "mtf 5d"])
+    expect(mtf.evidence.every((e) => e.source === "liveEO-buffers" && e.bull === 1)).toBe(true)
+    expect(mtf.evidence[0].read).toContain("composite LONG")
+    expect(mtf.evidence[0].read).toMatch(/score5 \d+\/5/)
+    expect(mtf.evidence[0].read).toMatch(/quality \d+\/10/)
+
+    // Layers never enter the blend: the entry point's score, verdict and the
+    // three legacy groups are byte-identical to the no-layers path on the
+    // same candles (spec REQ-R5 / R3).
+    const baseline = proAnalyzeCandles({ candles, symbol: "TEST", timeframe: "1d" })
+    expect(r.confluence.score).toBe(baseline.confluence.score)
+    expect(r.confluence.verdict).toBe(baseline.confluence.verdict)
+    expect(r.confluence.groups.slice(0, 3).map((g) => [g.id, g.score])).toEqual(
+      baseline.confluence.groups.map((g) => [g.id, g.score])
+    )
+
+    // Documentary layers surface in the narrative too. (reasoning lines are
+    // not guaranteed to be plain strings — phase.strategy may be an object.)
+    expect(JSON.stringify(r.confluence.reasoning)).toContain("Regime layer")
+  })
+
+  it("ExpertOption path: wires layers over liveEO buffers, one candles() call", async () => {
+    // 300 x 60s bars so the 5m sibling (60 bars) clears the 50-bar regression
+    // period and can contribute a directional read; floor for bars is 40.
+    const candles = candlesFromSeries(trendSeries(100, 0.002, 300))
+    const session = {
+      assets: vi.fn(async () => ({ assets: [{ id: "TEST", name: "Test Asset" }] })),
+      candles: vi.fn(async () => ({ closes: candles.map((c) => c.close), ohlc: candles, count: candles.length })),
+      balance: vi.fn(async () => ({ balance: 1000, currency: "USD", demo: true })),
+      close: vi.fn()
+    }
+    vi.mocked(connectSession).mockResolvedValue(session)
+
+    const r = await proAnalyzeExpertOption({ assetId: "TEST", timeframe: 60, count: 300 })
+
+    expect(connectSession).toHaveBeenCalledTimes(1)
+    expect(connectSession).toHaveBeenCalledWith(expect.objectContaining({ token: "tok-demo", isDemo: true }))
+    expect(session.candles).toHaveBeenCalledTimes(1)
+    expect(session.candles).toHaveBeenCalledWith("TEST", 60, 300)
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(true)
+    expect(r.platform).toBe("ExpertOption")
+    expect(r.confluence.groups.map((g) => g.id)).toEqual(["trend", "momentum", "volatility", "regimeLayer", "mtfLayer"])
+
+    const regime = r.confluence.groups.find((g) => g.id === "regimeLayer")
+    expect(regime.observed).toBe(true)
+    expect(regime.evidence.map((e) => e.name)).toEqual(["regime 1m", "regime 5m"])
+
+    const mtf = r.confluence.groups.find((g) => g.id === "mtfLayer")
+    expect(mtf.observed).toBe(true)
+    expect(mtf.evidence.map((e) => e.name)).toEqual(["mtf 1m", "mtf 5m"])
+    expect(mtf.evidence.every((e) => e.source === "liveEO-buffers")).toBe(true)
+  })
+
+  it("thin histories keep only the base plane — the sub-minimum aggregate is not smuggled in", async () => {
+    // 45 daily bars: a valid report (>= 40), but the 5d sibling aggregates to
+    // 9 bars < MIN_BARS(30), so the MTF layer must read the 1d plane only.
+    // The regime layer stays honest too: with a single plane whose only lean
+    // vote is ADX, the engine's consensus is UNCERTAIN (< TREND_MAJORITY=2),
+    // so it reports observed:false rather than a fabricated TRENDING.
+    const candles = candlesFromSeries(trendSeries(100, 0.002, 45))
+    vi.mocked(getHistory).mockResolvedValue(historyFrom(candles))
+
+    const r = await proAnalyzeSymbol("TEST")
+
+    expect(r.ok).toBe(true)
+    expect(getHistory).toHaveBeenCalledTimes(1)
+    const regime = r.confluence.groups.find((g) => g.id === "regimeLayer")
+    const mtf = r.confluence.groups.find((g) => g.id === "mtfLayer")
+    expect(regime).toMatchObject({ observed: false, score: 0, evidence: [] })
+    expect(mtf.evidence.map((e) => e.name)).toEqual(["mtf 1d"])
+  })
+
+  it("unknown intervals render observed:false layers instead of guessing a timeframe", async () => {
+    const candles = candlesFromSeries(trendSeries(100, 0.002, 400))
+    vi.mocked(getHistory).mockResolvedValue(historyFrom(candles))
+
+    const r = await proAnalyzeSymbol("TEST", { interval: "odd" })
+
+    expect(r.ok).toBe(true)
+    expect(r.confluence.groups.map((g) => g.id)).toEqual(["trend", "momentum", "volatility", "regimeLayer", "mtfLayer"])
+    for (const gr of r.confluence.groups.slice(3)) {
+      expect(gr).toMatchObject({ weight: 0, score: 0, evidence: [], observed: false })
+    }
+  })
+
+  it("a ranging market exposes no directional regime evidence — never a fabricated lean", async () => {
+    const candles = candlesFromSeries(randomishSeries(100, 400))
+    vi.mocked(getHistory).mockResolvedValue(historyFrom(candles))
+
+    const r = await proAnalyzeSymbol("TEST")
+
+    expect(r.ok).toBe(true)
+    const regime = r.confluence.groups.find((g) => g.id === "regimeLayer")
+    expect(regime.observed).toBe(false)
+    expect(regime.evidence).toEqual([])
+    expect(regime.score).toBe(0)
+    // The legacy read still computes over the same candles.
+    expect(r.confluence.groups.slice(0, 3).every((g) => Number.isFinite(g.score))).toBe(true)
   })
 })

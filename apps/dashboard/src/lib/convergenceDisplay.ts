@@ -3,7 +3,7 @@
 // React mounting is out of reach, so all render decisions live here and the
 // component stays a dumb consumer). Absent reads render as "—", never 0
 // (R10 honesty: unconfigured ≠ zero-filled).
-import type { ConvergenceResult, ConvergencePlane, ConvergenceState } from "@/lib/liveTrading"
+import type { ConvergenceResult, ConvergencePlane, ConvergenceState, RegimeBlock } from "@/lib/liveTrading"
 
 export interface ConvergenceDisplayRow {
   key: string
@@ -15,6 +15,14 @@ export interface ConvergenceDisplayRow {
   adx: string
   source: string
   stale: boolean
+}
+
+/** The regime-engine badge surface (B-REG-5): one honest chip + factor line. */
+export interface RegimeBadgeDisplay {
+  text: string
+  tone: "success" | "warn" | "muted"
+  factors: string[]
+  tag: string | null
 }
 
 export const NDA = "—"
@@ -77,4 +85,30 @@ export function whyText(r: ConvergenceResult | null): string {
   if (!r) return NDA
   const parts = Array.isArray(r.why) ? r.why : r.why ? [r.why] : []
   return [r.state, ...parts].join(" — ")
+}
+
+/** Deterministic tone for a regimeEngine label (B-REG-5). */
+export function regimeTone(regime: string): "success" | "warn" | "muted" {
+  if (regime === "TRENDING") return "success"
+  if (regime === "RANGING") return "muted"
+  return "warn" // UNCERTAIN / unknown
+}
+
+/**
+ * The additive regime block → badge surface (B-REG-5). Honesty contract (R10):
+ * a missing/empty block renders as the literal status "unknown", NEVER a
+ * zero-confidence claim ("RANGING · 0%") or empty strings. `tag` reads
+ * "advisory, not applied" whenever the read did not modulate the weights
+ * (`mode:"off"`, or `applied:false` from a below-floor soft read) — the
+ * displayed score5/quality/confidence then came from the preset untouched.
+ */
+export function regimeBadge(r: RegimeBlock | null | undefined): RegimeBadgeDisplay {
+  if (!r || typeof r.regime !== "string" || r.regime === "" || !Number.isFinite(r.confidence)) {
+    return { text: "unknown", tone: "muted", factors: [], tag: null }
+  }
+  const vol = r.volatile ? " · volatile" : ""
+  const text = `${r.regime} · ${r.confidence}%${vol}`
+  const factors = Array.isArray(r.factors) ? r.factors.slice(0, 4) : []
+  const tag = r.applied === false ? "advisory, not applied" : null
+  return { text, tone: regimeTone(r.regime), factors, tag }
 }

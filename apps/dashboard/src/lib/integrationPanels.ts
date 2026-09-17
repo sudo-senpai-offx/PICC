@@ -4,7 +4,20 @@
 //   - an empty portfolio renders "no open positions", never a fake zero entry;
 //   - the risk check mirrors the server's allowed/warnings verdict verbatim.
 
-import type { AccountMetricsResult, AggregateResult, SpreadResult, SystemCapabilitiesResult } from "./trading"
+import type { AccountMetricsResult, AggregateResult, AggVenue, PnlSlice, SpreadResult, SystemCapabilitiesResult } from "./trading"
+
+// ---------------------------------------------------------------------
+// B-PAP-2 — grep-auditable bucket labels.
+//
+// Two money buckets exist on every shared surface and are NEVER summed into
+// one number: simulated paper PnL (paperIncome) and live-venue demo PnL
+// (realPnl — the spec's constant name; the venue bucket today is EO demo
+// deals, never real cash — B-PAP-1 audit §2). Surfaces render them as two
+// separately-labeled rows.
+// ---------------------------------------------------------------------
+
+export const paperIncome = "Paper P&L (simulated)"
+export const realPnl = "EO demo P&L"
 
 export type SpreadDisplay =
   | {
@@ -48,7 +61,11 @@ export function spreadPanelModel(res: SpreadResult): SpreadDisplay {
 
 export interface AggregateDisplay {
   totals: { openPositions: number; notional: number; instruments: number }
-  todayPnl: { pnl: number; trades: number } | null
+  venues: AggVenue[]
+  // B-PAP-2: two buckets, never a merged paper+demo total. Each entry is the
+  // observed PnL for that bucket this trading day (0 trades is honest "nothing
+  // traded yet", absent means the bucket has no store to read).
+  todayPnl: { paper: PnlSlice | null; expertoption: PnlSlice | null }
   riskCheck: {
     allowed: boolean
     warnings: string[]
@@ -60,9 +77,11 @@ export interface AggregateDisplay {
 export function aggregatePanelModel(res: AggregateResult): AggregateDisplay {
   return {
     totals: res.totals,
-    // todayPnl.total is a real observed ledger aggregation — when nothing
-    // traded today it is genuinely 0 trades / 0 pnl, which is honest.
-    todayPnl: res.todayPnl?.total ?? null,
+    venues: res.venues ?? [],
+    todayPnl: {
+      paper: res.todayPnl?.paper ?? null,
+      expertoption: res.todayPnl?.expertoption ?? null
+    },
     riskCheck: res.riskCheck
       ? {
           allowed: res.riskCheck.allowed,
@@ -108,8 +127,6 @@ export function metricsPanelModel(res: AccountMetricsResult): MetricsDisplay {
 
 export interface CapabilitiesDisplay {
   browserFound: boolean
-  sensorSeen: boolean
-  sensorLastSeen: number | null
   notifierChannels: { inApp: boolean; webpush: boolean }
   signalEngine: boolean
   uptimeSec: number
@@ -122,8 +139,6 @@ export function capabilitiesPanelModel(res: SystemCapabilitiesResult): Capabilit
   if (!res?.ok) return null
   return {
     browserFound: Boolean(res.browserFound),
-    sensorSeen: Boolean(res.extensionSensor?.seen),
-    sensorLastSeen: res.extensionSensor?.lastSeen ?? null,
     notifierChannels: res.notifierChannels ?? { inApp: true, webpush: false },
     signalEngine: Boolean(res.signalEngine),
     uptimeSec: Number(res.uptime) || 0,

@@ -4,19 +4,24 @@
 //   1. the statistical ensemble (prediction.mjs) — direction + calibrated odds,
 //   2. a full indicator dashboard (indicators.mjs) — every classic oscillator,
 //   3. higher-timeframe (weekly aggregate) bias and alignment,
-//   4. a weighted confluence model scoring trend, momentum and volatility.
+//   4. a weighted confluence model scoring trend, momentum and volatility,
+//   5. optional DOCUMENTARY fusion layers (regime engine + MTF convergence)
+//      when the data-source entry points can supply them (B-FUS).
 //
 // Output is decision support only. Nothing here executes trades, and every
 // report carries an explicit honesty note about what it can and cannot tell you.
 
 import { getHistory } from "./yahoo.mjs"
 import { predictDirection } from "./prediction.mjs"
+import { detectRegimeEnhanced, MIN_BARS as REGIME_MIN_BARS } from "./regimeEngine.mjs"
+import { converge } from "./mtfConvergence.mjs"
 import {
   candlesFromSeries,
   aggregateCandles,
   computeIndicatorDashboard,
   detectMarketPhase,
   findDivergences,
+  linearRegression,
   swingPoints,
   rsi,
   stochRSI,
@@ -105,7 +110,7 @@ const label = (v) => (Number.isFinite(v) ? round(v, 4) : "n/a")
 // Confluence model
 // ---------------------------------------------------------------------
 
-function buildConfluence({ dash, series, phase, last, close }) {
+export function buildConfluence({ dash, series, phase, last, close, layers }) {
   const lr = dash.linearRegression
   const ema20 = g(series.ema20), ema50 = g(series.ema50), ema200 = g(series.ema200)
   const psarTrend = g(series.psarTrend)
@@ -240,11 +245,39 @@ function buildConfluence({ dash, series, phase, last, close }) {
   const B = scoreGroup(momentumItems)
   const C = scoreGroup(volItems)
 
+  // Documentary fusion layers (B-FUS-1). The data-source entry points (B-FUS-2)
+  // may pass `layers.{regime,mtf}` — arrays of pre-built evidence items shaped
+  // {name, weight, bull, read, source} with source "regimeEngine" / "liveEO-buffers".
+  // They surface as groups inside confluence.groups so the report can show the
+  // regime + MTF reads next to the classic score, but they are evidence ONLY:
+  // absent (or all-abstaining) input renders observed:false with an empty
+  // evidence list, zero-bull items are excluded by scoreGroup above, and the
+  // blended score below never includes them — verdict thresholds stay
+  // byte-identical (`weight: 0` = no share of the score).
+  const layerGroups = []
+  if (layers) {
+    for (const [id, name, items] of [
+      ["regimeLayer", "Regime layer", layers.regime],
+      ["mtfLayer", "MTF layer", layers.mtf]
+    ]) {
+      const scored = scoreGroup(Array.isArray(items) ? items : [])
+      layerGroups.push({
+        id,
+        name,
+        weight: 0,
+        score: scored.score,
+        evidence: scored.items,
+        observed: scored.items.length > 0
+      })
+    }
+  }
+
   const score = clamp(A.score * 0.45 + B.score * 0.35 + C.score * 0.2, -1, 1)
   const groups = [
     { id: "trend", name: "Trend & Structure", weight: 0.45, score: A.score, evidence: A.items },
     { id: "momentum", name: "Momentum & Strength", weight: 0.35, score: B.score, evidence: B.items },
-    { id: "volatility", name: "Volatility & Cycle", weight: 0.2, score: C.score, evidence: C.items }
+    { id: "volatility", name: "Volatility & Cycle", weight: 0.2, score: C.score, evidence: C.items },
+    ...layerGroups
   ]
 
   return { score, direction: sign(score), groups }
@@ -345,7 +378,7 @@ function buildSetups({ close, atrNow, phase, direction, swing, score, divergence
 // Core orchestration over normalized candles
 // ---------------------------------------------------------------------
 
-export function proAnalyzeCandles({ candles, symbol = "?", name = "", currency = "", timeframe = "1d", horizonDays = 3, ensemble = null }) {
+export function proAnalyzeCandles({ candles, symbol = "?", name = "", currency = "", timeframe = "1d", horizonDays = 3, ensemble = null, layers = null }) {
   const clean = normalizeCandles(candles)
   if (clean.length < 40) {
     return {
@@ -372,7 +405,7 @@ export function proAnalyzeCandles({ candles, symbol = "?", name = "", currency =
   }
   dash.phase = phase
 
-  const confluence = buildConfluence({ dash, series, phase, last, close })
+  const confluence = buildConfluence({ dash, series, phase, last, close, layers })
   const direction = confluence.direction
 
   // Statistical ensemble
@@ -616,6 +649,144 @@ export async function summarizeProAnalysis(result) {
 }
 
 // ---------------------------------------------------------------------
+// Fusion layers (B-FUS-2) — build the documentary regime + MTF evidence
+// ---------------------------------------------------------------------
+
+// Standard Yahoo/ExpertOption intervals -> seconds. Unknown intervals yield
+// null and the layers render observed:false instead of guessing a timeframe.
+const INTERVAL_TO_SECONDS = Object.freeze({
+  "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400,
+  "1d": 86400, "1wk": 604800, "1mo": 2592000
+})
+const intervalToSeconds = (interval) => (interval in INTERVAL_TO_SECONDS ? INTERVAL_TO_SECONDS[interval] : null)
+
+// Standard consecutive timeframe above `base` (in seconds) that can be built by
+// aggregating the same candles — no extra network calls. 86400 -> 432000 is the
+// 5-trading-day sibling of 1d, honestly labelled "5d" (NOT 1w: 604800).
+const AGGREGATE_SIBLING = Object.freeze({
+  60: 300, 300: 900, 900: 3600, 3600: 14400, 14400: 86400, 86400: 432000
+})
+
+function tfSecondsLabel(seconds) {
+  const s = Number(seconds)
+  const d = s / 86400
+  if (Number.isInteger(d)) return d === 1 ? "1d" : d === 5 ? "5d" : d === 7 ? "1w" : d === 30 ? "1mo" : `${d}d`
+  const h = s / 3600
+  if (Number.isInteger(h)) return h === 1 ? "1h" : `${h}h`
+  const m = s / 60
+  if (Number.isInteger(m)) return m === 1 ? "1m" : m === 5 ? "5m" : m === 15 ? "15m" : m === 30 ? "30m" : `${m}m`
+  return `${s}s`
+}
+
+// Same lean table as regimeEngine.mjs — copied here so each plane's own votes
+// can be read into a per-plane regime without re-asking the (multi-plane)
+// consensus engine. Keep in sync with regimeEngine.LEANS.
+const PLANE_LEANS = Object.freeze({
+  choppiness: Object.freeze({ trend: "trend", chop: "range" }),
+  atr_ratio: Object.freeze({ quiet: "range" }), // volatile -> annotation only
+  adx: Object.freeze({ trend: "trend", "no-trend": "range" }),
+  supertrend: Object.freeze({})
+})
+
+/**
+ * Tally a plane's lean-bearing votes (trend vs range) for the transparent
+ * "votes 2t/1r" read string. Same lean table as regimeEngine.mjs — copied here
+ * so the layer stays in sync without re-asking the multi-plane engine.
+ */
+function planeVoteTally(votes) {
+  let trend = 0, range = 0
+  for (const dim of Object.keys(votes)) {
+    const v = votes[dim]
+    if (!v?.observed) continue
+    const lean = PLANE_LEANS[dim]?.[v.value] ?? null
+    if (lean === "trend") trend++
+    else if (lean === "range") range++
+  }
+  return { trend, range }
+}
+
+/**
+ * Regime layer items. The layer carries the ENGINE's consensus regime and
+ * textures it per plane: one item per non-abstaining plane whose own slope is
+ * measurable, reading the consensus tag with that plane's slope direction and
+ * vote tally. Directional items exist ONLY when the consensus is TRENDING —
+ * a RANGING/UNCERTAIN consensus yields an empty layer (observed:false), so the
+ * layer can never contradict detectRegimeEnhanced. `bull` = direction times
+ * consensus confidence (direction * confidence/100): an 80% read contributes
+ * 0.8, never a fabricated 1.0. Planes with fewer bars than the 50-bar
+ * regression period honestly contribute no direction.
+ */
+function regimeLayerItems(planes) {
+  const items = []
+  const read = detectRegimeEnhanced({ planes })
+  if (read.regime !== "TRENDING" || read.confidence === 0) return items
+  for (const tf of Object.keys(read.perPlane)) {
+    const pp = read.perPlane[tf]
+    if (pp.abstain) continue
+    const closes = planes[tf].map((c) => c.close)
+    if (closes.length < 50) continue
+    const slopePct = linearRegression(closes).slopePct[closes.length - 1]
+    const dir = Number.isFinite(slopePct) && Math.abs(slopePct) > 1e-9 ? (slopePct > 0 ? 1 : -1) : 0
+    if (dir === 0) continue
+    const { trend, range } = planeVoteTally(pp.votes)
+    items.push({
+      name: `regime ${tfSecondsLabel(Number(tf))}`,
+      weight: 1,
+      bull: dir * (read.confidence / 100),
+      read: `TRENDING · conf ${read.confidence}%${read.volatile ? " · volatile" : ""} · votes ${trend}t/${range}r · lean ${dir > 0 ? "up" : "down"}`,
+      source: "regimeEngine"
+    })
+  }
+  return items
+}
+
+/**
+ * MTF layer items: one per active convergence plane (sign +1/-1 only; flat and
+ * abstained planes carry no directional evidence). Each read carries the plane's
+ * own lean plus the composite state/score5/quality so the multi-plane picture is
+ * documentary: which timeframes agree, and how strongly the composite says so.
+ */
+function mtfLayerItems(planes) {
+  const items = []
+  const read = converge({ planes })
+  const compositeDir = read.compositeDirection === 1 ? "LONG" : read.compositeDirection === -1 ? "SHORT" : "FLAT"
+  for (const p of read.planes) {
+    if (!p.active || p.sign === 0) continue
+    const side = p.sign > 0 ? "long" : "short"
+    items.push({
+      name: `mtf ${tfSecondsLabel(p.tf)}`,
+      weight: 1,
+      bull: p.sign,
+      read: `${side} ${tfSecondsLabel(p.tf)} · composite ${compositeDir} · ${read.state} · score5 ${read.score5 ?? "—"}/5 · quality ${read.quality ?? "—"}/10`,
+      source: "liveEO-buffers"
+    })
+  }
+  return items
+}
+
+/**
+ * Build the documentary {regime, mtf} layer items from the candles a data-source
+ * entry point ALREADY has — aggregation only, never new network calls. The base
+ * plane gets its standard next-step sibling (e.g. 1d -> 5d, 60s -> 5m) when that
+ * aggregate clears the engine minimum bars; absent/unknown timeframes or too-thin
+ * data yield empty layers (observed:false), never fabricated reads.
+ */
+function buildFusionLayers(candles, tfSeconds) {
+  const clean = normalizeCandles(candles)
+  const base = Number(tfSeconds)
+  const planes = {}
+  if (Number.isFinite(base) && base > 0 && clean.length > 0) {
+    planes[base] = clean
+    const up = AGGREGATE_SIBLING[base]
+    if (up) {
+      const agg = aggregateCandles(clean, Math.round(up / base))
+      if (agg.length >= REGIME_MIN_BARS) planes[up] = agg
+    }
+  }
+  return { regime: regimeLayerItems(planes), mtf: mtfLayerItems(planes) }
+}
+
+// ---------------------------------------------------------------------
 // Data-source entry points
 // ---------------------------------------------------------------------
 
@@ -637,7 +808,8 @@ export async function proAnalyzeSymbol(symbol, { range = "2y", interval = "1d", 
     name: history.name,
     currency: history.currency,
     timeframe: interval,
-    horizonDays
+    horizonDays,
+    layers: buildFusionLayers(candles, intervalToSeconds(interval))
   })
   if (!result.ok) return result
   return { ...result, platform: "Yahoo", lastPrice: history.lastPrice }
@@ -676,7 +848,8 @@ export async function proAnalyzeExpertOption({ assetId, timeframe = 60, count = 
       name: asset?.name ?? String(assetId),
       currency: "USD",
       timeframe: `${timeframe}s`,
-      horizonDays
+      horizonDays,
+      layers: buildFusionLayers(raw.ohlc ?? [], timeframe)
     })
     if (!result.ok) return result
     return { ...result, platform: "ExpertOption", account: balanceData, timeframe: `${timeframe}s` }

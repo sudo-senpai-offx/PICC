@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Card, Badge, Button, Skeleton } from "@/components/ui"
 import { getPortfolioAggregate, type AggregateResult } from "@/lib/trading"
-import { aggregatePanelModel, type AggregateDisplay } from "@/lib/integrationPanels"
+import { aggregatePanelModel, paperIncome, realPnl, type AggregateDisplay } from "@/lib/integrationPanels"
 
 /**
  * Cross-venue portfolio aggregate + pre-trade risk check (spec T5).
@@ -68,18 +68,28 @@ export function PortfolioAggregatePanel({ paperAvailable }: { paperAvailable: bo
               <div style={{ fontSize: 14, fontWeight: 700 }}>{model.totals.openPositions}</div>
             </div>
             <div style={{ padding: "4px 8px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Notional</div>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>{model.totals.openPositions === 0 ? "—" : `$${model.totals.notional}`}</div>
-            </div>
-            <div style={{ padding: "4px 8px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center" }}>
               <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Instruments</div>
               <div style={{ fontSize: 14, fontWeight: 700 }}>{model.totals.instruments}</div>
             </div>
-            {model.todayPnl && (
-              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.pnl > 0 ? "#4ade80" : model.todayPnl.pnl < 0 ? "#ff6b6b" : "var(--border)"}` }}>
-                <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Today P&L</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.pnl > 0 ? "#4ade80" : model.todayPnl.pnl < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
-                  {model.todayPnl.pnl > 0 ? "+" : ""}${model.todayPnl.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.trades} trades)</span>
+            {model.venues.map((v) => (
+              <div key={v.venue} style={{ padding: "4px 8px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center" }}>
+                <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{v.venue} exposure</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{v.totalSize === 0 ? "—" : `$${v.totalSize}`}</div>
+              </div>
+            ))}
+            {model.todayPnl.paper && (
+              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.paper.pnl > 0 ? "#4ade80" : model.todayPnl.paper.pnl < 0 ? "#ff6b6b" : "var(--border)"}` }}>
+                <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{paperIncome}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.paper.pnl > 0 ? "#4ade80" : model.todayPnl.paper.pnl < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
+                  {model.todayPnl.paper.pnl > 0 ? "+" : ""}${model.todayPnl.paper.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.paper.trades} trades)</span>
+                </div>
+              </div>
+            )}
+            {model.todayPnl.expertoption && (
+              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.expertoption.pnl > 0 ? "#4ade80" : model.todayPnl.expertoption.pnl < 0 ? "#ff6b6b" : "var(--border)"}` }}>
+                <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{realPnl}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.expertoption.pnl > 0 ? "#4ade80" : model.todayPnl.expertoption.pnl < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
+                  {model.todayPnl.expertoption.pnl > 0 ? "+" : ""}${model.todayPnl.expertoption.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.expertoption.trades} trades)</span>
                 </div>
               </div>
             )}

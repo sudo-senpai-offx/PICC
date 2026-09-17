@@ -123,7 +123,13 @@ function canonical(raw) {
   return String(raw ?? "").replace(/\s*\(otc\)/gi, "").replace(/[/\s.\-_]+/g, "").toUpperCase() || "UNKNOWN"
 }
 
-/** Combined realized P&L today across paper closed trades + settled demo deals. */
+/**
+ * Realized P&L today, kept in TWO separate buckets (paper ledger vs EO demo
+ * deals). B-PAP-2: the merged `total` slice is deliberately GONE — summing
+ * simulated paper money with live-venue demo money into one number is the
+ * exact merge the spec forbids on shared surfaces. Each bucket is observed
+ * from its own store; neither is ever combined with the other.
+ */
 export async function combinedTodayPnl() {
   const today = new Date().toISOString().slice(0, 10)
   let paperPnl = 0
@@ -147,8 +153,7 @@ export async function combinedTodayPnl() {
 
   return {
     paper: { pnl: round2(paperPnl), trades: paperCount },
-    expertoption: { pnl: round2(demoPnl), trades: demoCount },
-    total: { pnl: round2(paperPnl + demoPnl), trades: paperCount + demoCount }
+    expertoption: { pnl: round2(demoPnl), trades: demoCount }
   }
 }
 
@@ -203,7 +208,8 @@ export async function portfolioRiskCheck({ symbol, amount, maxNotional = 50000, 
     warnings,
     proposed: { symbol: sym, amount: round2(addSize) },
     after: { totalNotional: newNotional },
-    todayPnl: pnlToday.total,
+    // B-PAP-2: both buckets, never a merged paper+demo total.
+    todayPnl: pnlToday,
     exposureByInstrument: Object.fromEntries(
       Object.entries(agg.byInstrument).map(([s, i]) => [s, i.totalSize])
     )

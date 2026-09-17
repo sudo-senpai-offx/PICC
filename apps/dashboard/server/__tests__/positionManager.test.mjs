@@ -46,7 +46,7 @@ describe("positionManager (slice 5d coverage)", () => {
     expect(agg.venues).toEqual([{ venue: "paper", totalSize: 5, positions: 2 }])
   })
 
-  test("combinedTodayPnl sums only today's closed paper trades and settled deals", async () => {
+  test("combinedTodayPnl keeps today's closed paper trades and settled deals in SEPARATE buckets (B-PAP-2)", async () => {
     const pm = await boot({
       ledger: { closed: [{ pnl: 5, closedAt: `${today}T10:00:00Z` }, { pnl: -2, closedAt: "2020-01-01T00:00:00Z" }] },
       deals: { deals: [{ profit: 7, closedAt: `${today}T11:00:00Z` }, { profit: -3, closedAt: "2020-01-01T00:00:00Z" }] }
@@ -54,7 +54,9 @@ describe("positionManager (slice 5d coverage)", () => {
     const pnl = await pm.combinedTodayPnl()
     expect(pnl.paper).toEqual({ pnl: 5, trades: 1 })
     expect(pnl.expertoption).toEqual({ pnl: 7, trades: 1 })
-    expect(pnl.total).toEqual({ pnl: 12, trades: 2 })
+    // The merged `total` slice is removed: paper and venue-demo money are
+    // never summed on any shared surface.
+    expect(pnl).not.toHaveProperty("total")
   })
 
   test("portfolioRiskCheck refuses over-cap proposals", async () => {
@@ -86,7 +88,9 @@ describe("positionManager (slice 5d coverage)", () => {
     const agg = await pm.aggregateOpenPositions()
     expect(agg.totals).toEqual({ openPositions: 0, notional: 0, instruments: 0 })
     const pnl = await pm.combinedTodayPnl()
-    expect(pnl.total).toEqual({ pnl: 0, trades: 0 })
+    expect(pnl.paper).toEqual({ pnl: 0, trades: 0 })
+    expect(pnl.expertoption).toEqual({ pnl: 0, trades: 0 })
+    expect(pnl).not.toHaveProperty("total")
     const check = await pm.portfolioRiskCheck({ symbol: "BTCUSD", amount: 10 })
     expect(check.allowed).toBe(true)
     expect(check.warnings).toEqual([])

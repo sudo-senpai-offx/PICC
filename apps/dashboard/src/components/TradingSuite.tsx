@@ -1417,9 +1417,18 @@ function ProAnalysisResultView({ result }: { result: ProAnalysisResult }) {
           <div key={gr.id} className="card pad">
             <div className="row-between">
               <strong className="small">{gr.name}</strong>
-              <Badge tone={gr.score > 0 ? "success" : gr.score < 0 ? "danger" : "muted"}>
-                {gr.score > 0 ? "+" : ""}{gr.score.toFixed(2)}
-              </Badge>
+              <div className="row gap">
+                {/* B-FUS: weight:0 groups (regime/MTF layers) are documentary —
+                    they read evidence but never move the verdict or the score. */}
+                {gr.weight === 0 ? (
+                  <span className="muted small">
+                    {gr.observed === false ? "documentary · no directional evidence" : "documentary · evidence only"}
+                  </span>
+                ) : null}
+                <Badge tone={gr.score > 0 ? "success" : gr.score < 0 ? "danger" : "muted"}>
+                  {gr.score > 0 ? "+" : ""}{gr.score.toFixed(2)}
+                </Badge>
+              </div>
             </div>
             <div className="grid grid-2 small muted">
               {gr.evidence.map((e) => (

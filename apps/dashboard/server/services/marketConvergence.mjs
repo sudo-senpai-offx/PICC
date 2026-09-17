@@ -6,10 +6,11 @@
 // never fabricate a read when nothing is connected — an absent buffer reports
 // source "none" / stale / empty planes, which converge turns into NO TRADE with
 // "—" values (R10 honesty rule). The section cache TTL lives in realtimeSuite.
-import { loadConvergence, converge, setConvergenceOutcomeHook } from "./mtfConvergence.mjs"
+import { loadConvergence, converge, setConvergenceOutcomeHook, PRESETS } from "./mtfConvergence.mjs"
 import { liveEOData } from "./liveEO.mjs"
 import { updateConvergence } from "./alertEngine.mjs"
 import { recordConvergence, flushConvergence } from "./convergenceLedger.mjs"
+import { detectRegimeLatched, regimeKnobs, REGIME_MODES as REGIME_MODE_LIST } from "./regimeEngine.mjs"
 
 // The full ladder the convergence matrix shows: intraday buffers direct from
 // liveEO, 30m/4h derived from M1 (dailies would go through getBestCandles at
@@ -33,6 +34,28 @@ setConvergenceOutcomeHook((result, ctx) => {
     confidence: result.confidence
   })
 })
+
+// Per-asset regime modulation mode (REQ-R3): "soft" is the default; "hard" and
+// "off" are explicit per-asset overrides. The mode map is in-memory (settings
+// surface wiring is a later fusion slice) — reset helpers exist for tests and
+// for a settings toggle to land on without touching this module.
+const REGIME_MODE_OVERRIDES = new Map() // assetId -> "soft"|"hard"|"off"
+
+/** Register a per-asset modulation mode. Throws on an unknown mode (loud). */
+export function setRegimeMode(assetId, mode) {
+  if (!REGIME_MODE_LIST.includes(mode)) {
+    throw new Error(`unknown regime mode "${mode}" (expected one of ${REGIME_MODE_LIST.join(",")})`)
+  }
+  REGIME_MODE_OVERRIDES.set(assetId, mode)
+}
+
+/** Test/dev hook: drop all per-asset mode overrides (default resumes). */
+export function resetRegimeModes() {
+  REGIME_MODE_OVERRIDES.clear()
+}
+
+/** The live-buffer ladder's preset (marketConvergence's own, spec 7b). */
+const SECTION_PRESET = "intraday"
 
 /**
  * One convergence read for the currently-viewed asset over the live buffers.
@@ -61,11 +84,26 @@ export async function convergenceSection({ now = Date.now() } = {}) {
     m1: liveByTf[60] ?? [],
     deriveTfs: CONVERGENCE_DERIVE_TFS
   })
+  // B-REG-3: regime read over the same planes; the bias plane is the preset's
+  // bias role (regimeEngine imports PRESETS read-only — engine unchanged).
+  const idKey = asset?.id ?? "default"
+  const mode = REGIME_MODE_OVERRIDES.get(idKey) ?? "soft"
+  const regime = detectRegimeLatched({
+    assetId: idKey,
+    planes,
+    biasTf: PRESETS[SECTION_PRESET].bias
+  })
+  const knobs = regimeKnobs(
+    { regime: regime.regime, volatile: regime.volatile, confidence: regime.confidence },
+    { mode, preset: SECTION_PRESET }
+  )
+  const applied = knobs.weights != null || knobs.conservative
   const result = converge({
     planes,
     sourceByTf,
     staleByTf,
-    outcome: { assetId: asset?.id ?? null, asset: asset?.name ?? null, preset: "intraday" }
+    ...(applied ? { weights: knobs.weights, conservative: knobs.conservative } : {}),
+    outcome: { assetId: asset?.id ?? null, asset: asset?.name ?? null, preset: SECTION_PRESET }
   })
   // Feed the alert engine (spec 8a/8b): armed convergence_above alerts for
   // this symbol now evaluate against the freshest honest read. Absent reads
@@ -89,6 +127,9 @@ export async function convergenceSection({ now = Date.now() } = {}) {
     assetId: asset?.id ?? null,
     asset: asset?.name ?? null,
     source: "liveEO-buffers",
-    ts: now
+    ts: now,
+    // Additive regime block (R1 mitigation): how the read was modulated, and
+    // by which regime. `applied` false + `labels` null = advisory, not applied.
+    regime: { ...regime, mode, applied, labels: knobs.labels }
   }
 }

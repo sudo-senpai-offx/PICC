@@ -714,6 +714,9 @@ export interface ProGroupEvidence {
   read: string
   bull: number
   weight: number
+  // B-FUS: documentary layer evidence is tagged with its source engine
+  // ("regimeEngine" | "liveEO-buffers"). Optional — legacy fixtures have none.
+  source?: string
 }
 
 export interface ProConfluenceGroup {
@@ -722,6 +725,10 @@ export interface ProConfluenceGroup {
   weight: number
   score: number
   evidence: ProGroupEvidence[]
+  // B-FUS: false when a layer had no observable input (absent/abstaining
+  // planes) — the honest "no directional evidence" state, never a fake read.
+  // Optional — legacy fixtures have none.
+  observed?: boolean
 }
 
 export interface ProPhase {
@@ -1503,7 +1510,8 @@ export interface PortfolioRiskCheck {
   warnings: string[]
   proposed: { symbol: string; amount: number }
   after: { totalNotional: number }
-  todayPnl: PnlSlice
+  // B-PAP-2: two money buckets, never a merged paper+demo total.
+  todayPnl: { paper: PnlSlice; expertoption: PnlSlice }
   exposureByInstrument: Record<string, number>
 }
 
@@ -1514,7 +1522,7 @@ export interface AggregateResult {
   byInstrument: Record<string, AggInstrument>
   venues: AggVenue[]
   totals: { openPositions: number; notional: number; instruments: number }
-  todayPnl: { paper: PnlSlice; expertoption: PnlSlice; total: PnlSlice }
+  todayPnl: { paper: PnlSlice; expertoption: PnlSlice }
   riskCheck: PortfolioRiskCheck | null
 }
 
@@ -1561,7 +1569,6 @@ export interface SystemCapabilitiesResult {
   platform: string
   node: string
   browserFound: boolean
-  extensionSensor: { seen: boolean; lastSeen: number | null }
   notifierChannels: { inApp: boolean; webpush: boolean }
   signalEngine: boolean
   uptime: number

@@ -234,7 +234,7 @@ export function NotificationCenter() {
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
                       <span style={{ fontSize: 11, fontWeight: 600 }}>
-                        {p.source === "trade" ? "U4FA signal" : "Capture approval"}
+                        {p.source === "trade" ? p.workflowName : "Capture approval"}
                       </span>
                       <span style={{ fontSize: 9, color: "var(--text-muted)" }}>{p.workflowName}</span>
                     </div>

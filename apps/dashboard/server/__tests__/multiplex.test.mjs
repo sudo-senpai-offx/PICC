@@ -181,7 +181,7 @@ describe("cross-platform position manager + portfolio risk", () => {
     expect(agg.byInstrument.ETHUSD).toBeUndefined()
   })
 
-  it("combines today's realized PnL across venues", async () => {
+  it("combines today's realized PnL across venues, kept in separate buckets", async () => {
     const pnl = await pm.combinedTodayPnl()
     expect(pnl.paper.pnl).toBeCloseTo(15.5, 2)
     expect(pnl.paper.trades).toBe(2)
@@ -189,8 +189,8 @@ describe("cross-platform position manager + portfolio risk", () => {
     // exposure, which requires a live session).
     expect(pnl.expertoption.pnl).toBe(82)
     expect(pnl.expertoption.trades).toBe(1)
-    expect(pnl.total.pnl).toBeCloseTo(97.5, 2)
-    expect(pnl.total.trades).toBe(3)
+    // B-PAP-2: no merged total — paper and venue-demo stay separate buckets.
+    expect(pnl).not.toHaveProperty("total")
   })
 
   it("risk check warns on concentration and passes a small proposal", async () => {

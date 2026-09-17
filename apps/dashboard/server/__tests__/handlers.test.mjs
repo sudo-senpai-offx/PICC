@@ -519,3 +519,64 @@ await new Promise((r) => setTimeout(r, 80))
     rmSync(dir, { recursive: true, force: true })
   })
 })
+
+describe("POST /api/trading/regime (B-REG-4)", () => {
+  const trendCandles = () =>
+    Array.from({ length: 60 }, (_, i) => ({ time: i * 60000, open: 99 + i, high: 101 + i, low: 98 + i, close: 100 + i }))
+
+  let authDir
+  beforeEach(() => {
+    authDir = mkdtempSync(join(tmpdir(), "picc-regime-test-"))
+    const token = randomBytes(32).toString("hex")
+    writeFileSync(join(authDir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
+    writeFileSync(join(authDir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
+    this.token = token
+    vi.stubEnv("PICC_AUTH_DATA_DIR", authDir)
+    vi.resetModules()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    rmSync(authDir, { recursive: true, force: true })
+  })
+
+  it("returns the legacy fields byte-identical and adds the regimeEngine block", async () => {
+    const { handleApi: hApi } = await import("../handlers.mjs?regime-test")
+    const { detectRegime } = await import("../services/regimeDetection.mjs?regime-test")
+    const candles = trendCandles()
+    const direct = detectRegime(candles, "1H")
+    const res = makeRes()
+    await hApi(makeReq("POST", "/api/trading/regime", { candles, timeframe: "1H" }, { authorization: `Bearer ${this.token}` }), res, "/api/trading/regime")
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    // legacy keys byte-identical to a direct module call on the same candles
+    for (const k of ["regime", "confidence", "factors", "suggestedStrategy"]) {
+      expect(res.body[k]).toEqual(direct[k])
+    }
+    expect(res.body.metrics).toEqual(direct.metrics)
+    // additive regimeEngine block (the new canonical classification surface)
+    expect(res.body.regimeEngine.source).toBe("regimeEngine")
+    expect(res.body.regimeEngine.regime).toBe("TRENDING")
+    expect(res.body.regimeEngine.confidence).toBe(100)
+    expect(res.body.regimeEngine.perPlane["3600"].observed).toBe(3)
+  })
+
+  it("thin candle sets yield an honest unknown regimeEngine block, never a guess", async () => {
+    const { handleApi: hApi } = await import("../handlers.mjs?regime-test")
+    const res = makeRes()
+    await hApi(
+      makeReq(
+        "POST",
+        "/api/trading/regime",
+        { candles: [{ time: 1, open: 1, high: 1, low: 1, close: 1 }], timeframe: "1H" },
+        { authorization: `Bearer ${this.token}` }
+      ),
+      res,
+      "/api/trading/regime"
+    )
+    expect(res.status).toBe(200)
+    expect(res.body.regime).toBe("unknown")
+    expect(res.body.confidence).toBe(0)
+    expect(res.body.regimeEngine.regime).toBe("unknown")
+    expect(res.body.regimeEngine.reason).toContain("insufficient bars")
+  })
+})

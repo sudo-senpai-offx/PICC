@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { aggregatePanelModel, capabilitiesPanelModel, metricsPanelModel, spreadPanelModel } from "../integrationPanels"
+import { aggregatePanelModel, capabilitiesPanelModel, metricsPanelModel, paperIncome, realPnl, spreadPanelModel } from "../integrationPanels"
 import type { AccountMetricsResult, AggregateResult, SpreadResult, SystemCapabilitiesResult } from "../trading"
 
 // T5 acceptance: spread renders n/a (never 0) when <2 venues; measured edge
@@ -71,8 +71,7 @@ const AGG: AggregateResult = {
   totals: { openPositions: 1, notional: 100, instruments: 1 },
   todayPnl: {
     paper: { pnl: 12.5, trades: 2 },
-    expertoption: { pnl: -4.5, trades: 1 },
-    total: { pnl: 8, trades: 3 }
+    expertoption: { pnl: -4.5, trades: 1 }
   },
   riskCheck: {
     ok: true,
@@ -80,16 +79,31 @@ const AGG: AggregateResult = {
     warnings: [],
     proposed: { symbol: "EURUSD", amount: 200 },
     after: { totalNotional: 300 },
-    todayPnl: { pnl: 8, trades: 3 },
+    todayPnl: {
+      paper: { pnl: 12.5, trades: 2 },
+      expertoption: { pnl: -4.5, trades: 1 }
+    },
     exposureByInstrument: { EURUSD: 100 }
   }
 }
 
 describe("aggregatePanelModel (T5)", () => {
-  it("surfaces totals + observed today PnL", () => {
+  it("surfaces totals + per-venue exposure, never a merged notional render", () => {
     const d = aggregatePanelModel(AGG)
     expect(d.totals).toEqual({ openPositions: 1, notional: 100, instruments: 1 })
-    expect(d.todayPnl).toEqual({ pnl: 8, trades: 3 })
+    expect(d.venues).toEqual([{ venue: "paper", totalSize: 100, positions: 1 }])
+  })
+
+  it("renders today PnL as TWO separately-labeled buckets — no merged total (B-PAP-2)", () => {
+    const d = aggregatePanelModel(AGG)
+    expect(d.todayPnl.paper).toEqual({ pnl: 12.5, trades: 2 })
+    expect(d.todayPnl.expertoption).toEqual({ pnl: -4.5, trades: 1 })
+    // The merged total slice is gone from the server shape — the model must
+    // never resurrect a summed paper+demo number the UI could paint.
+    expect(d.todayPnl).not.toHaveProperty("total")
+    expect(paperIncome).toBe("Paper P&L (simulated)")
+    expect(realPnl).toBe("EO demo P&L")
+    expect(paperIncome).not.toBe(realPnl)
   })
 
   it("passes the risk check verdict verbatim", () => {
@@ -173,19 +187,12 @@ const CAPS: SystemCapabilitiesResult = {
   platform: "win32",
   node: "v22.0.0",
   browserFound: true,
-  extensionSensor: { seen: false, lastSeen: null },
   notifierChannels: { inApp: true, webpush: true },
   signalEngine: true,
   uptime: 4321
 }
 
 describe("capabilitiesPanelModel (T6)", () => {
-  it("reports the extension sensor absent honestly — never a claimed session", () => {
-    const d = capabilitiesPanelModel(CAPS)!
-    expect(d.sensorSeen).toBe(false)
-    expect(d.sensorLastSeen).toBeNull()
-  })
-
   it("passes notifier channel configuration through (unconfigured stays false)", () => {
     const d = capabilitiesPanelModel(CAPS)!
     expect(d.notifierChannels).toEqual({ inApp: true, webpush: true })

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -210,5 +211,52 @@ describe("GET /api/income/overview", () => {
       authorization: "Bearer definitely-not-a-real-token"
     })
     expect(res.status).toBe(401)
+  })
+
+  it("keeps paper-ledger PnL out of the income summary (B-PAP-3)", async () => {
+    const acct = await createAccount({ email: "iv-pap@x.com", password: "password123", name: "PAP" })
+    const auth = { authorization: `Bearer ${acct.token}` }
+
+    // A trading-category stream row renders as a real-venue/user stream...
+    await call("POST", "/api/data/income_streams/upsert", {
+      platform: "expertoption",
+      category: "trading",
+      name: "ExpertOption",
+      status: "active",
+      balance: 10,
+      payoutThreshold: 20,
+      estimatedDaily: 0.5,
+      totalEarned: 25
+    }, auth)
+
+    seedSnapshots({
+      mysterium: { provider: "mysterium", lifetime: 30, today: 1.2, status: "ok", lastChecked: 123 }
+    })
+    await writeFile(join(tmp, "trading-ledger.json"), JSON.stringify({
+      positions: [],
+      closed: [
+        // A fat paper-ledger delta today: +$4,999 then -$98 on simulated money.
+        { pnl: 4999, closedAt: new Date().toISOString() },
+        { pnl: -98, closedAt: new Date().toISOString() }
+      ],
+      signals: []
+    }), "utf8")
+
+    const res = await call("GET", "/api/income/overview", undefined, auth)
+    expect(res.status).toBe(200)
+
+    // The trading-category stream is present as a user row (real-venue data)...
+    expect(res.body.streams.some((s) => s.category === "trading" && s.platform === "expertoption")).toBe(true)
+    expect(res.body.summary.activeCount).toBe(1)
+    // ...but the paper ledger delta does NOT move the summary at all:
+    // lifetime/today are snapshot-driven, monthly is unobservable -> null.
+    expect(res.body.summary.lifetime).toBe(30)
+    expect(res.body.summary.today).toBe(1.2)
+    expect(res.body.summary.monthly).toBeNull()
+    // No snapshot was derived from the paper ledger's closed trades.
+    expect(Object.keys(res.body.snapshots).sort()).toEqual(["mysterium"])
+
+    // Clean up so later runs in this file start without a paper ledger.
+    await rm(join(tmp, "trading-ledger.json"), { force: true }).catch(() => {})
   })
 })
