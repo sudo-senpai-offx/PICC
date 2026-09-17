@@ -135,18 +135,18 @@ Novel-context patterns PICC's MTF engine currently lacks:
 | browser-use / Nova Act HITL | Approval + UI-takeover HITL with screenshot, notification channels, timeout | Push-notification intervention design (Phase C) |
 
 **Firecrawl tasks (free-plan budget-minded):**
-- [ ] `firecrawl search "MTF confluence engine open source" --scrape` → `.firecrawl/mtf-confluence.md` (1 search, 2 credits).
-- [ ] `firecrawl search "chopiness index regime detection trading"` → `.firecrawl/choppiness-regime.md` (only if needed).
-- [ ] `firecrawl research search-papers "regime detection multi-timeframe trading"` → `.firecrawl/research-regime.md` (free-plan credit; check balance first).
+- [x] ~~`firecrawl search "MTF confluence engine open source" --scrape` → `.firecrawl/mtf-confluence.md` (1 search, 2 credits).~~ SKIPPED — superseded: MTF research already consolidated in `MTF_CONVERGENCE_ENGINE.md` (Sobreiro honest-band discipline), and the B.3 slices were specified + shipped without needing new artifacts.
+- [ ] `firecrawl search "chopiness index regime detection trading"` → `.firecrawl/choppiness-regime.md` (only if needed). — not needed: Choppiness index shipped directly in `regimeEngine.mjs` (B.3 Regime layer, done in `bf99e09`).
+- [ ] `firecrawl research search-papers "regime detection multi-timeframe trading"` → `.firecrawl/research-regime.md` (free-plan credit; check balance first). — skipped with the other research tasks; regime detection delivered from existing domain knowledge + ADR-disciplined thresholds.
 
 ### B.3 Phase B slices (draft — to-spec needed before implementation)
 
-- [ ] **Spec**: `docs/specs/PICC_TRADING_SUITE_REBUILD_v1.md` via to-spec skill (problem/solution/stories/decisions/testing/out-of-scope).
-- [ ] **Regime layer**: new pure `regimeEngine.mjs` (or extend `mtfConvergence.mjs`): regime classification per asset from ADX/Choppiness/ATR-ratio; regime-aware state switching for MTF presets (conservative in UNCERTAIN, trend-mode in TRENDING, mean-reversion bias in RANGING).
-- [ ] **Fusion**: optional 2nd-order confluence dimensions (regime × MTF state) — documentary, not new MODELS.
-- [ ] **Execution path**: advisory currently; execution = human-approved only (paper → real opt-in via 4FA-style gate). Never auto-execute.
-- [ ] **Paper income separation**: paper PnL ledger keyed separately; every portfolio/metric surface renders `paperIncome` and `realPnl` distinctly.
-- [ ] **Push-notification intervention**: see Phase C.
+- [x] **Spec**: `docs/specs/PICC_TRADING_SUITE_REBUILD_v1.md` via to-spec skill (problem/solution/stories/decisions/testing/out-of-scope). — DONE, shipped in `6046b63`.
+- [x] **Regime layer**: new pure `regimeEngine.mjs` (or extend `mtfConvergence.mjs`): regime classification per asset from ADX/Choppiness/ATR-ratio; regime-aware state switching for MTF presets (conservative in UNCERTAIN, trend-mode in TRENDING, mean-reversion bias in RANGING). — DONE in `bf99e09`: `regimeEngine.mjs` + `regimeDetection.mjs` adapter.
+- [x] **Fusion**: optional 2nd-order confluence dimensions (regime × MTF state) — documentary, not new MODELS. — DONE in `bf99e09`: documentary `weight:0` layers (integrationPanels/convergenceDisplay), never move verdict.
+- [x] **Execution path**: advisory currently; execution = human-approved only (paper → real opt-in via 4FA-style gate). Never auto-execute. — DONE in `bf99e09`: `interventions.suiteTrade` approval gate + `executionAbsence` pin.
+- [x] **Paper income separation**: paper PnL ledger keyed separately; every portfolio/metric surface renders `paperIncome` and `realPnl` distinctly. — DONE in `bf99e09`: separate buckets (B-PAP-2), no merged total; `paperRealSeparation` pin.
+- [ ] **Push-notification intervention**: see Phase C. — DEFERRED to Phase C by design (own to-spec, `PICC_PUSH_INTERVENTION_v1.md` not drafted).
 
 ---
 
