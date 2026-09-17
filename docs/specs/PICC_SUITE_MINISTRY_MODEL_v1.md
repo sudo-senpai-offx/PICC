@@ -27,7 +27,7 @@
 | REQ-11 | **Two-level nesting:** `/suites/:suiteId` is the suite shell owning an inner sidebar + sub-routes. Entering a suite auto-collapses the outer sidebar; inner sidebar auto-expands. Manually expanding the outer sidebar inside a suite auto-collapses the inner. Collapse state is remembered per the user's deliberate choice. |
 | REQ-12 | **Whole-app search:** the header search (in the suite context) searches the ENTIRE app (all ministries), never suite-scoped. Redesigned for nested context. |
 | REQ-13 | **Per-ministry agentic capability + interaction:** each ministry has agents localized to its purpose; cross-ministry interaction is mediated by the de-localized general agent in Intelligence. Earnings may emulate/spawn sub-agents for a particular task in its broad field. |
-| REQ-14 | **Extension generalization:** the overlay extension is generalized for ALL ministries, with per-ministry catalogs/controls; configured sites are managed in per-ministry Settings. |
+| REQ-14 | **Extension generalization — SUPERSEDED by the D1 clean break (2026-09-17).** The overlay extension was removed; the requirement survives as **capture/studio generalization**: per-ministry catalogs/controls managed in per-ministry Settings, served by the browser studio + capture catalog (`studioCaptureCatalog()` in `captureProfiles.mjs`) instead of an extension. |
 | REQ-15 | **Folding of old category suites (rule A):** depin removed (no hardware, laptop tiers = bandwidth yield); nft/royalties, defi/yield, crypto-staking, p2p-lending, and agent-**income** fold into **Earnings** as income sub-families (documented there); crypto **execution** folds into Trading; `other`(Site) is not a ministry. |
 | REQ-16 | **Go-live gate (Trading):** Trading stays paper/demo until it is mature, viable, trusted, production-grade, **and** profitable, **and** the user approves. The real-money funding path (bank→Transak→Rabby→Arbitrum→Hyperliquid→ccxt) is **parked** as a future gate, not an immediate feature blocker. No real-money path is built or weakened before this gate. |
 
@@ -125,12 +125,11 @@ A cumulative view that sums income/PnL across ministries. Income is per-ministry
 **Acceptance:** aggregate math is extracted server-side and unit-tested (no fabrication on empty ministries); a ministry with no data renders honest emptiness, not 0.
 
 #### T6 — Per-ministry settings partition (`apps/dashboard/src/pages/Settings.tsx`)
-Split PICC-scoped settings (credentials, server connection, extensions, features, keys) from per-ministry settings (catalog of that ministry's sites, the autopilot/copilot flip-switch + confidence threshold per REQ-5/REQ-6). No overlap between PICC and per-ministry settings.
+Split PICC-scoped settings (credentials, server connection, features, keys) from per-ministry settings (catalog of that ministry's sites, the autopilot/copilot flip-switch + confidence threshold per REQ-5/REQ-6). No overlap between PICC and per-ministry settings.
 **Acceptance:** Settings is PICC-scoped; each ministry has its own settings surface; the flip-switch + threshold are exposed per ministry and persisted; grep asserts no per-ministry site/catalog config leaks into PICC Settings.
 
-#### T7 — Extension generalization (`apps/dashboard/extensions/picc-overlay/`)
-Generalize the overlay for all ministries: per-ministry catalogs/controls, encapsulated per ministry; configured sites managed in per-ministry Settings. The extension must exhibit core functionality for any ministry, and the web app must too (preferably synergized). Existing trading-only behavior is the first instance; Earnings/other ministries layer in.
-**Acceptance:** extension manifests a per-ministry catalog, not a hardcoded trading set; a ministry without extension support reports honestly; no fabrication.
+#### T7 — Capture/studio generalization (SUPERSEDED by D1 — rewrite as of 2026-09-17)
+The original task — generalize `apps/dashboard/extensions/picc-overlay/` for all ministries — is dead: the extension was removed with the D1 clean break. The surviving requirement (per-ministry capture catalogs/controls for the browser studio, configured sites managed in per-ministry Settings, honest "not supported" reporting per ministry) now lives at the capture-catalog layer (`captureProfiles.mjs` `studioCaptureCatalog()`) + studio bridge, not an extension manifest. Reword the acceptance accordingly: per-ministry catalog entries, not extension support, and no fabrication when a ministry's sites have no capture path.
 
 ### Phase 2 (P2 — governance substrate, following the ministry shells)
 
@@ -161,7 +160,7 @@ Generalize the overlay for all ministries: per-ministry catalogs/controls, encap
 - No demo/live gate is weakened. Trading stays paper/demo (REQ-16).
 - Fabricated-state risk lives in (a) the confidence signal (T8) and (b) cumulative dashboard math (T5). Both are pinned to real producers / extracted server-side and unit-tested with a no-data → honest-empty expectation.
 - Grep-able honesty strings per slice (`status` "..."); `"source:none"` honest emptiness on empty ministry data.
-- **UNVERIFIED this session (re-verify as slice gates):** `server/services/commandCentre/*` exact working-state (user says dysfunctional); `apps/dashboard/extensions/picc-overlay/*` extension structure beyond what the removal touched; all `commandCentre` endpoints' live behavior; `PICC.md` ministry-relevant content (not re-read this session).
+- **UNVERIFIED this session (re-verify as slice gates):** `server/services/commandCentre/*` exact working-state (user says dysfunctional); capture/studio generalization surface (`studioCaptureCatalog()` in `captureProfiles.mjs` + Browser Studio) beyond what the D1 slices touched (note: the former `apps/dashboard/extensions/picc-overlay/*` reference is dead — the extension was removed); all `commandCentre` endpoints' live behavior; `PICC.md` ministry-relevant content (not re-read this session).
 
 ---
 

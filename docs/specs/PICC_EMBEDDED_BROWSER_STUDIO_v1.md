@@ -1,13 +1,27 @@
 # PICC Embedded Browser Studio — spec v1
 
-**Status:** PROPOSED — no code landed from this spec.
-**Date:** 2026-09-15
+**Status:** PROPOSED — Phase 0 (window-first browser model) LANDED 2026-09-16. **Phase C (extension removal + test migration) EXECUTED 2026-09-17 via the D1 clean break** (`docs/specs/PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md`, slices A-1…A-6) — the extension, its server routes, and its tests are gone; the studio is the only browser leg. Phase A (UI surface) + Phase B (studio-owned capture/rearm) remain pending in the sequence this spec plans.
+**Date:** 2026-09-15 (updated 2026-09-16; Phase C status updated 2026-09-17)
 
-**Scope:** Embed the existing PICC browser studio as the central, shared browser surface inside the webapp: a top-level outer-sidebar navlink, a full studio page, suite-level entrypoints, studio-owned capture/rearm (replacing the manual re-log), and eventual extension removal. Three-phase sequence; Phase C gates on Phase B proving the studio capture leg works.
+**Scope:** Make the existing PICC browser studio the central, shared browser surface: it opens as a **real, separate, visible, trackable browser window** (not an embedded page) that PICC fully intercepts (inputs, console, network, DOM, dialogs, navigation) and keeps in **bidirectional tab sync** with the webapp UI; the webapp gains a top-level outer-sidebar navlink, a full studio page (a live CDP-screencast mirror of the real window), suite-level entrypoints, and studio-owned capture/rearm (replacing the manual re-log). Extension removal (the original Phase C) was executed ahead of schedule via the D1 clean break (2026-09-17) — see Status.
 
 **Extends / relates to:** `PICC.md` (§0 positioning: "studio browser with read-only metrics overlay"; §1 honesty contract), `docs/adr/0001-session-capture-kill-switch-precedence.md` (AND-semantics kill-switch; observation never auto-resumes), `docs/adr/0002-bandwidth-suite-rejected.md` (bandwidth suite excluded), `docs/specs/PICC_SUITE_MINISTRY_MODEL_v1.md` (ministry IA, outer/inner rail, REQ-10/REQ-11), `docs/specs/PICC_PACK1_LOCAL_TRADING_CORE_v1.md` (pack registry, P1-1 EO capture step).
 
 **Grounding rule (per PICC convention):** every `file:line` below was read this session or is explicitly marked **UNVERIFIED**. Anything not re-read this session is **UNVERIFIED** and must be re-verified as a gate in its slice.
+
+---
+
+## Browser model — window-first (Phase 0, LANDED)
+
+The studio browser contract was reversed 2026-09-16 from embedded-first to **window-first**:
+
+- **Default is a REAL window.** `resolveStudioHeadless` (`browserStudio.mjs:1447-1459`) returns `false` unless the caller explicitly passes `headless: true` (background automation such as `liveEO.mjs:675` keeps passing it) or `PICC_STUDIO_HEADLESS=1` (CI/E2E forced-headless escape). `PICC_STUDIO_HEADLESS=0` lets an explicit arg win.
+- **Truth table** (pinned by `browserHeadless.mode.test.mjs`, 5 tests, GREEN): `undefined` → `false` (window); `true` → `true`; `false` → `false`; env `=1` → `true` always; env `=0` → follows explicit arg.
+- **Bidirectional tab sync** (pinned by `browserStudio.tabSync.test.mjs`, 5 tests, GREEN):
+  - Window → PICC: a tab closed in the real window is pruned via the `page.on("close")` handler in `wirePage` (`browserStudio.mjs:894-944`); closing the active tab moves activation to a neighbor; a user switching tabs fires a `document.visibilitychange`/`focus` listener injected per-tab (`__piccTabVisible` exposed function + `addInitScript`) that flips `studio.activeId`.
+  - PICC → window: `studioTab` "switch" now calls `target.page.bringToFront()` (`browserStudio.mjs:2067-2068`) so the real window follows; `studioTab` "close" re-finds the tab after `page.close()` fires the close event, so the splice never double-removes.
+- **Status exposure:** `studioStatus()` already reports `headless: studio.headless`; client `openBrowser()` (no arg) now yields the window.
+- **Comment surface updated:** `handlers.mjs:4209-4213` (`/api/browser/open`) documents window-first; `DEFAULT_SETTINGS` comment (`browserStudio.mjs:181-183`) and the `openStudio` inline comment (`browserStudio.mjs:1465-1468`) too.
 
 ---
 
@@ -16,14 +30,14 @@
 | ID | Requirement (user-visible, testable) |
 |----|---------------------------------------|
 | REQ-1 | **Studio as top-level outer-sidebar navlink.** A new entry appears in the outer rail (the `<nav>` inside `AppShell.tsx`'s sidebar) alongside Dashboard, Trading, Earnings, Intelligence, Settings, and Profile. It is a first-class navlink, not a submenu item. The link reads "Browser Studio" with an appropriate icon. Clicking it navigates to `/studio`. Feature-gated by a new `"studio"` feature key (default ON, same pattern as `"trading"` / `"earnings"` at `AppShell.tsx:49-72`). |
-| REQ-2 | **Studio page renders the live browser.** The `/studio` route renders a page that displays the live CDP screencast (SSE stream from `/api/browser/stream`) in a content area that fills the main content region of AppShell, with browser controls (address bar, back/forward/reload, new tab, close tab, tab bar). It reuses existing client API functions (`openBrowser`, `browserGoto`, `browserTab`, `browserNav`, `streamBrowser` — `api.ts:936-1378`) and existing SSE stream helpers. No new server endpoint is needed. |
+| REQ-2 | **Studio page mirrors the live window.** The `/studio` route renders a page that mirrors the real, separate browser window via the live CDP screencast (SSE stream from `/api/browser/stream`) in a content area that fills the main content region of AppShell, with browser controls (address bar, back/forward/reload, new tab, close tab, active-tab bar). Because the studio is window-first, the mirror and the real window stay in sync both ways (`browserStudio.tabSync.test.mjs`): closing a tab in the window prunes it from the mirror, and switching tabs on either side flips the other. It reuses existing client API functions (`openBrowser`, `browserGoto`, `browserTab`, `browserNav`, `streamBrowser` — `api.ts:936-1378`) and existing SSE stream helpers. No new server endpoint is needed. |
 | REQ-3 | **Suite-level studio entrypoint.** Each suite's `MinistryShell.tsx` inner-nav (currently trading/earnings/intelligence) gains a "Studio" link (`to: "studio"`). Clicking it opens the shared studio inside the ministry content area, allowing any suite to observe through the browser. The studio page component is shared — it does not have per-suite variants. |
 | REQ-4 | **All suites observe the same browser.** There is exactly ONE Chromium process, ONE studio instance, ONE screencast stream. Every suite and every page that opens the studio reads from the same `studio` singleton in `browserStudio.mjs:585-625`. The studio is never duplicated per-suite. When a user is in the trading suite looking at the studio, and switches to the intelligence suite, the same browser continues running with its same tabs. |
 | REQ-5 | **Studio-owned automatic capture/rearm.** The studio's EO tab stays logged-in continuously. The 30-minute EO token refresh (`captureProfiles.mjs:68` — `cadence.tokenMs: 30 * 60 * 1000`) is read by the studio's own `refreshTabLogin` (`browserStudio.mjs:3159-3206`) whenever navigation happens on an EO tab. The existing `captureExpertOptionSession` (`:3575-3651`) runs automatically when a login is detected on an EO tab, and the `headless-session-refresh` scheduler job (`scheduler.mjs:328-342`) reads the refreshed token via `captureVenue` (`captureProfiles.mjs:811-938`). The human no longer needs to manually re-log; the studio's browser stays alive and logged-in, and the observation loop reads the fresh token on its own — **on the assumption that the EO SPA renews its session token in tab storage while the tab is open** (the expected behavior of a live trading terminal; the studio never fabricates a token). If the EO session genuinely expires, P1-1 honestly reports `needs: re-login` and the human re-logs in the studio — existing declared behavior, see Risks row 2. The pack-observation tick (`scheduler.mjs:357-413`) surveys `headlessSessionStatus` and `liveEOStats` as today — no new survey logic. |
-| REQ-6 | **ADR-0001 compliance preserved.** The observation cycle continues to respect ADR-0001: stopped-at-human steps are NEVER auto-resumed (`packRegistry.mjs:36-37` — legal map); the kill-switch AND-semantics (PICC settings + extension toggle, `packObservers.mjs:138-170`) remain intact; when the studio's capture is the only leg (extension removed in Phase C), the `captureEnabled` heartbeat relay (`:5090`) becomes always-true or the observer defaults it to unobserved (null = default-ON). The human ack path (`ackStep` at `packRegistry.mjs:243-265`) is the ONLY exit from stopped-at-human. |
-| REQ-7 | **Extension removal deferred to Phase C.** The browser extension (`extensions/picc-overlay/`) is NOT removed until Phase B proves the studio capture leg works. Phase C removes the extension, migrates tests, and cleans up server-side extension routes (`/api/extension/*`, `/api/extension/ingest`, `/api/extension/heartbeat`, `/api/extension/tab-changed`, `/api/casting/*`). This is gated on: (a) the `sourceLeg` in `headlessSessionStatus()` showing `"studio"` for EO capture, (b) all extension-related tests passing in their migrated form. |
+| REQ-6 | **ADR-0001 compliance preserved.** The observation cycle continues to respect ADR-0001: stopped-at-human steps are NEVER auto-resumed (`packRegistry.mjs:36-37` — legal map). Since the D1 clean break (2026-09-17) there is NO extension toggle — the PICC-side settings kill-switch is the ONLY switch (`sessionCaptureSettings.mjs`), and `observeEoCapture` honors `sessionCaptureEnabled` alone (`packObservers.mjs`). The `captureEnabled` extension-heartbeat seam was removed (A-4). The human ack path (`ackStep` at `packRegistry.mjs:243-265`) is the ONLY exit from stopped-at-human. |
+| REQ-7 | **Extension removal — DONE (D1 clean break, 2026-09-17).** The browser extension (`extensions/picc-overlay/` → archived as `apps/extension-archived/`), the server-side extension routes (`/api/extension/*`, `/api/extension/ingest`, `/api/extension/heartbeat`, `/api/extension/tab-changed`, `/api/casting/*`, `/api/trading/capture-session` extension leg), and the extension tests are removed. Executed earlier than this spec's Phase-C gate allowed (the D1 decision overrode the deferral; `sourceLeg: "studio"` was already the observed EO capture leg). See `PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md` slices A-1…A-6 for the audit trail. |
 | REQ-8 | **No bandwidth/depin dependency.** Nothing in this spec touches or depends on the bandwidth/depin suite (ADR-0002: rejected). |
-| REQ-9 | **Settings toggle remains.** The PICC-side session-capture kill-switch toggle (`sessionCaptureSettings.mjs`, `/api/settings/session-capture`) stays in Settings.tsx. Its role changes from "gate the extension leg" to "gate the studio capture leg" — the same boolean, the same AND-semantics, the same honesty contract. |
+| REQ-9 | **Settings toggle remains.** The PICC-side session-capture kill-switch toggle (`sessionCaptureSettings.mjs`, `/api/settings/session-capture`) stays in Settings.tsx. Its role is now entirely "gate the studio capture leg" — there is no extension leg to gate anymore (D1 clean break). Same boolean, same AND-semantics collapsed to this single switch, same honesty contract (absent setting = capture allowed; never treated as off). |
 
 ---
 
@@ -31,7 +45,7 @@
 
 ### The seam being cut
 
-The browser studio already exists as a fully-featured server-side service (`browserStudio.mjs`, 3746 lines) with ~30 API endpoints (`handlers.mjs:4479-5113`) and a client library (`api.ts:936-1378`). What is missing is entirely on the **UI surface**: there is no route, no page component, and no outer-sidebar navlink that opens the studio. The studio is a hidden capability that can only be reached through `useExternalLinkRouter` (clicking `_blank` links) or through implicit background operations (the scheduler's `headless-sessionRefresh`).
+The browser studio already exists as a fully-featured server-side service (`browserStudio.mjs`, 3746 lines) with ~30 API endpoints (`handlers.mjs:4479-5113`) and a client library (`api.ts:936-1378`). Since 2026-09-16 the studio opens a **real, separate, visible browser window by default** (window-first; see Browser model above) with bidirectional tab sync; what is missing is entirely on the **UI surface**: there is no route, no page component, and no outer-sidebar navlink that opens the studio's screencast mirror. The studio is a hidden capability that can only be reached through `useExternalLinkRouter` (clicking `_blank` links) or through implicit background operations (the scheduler's `headless-sessionRefresh`).
 
 This spec cuts the seam between "studio exists as a server capability" and "studio is visible as a first-class UI surface". The design is almost entirely additive — a new route, a new page, and two small wiring additions (outer-rail navlink + inner-rail navlinks).
 
@@ -125,7 +139,7 @@ The capture/rearm mechanism already exists in the studio:
 - `headlessSessionRefresh` (`captureProfiles.mjs:970-988`) runs every 60s (`scheduler.mjs:328-342`), calls `captureVenue("expertoption")` which reads the studio's live pages (`resolveCapturePage` at `:948-963`) and runs the same hook.
 - `finalizeCapturedToken` (`:559-586`) compares before/after and triggers `restartLiveEO({force:true})` when the token changed.
 
-What changes: today the human must manually log in to EO in the studio (or their own browser via the extension). With the studio as the persistent browser surface, the EO tab stays open and logged-in. The 30-minute token lifecycle is handled by the EO server — as long as the tab is active and not frozen, the browser's cookies remain fresh. The `refreshTabLogin` hook captures the fresh token whenever navigation fires, and the scheduler's 60s pass picks it up.
+What changes: today the human must manually log in to EO in the studio. With the studio as the persistent browser surface, the EO tab stays open and logged-in. The 30-minute token lifecycle is handled by the EO server — as long as the tab is active and not frozen, the browser's cookies remain fresh. The `refreshTabLogin` hook captures the fresh token whenever navigation fires, and the scheduler's 60s pass picks it up.
 
 #### B2. Prevent EO tab freezing
 
@@ -138,17 +152,24 @@ The pack-observation tick (`scheduler.mjs:357-413`) surveys the same seams:
 - `liveEOStats()` — reads the liveEO connection state
 - `getCredentials()` — reads the saved token
 
-When the extension is removed (Phase C), the `captureEnabled` heartbeat relay (`:5090`) becomes permanently null (no extension to report). The observer (`packObservers.mjs:138-170`) treats null as "not observed, default-ON" (`:149`: `if (sessionCaptureEnabled === false)` — null is not false). The AND-semantics work: PICC-side settings toggle stays; extension toggle becomes permanently unobserved (null = default-ON); capture proceeds.
+The extension is gone (D1 clean break, 2026-09-17): there is no extension heartbeat, and no `captureEnabled` relay (the seam was removed in A-4). The observer (`packObservers.mjs`) honors `sessionCaptureEnabled` alone — `true`=allow, `false`=block (skip), absent=default-ON (never treated as off). The AND-semantics collapsed to this single switch.
 
 #### B4. ADR-0001 compliance path
 
 ADR-0001 requires:
-1. **AND-semantics:** either switch OFF blocks capture. With the extension gone, only the PICC settings toggle is observable. An unobserved extension toggle (null) is default-ON. So: PICC settings OFF → capture blocked; PICC settings ON → capture allowed. The AND-semantics collapse to a single switch (PICC settings) when the other is absent.
+1. **Single-switch semantics (post-D1).** With the extension gone (2026-09-17), only the PICC settings toggle is observable. PICC settings OFF → capture blocked; PICC settings ON → capture allowed. There is no second switch to AND against anymore.
 2. **Observation never auto-resumes:** `coerceObservationForStoppedStep` (`packObservers.mjs:87-117`) continues to hold: when the step is `stopped-at-human` and the seam reports `running`, the coercion rewrites to `stopped-at-human` (same-status, fresh evidence). The human ack via `ackStep` is the only exit.
 3. **Kill-switch skip on stopped step:** a `sessionCaptureDisabled` skip on a `stopped-at-human` step is coerced to same-status (`:101-115`). This path is unchanged.
-4. **Pathway prompt:** the login pathway (`loginPathway` at `:32-46`) and the capture pathway (`capturePathway` at `:52-62`) continue to show structured steps directing the user. The pathway steps change in Phase C: "Open the ExpertOption app tab for the capture leg you use (studio browser, or your own browser with the PICC extension)" becomes "Open the Browser Studio and navigate to ExpertOption" — but the format is unchanged.
+4. **Pathway prompt:** the login pathway (`loginPathway` at `:32-46`) and the capture pathway (`capturePathway` at `:52-62`) continue to show structured steps directing the user. The pathway step is already the D1-era wording: "Open the Browser Studio and navigate to ExpertOption" (updated in A-4).
 
-### Phase C — Extension Removal + Test Migration
+### Phase C — Extension Removal + Test Migration — **EXECUTED 2026-09-17 (D1 clean break)**
+
+> This phase's plan below is retained as a historical record. All of it was executed
+> ahead of the original Phase-B gate by `PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md`
+> (owner decision D1), slices A-1…A-6: extension dir archived (not deleted) at
+> `apps/extension-archived/`, all server extension routes + capture leg removed, all
+> extension tests removed, `captureEnabled` seam and `captureSessionFromExtension`
+> deleted, `sourceLeg` is studio-only. The file paths below describe the pre-removal code.
 
 #### C1. Extension file removal
 
@@ -177,46 +198,36 @@ Remove or deprecate these handlers from `handlers.mjs:4868-5113`:
 
 Also remove the `isLocalhostRequest`-gated extension routes from the `EXTENSION_POLL_ROUTES` set if present (need to verify — UNVERIFIED: this route set was mentioned in handlers.mjs:1067 area but I did not read that section this session).
 
-#### C3. packObserver kill-switch simplification
+#### C3. packObserver kill-switch simplification — **DONE (Option B, A-4)**
 
-After Phase C, the `captureEnabled` input to `observeEoCapture` (`packObservers.mjs:142-143`) is always null (no extension heartbeat). The AND-gate at `:164-170` (`if (captureEnabled === false)`) is dead code (never triggered). Two options:
+Executed as this section's **Option B (cleanup)** in slice A-4: the `captureEnabled` input to `observeEoCapture` was removed entirely (it was always null post-removal), the `SKIP_REASONS.extensionCaptureDisabled` vocabulary was folded out of `packRunner.mjs` (SKIP_REASONS now 8 keys), and `killSwitchSkip` checks `sessionCaptureEnabled` only. The AND-gate simplification this section speculates about is what shipped.
 
-- **Option A (minimal):** Leave the dead code path. It still works correctly (null is not false, so it's skipped). Tests that exercise the extension kill-switch path can be updated to explicitly inject `captureEnabled: false` to verify the coercion logic still holds, even though the runtime never sends it.
-- **Option B (cleanup):** Remove the `captureEnabled` branch and the `SKIP_REASONS.extensionCaptureDisabled` vocabulary. Simplify `observeEoCapture` to only check `sessionCaptureEnabled`.
+#### C4. captureProfiles extension leg removal — **DONE (Option B, A-1/A-5)**
 
-Recommendation: Option A for Phase C. Clean up in a later sweep. The dead code is harmless and preserves test coverage of the AND-semantics path.
+Executed as this section's **Option B (remove)** in slices A-1/A-5: `captureSessionFromExtension` and the `/api/trading/capture-session` extension leg are gone; `captureVenue` (studio leg) is the only capture path. `extensionSessionCapture.test.mjs` was removed.
 
-#### C4. captureProfiles extension leg removal
+#### C5. Test migration — **DONE (A-5/A-6)**
 
-`captureSessionFromExtension` (`captureProfiles.mjs:604-680`; `sourceLeg: "extension"` at `:680`) is the extension leg of venue session capture. After Phase C, the only capture leg is the studio leg (`captureVenue` at `:811-938`). Two options:
+The following test files referenced the extension. **All are now removed** (verified 2026-09-17):
 
-- **Option A (minimal):** Leave `captureSessionFromExtension` in place. It is no longer called at runtime (no extension to POST to `/api/trading/capture-session`). Tests exercise it as a pure function.
-- **Option B (remove):** Delete `captureSessionFromExtension` and its test file (`extensionSessionCapture.test.mjs`). Also remove the `/api/trading/capture-session` handler.
+| Test file | Status |
+|-----------|--------|
+| `extensionIntegrity.test.mjs` (330 lines) | **Removed** — extension deleted |
+| `syncPolicy.test.mjs` | **Removed** — extension sync policy logic deleted with the extension |
+| `captureContracts.test.mjs` | **Kept, updated** — studio-side contract tests retained |
+| `sensorContentLifecycle.test.mjs` | **Removed** |
+| `extensionSessionCapture.test.mjs` | **Removed** — `captureSessionFromExtension` gone |
+| `extensionSelectors.test.mjs` | **Removed (A-5)** — 13 tests, imported only `extension-archived/` |
+| `extensionIngestEndpoint.test.mjs` | **Removed** |
+| `extensionIngest.test.mjs` | **Removed (A-1)** — regression coverage ported to `feedMode.test.mjs` |
+| `extensionBoundary.test.mjs` | **Removed (A-5)** — 2 tests, imported only `extension-archived/` |
+| `backgroundServerStatus.test.mjs` | **Removed** |
 
-Recommendation: Option B — it is dead code after extension removal.
+The studio-side tests (`browserStudio.test.mjs`, `browserStudio.login.test.mjs`, `captureVenue.test.mjs`, `captureProfiles.test.mjs`, `packObservers.test.mjs`, `sessionCaptureSettings.test.mjs`) stayed green through the removal. New D1 absence-pinning regression test: `extensionAbsence.test.mjs` (50 tests, A-6).
 
-#### C5. Test migration
+#### C6. `sourceLeg` cleanup — **DONE (A-1/A-5)**
 
-The following test files reference the extension and must be migrated or removed:
-
-| Test file | Action | Reason |
-|-----------|--------|--------|
-| `extensionIntegrity.test.mjs` (330 lines) | **Remove entirely** — tests extension file presence, manifest contracts, DOM-mutation-free sensor, chrome.* guards. All fail after extension deletion. | Extension deleted |
-| `syncPolicy.test.mjs` | **Review** — tests the extension's sync policy logic. If it imports extension files, remove or migrate to studio-side equivalent. | UNVERIFIED: did not read this file |
-| `captureContracts.test.mjs` | **Review** — tests capture contracts (extension kill-switch, storage keys). Update to test studio-only path. | Extension capture leg removed |
-| `sensorContentLifecycle.test.mjs` | **Remove entirely** — tests the content script lifecycle. | Extension deleted |
-| `extensionSessionCapture.test.mjs` | **Remove** — tests `captureSessionFromExtension`. | Function removed |
-| `extensionSelectors.test.mjs` | **Remove** — tests extension selector contracts. | Extension deleted |
-| `extensionIngestEndpoint.test.mjs` | **Remove** — tests `/api/extension/ingest` endpoint. | Endpoint removed |
-| `extensionIngest.test.mjs` | **Remove** — tests extension frame ingestion logic. | Function removed |
-| `extensionBoundary.test.mjs` | **Remove** — tests extension boundary contracts. | Extension deleted |
-| `backgroundServerStatus.test.mjs` | **Remove** (if exists — UNVERIFIED: not found in glob, may be named differently or may not exist) | Extension deleted |
-
-The studio-side tests (`browserStudio.test.mjs`, `browserStudio.login.test.mjs`, `captureVenue.test.mjs`, `captureProfiles.test.mjs`, `packObservers.test.mjs`, `sessionCaptureSettings.test.mjs`) remain green as-is — they test the studio capture leg and the observer, which are unchanged.
-
-#### C6. `sourceLeg` cleanup
-
-After Phase C, `headlessSessionStatus()` (`captureProfiles.mjs:447-481`) reports `sourceLeg: "studio"` for EO (the only capture leg). The `"extension"` sourceLeg is never produced. The UI that displays `sourceLeg` (if any — UNVERIFIED: did not grep for sourceLeg rendering in the frontend) can optionally simplify to show nothing or "studio" only.
+`headlessSessionStatus()` (`captureProfiles.mjs:447-481`) reports `sourceLeg: "studio"` for EO — the only capture leg. `"extension"` is never produced (the phrase "extension" is absent from `server/` entirely per the A-6 absence test; `feedMode.test.mjs` intentionally retains the legacy-coercion coverage).
 
 ---
 
@@ -225,7 +236,7 @@ After Phase C, `headlessSessionStatus()` (`captureProfiles.mjs:447-481`) reports
 - **No new server endpoint.** The studio page uses existing `/api/browser/*` routes. No new API surface.
 - **No new Chromium process management.** The studio reuses the existing `openStudio`/`closeStudio` lifecycle.
 - **No per-suite browser isolation.** There is ONE browser for all suites (REQ-4). Per-suite browser sessions are explicitly not in scope.
-- **No extension functionality replacement.** The extension's frame-ingestion relay (`/api/extension/ingest` → `liveEO.mjs` broker data) is removed in Phase C without replacement. The studio's CDP-based intelligence feed (console/network/DOM/WS at `browserStudio.mjs:664-984`) replaces the extension's passive relay. If the user wants real-browser frame data after Phase C, the studio is the only path.
+- **No extension functionality replacement.** The extension's frame-ingestion relay (`/api/extension/ingest` → `liveEO.mjs` broker data) was removed in the D1 clean break without replacement (2026-09-17). The studio's CDP-based intelligence feed (console/network/DOM/WS at `browserStudio.mjs:664-984`) is the only real-browser frame path now.
 - **No changes to the pack runner, registry, or envelope gate.** The pack observation cycle is read-only over existing seams.
 - **No changes to the Command Centre truth table.** ExpertOption stays `automationPermission: "forbidden"`, `demoOnly: true`.
 - **No live-money trading.** The studio's read-only-by-default bridge (`browserStudio.mjs:17`) is unchanged.
@@ -273,7 +284,7 @@ After Phase C, `headlessSessionStatus()` (`captureProfiles.mjs:447-481`) reports
 
 #### A-6. Update PICC.md §10 specs registry
 - **Files:** `PICC.md` (§10 specs registry)
-- **What:** Add an entry for this spec: `PICC_EMBEDDED_BROWSER_STUDIO_v1` — `docs/specs/PICC_EMBEDDED_BROWSER_STUDIO_v1.md`, status PROPOSED, date 2026-09-15, scope "embedded studio surface + studio-owned capture + extension removal". Flip status to IMPLEMENTED when the full three-phase sequence lands.
+- **What:** Add an entry for this spec: `PICC_EMBEDDED_BROWSER_STUDIO_v1` — `docs/specs/PICC_EMBEDDED_BROWSER_STUDIO_v1.md`, status PROPOSED (Phase 0 window-first LANDED 2026-09-16; Phase C extension removal EXECUTED 2026-09-17 via D1 clean break), date 2026-09-15, scope "window-first studio browser + webapp studio surface + studio-owned capture + extension removal". Flip status to IMPLEMENTED when the full sequence lands.
 - **Acceptance:** `PICC.md` §10 lists the spec with its five-WH elements consistent with the file.
 
 ### Phase B — Studio-owned Capture/Rearm
@@ -310,19 +321,19 @@ After Phase C, `headlessSessionStatus()` (`captureProfiles.mjs:447-481`) reports
 - **What:** Delete the files that test extension-only logic. For `captureContracts.test.mjs` — review first; if it has studio-side contract tests, keep those and remove only the extension-specific cases.
 - **Acceptance:** `npm test` passes with zero failures related to missing extension files/modules.
 
-#### C-4. Remove `captureSessionFromExtension`
+#### C-4. Remove `captureSessionFromExtension` — **DONE (A-1/A-5)**
 - **Files:** `apps/dashboard/server/services/captureProfiles.mjs`
 - **What:** Remove `captureSessionFromExtension` (`:604`), `captureSessionFromExtensionCore` (`:616`), and `sanitizeExtensionAccount`, plus the `sourceLeg: "extension"` finalize path at `:680`. Remove the exports.
-- **Acceptance:** `grep -r "captureSessionFromExtension" apps/dashboard/` returns zero hits.
+- **Acceptance:** `grep -r "captureSessionFromExtension" apps/dashboard/` returns zero hits. — **satisfied; the A-6 absence test pins "extension" absent from `captureProfiles.mjs`.**
 
-#### C-5. Clean up `useExternalLinkRouter`
+#### C-5. Clean up `useExternalLinkRouter` — **NO CHANGE NEEDED (verified)**
 - **Files:** `src/components/AppShell.tsx`
 - **What:** The `useExternalLinkRouter` hook at `AppShell.tsx:18-47` currently reroutes `_blank` links into the in-app browser via `openBrowser()`/`browserTab()`. With the studio as the central surface, this behavior is still correct — external links should open in the studio. No change needed, but verify the behavior is preserved after the extension removal.
 - **Acceptance:** Clicking a `_blank` link in the dashboard still opens it in the studio browser.
 
-#### C-6. Verify full observation cycle
+#### C-6. Verify full observation cycle — **DONE (A-2/A-4; `sourceLeg: "studio"` observed in the live shape)**
 - **Files:** None (verification task)
-- **What:** With the extension removed and the studio running: (a) verify `headlessSessionStatus()` shows `sourceLeg: "studio"` for EO, (b) verify pack P1-1 is `running`, (c) verify `observeEoCapture` with `captureEnabled: null` (the new default) produces the correct observation, (d) verify the kill-switch still works.
+- **What:** With the extension removed and the studio running: (a) verify `headlessSessionStatus()` shows `sourceLeg: "studio"` for EO, (b) verify pack P1-1 is `running`, (c) verify `observeEoCapture` (session-only kill-switch — the `captureEnabled` parameter was removed in A-4) produces the correct observation, (d) verify the kill-switch still works.
 - **Acceptance:** All observation paths work without the extension.
 
 ---
@@ -333,18 +344,18 @@ After Phase C, `headlessSessionStatus()` (`captureProfiles.mjs:447-481`) reports
 |------|--------|------------|
 | **Studio browser crash / OOM kills the capture leg.** | P1-1 goes to `no-tab` or `error`; token goes stale; liveEO disconnects. | The studio already handles Chromium death (`browserStudio.mjs:1483-1486` — `context.on("close")` calls `resetStudioAfterDeath`). The scheduler retries every 60s. The pack step shows honest `no-tab` status. |
 | **EO tab cookie expiry without user re-login.** | Token expires; `refreshTabLogin` detects degraded `expired` kind; P1-1 goes to `stopped-at-human`. | This is the EXISTING behavior — the human re-logs in the studio (now the central surface) and acks the pack step. The pathway prompt directs them to the studio. |
-| **Extension removal breaks frame-ingestion relay.** | `liveEO.mjs` loses the extension's broker frame relay; realtime EO data stops. | The studio's CDP intelligence feed (`network` intel at `:806-818`) captures the same WS frames the extension relayed. The liveEO module already has a studio-side path. Verify this works in Phase C-6. |
-| **Test migration misses a hidden extension dependency.** | Test suite fails after Phase C. | Run `npm test` after each Phase C task. Grep for `extension`, `picc-overlay`, `chrome.storage`, `chrome.runtime` in test files. |
+| **Extension removal broke the frame-ingestion relay.** | `liveEO.mjs` lost the extension's broker frame relay; realtime EO data stops. | RESOLVED 2026-09-17: the studio's CDP intelligence feed (`network` intel at `:806-818`) captures the same WS frames the extension relayed; `liveEO` has a studio-side path. Verified by the full test gate (204 files / 2133 tests) + `extensionAbsence.test.mjs`. |
+| **Test migration misses a hidden extension dependency.** | Test suite fails after Phase C. | CLOSED 2026-09-17: full gate green (204 files / 2133 tests); the A-6 `extensionAbsence.test.mjs` pins the dead tokens (`chrome.runtime`, `content.js`, `__piccCommand`, `extensionCaptureDisabled`, `captureEnabled`, "extension" word) in all 25 key modules. |
 | **ADR-0001 compliance regression.** | Capture auto-resumes a stopped-at-human step. | The legal map (`packRegistry.mjs:31-37`) is the guard — `stopped-at-human` can ONLY transition to itself. `coerceObservationForStoppedStep` is tested (`packObservers.test.mjs`). No code change touches the legal map or the coercion logic. |
-| **`isLocalhostRequest` guard removal exposes localhost-only routes.** | External clients hit extension routes. | Phase C removes the routes entirely, not just the guard. No orphan routes remain. |
+| **`isLocalhostRequest` guard removal exposes localhost-only routes.** | External clients hit extension routes. | DONE — the extension routes were removed entirely (not just the guard); `/api/extension/*` matches zero route registrations (A-6 verification). No orphan routes remain. |
 
 ---
 
 ## Honesty notes
 
-- **Demo/live gates touched:** Phase B-1 is a manual verification gate — the human must log in to EO in the studio and verify the capture leg works. This is recorded as human observation, not CI assertion. Phase C-6 is another manual gate — verify the full cycle after extension removal.
+- **Demo/live gates touched:** Phase B-1 is a manual verification gate — the human must log in to EO in the studio and verify the capture leg works. This is recorded as human observation, not CI assertion. Phase C's manual gate (verify the full cycle after extension removal) was executed as part of the D1 clean break suite — the observation path is verified by `packObservers.test.mjs` + `feedMode.test.mjs` + the full gate, awaiting a live-studio manual pass.
 - **Fabricated-state risks:** None. The studio capture leg (`captureExpertOptionSession`) reads REAL cookies/storage from a REAL Chromium tab. The token value is never invented. The `guest` detection (`:3627-3644`) reads DOM signals honestly. The observer (`packObservers.mjs`) never fabricates a `running` status — it maps real seam outputs.
-- **ADR-0001 precision:** The kill-switch AND-semantics collapse to a single switch when the extension is removed. This is an honest simplification, not a weakening: the unobserved extension toggle is default-ON (null ≠ false), so the PICC settings toggle becomes the sole gate. The spec explicitly documents this collapse.
+- **ADR-0001 precision:** The kill-switch AND-semantics collapsed to a single switch when the extension was removed (2026-09-17). This is an honest simplification, not a weakening — the extension toggle is gone entirely, so the PICC settings toggle is the sole gate. The spec documents this collapse.
 
 ---
 
@@ -352,5 +363,5 @@ After Phase C, `headlessSessionStatus()` (`captureProfiles.mjs:447-481`) reports
 
 1. **Studio page layout:** Should the studio page fill the ENTIRE content area (no padding/margins — the screencast viewport should be as large as possible), or should it have the standard `stack stack-lg` padding that other pages use? The screencast viewport is already constrained to the browser's viewport dimensions (`DEFAULT_VIEWPORT: { width: 1440, height: 900 }` at `browserStudio.mjs:30`), so full-bleed makes visual sense.
 2. **Feature gate default:** Should `"studio"` be default-ON for all users, or should it require an explicit opt-in (like `"opportunities"` which is feature-gated)? The owner's requirement says "the PICC browser becomes a separate outer-sidebar navlink" — this implies default-ON.
-3. **Extension removal timing:** Should Phase C land in the same PR as Phase A+B, or in a separate follow-up PR after manual verification of Phase B? The owner's requirement says "remove the extension" but also says "only after the embed is proven." A separate PR is safer.
-4. **`captureSessionFromExtension` removal:** Option B (full removal) is cleanest but removes a pure function that could serve as a reference implementation. Option A (dead code) preserves it. Which does the owner prefer?
+3. **Extension removal timing:** RESOLVED — the owner chose the D1 clean break (2026-09-17): the extension was removed as a standalone eradication effort (`PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md`), separate from the studio UI-surface work this spec plans.
+4. **`captureSessionFromExtension` removal:** RESOLVED — Option B (full removal) was executed in slices A-1/A-5 at the owner's D1 direction.

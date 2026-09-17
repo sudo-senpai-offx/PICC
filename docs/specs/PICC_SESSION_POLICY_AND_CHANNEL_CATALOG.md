@@ -1,8 +1,15 @@
-# PICC Session Policy + Channel Catalog + Extension Active-Tab Sync
+# PICC Session Policy + Channel Catalog (+ Extension Active-Tab Sync — removed)
 
-Status: draft → implementing (user directive 2026-08-31)
+Status: draft → implementing (user directive 2026-08-31) · committed `0159703` (delivered)
 Spec owner: user + executor (big-pickle). Not part of PICC_TRADING_SUITE_UPGRADE.md;
 it is a separate user-authorized workstream that takes priority over T11 for now.
+
+> **D1 clean break (2026-09-17):** checklist item 7 — the extension active-tab
+> sync row — was **removed with the extension** (no popup, no content script, no
+> `/api/extension/trading-data`). Items 1–6 and 8 (session-policy persistence,
+> first-login gate, stream catalog trading category, channels health rendering)
+> remain live architecture and are unaffected. Extension rows below are retained
+> as the historical record of the delivered feature.
 
 > **Notification channels (2026-09-02):** this document's channel catalog is the
 > **income/stream** catalog (`streamCatalog.ts`), not the alert notifier. The
@@ -24,8 +31,8 @@ it is a separate user-authorized workstream that takes priority over T11 for now
    dividend/rental/content — not trading platforms, despite the trading suite
    tracking 10 venues (ExpertOption, IQ Option, Olymp Trade, Deriv, Binance,
    Bybit, KuCoin, OKX, eToro, Plus500).
-3. **Extension popup lists every venue's headless state**, unrelated to what the
-   human is looking at. Desired: the popup shows **only the active tab's** sync
+3. **Extension popup lists every venue's headless state** (historical — popup removed with the D1 clean break, 2026-09-17), unrelated to what the
+   human is looking at. Desired (as delivered): the popup shows **only the active tab's** sync
    status, generalized beyond "trading platform".
 4. Income page hardcodes 3 payment-provider cards; status should render from the
    observed health payload, honestly.
@@ -51,10 +58,10 @@ it is a separate user-authorized workstream that takes priority over T11 for now
   url = venue login/home). Income → Channel Catalog gets a **Trading platform**
   filter rendering per-platform sync settings (Auto-sync / Don't sync / Ask
   each time) backed by the session-policy API + honest headless status.
-- **R6 — Extension**: content script `sensor-queue-depth` reply carries
+- **R6 — Extension (removed with D1, 2026-09-17)**: content script `sensor-queue-depth` reply carries
   `venueId` (+ name); background echoes it; popup shows **one row — the active
   tab's** sync state (venue, mode, headless status, "no sync target" otherwise),
-  generalized labels.
+  generalized labels. Shipped 2026-08-31; the popup and content script were deleted with the extension.
 - **R7 — Income channels**: ChannelsTab renders provider status from the health
   payload (not only 3 hardcoded cards) with honest Configured/Not-configured +
   enable hints.
@@ -63,8 +70,7 @@ it is a separate user-authorized workstream that takes priority over T11 for now
 
 - No NEW open-positions/position-exposure capture. Exploration finding: the
   live-chart / trading-data feedback loop ALREADY exists
-  (`/api/extension/trading-data` + the liveEO candle/account buffer, wired in
-  `handlers.mjs:3784`); the only genuine gap is open-positions exposure
+  (the extension-era `/api/extension/trading-data` endpoint was removed with D1 — the liveEO candle/account buffer + studio bridge carry the loop now, `handlers.mjs`); the only genuine gap is open-positions exposure
   (`accountMetrics` `openPositions`/`exposurePct` stay `null` — never
   fabricated — because no documented/verified EO position key exists and no
   live session is observed to reverse against). Extracting it requires the same
@@ -98,6 +104,6 @@ None are caused by, or block, this workstream.
        re-arms, interventions write path, API clamp + restart round-trip.
 6. [x] `streamCatalog.ts` trading category + entries; CatalogTab filter + sync
        settings table; ChannelsTab from health payload.
-7. [x] Extension active-tab sync row (content/background/popup).
+7. [x] Extension active-tab sync row (content/background/popup) — **removed with the extension, D1 clean break 2026-09-17**.
 8. [x] Full `npx vitest run` (116 files / 1303 tests) + `npx tsc -b --noEmit`
        green; committed `0159703`.

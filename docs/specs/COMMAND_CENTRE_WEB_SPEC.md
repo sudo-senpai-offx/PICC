@@ -37,7 +37,7 @@ and bounded looping (one-to-one, one-to-many, many-to-many, many-to-one) — pro
 **risk-backed, auditable autopilot/copilot mode per site**, with safety as an unbreachable floor,
 self-improvement, evolution, anti-hallucination and metalearning baked in. The UI must present it as
 a professional, organized, encapsulated command centre that avoids overwhelm and integrates fully
-with backend, extension and scripts.
+with backend, studio browser and scripts.
 
 ---
 
@@ -122,7 +122,7 @@ P-BOUNDED-LOOPS, P-EVOLUTION, P-SELF-IMPROVEMENT, P-METALEARNING.**
     in-flight execution.
 24. As a PICC user, I want a **Command Centre UI** that is professional, well-organized,
     encapsulated, and easy to access — showing per stream the agent team, findings, mode, reason,
-    safety status, and kill switch, without overwhelm, fully integrated with backend/extension.
+    safety status, and kill switch, without overwhelm, fully integrated with backend/studio browser.
 25. As a PICC user, I want **configurable settings** per site/stream that let me tune the
     "streamline beyond (a)+(b)" surface (exposure, concurrency, risk targets) within the floor.
 26. As a PICC user, I want **real-money autopilot** to begin on **platform-sanctioned venues**
@@ -514,7 +514,7 @@ follows the same protocol:
   explicit ADR decision — a later phase).
 - **Non-trading, non-bandwidth streams** (depin, nft, defi, crypto, p2p, agent) beyond registry
   readiness — they plug in as their suites gain features via the catalog (no engine redesign).
-- **Network-acceleration bandwidth sharing** and **extension-based account tracking** — both
+- **Network-acceleration bandwidth sharing** and **studio-based account tracking** — both
   explicitly deferred ("needs more brainstorming") by the owner; not specced here.
 - **Auto-execution on `forbidden` sites** — never, by design (5C).
 - **Removing the human-approval floor** for any real-money execution on non-sanctioned sites.

@@ -1,5 +1,7 @@
 # G5 — Pack 1 "Local Trading Core" — spec v1
 
+> **D1 clean break (2026-09-17) — historical record:** the "existing engine" rows below describe the extension as the PRIMARY capture leg (`extensions/picc-overlay/content.js`). The extension is removed; the **studio browser is the only capture leg** (`browserStudio.captureExpertOptionSession`, `sourceLeg:"studio"`). Pack-1 content (EO session capture, CCXT poll, news digest, signal notifications) is unaffected; extension rows are history.
+
 ## Status
 PROPOSED — one blocker category (`DEPENDENCY-NOT-YET-AVAILABLE` for the Cactus Needle T0 runtime) and three open-owner questions (§Open questions) before approval. No code landed from this spec.
 

@@ -4,8 +4,11 @@
 Should `resolveAlertVenue`'s exactly-one candidate pool narrow to liveEO-verified venues only, or keep IS-mode (integration-speculative) venues as candidates?
 
 ## Evidence (read this session)
-- `signalEngine.mjs:81-89` — `resolveAlertVenue` maps `extensionCaptureConfigs()` candidates through `instrumentUrl`, filters `mode !== "none" && url`, emits on exactly-one else `undefined`.
-- `captureProfiles.mjs:714-743` `extensionCaptureConfigs()` — emits every profile with `capture.via` + `hostRe`; carries `via` per venue (`:728`). Today that set = `expertoption` (via `liveEO`) + `iqoption` (via `storageScan`).
+
+> **D1 note (2026-09-17):** the catalog anchor below is `studioCaptureCatalog()` since the A-slices; the former `extensionCaptureConfigs()` was renamed with the extension removal (the capture catalog is now studio-browser-owned). Resolution behavior is unchanged.
+
+- `signalEngine.mjs:81-89` — `resolveAlertVenue` maps `studioCaptureCatalog()` candidates through `instrumentUrl`, filters `mode !== "none" && url`, emits on exactly-one else `undefined`.
+- `captureProfiles.mjs:591-593,714-743` `studioCaptureCatalog()` — emits every profile with `capture.via` + `hostRe`; carries `via` per venue. Today that set = `expertoption` (via `liveEO`) + `iqoption` (via `storageScan`).
 - `captureProfiles.mjs:62,730-735` — EO `capture.via:"liveEO"`, scan keys all `verified:true`.
 - `captureProfiles.mjs:81-95` — IQ `capture.via:"storageScan"`, ssid `verified:false` (`:89`, NON-PRIMARY reverse-engineered), `metrics.extractVia:[]` (`:95`), no live leg.
 - `captureProfiles.mjs:564-571,584` — EO is the ONLY venue with a live bridge (`reconnectTriggered`); storage-scan venues report `liveLeg:false`.
@@ -17,7 +20,7 @@ Should `resolveAlertVenue`'s exactly-one candidate pool narrow to liveEO-verifie
 The pool filters to venues whose capture path is a *verified live-session* path. Only EO qualifies today (`via === "liveEO"`, keys verified, live data bridge). This matches Decision D's stated intent, keeps the honest invariant (never deep-link a user onto a venue PICC has no live feed for — REQ-6 / G2), and is the ONLY option under which the T5 acceptance ("venue field present for an EO-resolvable asset") is ever satisfiable against the real catalog. Keeping IQ would make the exactly-one branch permanently dead AND land users on a venue the signal engine cannot act on.
 
 ### Exact filter rule (recommended)
-> From `extensionCaptureConfigs()`, retain only candidates with `capture` mode `"liveEO"` (equivalently: every scan key in the candidate `keys` is `verified:true`), then resolve each survivor via `instrumentUrl` and keep those with `mode !== "none" && url`; emit when EXACTLY ONE survives, else omit. Apply the same `"liveEO"`-only pre-filter to injected `candidateConfigs` so the test seam stays in lockstep with the real catalog.
+> From `studioCaptureCatalog()`, retain only candidates with `capture` mode `"liveEO"` (equivalently: every scan key in the candidate `keys` is `verified:true`), then resolve each survivor via `instrumentUrl` and keep those with `mode !== "none" && url`; emit when EXACTLY ONE survives, else omit. Apply the same `"liveEO"`-only pre-filter to injected `candidateConfigs` so the test seam stays in lockstep with the real catalog.
 
 ## Acceptance criteria (a future slice must test)
 - Real catalog: `resolveAlertVenue({assetId})` returns `{venueId:"expertoption", tradeUrl:"https://app.expertoption.finance/"}` for EO-resolvable assets (mode `venue`, `browserStudio.mjs:580`).
@@ -31,4 +34,4 @@ The pool filters to venues whose capture path is a *verified live-session* path.
 - `signalEngine.test.mjs:110-113` (`call.venue` `toBeUndefined()`) FLIPS → assert exact EO payload.
 - `signalEngine.test.mjs:72-78` (single-EO, REAL resolver) stays green and becomes the real-catalog exemplar.
 - `signalEngine.test.mjs:88-98` — catalog-only / multiple-venue cases keep `undefined`, but the `candidateConfigs` injection must apply the same `"liveEO"` filter first or its multi-candidate semantics diverge from the real catalog.
-- Not affected: `browserStudio.test.mjs:66-90`, extension integrity, feed/headless paths.
+- Not affected: `browserStudio.test.mjs:66-90`, the studio bridge contract tests (successor to the extension integrity pins, which were removed with the extension), feed/headless paths.

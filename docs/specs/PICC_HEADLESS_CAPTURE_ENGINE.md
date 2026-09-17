@@ -1,5 +1,7 @@
 # Headless Session-Capture + Account-Metrics Engine (platform-general) — spec v1
 
+> **D1 clean break (2026-09-17) — historical record:** this spec's T13 direction made the **extension the PRIMARY capture leg** (studio fallback). That was reversed by the D1 decision: the extension is removed and the **studio browser is the only capture leg**. REQ-D/Mechanism D (extension status framing) and the `extensionIntegrity`/`extensionSessionCapture` pins referenced below no longer exist. Headless capture itself (the spec's core subject) is unaffected; treat extension-derived rows as history.
+
 **Status:** Draft for execution · **Date:** 2026-08-29
 **Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (multi-venue integration; Platform-Kind taxonomy at
 `apps/dashboard/server/services/browserStudio.mjs:541-552`) · the Phase-1 read-only bridge contract

@@ -95,8 +95,8 @@ Surface `POST /api/trading/spread` (`handlers.mjs:2530-2569`: EO mid from newest
 **Acceptance:** component tests with mocked fetch — spread panel renders "n/a" (never 0) when <2 quotes; aggregate renders todayPnl + risk check result; server tests unchanged (endpoints already tested); greedy: `yield` the `riskCheck` button only when `paper.status` exists.
 
 #### T6 — Account metrics + capabilities panels (P1 · S) — *integration*
-Surface `GET /api/trading/account-metrics` (`handlers.mjs:1323`) and `POST /api/system/capabilities` (`handlers.mjs:2469-2506`; returns arch/platform/node/browserFound/extensionSensor/notifierChannels/signalEngine/uptime `:2495-2500`).
-**Acceptance:** components render honest states from fixtures (extension absent → "sensor not found", not fabricated); capabilities call guarded by `signalEngine` flag `:2499`.
+Surface `GET /api/trading/account-metrics` (`handlers.mjs:1323`) and `POST /api/system/capabilities` (`handlers.mjs:2469-2506`; returns arch/platform/node/browserFound/notifierChannels/signalEngine/uptime `:2495-2500` — the `extensionSensor` field was removed with the D1 clean break, A-5; `browserFound` reports the studio browser).
+**Acceptance:** components render honest states from fixtures (studio absent → "browser not found", not fabricated); capabilities call guarded by `signalEngine` flag `:2499`.
 
 #### T7 — U4FA chart overlay (P1 · M) — *integration*
 Consume `type:"u4fa"` SSE events (already routed `liveTrading.ts:428-432`, pinned by `u4faStream.test.ts`) in the chart context; render verdict markers/readout on `CandlestickChart.tsx` only when `strategies.u4fa.enabled` (`adaptiveConfluence.mjs:384-390`); adhere to `PICC_UNIVERSAL_4FA_ENGINE.md` honesty keys (`honesty.*` from real producer, `:202-206`).

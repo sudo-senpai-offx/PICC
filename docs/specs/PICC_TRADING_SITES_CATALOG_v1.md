@@ -16,7 +16,7 @@ Every entry has exactly these fields (missing optional fields are omitted, never
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | string | stable slug, e.g. `expertoption`, `ccxt:binance`, `yahoo`, `coingecko` |
-| `kind` | enum | `venue` (trading site, session-based), `exchange` (CCXT market-data venue), `market-data` (free price feed), `news`, `research`, `capture` (extension capture path) |
+| `kind` | enum | `venue` (trading site, session-based), `exchange` (CCXT market-data venue), `market-data` (free price feed), `news`, `research`, `capture` (studio capture path) |
 | `data` | string[] | what it provides (candles, ticker, orderbook, news, research...) |
 | `auth` | enum | `none` \| `session` (broker demo login) \| `key-public` (free API key) \| `key-private` (signed/paid) |
 | `rateLimit` | enum | `unlimited` \| `resettable` (rate window resets, free tier) \| `paid` |
@@ -37,7 +37,7 @@ A catalog row with `verified:false` is a **candidate**, not a claim — it rende
 - **capture path:** `capture.via:"liveEO"`, every scan key `verified:true` (`captureProfiles.mjs:62,730-735`); EO is the ONLY venue with a live data bridge + `reconnectTriggered` (`captureProfiles.mjs:564-571,584`); `browserStudio.mjs:573-581` resolves EO to `mode:"venue"`, url `<root>` — this makes EO the only liveEO-verified venue in `resolveAlertVenue` (`PICC_SIGNAL_VENUE_POOL_DECISION.md`)
 - **PICC cap:** `PICC_EO_GATEWAY_RPM` default 120 (rateLimited(), `handlers.mjs:321`); 429 → honest local rule engine (no fake data)
 - **multiplex:** trading (chart/signal/venue deep-link), earnings (demo-session proof for go-live gate, `PICC_EARNINGS_AGENTIC_MINISTRY_v1.md` §10)
-- **verified:** yes — capture keys, live bridge presence, adapter contract pin tests; the one HUMAN-only step is the demo session login (extension installed, headless-only otherwise)
+- **verified:** yes — capture keys, live bridge presence, adapter contract pin tests; the one HUMAN-only step is the demo session login (studio-browser capture when logged in; headless-only otherwise)
 - **note:** demo balance must end higher than start for the trading trust gate; PICC never opens a headed browser, never places real orders (advisory-only, `PICC_UNIVERSAL_4FA_ENGINE.md`)
 
 ### 3.2 ccxt:<exchange> — exchange market-data (VERIFIED, key-less public data)
@@ -71,7 +71,7 @@ A catalog row with `verified:false` is a **candidate**, not a claim — it rende
 
 - **kind:** `venue` registry; **auth:** `none` for the registry itself; **rateLimit:** n/a
 - **data:** per-venue base URLs + payout thresholds for `category:"trading"` venues: expertoption, binance, bybit, kucoin, okx, etoro, plus500, iqoption, olymptrade, deriv (`browserStudio.mjs:477-521`, map at `:513-521`)
-- **PICC use:** "Trade on {venue}" deep-link redirects (extension-collect / web-app-decide model, `NEXT_WAVE_generalization.md` R5/R8); only `mode:"venue"` rows with a live capture leg produce deep links (`PICC_SIGNAL_VENUE_POOL_DECISION.md`)
+- **PICC use:** "Trade on {venue}" deep-link redirects (studio-collect / web-app-decide model, `NEXT_WAVE_generalization.md` R5/R8 — collect side now the studio browser, post-D1); only `mode:"venue"` rows with a live capture leg produce deep links (`PICC_SIGNAL_VENUE_POOL_DECISION.md`)
 - **multiplex:** trading (venue redirect), compliance (honesty labels "opens {venue} — you are leaving PICC's advisory view")
 - **verified:** presence yes; per-venue capture-feasibility NOT verified this session (only EO has a verified live leg) — each row therefore stays a `candidate` until its own live-capture proof exists
 
