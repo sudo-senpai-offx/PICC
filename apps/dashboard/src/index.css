@@ -1420,7 +1420,7 @@ kbd {
   font-size: 11.5px;
 }
 
-/* ---------- Browser studio ---------- */
+/* ---------- Browser studio (subtle manager surface, plan Part A) ---------- */
 .studio-toolbar {
   display: flex;
   flex-direction: column;
@@ -1475,6 +1475,27 @@ kbd {
   color: var(--danger);
 }
 
+.studio-tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.studio-tab-new:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .studio-controls {
   display: flex;
   align-items: center;
@@ -1487,29 +1508,13 @@ kbd {
   min-width: 160px;
 }
 
-.studio-viewport {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 320px;
-  padding: 12px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: auto;
+.studio-live-on {
+  color: var(--success, #2e9e5b);
+  font-weight: 600;
 }
 
-.studio-viewport img {
-  object-fit: contain;
-}
-
-.studio-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 40px 16px;
-  text-align: center;
+.studio-suite-link {
+  margin-left: auto;
 }
 
 .studio-footer {

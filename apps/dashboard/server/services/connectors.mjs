@@ -68,8 +68,8 @@ export function normalizeEarnings(r = {}) {
 const registry = new Map()
 
 /**
- * Per-site cadence default — mirrors the extension's syncPolicy.js constants so
- * a connector that omits `cadence` inherits the tested cross-site policy.
+ * Per-site cadence default — the tested cross-site policy a connector that
+ * omits `cadence` inherits.
  */
 export const DEFAULT_CADENCE = {
   base: "intermittent",
@@ -83,7 +83,7 @@ export const DEFAULT_CADENCE = {
 const NO_SCAN = { mode: null, keys: [], profileKeys: null, wsUrlRe: null, mapFrame: null }
 
 /**
- * Derive the extension host-matching origin list for a connector definition:
+ * Derive the host-matching origin list for a connector definition:
  * an explicit `origins` array wins; otherwise fall back to the single hostname
  * of the legacy `url` (stripping a leading `www.`).
  */
@@ -109,11 +109,11 @@ export function normalizeOrigins(def) {
  * @param {string} def.category   treasury | trading | bandwidth | depin | nft | defi | ...
  * @param {string[]} def.transports  ['api','ws','browser', ...]
  * @param {string} def.url        dashboard URL the browser transport navigates to
- * @param {string[]} [def.origins]  host list the extension watches (Q5 declarative)
- * @param {object} [def.cadence]    per-site cadence override (Q5)
+ * @param {string[]} [def.origins]  host list the browser transport watches
+ * @param {object} [def.cadence]    per-site cadence override
  * @param {object} [def.selectors]  DOM selectors -> { balance, today, lifetime, ... }
- * @param {object} [def.extractors] declarative alias for selectors (Q5)
- * @param {object} [def.scan]       declarative read-only capture config (Q5)
+ * @param {object} [def.extractors] declarative alias for selectors
+ * @param {object} [def.scan]       declarative read-only capture config
  * @param {object} [def.defaults]   fallback earnings values when the DOM is missing
  * @param {(opts)=>Promise<any>} [def.collect]  custom collector; overrides generic browser path
  */
@@ -136,14 +136,13 @@ export const listConnectors = () => [...registry.values()]
 export const hasConnector = (slug) => registry.has(slug)
 
 /**
- * The registry view the extension is allowed to see: origins, per-site cadence,
+ * The registry view exposed to the Browser Studio: origins, per-site cadence,
  * and the *key names* of any declarative scan — never DOM extractor values,
- * never secrets, never token-bearing fields. This is what keeps the extension
- * a read-only, config-driven sensor.
+ * never secrets, never token-bearing fields.
  */
 /**
- * Resolve a connector from a page origin (host). Used to route an extension
- * income observation to its matching adaptor by origin.
+ * Resolve a connector from a page origin (host). Used to route a
+ * Browser Studio income observation to its matching adaptor by origin.
  */
 export function getConnectorByOrigin(origin) {
   if (!origin) return undefined
@@ -568,7 +567,7 @@ registerConnector({
 })
 
 // NFT marketplaces — floor price / volume via `text:` label matching (hashed
-// utility classes). Magic Eden referenced by the extension; OpenSea above.
+// utility classes). Magic Eden below; OpenSea above.
 registerConnector({
   slug: "magiceden",
   label: "Magic Eden",

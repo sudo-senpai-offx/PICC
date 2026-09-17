@@ -57,7 +57,7 @@ vi.mock("../services/trading.mjs", () => ({
 vi.mock("../services/liveEO.mjs", () => ({
   restartLiveEO: vi.fn(async () => true),
   feedProvenance: vi.fn(() => "studio"),
-  liveEOStats: vi.fn(() => ({ legs: { extension: {}, studio: {} }, lastSeen: 0 }))
+  liveEOStats: vi.fn(() => ({ legs: { studio: {} }, lastSeen: 0 }))
 }))
 
 // PLATFORM_KINDS (browserStudio.mjs:541-552) as a test-side literal — the

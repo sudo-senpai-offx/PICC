@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   getFeedMode,
-  ingestAppFrame,
   ingestStudioFrame,
   liveEOData,
   liveSnapshot,
@@ -11,13 +10,11 @@ import {
 } from "../services/liveEO.mjs"
 
 /**
- * T4 — hybrid feed-mode gate. `feedMode` is a PREFERENCE with fallback, never a
- * blackout switch: the preferred leg is consumed while it is alive; when it
- * dies, the other leg takes over so a live feed is never dropped.
- *
- * "Alive" = frames keep ARRIVING (seen/lastAt). "Consumed" = the gate let the
- * frame into the candle buffers (accepted/lastConsumedAt). Dropped frames
- * still count as seen — that is the liveness signal the fallback relies on.
+ * T4 — feed-preference gate. With the studio bridge as the only browser leg,
+ * "auto" and "studio" both serve studio frames; a stored "extension"
+ * preference degrades to "auto" (the extension is gone — clean break, D1).
+ * Kept as a gate so a future leg keeps the prefer-with-fallback semantics
+ * (never a blackout).
  */
 
 function candleFrame(assetId, tf, t, v) {
@@ -28,7 +25,7 @@ function lastClose(data, assetId) {
   return data.assets.find((a) => a.id === assetId).periods[60].at(-1).close
 }
 
-describe("feed-mode preference gate (T4)", () => {
+describe("feed-mode preference gate (T4, studio-only)", () => {
   beforeEach(async () => {
     await stopLiveEO()
     setFeedMode("auto")
@@ -39,75 +36,21 @@ describe("feed-mode preference gate (T4)", () => {
 
   it("defaults to auto and coerces invalid input", () => {
     expect(getFeedMode()).toBe("auto")
-    expect(setFeedMode("extension")).toBe("extension")
     expect(setFeedMode("studio")).toBe("studio")
+    // "extension" is no longer a valid feed mode — coerced to the safe default
+    // so a stale on-disk preference can never wedge the feed.
+    expect(setFeedMode("extension")).toBe("auto")
     expect(setFeedMode("garbage")).toBe("auto")
     expect(getFeedMode()).toBe("auto")
   })
 
-  it("studio preference drops extension frames while the studio leg is alive", () => {
-    vi.useFakeTimers()
-    setFeedMode("studio")
+  it("serves studio frames in auto and studio modes", () => {
+    expect(setFeedMode("auto")).toBe("auto")
     expect(ingestStudioFrame(candleFrame("1", 5, 100, [1, 2, 3, 4]))).toBe(true)
-    // The extension frame arrives while studio is alive → seen, but dropped.
-    expect(ingestAppFrame(candleFrame("1", 5, 110, [4, 5, 6, 7]))).toBe(false)
-    const data = liveEOData()
-    expect(lastClose(data, "1")).toBe(4) // newest consumed bar is the STUDIO bar
-    // Arrival is still recorded — that is the leg-liveness signal.
-    expect(liveEOStats().legs.extension.lastAt).toBeGreaterThan(0)
-    expect(liveEOStats().legs.extension.accepted).toBe(0)
-  })
-
-  it("studio preference falls back to the extension leg when studio dies", () => {
-    vi.useFakeTimers()
+    expect(lastClose(liveEOData(), "1")).toBe(4)
     setFeedMode("studio")
-    expect(ingestStudioFrame(candleFrame("2", 5, 100, [1, 2, 3, 4]))).toBe(true)
-    vi.advanceTimersByTime(61_000) // no studio frames for > 60s → dead
-    expect(ingestAppFrame(candleFrame("2", 5, 110, [4, 5, 6, 7]))).toBe(true)
-    expect(lastClose(liveEOData(), "2")).toBe(7)
-  })
-
-  it("extension preference drops studio frames, falling back after the leg dies", () => {
-    vi.useFakeTimers()
-    setFeedMode("extension")
-    expect(ingestAppFrame(candleFrame("3", 5, 100, [1, 2, 3, 4]))).toBe(true)
-    expect(ingestStudioFrame(candleFrame("3", 5, 110, [4, 5, 6, 7]))).toBe(false)
-    expect(lastClose(liveEOData(), "3")).toBe(4)
-    expect(liveEOStats().legs.studio.accepted).toBe(0)
-    vi.advanceTimersByTime(61_000) // extension leg dies
-    expect(ingestStudioFrame(candleFrame("3", 5, 120, [7, 8, 9, 10]))).toBe(true)
-    expect(lastClose(liveEOData(), "3")).toBe(10)
-  })
-
-  it("auto serves whichever leg is newest (shared buffers, newest frame wins)", () => {
-    vi.useFakeTimers()
-    setFeedMode("auto")
-    expect(ingestStudioFrame(candleFrame("4", 5, 100, [1, 2, 3, 4]))).toBe(true)
-    expect(ingestAppFrame(candleFrame("4", 5, 101, [4, 5, 6, 7]))).toBe(true)
-    expect(lastClose(liveEOData(), "4")).toBe(7) // extension frame arrived most recently
-    expect(ingestStudioFrame(candleFrame("4", 5, 102, [7, 8, 9, 11]))).toBe(true)
-    expect(lastClose(liveEOData(), "4")).toBe(11) // studio frame is now newest
-  })
-
-  it("never blanks a live feed: every mode serves when ANY single leg is live", async () => {
-    vi.useFakeTimers()
-    // Scenario A — only the extension leg is live. Every mode must serve its
-    // frames: "studio" is the interesting case (preferred leg dead → fallback).
-    for (const mode of ["auto", "studio"]) {
-      setFeedMode(mode)
-      expect(ingestAppFrame(candleFrame("5", 5, 100, [1, 2, 3, 4]))).toBe(true)
-      expect(lastClose(liveEOData(), "5")).toBe(4)
-    }
-    // stopLiveEO resets per-leg aliveness — otherwise the extension leg from
-    // scenario A would still look alive and scenario B would legitimately drop.
-    await stopLiveEO()
-    // Scenario B — only the studio leg is live. "extension" is the interesting
-    // case (preferred leg dead → fallback).
-    for (const mode of ["auto", "extension"]) {
-      setFeedMode(mode)
-      expect(ingestStudioFrame(candleFrame("6", 5, 101, [4, 5, 6, 8]))).toBe(true)
-      expect(lastClose(liveEOData(), "6")).toBe(8)
-    }
+    expect(ingestStudioFrame(candleFrame("1", 5, 110, [4, 5, 6, 7]))).toBe(true)
+    expect(lastClose(liveEOData(), "1")).toBe(7)
   })
 
   it("surfaces the preference and leg liveness in stats and snapshot", () => {
@@ -118,6 +61,86 @@ describe("feed-mode preference gate (T4)", () => {
     expect(liveSnapshot().legs.studio).toBe(false) // no frames yet
     ingestStudioFrame(candleFrame("7", 5, 100, [1, 2, 3, 4]))
     expect(liveSnapshot().legs.studio).toBe(true)
-    expect(liveSnapshot().legs.extension).toBe(false)
+  })
+
+  it("rejects malformed frames", () => {
+    expect(ingestStudioFrame(null)).toBe(false)
+    expect(ingestStudioFrame("candles")).toBe(false)
+    expect(ingestStudioFrame({})).toBe(false)
+    expect(ingestStudioFrame({ action: 42 })).toBe(false)
+    expect(ingestStudioFrame({ noAction: true })).toBe(false)
+  })
+
+  it("accepts a tick frame and records price + viewed asset", async () => {
+    const ok = ingestStudioFrame(candleFrame("142", 0, Math.floor(Date.now() / 1000), [1.2345]))
+    expect(ok).toBe(true)
+    const data = liveEOData()
+    // Asset stub is tracked even without a headless session
+    expect(data.watching.some((w) => w.id === "142")).toBe(true)
+    expect(data.viewed).toBe("142")
+    const stats = liveEOStats()
+    expect(stats.legs.studio.framesSeen).toBeGreaterThan(0)
+    expect(stats.legs.studio.accepted).toBeGreaterThan(0)
+    expect(stats.legs.studio.lastAt).toBeGreaterThan(0)
+  })
+
+  it("folds a 5s bar into aggregated timeframes without a session", async () => {
+    const now = Math.floor(Date.now() / 1000)
+    ingestStudioFrame(candleFrame("777", 5, now - (now % 60), [1.1, 1.2, 1.05, 1.15]))
+    const data = liveEOData()
+    const asset = data.assets.find((a) => a.id === "777")
+    expect(asset).toBeTruthy()
+    // The raw 5s bar cascades into the exposed watch periods (60/300/900/3600)
+    expect(asset.periods[60].length).toBeGreaterThanOrEqual(1)
+    expect(asset.periods[60].at(-1).close).toBeCloseTo(1.15, 8)
+    expect(asset.periods[3600].length).toBeGreaterThanOrEqual(1)
+  })
+
+  it("marks status connected while studio frames are fresh", async () => {
+    ingestStudioFrame(candleFrame("142", 0, Math.floor(Date.now() / 1000), [2.0]))
+    const stats = liveEOStats()
+    // No session exists — liveness comes solely from the studio feed
+    expect(stats.status).toBe("connected")
+  })
+
+  it("drops non-finite or non-positive tick prices instead of recording them as real ticks", async () => {
+    // A DOM-scraped price is not guaranteed numeric: locale decimal commas,
+    // a loading-state placeholder ("--"), or a selector that briefly missed
+    // its target can all produce NaN. Regression for a bug where such a tick
+    // was accepted, stored as lastPrice, and silently broke up/down
+    // classification for every subsequent legitimate tick too.
+    ingestStudioFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [Number("--")]))
+    ingestStudioFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [-1]))
+    ingestStudioFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [0]))
+    let data = liveEOData()
+    let asset = data.assets.find((a) => a.id === "555")
+    expect(asset?.ticks?.count ?? 0).toBe(0)
+
+    // A legitimate tick right after must not have its up/down classification
+    // poisoned by the rejected bad ticks.
+    ingestStudioFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [1.5]))
+    ingestStudioFrame(candleFrame("555", 0, Math.floor(Date.now() / 1000), [1.6]))
+    data = liveEOData()
+    asset = data.assets.find((a) => a.id === "555")
+    expect(asset.ticks.count).toBe(2)
+    expect(asset.ticks.up).toBe(1)
+  })
+
+  it("drops OHLC bars containing any non-finite or non-positive value", async () => {
+    const now = Math.floor(Date.now() / 1000)
+    ingestStudioFrame(candleFrame("666", 5, now - (now % 60), [1.1, Number("--"), 1.05, 1.15]))
+    const data = liveEOData()
+    const asset = data.assets.find((a) => a.id === "666")
+    // Asset stub is still tracked (frame was structurally valid), but no bar
+    // was written from the corrupt OHLC row.
+    expect(asset?.periods?.[60]?.length ?? 0).toBe(0)
+  })
+
+  it("ignores non-candle actions other than profile/error", async () => {
+    const before = liveEOStats().legs.studio.framesSeen
+    ingestStudioFrame({ action: "unknown-action", message: {} })
+    expect(liveEOStats().legs.studio.framesSeen).toBe(before + 1) // seen but harmless
+    const data = liveEOData()
+    expect(data.viewed).not.toBe(undefined) // state unchanged / no crash
   })
 })

@@ -349,8 +349,8 @@ every(
 // in packObservers.mjs (pure, table-tested); the pack runner applies the envelope
 // gate. Observation NEVER resumes stopped-at-human — that is the human ack's job.
 // S6: the PICC-side settings toggle (sessionCaptureEnabled store) is read HERE —
-// an observed OFF skips p1-1. (The extension relay is gone; the captureEnabled
-// input is read as null = "not observed, default-ON assumed".)
+    // an observed OFF skips p1-1. There is no browser-side kill-switch anymore
+    // (clean break, D1): the studio leg is the only capture path.
 every(
   "pack-observation",
   60 * 1000,
@@ -373,9 +373,6 @@ every(
       headless: headlessRows.expertoption ?? {},
       liveStats,
       creds,
-      // Read the extension-relayed kill-switch (boolean false only; absent/null
-      // = nothing observed). Honest null, never invented false.
-      captureEnabled: globalThis.__picc_ext_heartbeat?.captureEnabled ?? null,
       // PICC-side toggle: default-ON when never set; only a real false disables.
       sessionCaptureEnabled: sessionCaptureEnabled()
     })

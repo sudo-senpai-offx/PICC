@@ -101,7 +101,6 @@ describe("packRunner — pure envelope gate", () => {
       noVapid: "no-vapid",
       noCcxtPairs: "no-ccxt-pairs-configured",
       signalEngineDisabled: "signal-engine-disabled",
-      extensionCaptureDisabled: "extension-capture-disabled",
       sessionCaptureDisabled: "session-capture-disabled",
       cactusNeedleT0NotShipped: "cactus-needle-t0-runtime-not-shipped",
       dependencyNotAvailable: "dependency-not-available",
@@ -168,11 +167,11 @@ describe("packRunner — runStep integration", () => {
     const { step: s } = await runner.runStep({
       packId: "pack1-local-trading-core",
       stepId: "p1-1-eo-session-capture",
-      observation: { status: "running", detail: "token present, session connected", observed: { sourceLeg: "extension" } },
+      observation: { status: "running", detail: "token present, session connected", observed: { sourceLeg: "studio" } },
       gates: { hasCredentials: true, tierAvailable: true }
     })
     expect(s.status).toBe("running")
-    expect(s.evidence[0].observed.sourceLeg).toBe("extension")
+    expect(s.evidence[0].observed.sourceLeg).toBe("studio")
   })
 
   it("stopped-at-human is NEVER auto-run: a running-intent later is rejected, and the runner never acks", async () => {

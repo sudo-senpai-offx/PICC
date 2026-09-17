@@ -44,7 +44,7 @@ const MAX_DOWNLOADS = 20
 const PERF_MODES = {
   low: { captureFps: 8, idleFps: 2, quality: 40, scale: 0.7, maxW: 1024, maxH: 768, idleAfterMs: 900 },
   medium: { captureFps: 12, idleFps: 3, quality: 55, scale: 0.85, maxW: 1280, maxH: 900, idleAfterMs: 1200 },
-  high: { captureFps: 20, idleFps: 5, quality: 62, scale: 1, maxW: 1600, maxH: 1000, idleAfterMs: 1500 }
+  high: { captureFps: 60, idleFps: 15, quality: 62, scale: 1, maxW: 1600, maxH: 1000, idleAfterMs: 1500 }
 }
 
 function detectPerfMode() {
@@ -179,8 +179,11 @@ export const PERMISSION_CATALOG = [
 ].map(([name, label]) => ({ name, label }))
 
 const DEFAULT_SETTINGS = {
-  // Pages always render in PICC's own embedded engine and stream to the
-  // content window — a separate Chrome/Edge window is never spawned.
+  // Window-first: the studio opens a real, visible, trackable browser window
+  // by default — the window where the user interacts and PICC intercepts
+  // every signal (console, network, DOM, dialogs, navigation, inputs) for
+  // intervention. Headless (no window) is an explicit opt-in for CI or liveEO's
+  // background session.
   stealth: true,
   // Humanized interaction (variable per-key latency, burst typing). OFF by
   // default per the project's no-behavioral-camouflage boundary: plain
@@ -498,7 +501,8 @@ const SITE_INDEX = [
   ["plus500.com,www.plus500.com", "plus500", "Plus500", "trading", 0, "https://www.plus500.com", "CFD trading platform."],
   ["iqoption.com,www.iqoption.com", "iqoption", "IQ Option", "trading", 0, "https://iqoption.com", "Binary options / trading platform."],
   ["olymptrade.com,www.olymptrade.com", "olymptrade", "Olymp Trade", "trading", 0, "https://olymptrade.com", "Binary options / trading platform."],
-  ["deriv.com,app.deriv.com", "deriv", "Deriv", "trading", 0, "https://deriv.com", "Online trading platform."]
+  ["deriv.com,app.deriv.com", "deriv", "Deriv", "trading", 0, "https://deriv.com", "Online trading platform."],
+  ["fxtrade.oanda.com,oanda.com", "oanda", "OANDA (fxTrade Practice)", "trading", 0, "https://fxtrade.oanda.com", "Demo venue — free practice account ($100K virtual), instant email signup, no payment info, no KYC for demo."]
 ].map(([hosts, id, name, category, payoutThreshold, url, note]) => ({
   hosts: hosts.split(","),
   id,
@@ -584,7 +588,7 @@ export function tradingVenues() {
 // ---------------------------------------------------------------------
 const studio = {
   open: false,
-  headless: true,
+  headless: false,
   profile: "studio",
   bridge: null,
   cdp: null,
@@ -876,6 +880,94 @@ function wirePage(page, tabId) {
   })
 
   installDomWatcher(page, id)
+
+  // ── Bidirectional tab sync (window → PICC) ─────────────────────────────
+  // When the user CLOSES a tab in the real browser window, the page emits
+  // "close". Prune it from studio.tabs, fix activeId, and broadcast so the
+  // studio UI never shows ghost tabs.
+  page.on("close", () => {
+    if (!studio.open) return
+    const idx = studio.tabs.findIndex((t) => t.page === page)
+    if (idx === -1) return
+    const tab = studio.tabs[idx]
+    studio.tabs.splice(idx, 1)
+    studio.tabActivity.delete(tab.id)
+    studio.frozen.delete(tab.id)
+    studio._lastAssistKeys.delete(tab.id)
+    if (studio.tabs.length === 0) {
+      // Last tab closed in the real window — keep the studio alive with a
+      // fresh blank tab (mirrors studioTab close, :2004).
+      void serial(async () => {
+        if (!studio.open || !studio.bridge?.context) return
+        const page2 = await studio.bridge.context.newPage().catch(() => null)
+        if (!page2) return
+        const t2 = { id: ++studio.lastTabId, page: page2, title: "New tab", url: "about:blank" }
+        studio.tabs.push(t2)
+        wirePage(page2, t2.id)
+        bumpTabMeta(page2, t2)
+        studio.activeId = t2.id
+        touchTabActivity(t2.id)
+        void startScreencast()
+        broadcast(tabsPayload())
+        broadcast({ type: "status", status: studioStatus() })
+      })
+      return
+    }
+    if (studio.activeId === tab.id) {
+      // Move activation to the nearest neighbor (mirrors studioTab close).
+      studio.activeId = studio.tabs[Math.min(idx, studio.tabs.length - 1)].id
+      touchTabActivity(studio.activeId)
+    }
+    void startScreencast()
+    broadcast(tabsPayload())
+    broadcast({ type: "status", status: studioStatus() })
+  })
+
+  // ── Bidirectional tab sync (user switches tabs in the real window) ──────
+  // The user clicking a different tab in the real Chrome window fires
+  // document.visibilitychange → "visible" on the newly-active tab. Inject a
+  // listener that calls back to Node.js so PICC follows. Same injection
+  // pattern as the keyboard shortcut listener above.
+  const injectVis = () => {
+    if (page.isClosed()) return
+    page.evaluate((tid) => {
+      if (window.__piccVisListener) return
+      window.__piccVisListener = true
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) window.__piccTabVisible?.(String(tid))
+      })
+      window.addEventListener("focus", () => {
+        window.__piccTabVisible?.(String(tid))
+      })
+    }, id).catch(() => {})
+  }
+  page.exposeFunction("__piccTabVisible", async (tabId) => {
+    try {
+      if (!studio.open) return
+      const tid = Number(tabId)
+      if (!Number.isFinite(tid) || tid === studio.activeId) return
+      const t = studio.tabs.find((x) => x.id === tid)
+      if (!t || !livePage(t.page)) return
+      studio.activeId = tid
+      touchTabActivity(tid)
+      void resumeTab(t)
+      void pushAssist(tid, t.url, true)
+      void startScreencast()
+      broadcast(tabsPayload())
+      broadcast({ type: "status", status: studioStatus() })
+    } catch { /* best-effort */ }
+  }).catch(() => { /* already exposed — harmless */ })
+  injectVis()
+  page.addInitScript((tid) => {
+    if (window.__piccVisListener) return
+    window.__piccVisListener = true
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) window.__piccTabVisible?.(String(tid))
+    })
+    window.addEventListener("focus", () => {
+      window.__piccTabVisible?.(String(tid))
+    })
+  }, id)
 
   page.on("framenavigated", () => {
     const url = page.url()
@@ -1232,6 +1324,22 @@ function ackScreencastFrame() {
   studio.cdp?.send("Page.screencastFrameAck", { sessionId: id }).catch(() => {})
 }
 
+/**
+ * An interaction just landed on the page — it will repaint. Flip the pump out
+ * of idle cadence immediately, cancel any idle-paced ack already scheduled,
+ * and release the pending ack so Chrome encodes the response frame now rather
+ * than after the next idle tick. This is what makes the viewport feel live
+ * on the very first click/scroll after a static period.
+ */
+function wakeScreencastPump() {
+  lastChangedAt = Date.now()
+  if (ackTimer) {
+    clearTimeout(ackTimer)
+    ackTimer = null
+  }
+  ackScreencastFrame()
+}
+
 function onScreencastFrame(e) {
   const data = e.data ?? ""
   const now = Date.now()
@@ -1428,11 +1536,11 @@ export function studioStatus() {
 }
 
 /**
- * Resolve the studio's headless flag. The default is a REAL, interactive
- * headed window: the user drives the session directly at full fidelity, and
- * the content window stays a live mirror of it. Pass headless:true (or set
- * PICC_STUDIO_HEADLESS=1, e.g. for headless CI / E2E runs) to keep the fully
- * embedded mirror-only session instead.
+ * Resolve the studio's headless flag. WINDOW-FIRST: the studio opens a REAL,
+ * visible, trackable browser window by default — the window where the user
+ * interacts and PICC intercepts every signal for intervention. Headless is the
+ * explicit opt-in (headless:true) used by CI / E2E runs and by liveEO's
+ * background session. PICC_STUDIO_HEADLESS=1 always forces headless.
  */
 export function resolveStudioHeadless(headless, env = process.env) {
   if (env?.PICC_STUDIO_HEADLESS === "1") return true
@@ -1443,9 +1551,11 @@ export async function openStudio({ headless, profile, homepage } = {}) {
   const settings = await readSettings()
   studio.perf = resolvePerf(settings)
   HUMANIZE_INPUT = process.env.PICC_HUMANIZE === "1" ? true : settings.humanizeInput === true
-  // Default: a real headed Edge window so every interaction (click, keyboard,
-  // hover, drag, file dialogs, video, 2FA) is fully native. The screencast
-  // still streams to the content window as a live mirror of the same session.
+  // Window-first: the session runs in a REAL, visible, trackable browser
+  // window by default — the window where the user interacts and PICC
+  // intercepts every signal (console, network, DOM, dialogs, navigation,
+  // inputs) for intervention. Pass headless:true explicitly for a silent
+  // session (CI / liveEO background automation).
   const head = resolveStudioHeadless(headless, process.env)
   const prof = String(profile || settings.defaultProfile || "studio").trim() || "studio"
   const home = homepage ?? settings.homepage ?? ""
@@ -1532,7 +1642,7 @@ export async function closeStudio() {
   studio.bridge = null
   studio.cdp = null
   studio.open = false
-  studio.headless = true
+  studio.headless = false
   studio.profile = "studio"
   studio.tabs = []
   studio.activeId = null
@@ -1824,7 +1934,7 @@ function resetStudioAfterDeath() {
   studio.bridge = null
   studio.cdp = null
   studio.open = false
-  studio.headless = true
+  studio.headless = false
   studio.profile = "studio"
   studio.tabs = []
   studio.activeId = null
@@ -1971,27 +2081,55 @@ async function studioTabInner({ action, url, id } = {}) {
     broadcast(tabsPayload())
     return studioStatus()
   }
+  if (action === "open") {
+    // Find-or-create deep-link open (REQ-9 style): a venue URL should focus
+    // an existing tab instead of stacking a duplicate, and create one only
+    // when nothing matches. Trailing-slash-insensitive so
+    // "https://app.expertoption.finance/" and "...finance" are the same tab.
+    const clean = String(url ?? "").trim()
+    if (!clean) throw new Error("url required for open")
+    const norm = (u) => String(u ?? "").replace(/\/+$/, "")
+    const existing = studio.tabs.find((t) => norm(t.url) === norm(clean))
+    if (existing) {
+      studio.activeId = existing.id
+      touchTabActivity(existing.id)
+      void resumeTab(existing)
+      void pushAssist(existing.id, existing.url, true)
+      if (studio.overlayEnabled) void injectOverlayForCurrentPage()
+      await existing.page.bringToFront().catch(() => {})
+      await startScreencast()
+      broadcast(tabsPayload())
+      return studioStatus()
+    }
+    return studioTabInner({ action: "new", url: clean })
+  }
   if (action === "close") {
     const target = studio.tabs.find((t) => t.id === Number(id))
     if (!target) return studioStatus() // idempotent — the tab is already gone
     const wasActive = target.id === studio.activeId
-    const idx = studio.tabs.indexOf(target)
     await target.page.close().catch(() => {})
-    studio.tabs.splice(idx, 1)
-    studio.tabActivity.delete(target.id)
-    studio.frozen.delete(target.id)
-    studio._lastAssistKeys.delete(target.id)
-    if (studio.tabs.length === 0) {
-      const page = await context.newPage()
-      const tab = { id: ++studio.lastTabId, page, title: "New tab", url: "about:blank" }
-      studio.tabs.push(tab)
-      wirePage(page, tab.id)
-      bumpTabMeta(page, tab)
-      studio.activeId = tab.id
-      touchTabActivity(tab.id)
-    } else if (wasActive) {
-      studio.activeId = studio.tabs[Math.min(idx, studio.tabs.length - 1)].id
-      touchTabActivity(studio.activeId)
+    // page.close() emits "close" on a real Playwright page, and the wirePage
+    // close handler has ALREADY pruned the tab by now. Re-find so we never
+    // splice a shifted array; only run the PICC-side bookkeeping when the
+    // handler did not fire (closed/crashed pages without an event).
+    const idx = studio.tabs.findIndex((t) => t.id === target.id)
+    if (idx !== -1) {
+      studio.tabs.splice(idx, 1)
+      studio.tabActivity.delete(target.id)
+      studio.frozen.delete(target.id)
+      studio._lastAssistKeys.delete(target.id)
+      if (studio.tabs.length === 0) {
+        const page = await context.newPage()
+        const tab = { id: ++studio.lastTabId, page, title: "New tab", url: "about:blank" }
+        studio.tabs.push(tab)
+        wirePage(page, tab.id)
+        bumpTabMeta(page, tab)
+        studio.activeId = tab.id
+        touchTabActivity(tab.id)
+      } else if (wasActive) {
+        studio.activeId = studio.tabs[Math.min(idx, studio.tabs.length - 1)].id
+        touchTabActivity(studio.activeId)
+      }
     }
     await startScreencast()
     broadcast(tabsPayload())
@@ -2005,6 +2143,9 @@ async function studioTabInner({ action, url, id } = {}) {
     void resumeTab(target)
     void pushAssist(target.id, target.url, true)
     if (studio.overlayEnabled) void injectOverlayForCurrentPage()
+    // Bring the target page to front in the real window so the user sees
+    // the tab switch (only meaningful in headed mode).
+    await target.page.bringToFront().catch(() => {})
     await startScreencast()
     broadcast(tabsPayload())
     return studioStatus()
@@ -2134,8 +2275,9 @@ export async function studioInput(input = {}) {
       throw new Error(`unknown input type "${input.type}"`)
   }
   // Kick the screencast pump so the frame reflecting this input is captured
-  // immediately instead of waiting for the next paced ack.
-  ackScreencastFrame()
+  // immediately: flip off idle cadence, cancel any idle-paced ack, and release
+  // the pending ack right away instead of waiting for the next paced ack.
+  wakeScreencastPump()
   return { ok: true, x, y, type: input.type }
 }
 

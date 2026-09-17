@@ -117,7 +117,7 @@ export async function migrateLocalStreams(): Promise<{
 // Any read of the SERVER-backed income surface (listIncomeStreams from the
 // Streams tab, getIncomeOverview from the Overview tab) first runs the
 // localStorage → server migration, so a still-unmigrated install sees its
-// streams after one open — the web-app-alone + extension-alone rule holds and
+// streams after one open — the web-app-alone rule holds and
 // nothing is cleared until the server confirms each row. One in-flight promise
 // is shared by concurrent readers; it is released on settle so a later read
 // retries, and migrateLocalStreams itself is idempotent (completed → no-op,

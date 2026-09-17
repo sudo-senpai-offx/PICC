@@ -22,8 +22,12 @@ export const DIGEST_CADENCE_MS = 600_000 // envelope cadenceMs: 10min
 /**
  * Curated free-source set, probe-verified 2026-09-13 (all returned HTTP 200 +
  * real RSS/Atom XML, no captcha gates, no key). Recorded in the spec S3 notes.
- * Operators paste any subset into PICC_NEWS_FEEDS; the digest never hardcodes
- * these as configured (empty default = honest no-news-source-configured skip).
+ * Re-extended 2026-09-15 from the free-sources research (docs are in the
+ * research pass findings): Seeking Alpha market-currents and the Federal
+ * Reserve press feed were re-probed live on 2026-09-15 (both HTTP 200 + real
+ * RSS). Operators paste any subset into PICC_NEWS_FEEDS; the digest never
+ * hardcodes these as configured (empty default = honest no-news-source-
+ * configured skip).
  */
 export const VERIFIED_FREE_FEEDS = Object.freeze([
   { id: "forexlive-news", url: "https://www.forexlive.com/feed/news" },
@@ -34,9 +38,13 @@ export const VERIFIED_FREE_FEEDS = Object.freeze([
   { id: "cryptoslate", url: "https://cryptoslate.com/feed/" },
   { id: "marketwatch", url: "https://feeds.content.dowjones.io/public/rss/mw_topstories" },
   { id: "ft-news", url: "https://www.ft.com/news-feed?format=rss" },
-  { id: "livemint-markets", url: "https://www.livemint.com/rss/markets" }
+  { id: "livemint-markets", url: "https://www.livemint.com/rss/markets" },
+  { id: "seeking-alpha", url: "https://seekingalpha.com/market_currents.xml" },
+  { id: "fed-press", url: "https://www.federalreserve.gov/feeds/press_all.xml" }
   // investing.com/rss/news_1.rss also probed 200 — excluded from the curated
   // set (heavier anti-bot posture); an operator may still add it.
+  // Federal Reserve feeds/monetary_policy.xml listed in research 404s on
+  // re-probe (2026-09-15) — never registered.
 ])
 
 /**

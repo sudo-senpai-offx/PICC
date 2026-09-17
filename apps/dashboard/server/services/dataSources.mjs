@@ -33,11 +33,10 @@ export function collectSourceStatuses(now = Date.now()) {
     if (lastSeen != null) {
       candles = classifySource(lastSeen, now)
       // Provenance: which live leg's frames were CONSUMED most recently.
-      // Arrival alone says nothing about use — the feed-mode preference gate
-      // (T4) may drop one leg while its frames keep arriving, and the served
-      // data would then be the OTHER leg's.
-      const extConsumed = Number(stats?.legs?.extension?.lastConsumedAt) || 0
-      candleFeed = lastSeen && extConsumed && extConsumed >= lastSeen - 1500 ? "extension" : "studio"
+      // The studio bridge is the only browser leg today (clean break) — the
+      // feed is attributed to it only when its frames were actually consumed.
+      const studioConsumed = Number(stats?.legs?.studio?.lastConsumedAt) || 0
+      candleFeed = studioConsumed && studioConsumed >= lastSeen - 1500 ? "studio" : null
     }
   } catch {}
   let sentiment = unconfigured()

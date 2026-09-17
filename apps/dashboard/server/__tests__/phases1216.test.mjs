@@ -61,7 +61,7 @@ describe("Phase 14 — dry-run whyAutopilot refuses cleanly without a live setup
 })
 
 describe("Phase 13 — liveness verdicts are honest", () => {
-  it("reports not-live when no studio browser exists and no extension feed runs", async () => {
+  it("reports not-live when no studio browser exists and no feed runs", async () => {
     const { getSessionLive } = await import("../services/autopilot.mjs")
     const verdict = await getSessionLive()
     expect(verdict.live).toBe(false)

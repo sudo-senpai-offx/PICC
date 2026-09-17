@@ -19,12 +19,12 @@ describe("browser perf profile resolver", () => {
     expect(p.quality).toBe(40)
   })
 
-  it("honors an explicit high env profile", () => {
+  it("honors an explicit high env profile (display-refresh cadence)", () => {
     process.env.PICC_BROWSER_PERF = "high"
     const p = resolvePerf({})
     expect(p.mode).toBe("high")
-    expect(p.captureFps).toBe(20)
-    expect(p.idleFps).toBe(5)
+    expect(p.captureFps).toBe(60)
+    expect(p.idleFps).toBe(15)
     expect(p.quality).toBe(62)
   })
 

@@ -87,6 +87,22 @@ describe("Browser Studio — trading venue redirects (Slice 5 / R5)", () => {
     expect(instrumentUrl("silencio", "BTCUSD").mode).toBe("none")
     expect(instrumentUrl("whatever", "BTCUSD").mode).toBe("none")
   })
+
+  it("registers the OANDA fxTrade Practice demo venue (free-sources research AS4)", async () => {
+    const { detectSite, tradingVenues, instrumentUrl } = await import("../services/browserStudio.mjs")
+    const site = detectSite("https://fxtrade.oanda.com/")
+    expect(site.id).toBe("oanda")
+    expect(site.name).toBe("OANDA (fxTrade Practice)")
+    expect(site.category).toBe("trading")
+    // No verified capture leg or symbol map yet → honest null kind + root redirect.
+    expect(site.platformKind).toBeNull()
+    const row = tradingVenues().find((v) => v.id === "oanda")
+    expect(row).toBeDefined()
+    expect(row.url).toBe("https://fxtrade.oanda.com")
+    const link = instrumentUrl("oanda", "EURUSD")
+    expect(link.mode).toBe("venue")
+    expect(link.url).toBe("https://fxtrade.oanda.com")
+  })
 })
 
 describe("Browser Studio â€” credential vault", () => {

@@ -945,12 +945,8 @@ export async function getSessionLive() {
     if (studioCheck.live) return { ...studioCheck, via: "studio" }
     var studioReason = studioCheck.reason
   } catch { var studioReason = "studio browser unavailable" }
-  try {
-    const upAt = Number(getBrokerStats()?.upstream?.lastAt) || 0
-    if (upAt && Date.now() - upAt < 60_000) {
-      return { live: true, reason: "extension feed streaming from your browser", url: null, via: "extension" }
-    }
-  } catch { /* ignore */ }
+  // The studio browser is the only browser leg — no further liveness source
+  // exists here.
   return { live: false, reason: studioReason, url: null, via: "none" }
 }
 

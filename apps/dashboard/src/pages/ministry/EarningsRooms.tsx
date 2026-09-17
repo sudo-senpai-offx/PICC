@@ -6,7 +6,6 @@ import { CatalogTab, OverviewTab, StreamsTab } from "@/components/IncomeStreams"
 import { getEarnings, getStreams } from "@/lib/streams"
 import { SUITE_META } from "@/lib/suites"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
-import { OverlaySettingsPanel } from "@/components/OverlaySettingsPanel"
 import type { IncomeStream } from "@/lib/types"
 
 // ---------------------------------------------------------------------
@@ -458,14 +457,6 @@ export function EarningsSimulatorRoom() {
             <SuitePanel category={stream.category} />
           </div>
 
-          <div>
-            <h2>Overlay Settings</h2>
-            <p className="muted small">
-              Configure the PICC overlay for this stream's site. The overlay appears in the headed
-              browser window and provides real-time intervention, assistance, and decision support.
-            </p>
-            <OverlaySettingsPanel site={stream.platform.toLowerCase().replace(/\s+/g, "")} />
-          </div>
         </>
       ) : null}
     </div>

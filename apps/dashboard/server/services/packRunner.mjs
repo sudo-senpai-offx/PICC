@@ -20,7 +20,6 @@ export const SKIP_REASONS = Object.freeze({
   noVapid: "no-vapid",
   noCcxtPairs: "no-ccxt-pairs-configured",
   signalEngineDisabled: "signal-engine-disabled",
-  extensionCaptureDisabled: "extension-capture-disabled",
   sessionCaptureDisabled: "session-capture-disabled",
   cactusNeedleT0NotShipped: "cactus-needle-t0-runtime-not-shipped",
   dependencyNotAvailable: "dependency-not-available",

@@ -99,7 +99,7 @@ vi.mock("../services/browserBridge.mjs", () => ({
 vi.mock("../services/liveEO.mjs", () => ({
   restartLiveEO: vi.fn(async () => true),
   feedProvenance: vi.fn(() => "studio"),
-  liveEOStats: vi.fn(() => ({ legs: { extension: {}, studio: {} }, lastSeen: 0 })),
+  liveEOStats: vi.fn(() => ({ legs: { studio: {} }, lastSeen: 0 })),
   liveEOData: vi.fn(() => null)
 }))
 

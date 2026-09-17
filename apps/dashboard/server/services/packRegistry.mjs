@@ -72,7 +72,7 @@ export function packOneDefinition() {
           tier: "T0",
           cadenceMs: 1_800_000, // captureProfiles token refresh cadence (30min)
           rpmCeiling: 0, // extraction on demand — no LLM polling rpm
-          needs: "human demo-session login in the browser/extension; re-login on token expiry"
+          needs: "human demo-session login in the browser; re-login on token expiry"
         }
       },
       {

@@ -79,7 +79,7 @@ interface UseCandleDataResult {
   availableSources: AvailableSource[]
   /** T6 — pin the next fetch to one source slug ("auto" = best/ideal). */
   setSource: (source: string) => void
-  /** Which live leg fed the series when the EO source served: "extension" | "studio" | null. */
+  /** Which live leg fed the series when the EO source served: "studio" | "auto" | null. */
   feed: string | null
   /** Actual bar resolution of the returned series (86400 = Yahoo daily). */
   resolvedTimeframe: number | null
@@ -100,7 +100,7 @@ interface CandleResponse {
   candles: Array<{ time: number; open: number; high: number; low: number; close: number; timeframe?: number }>
   source?: string
   error?: string
-  /** Which live leg fed the series: "extension" | "studio" | null (EO source only). */
+  /** Which live leg fed the series: "studio" | "auto" | null (EO source only). */
   feed?: string | null
   /** T6 — the selectable source set for the dropdown (additive). */
   availableSources?: AvailableSource[]

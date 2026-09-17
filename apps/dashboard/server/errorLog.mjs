@@ -11,8 +11,8 @@
 //   - uncaughtException / unhandledRejection / process warnings
 //   - structured log.error(...) calls (via logger.mjs)
 //   - browser console + window errors from the web dashboard (via
-//     POST /api/client-logs, handled in handlers.mjs)
-//   - errors from the extension background/content/popup contexts (same route)
+//     POST /api/client-logs, handled in handlers.mjs) — the Browser Studio
+//     window reports through the same route
 import { appendFileSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
@@ -157,7 +157,7 @@ export function _resetErrorLogForTests() {
 }
 
 /**
- * Ingest an error report arriving from a browser/extension client via
+ * Ingest an error report arriving from a browser/studio client via
  * POST /api/client-logs. Sanitizes and clamps every field before it touches
  * disk. Returns the number of entries persisted.
  */

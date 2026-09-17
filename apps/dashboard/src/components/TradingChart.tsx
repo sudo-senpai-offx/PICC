@@ -180,8 +180,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   const servedSource = source === "live" || source === "buffer" ? "expertoption" : source
   const sourceCurve = servedSource ? sourceTimeframes.get(servedSource) : undefined
   const servable = new Set<number>(sourceCurve?.length ? sourceCurve : [...servableTimeframes])
-  const sourceLabel = feed === "extension" ? "Extension feed"
-    : feed === "studio" ? "ExpertOption headless"
+  const sourceLabel = feed === "studio" ? "ExpertOption headless"
       : source === "yahoo" || source === "yahoo-daily" ? "Yahoo"
         : servedSource === "expertoption" ? "ExpertOption"
           : servedSource === "ccxt" ? "CCXT"
@@ -236,9 +235,8 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
               {isUp ? "+" : ""}{change.toFixed(4)} ({isUp ? "+" : ""}{changePct.toFixed(2)}%)
             </Badge>
           ) : null}
-          {feed === "extension" ? <Badge tone="success">Extension live</Badge>
-            : feed === "studio" ? <Badge tone="success">EO headless live</Badge>
-              : sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
+          {feed === "studio" ? <Badge tone="success">EO headless live</Badge>
+            : sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
           {/* T6 — show when the user pinned a specific source (not "auto"). */}
           {pinnedSource !== "auto" ? <span title={`Pinned to source: ${sourceLabel} — fetch from this broker only`}><Badge tone="muted">Source: {sourceLabel}</Badge></span> : null}
           {/* Cross-source verification (server `verify:true`). Honest: a badge
@@ -405,7 +403,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           />
         </ChartErrorBoundary>
       ) : (
-        // Honest empty state (T11 live finding 2026-08-29): a dead extension
+        // Honest empty state (T11 live finding 2026-08-29): a dead live
         // feed plus no fallback covering this asset/resolution returned NO
         // candles, and the old code rendered a blank canvas. Say WHY instead.
         <div

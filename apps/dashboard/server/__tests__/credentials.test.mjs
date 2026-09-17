@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 vi.mock("../services/liveEO.mjs", () => ({
   restartLiveEO: vi.fn(async () => true),
   feedProvenance: vi.fn(() => "studio"),
-  liveEOStats: vi.fn(() => ({ legs: { extension: {}, studio: {} }, lastSeen: 0 }))
+  liveEOStats: vi.fn(() => ({ legs: { studio: {} }, lastSeen: 0 }))
 }))
 
 let tmp

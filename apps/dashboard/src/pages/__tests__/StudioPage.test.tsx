@@ -1,12 +1,18 @@
 // @vitest-environment jsdom
-// Embedded browser studio page (spec PICC_EMBEDDED_BROWSER_STUDIO_v1.md, Phase A):
+// Studio page as a subtle streaming + suite-linking manager
+// (plan PICC_STUDIO_SIMPLIFICATION_AND_SOURCE_LANDING_v1.md, Part A):
 //  - auto-opens the shared Chromium on mount when closed
-//  - renders live screencast frames from the SSE stream
+//  - subscribes to the SSE stream for DATA events only (status/tabs/assist/error);
+//    frame events are received and ignored (the viewport slideshow is gone)
 //  - tab bar: switch + close; address bar: goto; nav controls: back/forward/reload
+//  - NEVER writes any server setting (fullscreen/perfMode overlap removed)
+//  - suite-linking chip when an assist event carries a suite
+//  - live indicator derived from observed status events only
 //  - cleans up the SSE stream on unmount
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
+import { Profiler } from "react"
 import { StudioPage } from "@/pages/StudioPage"
 import type { StudioStreamEvent } from "@/lib/api"
 
@@ -15,6 +21,9 @@ const closeBrowser = vi.fn().mockResolvedValue({ ok: true, open: false, headless
 const browserGoto = vi.fn().mockResolvedValue({ ok: true, url: "", title: "" })
 const browserNav = vi.fn().mockResolvedValue({ ok: true, url: "", title: "" })
 const browserTab = vi.fn().mockResolvedValue({ ok: true, open: true, headless: false, tabs: [], activeTabId: null, viewport: { width: 1440, height: 900 }, subscriberCount: 1 })
+const browserInput = vi.fn().mockResolvedValue({ ok: true, x: 0, y: 0, type: "click" })
+const getBrowserSettings = vi.fn().mockResolvedValue({ ok: true, settings: { perfMode: "auto" } })
+const saveBrowserSettings = vi.fn().mockResolvedValue({ ok: true, settings: {} })
 const streamClose = vi.fn()
 const getBrowserStatus = vi.fn()
 
@@ -25,6 +34,9 @@ vi.mock("@/lib/api", () => ({
   browserGoto: (...a: unknown[]) => browserGoto(...a),
   browserNav: (...a: unknown[]) => browserNav(...a),
   browserTab: (...a: unknown[]) => browserTab(...a),
+  browserInput: (...a: unknown[]) => browserInput(...a),
+  getBrowserSettings: (...a: unknown[]) => getBrowserSettings(...a),
+  saveBrowserSettings: (...a: unknown[]) => saveBrowserSettings(...a),
   streamBrowser: (onEvent: (e: StudioStreamEvent) => void) => {
     onEventRef = onEvent
     return { close: streamClose }
@@ -74,7 +86,7 @@ async function settle() {
   flushSync(() => {})
 }
 
-describe("StudioPage (embedded browser studio, Phase A)", () => {
+describe("StudioPage (subtle streaming + suite-link manager, Part A)", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     onEventRef = null
@@ -111,17 +123,48 @@ describe("StudioPage (embedded browser studio, Phase A)", () => {
     expect(streamClose).toHaveBeenCalledTimes(1)
   })
 
-  it("renders a live screencast frame from the stream into the viewport", async () => {
+  // A-AC1: the viewport slideshow is gone. No frame <img>, no fullscreen
+  // toggle, no viewport container — the studio is a management surface.
+  it("renders NO viewport surface: no frame img, no fullscreen toggle, no viewport container", async () => {
     const m = mountStudio()
     try {
       await settle()
-      pushEvent({ type: "frame", data: "aGVsbG8=", ts: 1, vp: { width: 1440, height: 900 } })
-      const img = m.host.querySelector<HTMLImageElement>("img[data-testid='studio-frame']")
-      expect(img).toBeTruthy()
-      expect(img?.src).toContain("data:image/jpeg;base64,aGVsbG8=")
-      expect(img?.style.width).toBe("1440px")
+      expect(m.host.querySelector("img[data-testid='studio-frame']")).toBeNull()
+      expect(m.host.querySelector("button[data-testid='studio-fullscreen']")).toBeNull()
+      expect(m.host.querySelector("[data-testid='studio-viewport']")).toBeNull()
+      // The management surface that remains:
+      expect(m.host.querySelector("[data-testid='studio-tabs']")).toBeTruthy()
+      expect(m.host.querySelector("input[data-testid='studio-address']")).toBeTruthy()
+      expect(m.host.querySelector("button[data-testid='studio-open-browser'], button[data-testid='studio-close-browser']")).toBeTruthy()
     } finally {
       m.unmount()
+    }
+  })
+
+  // A-AC3: frame events are received but never cause render/commit work.
+  it("ignores frame events entirely: a frame burst causes zero commits", async () => {
+    let commits = 0
+    const host = document.createElement("div")
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    flushSync(() => {
+      root.render(
+        <Profiler id="studio-plane" onRender={() => { commits += 1 }}>
+          <StudioPage />
+        </Profiler>
+      )
+    })
+    try {
+      await settle()
+      const baseline = commits
+      for (let i = 0; i < 20; i += 1) {
+        pushEvent({ type: "frame", data: `ZnJhbWUtaQ${i}==`, ts: i + 2, vp: { width: 1440, height: 900 } })
+      }
+      expect(commits).toBe(baseline) // frames never reach React
+      expect(host.querySelector("img[data-testid='studio-frame']")).toBeNull()
+    } finally {
+      root.unmount()
+      document.body.removeChild(host)
     }
   })
 
@@ -211,12 +254,94 @@ describe("StudioPage (embedded browser studio, Phase A)", () => {
     }
   })
 
+  // A-AC4: suite linking — the assist event's suite renders a back-link chip.
+  it("renders a suite-linking chip when assist carries a suite (links to the suite home)", () => {
+    const m = mountStudio()
+    try {
+      pushEvent({
+        type: "assist",
+        assist: { site: { id: "expertoption", name: "ExpertOption", category: "trading", payoutThreshold: 10, url: "app.expertoption.com", note: "", host: "app.expertoption.com" }, suite: { id: "trading", label: "Trading", icon: "📈" }, hasSavedCredentials: true, tabId: 1 }
+      })
+      const chip = m.host.querySelector<HTMLAnchorElement>("a[data-testid='studio-suite-link']")
+      expect(chip).toBeTruthy()
+      expect(chip?.textContent).toContain("Trading")
+      expect(chip?.getAttribute("href")).toBe("/suites/trading")
+    } finally {
+      m.unmount()
+    }
+  })
+
+  it("renders no suite chip when assist carries no suite", () => {
+    const m = mountStudio()
+    try {
+      pushEvent({
+        type: "assist",
+        assist: { site: null, hasSavedCredentials: false, tabId: 1 }
+      })
+      expect(m.host.querySelector("a[data-testid='studio-suite-link']")).toBeNull()
+    } finally {
+      m.unmount()
+    }
+  })
+
+  // A-AC2: the studio NEVER writes server settings (fullscreen/perfMode overlap removed).
+  it("never writes any server setting across mount, stream events, actions, and unmount", async () => {
+    const m = mountStudio()
+    await settle()
+    pushEvent({ type: "frame", data: "aGVsbG8=", ts: 1, vp: { width: 1440, height: 900 } })
+    pushEvent({ type: "status", status: { ...OPEN_STATUS, currentTitle: "updated" } })
+    pushEvent({
+      type: "assist",
+      assist: { site: null, hasSavedCredentials: true, tabId: 1 }
+    })
+    m.host.querySelector<HTMLElement>("button[data-testid='studio-back']")?.click()
+    m.host.querySelector<HTMLElement>("button[data-testid='studio-new-tab']")?.click()
+    m.host.querySelector<HTMLElement>("button[data-testid='studio-close-browser']")?.click()
+    m.unmount()
+    await settle()
+    expect(saveBrowserSettings).not.toHaveBeenCalled()
+    expect(getBrowserSettings).not.toHaveBeenCalled()
+  })
+
   it("offers open/close of the browser", async () => {
     const m = mountStudio()
     try {
       await settle()
       m.host.querySelector<HTMLElement>("button[data-testid='studio-close-browser']")?.click()
       expect(closeBrowser).toHaveBeenCalledTimes(1)
+    } finally {
+      m.unmount()
+    }
+  })
+
+  it("opens a new tab from the tab strip and renders it from the tabs event", () => {
+    const m = mountStudio()
+    try {
+      m.host.querySelector<HTMLElement>("button[data-testid='studio-new-tab']")?.click()
+      expect(browserTab).toHaveBeenCalledWith({ action: "new" })
+      pushEvent({
+        type: "tabs",
+        tabs: [{ id: 2, url: "about:blank", title: "New tab", active: true, auth: null }],
+        activeTabId: 2
+      })
+      const tabs = m.host.querySelectorAll("[data-testid='studio-tab']")
+      expect(tabs.length).toBe(1)
+      expect(tabs[0]?.textContent).toContain("New tab")
+    } finally {
+      m.unmount()
+    }
+  })
+
+  it("shows a live indicator only from observed status (open + subscribers)", async () => {
+    const m = mountStudio()
+    try {
+      await settle()
+      const live = m.host.querySelector("[data-testid='studio-live']")
+      expect(live).toBeTruthy()
+      expect(live?.textContent).toContain("live")
+      // Status event reports the browser closed → indicator turns off.
+      pushEvent({ type: "status", status: { ...OPEN_STATUS, open: false, subscriberCount: 0 } })
+      expect(m.host.querySelector("[data-testid='studio-live']")?.textContent).toContain("closed")
     } finally {
       m.unmount()
     }

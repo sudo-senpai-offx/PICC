@@ -29,7 +29,7 @@ vi.mock("../services/liveEO.mjs", () => ({
   liveEOAccountRaw: vi.fn(() => null),
   restartLiveEO: vi.fn(async () => true),
   feedProvenance: vi.fn(() => "studio"),
-  liveEOStats: vi.fn(() => ({ legs: { extension: {}, studio: {} }, lastSeen: 0 }))
+  liveEOStats: vi.fn(() => ({ legs: { studio: {} }, lastSeen: 0 }))
 }))
 
 const FRESH = new Date().toISOString()
@@ -133,12 +133,12 @@ describe("extractAccountState (T5)", () => {
       venueId: "expertoption",
       frames: [
         { at: 100, leg: "studio", payload: { balance: 1 } },
-        { at: 200, leg: "extension", payload: { balance: 2 } }
+        { at: 200, leg: "studio", payload: { balance: 2 } }
       ]
     })
     expect(rec.balance).toBe(2)
     expect(rec.venueId).toBe("expertoption")
-    expect(rec.sourceLeg).toBe("extension")
+    expect(rec.sourceLeg).toBe("studio")
     expect(rec.observedAt).toBe(new Date(200).toISOString())
   })
 

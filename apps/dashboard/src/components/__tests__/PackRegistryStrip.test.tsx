@@ -118,7 +118,7 @@ afterEach(() => {
 describe("PackRegistryStrip (S5/T5.1)", () => {
   it("renders every observed step status + envelope fact line + 'as of' timestamp; never echoes credentials", async () => {
     stubFetch(registry({
-      "p1-1-eo-session-capture": { status: "stopped-at-human", detail: "token expired — re-login in the extension" },
+      "p1-1-eo-session-capture": { status: "stopped-at-human", detail: "token expired — re-login in the browser" },
       "p1-2-ccxt-data-poll": { status: "running", detail: "polls ok" },
       "p1-3-news-digest": { status: "skipped-unconfigured", detail: "no feeds configured" },
       "p1-4-signal-notifications": { status: "idle" }
@@ -284,7 +284,7 @@ describe("PackRegistryStrip (S5/T5.1)", () => {
         status: 200,
         json: async () => registry({
           "p1-1-eo-session-capture": stopped
-            ? { status: "stopped-at-human", detail: "token expired — re-login in the extension" }
+            ? { status: "stopped-at-human", detail: "token expired — re-login in the browser" }
             : { status: "idle", detail: "human handoff acknowledged — step re-armed" }
         })
       } as unknown as Response

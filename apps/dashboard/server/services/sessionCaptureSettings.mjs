@@ -1,7 +1,6 @@
 // S6 / T6.2 — PICC-side session-capture kill-switch (owner decision 2026-09-15):
-// the dashboard SETTINGS toggle is authoritative over the extension toggle when
-// present (AND semantics: either "off" wins), and the extension governs alone in
-// extension-only mode (no server reachable → built-in fallback). Persisted in
+// the dashboard SETTINGS toggle is THE authoritative gate — there is no
+// browser-side toggle, so this file is the only switch. Persisted in
 // server/data/session-capture-settings.json (gitignored). DEFAULT-ON: absent
 // setting = capture allowed (honesty contract — absent is never treated as off).
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
@@ -35,8 +34,8 @@ export function _setSessionCaptureFile(path) {
 export function _resetSessionCaptureCache() {}
 
 /**
- * Effective PICC-side session-capture state. True = capture allowed at the
- * PICC level (the extension toggle may still veto); false = PICC killed it.
+ * Effective PICC-side session-capture state. True = capture allowed;
+ * false = PICC killed it.
  * Default true — an unset setting is NEVER treated as off.
  */
 export function sessionCaptureEnabled() {

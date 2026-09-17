@@ -10,8 +10,8 @@
 //   forex pairs · crypto · metals · energies · indices · equities
 //
 // The ALIASES table is the single source of truth for asset normalization.
-// The extension relay (content.js) no longer mirrors this — it forwards raw
-// frames and the server normalizes via canonicalAssetId().
+// The Browser Studio relay forwards raw frames and the server normalizes
+// via canonicalAssetId().
 
 export const ASSET_ALIASES = {
   // ── Metals ──────────────────────────────────────────────────────────────

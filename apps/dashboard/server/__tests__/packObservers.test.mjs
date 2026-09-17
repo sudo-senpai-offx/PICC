@@ -3,7 +3,7 @@
 // writes, no network, no credentials anywhere.
 //
 // Honesty contract under test:
-//   - extension kill-switch off → skipped-unconfigured "extension-capture-disabled";
+//   - PICC-settings kill-switch off → skipped-unconfigured "session-capture-disabled";
 //   - degraded unconfigured/expired → stopped-at-human "needs: re-login";
 //   - no token → stopped-at-human "needs: login";
 //   - token + connected session → running with sourceLeg;
@@ -30,13 +30,6 @@ describe("observeEoCapture — T1.1 status mapping table", () => {
     vi.resetModules()
   })
 
-  it("extension kill-switch observed OFF → skipped-unconfigured with the exact reason", () => {
-    const r = obs.observeEoCapture({ captureEnabled: false })
-    expect(r.status).toBe("skipped-unconfigured")
-    expect(r.detail).toBe("extension-capture-disabled")
-    expect(r.observed.captureEnabled).toBe(false)
-  })
-
   it("PICC-settings kill-switch observed OFF → skipped-unconfigured session-capture-disabled (settings wins)", () => {
     const r = obs.observeEoCapture({ sessionCaptureEnabled: false })
     expect(r.status).toBe("skipped-unconfigured")
@@ -44,24 +37,11 @@ describe("observeEoCapture — T1.1 status mapping table", () => {
     expect(r.observed.sessionCaptureEnabled).toBe(false)
   })
 
-  it("settings OFF + extension OFF → settings reason (PICC-side is authoritative)", () => {
-    const r = obs.observeEoCapture({ sessionCaptureEnabled: false, captureEnabled: false })
-    expect(r.status).toBe("skipped-unconfigured")
-    expect(r.detail).toBe("session-capture-disabled")
-    expect(r.observed.captureEnabled).toBe(false)
-  })
-
   it("settings OFF carries the 'capture' workflow pathway prompting PICC settings", () => {
     const r = obs.observeEoCapture({ sessionCaptureEnabled: false })
     expect(r.observed.pathway.need).toBe("capture")
     expect(r.observed.pathway.prompt).toMatch(/PICC settings/)
     expect(r.observed.pathway.steps.length).toBeGreaterThan(0)
-  })
-
-  it("settings NOT observed (null) is never assumed off — extension gate still governs", () => {
-    const r = obs.observeEoCapture({ sessionCaptureEnabled: null, captureEnabled: false })
-    expect(r.status).toBe("skipped-unconfigured")
-    expect(r.detail).toBe("extension-capture-disabled")
   })
 
   it("kill-switch NOT observed (null) is never assumed off — the mapping proceeds", () => {
@@ -110,17 +90,15 @@ describe("observeEoCapture — T1.1 status mapping table", () => {
 
   it("connected session + token → running with honest sourceLeg provenance", () => {
     const r = obs.observeEoCapture({
-      headless: { sourceLeg: "extension" },
-      liveStats: { status: "connected", feedMode: "extension" },
-      creds: { expertoptionToken: "abc123" },
-      captureEnabled: null
+      headless: { sourceLeg: "studio" },
+      liveStats: { status: "connected", feedMode: "studio" },
+      creds: { expertoptionToken: "abc123" }
     })
     expect(r.status).toBe("running")
     expect(r.observed.tokenConfigured).toBe(true)
-    expect(r.observed.sourceLeg).toBe("extension")
-    expect(r.observed.feedMode).toBe("extension")
+    expect(r.observed.sourceLeg).toBe("studio")
+    expect(r.observed.feedMode).toBe("studio")
     expect(r.observed.status).toBe("connected")
-    expect(r.observed.captureEnabled).toBeNull() // null observed — rendered "not-observed"
   })
 
   it("REGRESSION: degraded cleared by softReconnect + fresh token → running (not stuck stopped-at-human)", () => {
@@ -132,20 +110,18 @@ describe("observeEoCapture — T1.1 status mapping table", () => {
     // fresh. This test verifies the seam produces the right state AFTER the fix:
     // degraded=null (cleared) + token present → running.
     const r = obs.observeEoCapture({
-      headless: { sourceLeg: "extension" },
-      liveStats: { status: "connected", degraded: null, feedMode: "extension" },
-      creds: { expertoptionToken: "fresh-token-after-reconnect" },
-      captureEnabled: null
+      headless: { sourceLeg: "studio" },
+      liveStats: { status: "connected", degraded: null, feedMode: "studio" },
+      creds: { expertoptionToken: "fresh-token-after-reconnect" }
     })
     expect(r.status).toBe("running")
     expect(r.observed.tokenConfigured).toBe(true)
     expect(r.observed.degradedKind).toBeUndefined() // null degraded → not surfaced
     // If degraded were STILL set (the old bug), this would be stopped-at-human:
     const stuckBug = obs.observeEoCapture({
-      headless: { sourceLeg: "extension" },
-      liveStats: { status: "expired", degraded: { kind: "expired", reason: "old error" }, feedMode: "extension" },
-      creds: { expertoptionToken: "fresh-token-after-reconnect" },
-      captureEnabled: null
+      headless: { sourceLeg: "studio" },
+      liveStats: { status: "expired", degraded: { kind: "expired", reason: "old error" }, feedMode: "studio" },
+      creds: { expertoptionToken: "fresh-token-after-reconnect" }
     })
     expect(stuckBug.status).toBe("stopped-at-human") // confirms the old bug behavior
     expect(stuckBug.observed.degradedKind).toBe("expired")
@@ -200,7 +176,7 @@ describe("coerceObservationForStoppedStep — ack-only guard at the wiring seam"
 
   it("S6/T6.2: a kill-switch skip on a stopped step → same-status stopped-at-human carrying the real facts + the prior login pathway (pending handoff is never auto-cancelled)", () => {
     const r = obs.coerceObservationForStoppedStep(
-      { status: "skipped-unconfigured", detail: "session-capture-disabled", observed: { sessionCaptureEnabled: false, source: "PICC settings kill-switch", captureEnabled: true } },
+      { status: "skipped-unconfigured", detail: "session-capture-disabled", observed: { sessionCaptureEnabled: false, source: "PICC settings kill-switch" } },
       "stopped-at-human",
       { need: "re-login", prompt: "Manual login required", steps: ["Log in"] }
     )
@@ -208,22 +184,10 @@ describe("coerceObservationForStoppedStep — ack-only guard at the wiring seam"
     expect(r.detail).toBe("capture kill-switch off (session-capture-disabled); pending handoff still awaits human ack — the flip never cancels the handoff")
     // the REAL observed kill-switch facts survive (honest evidence, fresh row)
     expect(r.observed.sessionCaptureEnabled).toBe(false)
-    expect(r.observed.captureEnabled).toBe(true)
     expect(r.observed.source).toBe("PICC settings kill-switch")
     // the pending login handoff's pathway stays on the read surface; the
     // capture prompt appears only after the ack re-arms the step
     expect(r.observed.pathway).toEqual({ need: "re-login", prompt: "Manual login required", steps: ["Log in"] })
-  })
-
-  it("S6/T6.2: an extension kill-switch skip on a stopped step coerce the same way (server-side reason rides along)", () => {
-    const r = obs.coerceObservationForStoppedStep(
-      { status: "skipped-unconfigured", detail: "extension-capture-disabled", observed: { captureEnabled: false, source: "extension kill-switch", sessionCaptureEnabled: null } },
-      "stopped-at-human",
-      null // no prior pathway — nothing to preserve
-    )
-    expect(r.status).toBe("stopped-at-human")
-    expect(r.detail).toContain("extension-capture-disabled")
-    expect(r.observed.captureEnabled).toBe(false)
   })
 
   it("non-kill-switch skip intents on a stopped step pass through untouched (the observer's honest status wins)", () => {

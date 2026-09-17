@@ -196,7 +196,7 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
     expect(resDefault.body.config).toEqual({})
   })
 
-  // ── T8 — headless-status (Mechanism D: the extension worker's poll) ────────
+  // ── T8 — headless-status (Mechanism D: the studio routing poll) ─────────
 
   it("GET headless-status reports every venue honestly before any run — never a claimed session", async () => {
     const res = await call(handleApi, "GET", "/api/trading/headless-status")

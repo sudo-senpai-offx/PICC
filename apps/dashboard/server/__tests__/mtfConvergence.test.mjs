@@ -164,7 +164,7 @@ describe("dimension voters (unit)", () => {
     expect(STOCHRSI_TRIGGER_BAND).toEqual({ lo: 40, hi: 60 })
   })
 
-  it("volatility votes on pull-from-band, not extension", () => {
+  it("volatility votes on pull-from-band, not band escape", () => {
     const above = { last: 101, bollinger: { mid: 100, percentB: 0.6 } }
     const below = { last: 99, bollinger: { mid: 100, percentB: 0.4 } }
     expect(voteVolatility(above)).toEqual({ enabled: true, observed: true, value: 1, reason: "bull pull" })

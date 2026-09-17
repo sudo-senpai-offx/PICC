@@ -1105,15 +1105,15 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   // Feed preference (T4): GET reads the mode + live legs; POST sets the mode.
-  // Preference-with-fallback — the other leg takes over when the preferred one
-  // dies, so a live feed is never dropped (the extension can be closed and the
-  // studio leg still serves, and vice versa).
+  // Preference-with-fallback — a future second leg would take over when the
+  // preferred one dies, so a live feed is never dropped. The studio bridge is
+  // the only browser leg.
   if (path === "/api/trading/feed-mode" && (req.method === "GET" || req.method === "POST")) {
     const { getFeedMode, setFeedMode, liveEOStats } = await import("./services/liveEO.mjs")
     if (req.method === "POST") {
       const want = body?.feedMode
-      if (typeof want !== "string" || !["auto", "extension", "studio"].includes(want)) {
-        writeJson(res, 400, { ok: false, error: "feedMode must be auto | extension | studio" })
+      if (typeof want !== "string" || !["auto", "studio"].includes(want)) {
+        writeJson(res, 400, { ok: false, error: "feedMode must be auto | studio" })
         return
       }
       setFeedMode(want)
@@ -1124,7 +1124,6 @@ async function _handleApiInner(req, res, url, reqId) {
       feedMode: getFeedMode(),
       preference: getFeedMode(),
       legs: {
-        extension: { alive: stats.legs.extension.lastAt > 0 && Date.now() - stats.legs.extension.lastAt < 60_000, lastAt: stats.legs.extension.lastAt },
         studio: { alive: stats.legs.studio.lastAt > 0 && Date.now() - stats.legs.studio.lastAt < 60_000, lastAt: stats.legs.studio.lastAt }
       }
     })
@@ -1414,7 +1413,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   // Phase 5 (spec T8 / Mechanism D) — headless-session status for the
-  // extension worker poll. Read-only + authenticated (localhost passes;
+  // studio's routing poll. Read-only + authenticated (localhost passes;
   // remote callers need a valid session token — same gate as the sibling
   // trading endpoints). Rows are the ENGINE's observed state — idle /
   // needs-credentials / not-enabled are reported honestly, never a claimed
@@ -2300,8 +2299,8 @@ async function _handleApiInner(req, res, url, reqId) {
         fetchCandles(assetId, { timeframe, count, ensureWatch: ensureWatchingAsset, source }),
         listAvailableSources(assetId, { timeframe })
       ])
-      // Leg-level provenance when the live EO leg served: extension frames vs
-      // headless studio frames (mirrors dataSources.collectSourceStatuses).
+      // Leg-level provenance when the live EO leg served: studio bridge vs
+      // data-source buffer frames (mirrors dataSources.collectSourceStatuses).
       const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : null
       if (!out.candles.length) {
         return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources, verifySources: 0, verifiedCount: 0, verifiedRatio: 0 })
@@ -3747,8 +3746,8 @@ const creds = await getVenueCredentials()
     return
   }
 
-  // Client error reports (web dashboard browser console + extension contexts).
-  // Gated by PICC_ERROR_LOG — when disabled, reports are acknowledged but
+  // Client error reports (web dashboard browser console, incl. the studio
+  // window). Gated by PICC_ERROR_LOG — when disabled, reports are acknowledged but
   // dropped so clients stop buffering.
   if (path === "/api/client-logs" && req.method === "POST") {
     if (!errorLogEnabled()) {
@@ -4206,10 +4205,13 @@ const BROWSER_ROUTES = {
     if (!(await requireAuth(req, res))) return true
     if (req.method !== "POST") return false
     try {
-      // PICC always renders pages in its own embedded engine and streams them
-      // to the content window — a separate headed window is never opened. The
-      // headless flag is accepted for API compatibility but not used.
-      const status = await withTimeout(openStudio({ headless: Boolean(parsed.body?.headless) }), 45000)
+      // WINDOW-FIRST: PICC opens the studio as a real, separate, visible
+      // browser window it fully intercepts (inputs, console, network, DOM,
+      // dialogs, navigation) and keeps tab state in sync both ways. The
+      // headless flag is honored when the client explicitly sends one
+      // (headless:true forces the embedded/background mode); when omitted,
+      // the window-first default in resolveStudioHeadless applies.
+      const status = await withTimeout(openStudio({ headless: parsed.body?.headless }), 45000)
       writeJson(res, 200, status)
     } catch (err) {
       writeJson(res, err.code === "NO_BROWSER" ? 424 : 500, { ok: false, error: err.message })
@@ -4684,7 +4686,7 @@ function readBodyMax(req, maxBytes) {
 
 // Baseline hardening headers applied to every JSON response (F-04). The CSP
 // keeps the SPA self-only for scripts while allowing the real browser
-// surfaces the app uses (extension/dev loopback feeds + cloud data fetch
+// surfaces the app uses (dev loopback feeds + cloud data fetch
 // https/wss). frame-ancestors none + X-Frame-Options DENY stop clickjacking
 // of a page that touches payments and broker tokens.
 export const SECURITY_HEADERS = {

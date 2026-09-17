@@ -27,7 +27,7 @@ describe("autodetect.fingerprint (pure proposal builder)", () => {
       wsUrls: ["wss://earner.site/gateway"]
     })
     expect(r.proposed.scan.mode).toBe("wsFrames")
-    // wsUrlRe is a regex *source* the extension compiles into a sniff regex.
+    // wsUrlRe is a regex *source* the autodetect fingerprint compiles into a sniff regex.
     expect(new RegExp(r.proposed.scan.wsUrlRe).test("wss://earner.site/gateway")).toBe(true)
     expect(r.confidence).toBeGreaterThan(0)
   })

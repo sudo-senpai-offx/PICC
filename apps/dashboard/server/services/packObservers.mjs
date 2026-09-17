@@ -5,17 +5,15 @@
 // → status mapping table is trivially table-tested with fake seams.
 //
 // P1-1 EO session capture (T1.1) mapping per spec AC:
-//   extension kill-switch off  → skipped-unconfigured "extension-capture-disabled"
+//   PICC-settings kill-switch off → skipped-unconfigured "session-capture-disabled"
 //   degraded unconfigured/expired → stopped-at-human "needs: re-login"
 //   no token at all           → stopped-at-human "needs: login"
 //   token present (armed)     → running, observed {tokenConfigured, status,
 //                               sourceLeg, feedMode}
 // Honesty notes:
-//   - the extension kill-switch is client-side (content.js chrome.storage) and
-//     is NOT transmitted to the server today — the live observer reports
-//     captureEnabled only from what the server actually received (null until
-//     the extension ever reports it), never an assumed "false";
-//   - an observed 0/false is a real observation; null is "not observed".
+//   - the PICC-side settings kill-switch (sessionCaptureEnabled) is read by the
+//     scheduler wiring from the real settings store — default-ON when never set,
+//     only a real observed false disables (never an assumed off);
 //
 // T1.2 — T0 extraction sub-step: the Cactus Needle runtime is
 // DEPENDENCY-NOT-YET-AVAILABLE, so absent → skipped-unconfigured
@@ -37,7 +35,7 @@ function loginPathway({ need, reason = null }) {
     need,
     prompt: "Manual login required — PICC never auto-fills, auto-detects, or automates broker logins.",
     steps: [
-      "Open the ExpertOption app tab for the capture leg you use (studio browser, or your own browser with the PICC extension): https://app.expertoption.com/",
+      "Open the ExpertOption app tab for the capture leg you use (the studio browser, or your own browser): https://app.expertoption.com/",
       loginStep,
       "Keep the tab open — the 60s session-refresh pass reads the token from the logged-in tab automatically.",
       "Then acknowledge this handoff in the packs strip — the step re-arms from stopped-at-human (observation never auto-resumes it)."
@@ -70,11 +68,11 @@ function capturePathway() {
  * stopped-at-human observation (keeps the real observed payload, records
  * fresh evidence) — never auto-resuming the step. PURE: table-tested here.
  *
- * S6/T6.2 — a kill-switch skip (extension/settings capture disabled) on a
+ * S6/T6.2 — a session-capture settings kill-switch skip on a
  * stopped-at-human step is handled the same way: the pending handoff is
  * NEVER auto-cancelled by a kill-switch flip. The observation is rewritten
  * to same-status stopped-at-human carrying the REAL kill-switch facts in
- * observed (sessionCaptureEnabled/captureEnabled + source), with the prior
+ * observed (sessionCaptureEnabled + source), with the prior
  * login pathway preserved so the strip keeps instructing the pending handoff;
  * the capture prompt appears only after the ack re-arms the step (next tick
  * then skips honestly).
@@ -99,7 +97,7 @@ export function coerceObservationForStoppedStep(observation, currentStatus, prio
   // login pathway. Any OTHER skip intent passes through untouched (the
   // observer's honest status wins; the registry rejects it only if illegal).
   const killSwitchSkip = observation?.status === "skipped-unconfigured" &&
-    (observation?.detail === SKIP_REASONS.sessionCaptureDisabled || observation?.detail === SKIP_REASONS.extensionCaptureDisabled)
+    observation?.detail === SKIP_REASONS.sessionCaptureDisabled
   if (killSwitchSkip) {
     return {
       ...observation,
@@ -119,18 +117,17 @@ export function coerceObservationForStoppedStep(observation, currentStatus, prio
 /**
  * Survey the EO session-capture step from the real seams' outputs.
  *
- * S6/T6.2 kill-switch AND-gate (owner decision 2026-09-15): session capture
- * runs only when BOTH switches allow. PICC-side settings (dashboard toggle)
- * is authoritative; the extension toggle is a local veto that also applies in
- * extension-only mode (no server → built-in fallback). An UNOBSERVED switch
- * (null) is never assumed off — default-ON.
+ * S6/T6.2 PICC-side session-capture kill-switch (owner decision 2026-09-15):
+ * the dashboard setting is authoritative — an observed OFF skips. An
+ * UNOBSERVED switch (null) is never assumed off — default-ON. There is no
+ * browser-side kill-switch anymore (clean break, D1): the studio leg is the
+ * only capture path.
  *
  * @param {{headless?: {sourceLeg?: string|null},
  *          liveStats?: {status?: string,
  *                       degraded?: {kind?: string, reason?: string}|null,
  *                       feedMode?: string},
  *          creds?: {expertoptionToken?: string},
- *          captureEnabled?: boolean|null,
  *          sessionCaptureEnabled?: boolean|null}} opts  null = server never observed it
  * @returns {{status:string, detail:string, observed:object}}
  *          a registry observation ready for runStep
@@ -139,7 +136,6 @@ export function observeEoCapture({
   headless = {},
   liveStats = {},
   creds = {},
-  captureEnabled = null,
   sessionCaptureEnabled = null
 } = {}) {
   // PICC-side kill-switch first — the dashboard setting is authoritative when
@@ -153,19 +149,8 @@ export function observeEoCapture({
       observed: {
         sessionCaptureEnabled: false,
         source: "PICC settings kill-switch",
-        captureEnabled,
         pathway: capturePathway()
       }
-    }
-  }
-
-  // Extension kill-switch: only actionable when the server ACTUALLY observed it
-  // off. null = "not observed, default-ON assumed" — we never assume false.
-  if (captureEnabled === false) {
-    return {
-      status: "skipped-unconfigured",
-      detail: SKIP_REASONS.extensionCaptureDisabled,
-      observed: { captureEnabled: false, source: "extension kill-switch", sessionCaptureEnabled }
     }
   }
 
@@ -178,7 +163,6 @@ export function observeEoCapture({
         degradedKind: degKind,
         reason: liveStats.degraded.reason,
         tokenConfigured: Boolean(creds.expertoptionToken?.trim()),
-        captureEnabled,
         sessionCaptureEnabled,
         pathway: loginPathway({ need: "re-login", reason: liveStats.degraded.reason })
       }
@@ -191,7 +175,6 @@ export function observeEoCapture({
       detail: "needs: login",
       observed: {
         tokenConfigured: false,
-        captureEnabled,
         sessionCaptureEnabled,
         pathway: loginPathway({ need: "login" })
       }
@@ -206,7 +189,6 @@ export function observeEoCapture({
       status: liveStats.status ?? null,
       sourceLeg: headless.sourceLeg ?? null,
       feedMode: liveStats.feedMode ?? null,
-      captureEnabled,
       sessionCaptureEnabled
     }
   }

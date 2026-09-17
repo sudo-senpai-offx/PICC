@@ -5,8 +5,7 @@ import { capabilitiesPanelModel, type CapabilitiesDisplay } from "@/lib/integrat
 
 /**
  * Machine-level capabilities snapshot (spec T6).
- * Honesty: an absent extension sensor renders "sensor not found" (never a
- * claimed session); unconfigured notifier channels stay "off". The whole
+ * Honesty: unconfigured notifier channels stay "off". The whole
  * panel is guarded by the signal-engine flag — when the engine is disabled
  * we say so instead of pretending it is live.
  */
@@ -60,13 +59,6 @@ export function CapabilitiesPanel() {
             <div style={{ padding: "4px 8px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center" }}>
               <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Browser</div>
               <div style={{ fontSize: 12, fontWeight: 700 }}>{model.browserFound ? "found" : "not found"}</div>
-            </div>
-            <div style={{ padding: "4px 8px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Ext sensor</div>
-              {/* Honesty: false => "not seen", never a claimed session */}
-              <div style={{ fontSize: 12, fontWeight: 700, color: model.sensorSeen ? "#4ade80" : "var(--text-muted)" }}>
-                {model.sensorSeen ? "seen" : "not found"}
-              </div>
             </div>
           </div>
 

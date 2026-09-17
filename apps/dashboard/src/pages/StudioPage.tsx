@@ -1,8 +1,12 @@
-// Embedded browser studio page (spec PICC_EMBEDDED_BROWSER_STUDIO_v1.md, Phase A).
-// Renders the live shared Chromium screencast (SSE frames) with a tab bar,
-// address bar, nav controls and open/close. One browser for every suite — this
-// page is only a viewport over the server's studio singleton; it never opens a
-// second browser or a separate window.
+// Browser studio page — subtle streaming + suite-linking manager
+// (plan PICC_STUDIO_SIMPLIFICATION_AND_SOURCE_LANDING_v1.md, Part A).
+// Manages the server's shared studio singleton: tab bar, address bar, nav
+// controls, open/close, live stream state, and a suite-linking chip. The
+// viewport slideshow and the fullscreen toggle are REMOVED (owner directive
+// 2026-09-16): this page never renders frames and never writes a server
+// setting — perfMode and session-capture settings are owned by Settings.tsx
+// only. Frame events on the stream are received and ignored; the data plane
+// (status/tabs/assist/error) commits at its own cadence.
 import { useEffect, useRef, useState } from "react"
 import {
   browserGoto,
@@ -23,6 +27,7 @@ interface Props {
 interface AssistState {
   siteName: string | null
   hasSavedCredentials: boolean | null
+  suite: { id: string; label: string } | null
 }
 
 const EMPTY_TABS: StudioTab[] = []
@@ -31,9 +36,8 @@ export function StudioPage({ compact = false }: Props) {
   const [status, setStatus] = useState<StudioStatus | null>(null)
   const [tabs, setTabs] = useState<StudioTab[]>(EMPTY_TABS)
   const [activeTabId, setActiveTabId] = useState<number | null>(null)
-  const [frame, setFrame] = useState<{ data: string; width: number; height: number } | null>(null)
   const [address, setAddress] = useState("")
-  const [assist, setAssist] = useState<AssistState>({ siteName: null, hasSavedCredentials: null })
+  const [assist, setAssist] = useState<AssistState>({ siteName: null, hasSavedCredentials: null, suite: null })
   const [error, setError] = useState<string | null>(null)
   const openingRef = useRef(false)
 
@@ -63,11 +67,9 @@ export function StudioPage({ compact = false }: Props) {
 
   useEffect(() => {
     const stream = streamBrowser((e: StudioStreamEvent) => {
-      if (e.type === "frame" && e.data) {
-        const vp = e.vp ?? { width: 1440, height: 900 }
-        setFrame({ data: e.data, width: vp.width, height: vp.height })
-        return
-      }
+      // Data plane only. Frame events are deliberately ignored: the viewport
+      // slideshow is gone, so a frame payload must never cause a commit.
+      if (e.type === "frame") return
       if (e.type === "status" && e.status) {
         setStatus(e.status)
         setAddress((prev) => e.status?.currentUrl ?? prev)
@@ -83,7 +85,8 @@ export function StudioPage({ compact = false }: Props) {
       if (e.type === "assist" && e.assist) {
         setAssist({
           siteName: e.assist.site?.name ?? null,
-          hasSavedCredentials: e.assist.hasSavedCredentials
+          hasSavedCredentials: e.assist.hasSavedCredentials,
+          suite: e.assist.suite ? { id: e.assist.suite.id, label: e.assist.suite.label } : null
         })
         return
       }
@@ -121,18 +124,24 @@ export function StudioPage({ compact = false }: Props) {
     void closeBrowser().then((s) => {
       setStatus(s)
       setTabs([])
-      setFrame(null)
     })
   }
 
+  const onNewTab = () => {
+    void browserTab({ action: "new" })
+  }
+
   const open = status?.open === true
+  // Live indicator is derived from OBSERVED stream state only: the browser is
+  // open AND the stream reports at least one subscriber. Never fabricated.
+  const live = open && typeof status?.subscriberCount === "number" && status.subscriberCount > 0
 
   if (error && !open) {
     return <div className="stack stack-lg"><p className="muted">{error}</p></div>
   }
 
   return (
-    <div className={`stack ${compact ? "stack-compact" : "stack stack-lg"}`} data-testid="studio-page">
+    <div className={`studio-root stack ${compact ? "stack-compact" : "stack stack-lg"}`} data-testid="studio-page">
       <div className="studio-toolbar">
         <div className="studio-tabs" role="tablist" data-testid="studio-tabs">
           {tabs.map((t) => (
@@ -160,6 +169,7 @@ export function StudioPage({ compact = false }: Props) {
               </span>
             </button>
           ))}
+          <button className="studio-tab-new" data-testid="studio-new-tab" onClick={onNewTab} title="New tab" aria-label="New tab">+</button>
           {tabs.length === 0 ? <span className="muted small">No tabs — open a link from any suite, or type an address below.</span> : null}
         </div>
         <div className="studio-controls">
@@ -184,31 +194,6 @@ export function StudioPage({ compact = false }: Props) {
         </div>
       </div>
 
-      {open ? (
-        <div className="studio-viewport">
-          {frame ? (
-            <img
-              data-testid="studio-frame"
-              src={`data:image/jpeg;base64,${frame.data}`}
-              alt="PICC browser screencast"
-              style={{ width: frame.width, height: frame.height, maxWidth: "100%", maxHeight: "100%" }}
-            />
-          ) : (
-            <div className="studio-placeholder">
-              <p className="muted">Waiting for the screencast…</p>
-              {tabs.length === 0 ? <p className="muted small">Tip: click an external link in any suite, or type a URL above — it opens here in the shared browser.</p> : null}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="studio-viewport">
-          <div className="studio-placeholder">
-            <p className="muted">The shared PICC browser is closed.</p>
-            <button className="btn btn-sm" onClick={onOpen} data-testid="studio-open-browser">Open browser</button>
-          </div>
-        </div>
-      )}
-
       <div className="studio-footer">
         <span data-testid="studio-site" className="muted small">
           {assist.siteName ? `Site: ${assist.siteName}` : "Site: —"}
@@ -216,7 +201,14 @@ export function StudioPage({ compact = false }: Props) {
         <span data-testid="studio-vault" className="muted small">
           Vault: {assist.hasSavedCredentials === null ? "—" : assist.hasSavedCredentials ? "saved credentials" : "no saved credentials"}
         </span>
-        <span className="muted small">{open ? `Browser: open${status?.headless ? " (headless)" : ""}` : "Browser: closed"}</span>
+        <span data-testid="studio-live" className={`muted small ${live ? "studio-live-on" : ""}`}>
+          {live ? "● live" : "● closed"}
+        </span>
+        {assist.suite ? (
+          <a className="btn btn-ghost btn-sm studio-suite-link" data-testid="studio-suite-link" href={`/suites/${assist.suite.id}`}>
+            Back to {assist.suite.label}
+          </a>
+        ) : null}
       </div>
     </div>
   )

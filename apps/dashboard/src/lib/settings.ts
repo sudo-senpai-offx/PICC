@@ -9,7 +9,7 @@ export const FEATURES: Record<FeatureKey, FeatureDef> = {
   simulator: { label: "Financial Twin", desc: "Monte Carlo projections with live market data (Yahoo)." },
   agents: { label: "Agents", desc: "Live CrewAI research, content, and listing crews (free Groq)." },
   opportunities: { label: "Opportunities", desc: "2026 income-classification research — verified automation backlog, workflows, bounty boards." },
-  overlay: { label: "Overlay & Listing Optimizer", desc: "Browser-extension suggestions and listing analysis." },
+  overlay: { label: "Overlay & Listing Optimizer", desc: "Browser Studio suggestions and listing analysis." },
   content: { label: "Content Studio", desc: "Blog, YouTube, affiliate, and social drafts." },
   income: { label: "Income Channels", desc: "Payment links for BTCPay and TNG eWallet." },
   trading: { label: "Trading Suite", desc: "Multi-model prediction, read-only live broker bridge, and paper trading." },

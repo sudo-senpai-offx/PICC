@@ -1,5 +1,5 @@
 // Production server for the PICC dashboard.
-// Serves the built SPA from dist/ plus the /api/extension/* endpoints.
+// Serves the built SPA from dist/ plus the /api/* endpoints.
 // Zero dependencies: `node server/index.mjs`
 import { createServer } from "node:http"
 import { readFile, stat } from "node:fs/promises"

@@ -50,7 +50,7 @@ ${JSON.stringify(models ?? {}, null, 0)}
 }
 
 /**
- * Extension suggestion generation (/api/extension/suggest via chatJSON).
+ * Browser Studio suggestion generation (chatJSON).
  * Structured-output contract: schema declared inline, refusal path explicit.
  */
 export const SUGGEST_PROMPT_VERSION = 2

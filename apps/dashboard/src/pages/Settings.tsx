@@ -150,7 +150,7 @@ export function Settings() {
       setSessionCapture({ ok: true, ...saved.settings })
       setScMsg(
         enabled
-          ? "Session capture enabled — the extension capture leg resumes on the next pass."
+          ? "Session capture enabled — capture resumes on the next pass."
           : "Session capture disabled — the capture leg is skipped and prompts to re-enable here."
       )
     } catch (err) {
@@ -198,9 +198,8 @@ export function Settings() {
         <h2>Session capture</h2>
         <p className="muted">
           PICC-side kill-switch for broker session capture (PICC-wide, generalized). When OFF it
-          overrides the extension toggle — capture does not occur even if the extension says enabled,
-          and the packs strip prompts you to re-enable it here. When ON, the extension's own session-capture
-          toggle still applies in extension-only mode (no server reachable).
+          overrides the capture toggle — capture does not occur, and the packs strip prompts you to
+          re-enable it here. When ON, session capture runs on each studio pass.
         </p>
         {!sessionCapture ? (
           <p className="muted small">Loading session-capture setting…</p>

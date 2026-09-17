@@ -32,8 +32,6 @@ import { IOSInstallBanner } from "@/components/IOSInstallBanner"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
-import { getExtensionStatus } from "@/lib/api"
-import type { ExtensionStatus } from "@/lib/api"
 import {
   addToWatchlist,
   analyzeAsset,
@@ -289,7 +287,7 @@ export function MarketsSuite() {
 }
 
 // ---------------------------------------------------------------------
-// Autopilot Suite — automation-focused with extension metrics
+// Autopilot Suite — automation-focused
 // ---------------------------------------------------------------------
 export function AutopilotSuite() {
   const [cfg, setCfg] = useState<AutopilotConfig | null>(null)
@@ -297,7 +295,6 @@ export function AutopilotSuite() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [demo, setDemo] = useState<BrokerDemoStatus | null>(null)
   const [analytics, setAnalytics] = useState<DemoAnalyticsResult | null>(null)
-  const [extension, setExtension] = useState<ExtensionStatus | null>(null)
   const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number; ccxtJson: string }>({
     token: "",
     demo: true,
@@ -313,11 +310,10 @@ export function AutopilotSuite() {
 
   const load = async () => {
     try {
-      const [c, d, a, ext, cr, br] = await Promise.allSettled([
+      const [c, d, a, cr, br] = await Promise.allSettled([
         getAutopilotConfig(),
         getBrokerDemoStatus(),
         getDemoAnalytics().catch(() => null),
-        getExtensionStatus(),
         getTradingCredentials(),
         getBrokers().catch(() => null)
       ])
@@ -328,7 +324,6 @@ export function AutopilotSuite() {
       }
       if (d.status === "fulfilled") setDemo(d.value)
       if (a.status === "fulfilled" && a.value) setAnalytics(a.value)
-      if (ext.status === "fulfilled") setExtension(ext.value)
       if (br.status === "fulfilled" && br.value?.ok) setBrokers(br.value)
       if (cr.status === "fulfilled") {
         // Token comes back masked ("••••••") — only show whether one exists.
@@ -516,38 +511,6 @@ export function AutopilotSuite() {
           <div className="muted small">avg hold {analytics?.overview.avgDurationSec != null ? `${analytics.overview.avgDurationSec}s` : "—"}</div>
         </Card>
       </div>
-
-      {/* ─── Extension Status ─── */}
-      {extension?.installed ? (
-        <Card className="pad" style={{ border: "1px solid var(--success, #22c55e)" }}>
-          <div className="row-between" style={{ alignItems: "center" }}>
-            <div className="row gap" style={{ alignItems: "center" }}>
-              <span>🧩</span>
-              <strong className="small">PICC Extension Connected</strong>
-              {extension.lastHeartbeat?.version ? <Badge tone="success">v{extension.lastHeartbeat.version}</Badge> : null}
-            </div>
-            <Badge tone="success">active — heartbeat live</Badge>
-          </div>
-          <div className="grid grid-3 muted small" style={{ marginTop: 6 }}>
-            <div>active tab: <strong>{extension.lastHeartbeat?.activeTab?.title || extension.lastHeartbeat?.activeTab?.url || "none"}</strong></div>
-            <div>cookies: <strong>{extension.lastHeartbeat?.cookieCount ?? 0}</strong></div>
-            <div>last heartbeat: <strong>{extension.lastHeartbeat?.timestamp ? new Date(extension.lastHeartbeat.timestamp).toLocaleTimeString() : "—"}</strong></div>
-          </div>
-        </Card>
-      ) : (
-        <Card className="pad">
-          <div className="row-between" style={{ alignItems: "center" }}>
-            <div className="row gap" style={{ alignItems: "center" }}>
-              <span>🧩</span>
-              <strong className="small">PICC Extension</strong>
-            </div>
-            <Badge tone="muted">not installed</Badge>
-          </div>
-          <p className="muted small">
-            Optional. Load it unpacked from <code>extensions/picc-overlay/</code> for page-level metrics relay.
-          </p>
-        </Card>
-      )}
 
       {/* ─── Trading venues (broker adapter registry) ─── */}
       {brokers?.ok ? (

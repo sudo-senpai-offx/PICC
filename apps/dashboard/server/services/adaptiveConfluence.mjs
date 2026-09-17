@@ -860,7 +860,7 @@ async function u4faRuntimeContext() {
       calendarSource: events.length ? "feed" : "fallback-schedule",
       spread: null, // T6: no bid/ask feed in PICC → F1 spread honestly unmeasurable (abort, never fabricate)
       losses,
-      candleSource: "liveEO-extension"
+      candleSource: "liveEO"
     }
   } catch {
     return null

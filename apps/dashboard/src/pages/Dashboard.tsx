@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { NavLink, useNavigate } from "react-router-dom"
 import { Card, Badge, Spinner } from "@/components/ui"
 import { useUser } from "@/hooks/useAuth"
-import { getHealth, getBtcpayStatus, getExtensionStatus } from "@/lib/api"
+import { getHealth, getBtcpayStatus } from "@/lib/api"
 import type { HealthInfo, SerperVerdictInfo } from "@/lib/api"
 import { listData } from "@/lib/localdata"
 import type { AgentLog, SimulationRow } from "@/lib/types"
@@ -23,20 +23,17 @@ export const QUICK_ACTIONS: ReadonlyArray<{ icon: string; label: string; hint: s
 function SystemStatus() {
   const [health, setHealth] = useState<Awaited<ReturnType<typeof getHealth>> | null>(null)
   const [btcpay, setBtcpay] = useState<Awaited<ReturnType<typeof getBtcpayStatus>> | null>(null)
-  const [extStatus, setExtStatus] = useState<Awaited<ReturnType<typeof getExtensionStatus>> | null>(null)
   const [error, setError] = useState("")
 
   useEffect(() => {
-    Promise.allSettled([getHealth(), getBtcpayStatus(), getExtensionStatus()]).then(([h, b, e]) => {
+    Promise.allSettled([getHealth(), getBtcpayStatus()]).then(([h, b]) => {
       if (h.status === "fulfilled") setHealth(h.value)
       else setError("Backend /api not reachable — start it with `npm run dev` or `npm run start:all`.")
       if (b.status === "fulfilled") setBtcpay(b.value)
-      if (e.status === "fulfilled") setExtStatus(e.value)
     })
   }, [])
 
   const rows: [string, boolean, string][] = [
-    ["PICC Extension", extStatus?.installed ?? false, extStatus?.installed ? "connected — providing live metrics" : "install from extensions/picc-overlay/"],
     ["Yahoo Finance", health?.providers.yahoo ?? false, "real market data"],
     ["LLM rotation", health?.providers.llm ?? false, "Gemini/Groq/Mistral/Cerebras/OpenAI + more"],
     ["Stripe", health?.providers.stripe ?? false, "card billing"],

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // T6 / REQ-9 deep-link landing: /suites?asset=A&panel=chart[&venue=V] selects
 // the chart asset, focuses/scrolls the chart panel, and routes a verified
-// venue through the extension bridge (fallback tab when unanswered). Unknown
-// values degrade to the current view without a throw.
+// venue through the Browser Studio RPC (window.open fallback when the studio
+// is unavailable). Unknown values degrade to the current view without a throw.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { useEffect, useState } from "react"
 import { flushSync } from "react-dom"
@@ -40,8 +40,8 @@ vi.mock("@/components/CandlestickChart", () => ({
 }))
 
 // The bridge seam is mocked so the component test asserts the *wiring*
-// (resolve → openBrokerTab payload). The postMessage → fallback behavior is
-// pinned separately in src/lib/__tests__/brokerLink.test.ts.
+// (resolve → openBrokerTab payload). The studio-RPC → window.open fallback
+// behavior is pinned separately in src/lib/__tests__/brokerLink.test.ts.
 vi.mock("@/lib/brokerLink", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/brokerLink")>()
   return { ...actual, openBrokerTab: vi.fn(async () => ({ attempt: true, fellBack: false })) }

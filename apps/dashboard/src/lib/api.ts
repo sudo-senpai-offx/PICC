@@ -953,7 +953,7 @@ export function browserNav(action: "back" | "forward" | "reload"): Promise<{ ok:
   return post(`/browser/nav`, { action })
 }
 
-export function browserTab(opts: { action: "new" | "close" | "switch"; url?: string; id?: number }): Promise<StudioStatus> {
+export function browserTab(opts: { action: "new" | "open" | "close" | "switch"; url?: string; id?: number }): Promise<StudioStatus> {
   return post(`/browser/tab`, opts)
 }
 
@@ -1029,18 +1029,6 @@ export function browserDownloadUrl(id: number): string {
 
 /** One line of the PICC overlay, built with createElement/textContent (Trusted-Types safe). */
 export type OverlayNode = { tag?: string; className?: string; style?: string; text: string }
-
-export function browserOverlay(opts: {
-  nodes?: OverlayNode[]
-  clear?: boolean | number
-  overlayIndex?: number
-}): Promise<{ ok: boolean; shown: boolean; overlayIndex?: number }> {
-  return post(`/browser/overlay`, opts)
-}
-
-export function browserOverlayToggle(force?: boolean): Promise<{ ok: boolean; overlayEnabled: boolean }> {
-  return post(`/browser/overlay/toggle`, force === undefined ? {} : { force })
-}
 
 export function browserRead(selectors?: Record<string, string>): Promise<Record<string, string | null>> {
   return post(`/browser/read`, { selectors })
@@ -1285,11 +1273,6 @@ export interface BrowserPreference {
   headless?: boolean
   homepage?: string
   overlay?: boolean
-  // The extension round-trips its full overlay state through this field.
-  // Using the SHARED OverlaySettings type (which includes dockables,
-  // dockableLayout and groups) fixes the old drift where TS callers silently
-  // dropped those fields when saving per-site prefs.
-  overlaySettings?: import("@/lib/overlaySettings").OverlaySettings
 }
 
 export function getBrowserPreferences(): Promise<{ ok: boolean; prefs: Record<string, BrowserPreference> }> {
@@ -1606,24 +1589,4 @@ export function verifyCommandCentreOrder(
   token?: string
 ): Promise<{ ok: boolean; consentBy: string; kind: string; clientOrderId: string; at: string }> {
   return post(`/command-centre/orders/verify`, body, token)
-}
-
-// ---------------------------------------------------------------------
-// Extension status
-// ---------------------------------------------------------------------
-export interface ExtensionStatus {
-  installed: boolean
-  lastSeen: number | null
-  lastHeartbeat: {
-    version: string
-    installTime: number | null
-    activeTab: { id: number; url: string; title: string } | null
-    cookieCount: number
-    timestamp: number
-  } | null
-  metrics: Record<string, Record<string, unknown>>
-}
-
-export function getExtensionStatus(): Promise<ExtensionStatus> {
-  return request<ExtensionStatus>("/extension/status")
 }
