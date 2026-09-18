@@ -109,9 +109,10 @@ considerations are tracked in `PICC.md` §15 — verify with a qualified lawyer 
 
 ## Known issues
 
-- Realtime charts only animate while the ExpertOption live feed is connected; when it is down the
-  fallback is Yahoo **daily** bars and "no new present candles" is designed behavior
-  (`PICC.md` §20.2).
+- Realtime charts animate while the EO live feed or a live CCXT feed is connected; candles resolve
+  by a quality order (liveness > resolution-exactness > freshness > weight > latency) with the
+  winner and why named in every response (`PICC.md` §20.2). When no live source is reachable the
+  fallback bottoms out at Yahoo **daily** bars and "no new present candles" is designed behavior.
 - A shared per-IP rate-limit bucket (60 req/60 s) can 429 a legitimately busy multi-panel suite
   session (`PICC.md` §20.1).
 - The archived `apps/extension/` Plasmo skeleton is deprecated — the canonical extension is

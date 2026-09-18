@@ -214,11 +214,16 @@ this repo**) · `fourFactor` U4FA factor math · `u4faConfig` / `u4faRisk` U4FA 
 · `mtfConvergence` MTF engine · `multiTimeframe` 60/300/900/3600s candle layer · `signalEngine`
 signal creation.
 
-**Feed & data (16):** `liveEO` WS bridge + SSE relay (5s-bucket cascade, viewed-asset tracking,
-prune guard TTL 5 min / max 256 keys) · `liveCCXT` multi-exchange feed, liveness-gated connected ·
-`ccxtConnector` read-only by contract (28 order methods structurally amputated) · `marketDataBus`
-unified candle bus `getBestCandles` (priority EO-push → EO-fetch → CCXT → Yahoo-daily; latency
-stats) · `yahoo` / `crypto` / `dataSources` / `serper` / `wsclient` / `indicators` / `patterns` /
+**Feed, data & preference (17):** `liveEO` WS bridge + SSE relay (5s-bucket cascade, viewed-asset
+tracking, prune guard TTL 5 min / max 256 keys; studio + headless ingestion legs, `feed`/leg
+provenance — `PICC_MULTISOURCE_ENGINE` T4) · `liveCCXT` multi-exchange feed, liveness-gated
+connected · `ccxtConnector` read-only by contract (28 order methods structurally amputated) ·
+`marketDataBus` unified candle bus: quality-ordered source resolution (liveness >
+resolution-exactness > freshness > configured weight > latency), each response names the winner and
+why (`source` / `sourceMode` / per-candidate `sources[]`), stored prefs force a source first and
+fall through on emptiness — never a blackout · `chartPrefs` per-user stored source preference
+(`chart-prefs.json`, registry-validated slugs) · `yahoo` / `crypto` / `dataSources` (per-session
+source window + feed-status) / `serper` / `wsclient` / `indicators` / `patterns` /
 `orderFlow` / `regimeDetection` / `sentimentEngine` / `economicCalendar` (static
 `calendarSource:"fallback-schedule"` by design) / `marketIntel`.
 
@@ -364,8 +369,9 @@ decisions (T14 gate).
 
 `adaptiveConfluence` runs per enabled asset on its `periods[300]` slice; results ride
 `strategies.u4fa` + `type:"u4fa"` SSE events; OFF by default per asset; can VETO a confluence
-TRADE, never force one; TRADE verdicts enqueue PAPER proposals (`source:"trade"`). Honest
-`candleSource:"liveEO-extension"` provenance when fed by the extension.
+TRADE, never force one; TRADE verdicts enqueue PAPER proposals (`source:"trade"`). Served candles
+carry honest `feed` provenance (studio/headless/liveEO legs and broker slugs —
+`PICC_MULTISOURCE_ENGINE` T4), never a fabricated `candleSource`.
 
 ### 8.4 MTF convergence
 
@@ -810,10 +816,13 @@ or capture API → vault at rest. CrewAI: venv + `uvicorn server:app --port 8000
    `EXTENSION_POLL_ROUTES` exemption) · raise the ceiling only after real measurement · split
    mutation vs read cohorts. **Never weaken demo/live gates, honesty badges, or serper/EO
    limiters.** Open: measure real per-minute POST count first.
-2. **Live chart not updating in the present.** Realtime is a shared SSE stream fed only by the EO
-   live WebSocket; when EO is down, fallback is Yahoo **daily** bars and `useCandleData.ts` has a
-   deliberate coarse-series guard (refuses to append present buckets; nudges last close) — "no new
-   candles" is designed behavior while the live feed is down. Sandbox could not reach any EO WS
+2. **Live chart not updating in the present.** Realtime is a shared SSE stream fed by the EO
+   live WebSocket and the live CCXT feed; the candle bus fans in all sources (liveness >
+   resolution-exactness > freshness > weight > latency), so EO-down alone no longer means a
+   Yahoo-daily-only fallback. Only when NO live source is reachable does the fallback bottom out at
+   Yahoo **daily** bars and `useCandleData.ts`'s deliberate coarse-series guard (refuses to append
+   present buckets; nudges last close) — "no new candles" is designed behavior while no live feed is
+   connected. Sandbox could not reach any EO WS
    endpoint (several region URLs are dead DNS: `ws.expertoption.finance` ENOTFOUND etc.;
    `fr24g1eu.expertoption.com` resolves). **Open:** confirm whether the user's EO feed is actually
    connected; if yes, trace `subscribeLiveEO` → SSE relay. Related fix already landed: EO
