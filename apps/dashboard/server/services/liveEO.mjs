@@ -351,8 +351,7 @@ function processAppObject(obj, source = "studio") {
   noteLegArrival(source)
   if (!gateAccepts(source)) return false // preferred leg alive → drop this leg
   lastSeen = Date.now()
-  legStats[source].lastConsumedAt = Date.now()
-  if (source === "studio") legStats.studio.accepted += 1
+  noteLegConsumed(source)
   if (obj.action === "error") {
     const text = JSON.stringify(obj.message ?? obj)
     if (isAuthRejection(text)) {
@@ -440,7 +439,8 @@ function processAppObject(obj, source = "studio") {
 // preference gate's fallback depends on.
 const LEG_ALIVE_MS = 60_000 // same liveness window the status uses for live frames
 const legStats = {
-  studio: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0, lastConsumedFrameAt: 0 }
+  studio: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0, lastConsumedFrameAt: 0 },
+  headless: { framesSeen: 0, accepted: 0, lastAt: 0, lastConsumedAt: 0, lastConsumedFrameAt: 0 }
 }
 
 function noteLegArrival(source) {
@@ -448,6 +448,13 @@ function noteLegArrival(source) {
   if (!leg) return
   leg.framesSeen += 1
   leg.lastAt = Date.now()
+}
+
+function noteLegConsumed(source) {
+  const leg = legStats[source]
+  if (!leg) return
+  leg.lastConsumedAt = Date.now()
+  leg.accepted += 1
 }
 
 function legAlive(source, now = Date.now()) {
@@ -485,6 +492,21 @@ export function ingestStudioFrame(obj) {
 // ---------------------------------------------------------------------
 // Headless session: balance / assets / history seeding
 // ---------------------------------------------------------------------
+/**
+ * Headless-session history ingest: buffer history downloaded from the broker
+ * API (seedAll watchers + fetchAssetCandles live pulls). Mirrors
+ * ingestStudioFrame — arrival + consumption marking on the HEADLESS leg and
+ * a global lastSeen bump. Studio realtime frames NEVER route here (they land
+ * via mergeLiveCandle/cascadeBar), so the leg attribution stays honest.
+ */
+export function ingestHeadlessHistory({ assetId, period, ohlc }) {
+  if (!assetId || !period || !Array.isArray(ohlc) || !ohlc.length) return false
+  reseedBuffer(assetId, period, ohlc)
+  lastSeen = Date.now()
+  noteLegArrival("headless")
+  noteLegConsumed("headless")
+  return true
+}
 /** Normalize a platform asset name for loose matching: strip spaces, slashes,
  * dots, "OTC", ampersands; lowercase. "EUR / USD" -> "eurusd". */
 export function normName(name = "") {
@@ -537,8 +559,7 @@ async function seedAll(assetIds = watching.map((w) => w.id)) {
       try {
         const hist = await session.candles(id, period, HISTORY_COUNT)
         if (hist?.ohlc?.length) {
-          reseedBuffer(id, period, hist.ohlc)
-          lastSeen = Date.now()
+          ingestHeadlessHistory({ assetId: id, period, ohlc: hist.ohlc })
         }
       } catch {
         /* one failed seed never blocks the loop */
@@ -809,7 +830,7 @@ export function liveSnapshot() {
     viewed: viewedAssetId,
     account,
     feedMode,
-    legs: { studio: legAlive("studio") },
+    legs: { studio: legAlive("studio"), headless: legAlive("headless") },
     ts: Date.now()
   }
 }
@@ -1024,17 +1045,30 @@ export async function restartLiveEO({ force = false } = {}) {
 }
 
 /**
+ * The most recently CONSUMED leg (feed provenance), or null when no leg has
+ * ever been consumed. Last write wins: the leg whose frames/seeds the
+ * preference gate most recently accepted into the buffers is the leg that
+ * fed the served series. With the studio bridge and the headless session
+ * both producing history, either can be the producer depending on which
+ * consumed most recently.
+ * @returns {{ leg: string, lastConsumedAt: number } | null}
+ */
+export function mostRecentLeg() {
+  let best = null
+  for (const [leg, st] of Object.entries(legStats)) {
+    const at = Number(st.lastConsumedAt) || 0
+    if (at > 0 && (!best || at > best.lastConsumedAt)) best = { leg, lastConsumedAt: at }
+  }
+  return best
+}
+
+/**
  * Which live leg most recently fed the SERVED candle series, or null when
- * no leg has been consumed yet. With the studio as the sole browser leg,
- * the result is always "studio" once any frames arrive, or null before that.
- * Preserved as a function so a future leg keeps the prefer-with-fallback
- * semantics — it just always resolves to the studio leg today.
+ * no leg has been consumed yet. Delegates to mostRecentLeg() — the studio
+ * bridge and the headless session are both producers.
  */
 export function feedProvenance() {
-  const studioFrame = Number(legStats.studio.lastConsumedFrameAt) || 0
-  const studioArr = Number(legStats.studio.lastConsumedAt) || 0
-  if (studioFrame || studioArr) return "studio"
-  return null
+  return mostRecentLeg()?.leg ?? null
 }
 
 export function liveEOStats() {
@@ -1052,7 +1086,8 @@ export function liveEOStats() {
     degraded: degraded ? { kind: degraded.kind, reason: degraded.reason, at: degraded.at } : null,
     feedMode,
     legs: {
-      studio: { ...legStats.studio }
+      studio: { ...legStats.studio },
+      headless: { ...legStats.headless }
     },
     account
   }
@@ -1111,8 +1146,7 @@ export async function fetchAssetCandles(assetId, period = 60, count = 120) {
     if (lastLiveFetch.size > LIVE_FETCH_MAX_KEYS) pruneLiveFetchMap(lastLiveFetch)
     const hist = await session.candles(assetId, period, count)
     if (hist?.ohlc?.length) {
-      reseedBuffer(assetId, period, hist.ohlc)
-      lastSeen = Date.now()
+      ingestHeadlessHistory({ assetId, period, ohlc: hist.ohlc })
       const updatedBuf = buffers.get(key)
       return { ohlc: updatedBuf.ohlc.slice(-count), source: "live" }
     }

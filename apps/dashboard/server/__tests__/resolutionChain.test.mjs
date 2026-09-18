@@ -558,3 +558,20 @@ describe("T3 chart source preference (GET/POST /api/trading/source-preference)",
     expect(res.body.sourceMode).toBe("auto")
   })
 })
+
+describe("T4 feed provenance tags on candles responses", () => {
+  it("non-EO winners report their broker slug as feed (REQ-3)", async () => {
+    registerTestBroker({
+      slug: "t4-ccxt-feed",
+      label: "T4 ccxt feed",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    const res = await call("POST", "/api/trading/candles", { assetId: "EURUSD", timeframe: 60, count: 50 })
+    expect(res.status).toBe(200)
+    expect(res.body.source).toBe("t4-ccxt-feed")
+    expect(res.body.feed).toBe("t4-ccxt-feed")
+  })
+})

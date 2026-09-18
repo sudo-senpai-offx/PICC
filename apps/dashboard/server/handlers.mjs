@@ -2320,8 +2320,10 @@ async function _handleApiInner(req, res, url, reqId) {
         listAvailableSources(assetId, { timeframe })
       ])
       // Leg-level provenance when the live EO leg served: studio bridge vs
-      // data-source buffer frames (mirrors dataSources.collectSourceStatuses).
-      const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : null
+      // headless-seeded buffer frames (mirrors dataSources.collectSourceStatuses).
+      // Non-EO winners (yahoo/ccxt REST pulls) report their broker slug as the
+      // feed — REQ-3 honest per-source provenance, never a fabricated leg.
+      const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : out.source
       if (!out.candles.length) {
         return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources, sourceMode: out.sourceMode ?? "auto", sources: out.sources ?? [], verifySources: 0, verifiedCount: 0, verifiedRatio: 0 })
       }
