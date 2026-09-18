@@ -2287,7 +2287,22 @@ async function _handleApiInner(req, res, url, reqId) {
     // (sourceMode:"fallback", never a blackout). "auto"/omitted keeps the
     // quality-ordered fan-in (best/ideal source wins).
     const source = typeof body?.source === "string" ? body.source.trim() : "auto"
-    const preferredSource = typeof body?.preferredSource === "string" ? body.preferredSource.trim() : null
+    let preferredSource = typeof body?.preferredSource === "string" ? body.preferredSource.trim() : null
+    // T3 — persisted per-user source preference (chartPrefs.mjs) applies only
+    // when the request does NOT explicitly force a source: it is the same
+    // mechanism as preferredSource (tried first, falls through the quality
+    // order with sourceMode:"fallback"). A stored "auto" pref is a no-op —
+    // the plain quality fan-in runs and says sourceMode:"auto".
+    if (!preferredSource && (source === "auto" || source === "")) {
+      try {
+        const { getSourcePref } = await import("./services/chartPrefs.mjs")
+        const { verifyUser, hasUsers } = await import("./services/auth.mjs")
+        const hasAccts = await hasUsers()
+        const userId = hasAccts ? ((await verifyUser(req.headers.authorization)) ?? "default") : "default"
+        const pref = getSourcePref(userId)
+        if (pref && pref !== "auto") preferredSource = pref
+      } catch { /* pref read failure — plain auto fan-in */ }
+    }
     try {
       // Unified fan-in: EO push buffers → live EO fetch → CCXT aggregates →
       // Yahoo daily fallback. Source + staleness tagged for honest labeling.
@@ -2342,6 +2357,26 @@ async function _handleApiInner(req, res, url, reqId) {
       writeJson(res, 502, { ok: false, error: err.message })
     }
     return
+  }
+
+  // ── Per-user chart source preference (T3) ────────────────────────────────
+  // GET  → the active preference for this user ("auto" | broker slug).
+  // POST → set it; validated by chartPrefs (registered candle-capable slug or
+  //        "auto"; anything else resolves to "auto"). Pre-auth single-user
+  //        mode keys "default". Honored by every chart that does not
+  //        explicitly force a source on the request (see candles above).
+  if (path === "/api/trading/source-preference") {
+    if (!(await requireAuth(req, res))) return true
+    if (req.method !== "GET" && req.method !== "POST") return false
+    const { getSourcePref, setSourcePref } = await import("./services/chartPrefs.mjs")
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    if (req.method === "GET") {
+      writeJson(res, 200, { ok: true, userId, source: getSourcePref(userId) })
+      return true
+    }
+    const source = setSourcePref(userId, body?.source)
+    writeJson(res, 200, { ok: true, userId, source })
+    return true
   }
 
   // ── Advanced indicator calculations ──────────────────────────────────────

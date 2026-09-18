@@ -434,3 +434,127 @@ describe("POST /api/trading/candles T6 source override", () => {
     expect(res.body.source).toBe("t6-ep-default")
   })
 })
+
+describe("T3 chart source preference (GET/POST /api/trading/source-preference)", () => {
+  it("GET returns the pre-auth default: userId 'default', source 'auto'", async () => {
+    const res = await call("GET", "/api/trading/source-preference")
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ ok: true, userId: "default", source: "auto" })
+  })
+
+  it("POST persists a registered slug and GET reflects it back", async () => {
+    registerTestBroker({
+      slug: "t3-pref-broker",
+      label: "T3 pref broker",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(100) : [])
+    })
+    const setRes = await call("POST", "/api/trading/source-preference", { source: "t3-pref-broker" })
+    expect(setRes.status).toBe(200)
+    expect(setRes.body).toMatchObject({ ok: true, userId: "default", source: "t3-pref-broker" })
+    const getRes = await call("GET", "/api/trading/source-preference")
+    expect(getRes.body.source).toBe("t3-pref-broker")
+  })
+
+  it("POST rejects unknown slugs (resolve to 'auto'); 'auto' resets the pin", async () => {
+    const unknown = await call("POST", "/api/trading/source-preference", { source: "t3-no-such-broker" })
+    expect(unknown.status).toBe(200)
+    expect(unknown.body.source).toBe("auto")
+    const reset = await call("POST", "/api/trading/source-preference", { source: "auto" })
+    expect(reset.body.source).toBe("auto")
+  })
+
+  it("a stored pin makes the candles response report it as winner with sourceMode 'forced'", async () => {
+    registerTestBroker({
+      slug: "t3-pref-pinned",
+      label: "T3 pref pinned",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(100) : [])
+    })
+    registerTestBroker({
+      slug: "t3-pref-rival",
+      label: "T3 pref rival",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    await call("POST", "/api/trading/source-preference", { source: "t3-pref-pinned" })
+    const res = await call("POST", "/api/trading/candles", { assetId: "EURUSD", timeframe: 60, count: 50 })
+    expect(res.status).toBe(200)
+    expect(res.body.source).toBe("t3-pref-pinned")
+    expect(res.body.sourceMode).toBe("forced")
+  })
+
+  it("an explicit request source overrides the stored pin", async () => {
+    registerTestBroker({
+      slug: "t3-pref-pinned",
+      label: "T3 pref pinned",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(100) : [])
+    })
+    registerTestBroker({
+      slug: "t3-pref-rival",
+      label: "T3 pref rival",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    await call("POST", "/api/trading/source-preference", { source: "t3-pref-pinned" })
+    const res = await call("POST", "/api/trading/candles", {
+      assetId: "EURUSD",
+      timeframe: 60,
+      count: 50,
+      source: "t3-pref-rival"
+    })
+    expect(res.body.source).toBe("t3-pref-rival")
+    expect(res.body.sourceMode).toBe("forced")
+  })
+
+  it("a pin whose broker serves nothing falls through honestly (sourceMode 'fallback')", async () => {
+    registerTestBroker({
+      slug: "t3-pref-empty",
+      label: "T3 pref empty",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: () => []
+    })
+    registerTestBroker({
+      slug: "t3-pref-saver",
+      label: "T3 pref saver",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    await call("POST", "/api/trading/source-preference", { source: "t3-pref-empty" })
+    const res = await call("POST", "/api/trading/candles", { assetId: "EURUSD", timeframe: 60, count: 50 })
+    expect(res.status).toBe(200)
+    expect(res.body.source).toBe("t3-pref-saver")
+    expect(res.body.sourceMode).toBe("fallback")
+  })
+
+  it("storing 'auto' keeps the plain quality fan-in with sourceMode 'auto'", async () => {
+    registerTestBroker({
+      slug: "t3-pref-weighty",
+      label: "T3 pref weighty",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    await call("POST", "/api/trading/source-preference", { source: "auto" })
+    const res = await call("POST", "/api/trading/candles", { assetId: "EURUSD", timeframe: 60, count: 50 })
+    expect(res.status).toBe(200)
+    expect(res.body.source).toBe("t3-pref-weighty")
+    expect(res.body.sourceMode).toBe("auto")
+  })
+})
