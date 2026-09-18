@@ -13,6 +13,11 @@
 //   4. Broker weight (user-configurable, higher = preferred)
 //   5. Latency — median fetch time breaks the final tie (faster wins)
 //
+// Staleness (T6 — Mechanism D): every response tags `stale` honestly as
+// `!isAlive() || Boolean(stats().stale)` on every return path — a dead
+// broker's buffered data (or a live broker with its stale flag set, e.g.
+// "connected but no ticks >60s") is tagged stale, never "live".
+//
 // Every result is tagged with its source so the UI can label honesty
 // (live vs delayed) and the model matrix can weight accordingly. Responses
 // also name the option set and mode: sourceMode ("auto"|"forced"|"fallback")
@@ -85,14 +90,19 @@ async function timed(source, fn) {
 const EO_BRIDGE_TIMEFRAMES = [60, 300, 900, 3600]
 async function eoWatchAndFetch(assetId, tf, n) {
   const servedTf = resolveTimeframeFor(tf, EO_BRIDGE_TIMEFRAMES)
-  if (servedTf === null) return { ohlc: [], servedTf: null }
+  if (servedTf === null) return { ohlc: [], servedTf: null, alive: false, staleFlag: false }
   try {
-    const { ensureWatchingAsset, fetchAssetCandles } = await import("./liveEO.mjs")
+    const { ensureWatchingAsset, fetchAssetCandles, liveEOStats } = await import("./liveEO.mjs")
     await ensureWatchingAsset(assetId).catch(() => null)
     const result = await timed("eo-fetch", () =>
       fetchAssetCandles(assetId, servedTf, n).catch(() => ({ ohlc: [], source: null })))
-    return { ohlc: result.ohlc ?? [], servedTf }
-  } catch { return { ohlc: [], servedTf: null } }
+    // T6 — the bridge tags staleness from liveEO's own liveness + stale flag
+    // (stopLiveEO/transport give-up preserve buffers — data stays visible but
+    // is never labeled "EO live").
+    let st = null
+    try { st = liveEOStats() } catch { st = null }
+    return { ohlc: result.ohlc ?? [], servedTf, alive: st?.status === "connected", staleFlag: Boolean(st?.stale) }
+  } catch { return { ohlc: [], servedTf: null, alive: false, staleFlag: false } }
 }
 
 /**
@@ -180,10 +190,12 @@ function buildCandidates(brokers, tf) {
     if (servedTf === null || servedTf === undefined) continue
     let alive = false
     try { alive = broker.isAlive ? broker.isAlive() === true : false } catch { alive = false }
-    let lastSeen = 0
-    try { lastSeen = Number(broker.stats?.()?.lastSeen) || 0 } catch { lastSeen = 0 }
+    let statsOut = null
+    try { statsOut = broker.stats?.() ?? null } catch { statsOut = null }
+    const lastSeen = Number(statsOut?.lastSeen) || 0
+    const sourceStale = Boolean(statsOut?.stale) // advisory flag (e.g. "connected but no ticks")
     const medianMs = dataBusStats()[broker.slug]?.medianMs ?? null
-    out.push({ broker, servedTf, exact: servedTf === tf, alive, lastSeen, medianMs, weight: Number(broker.weight) || 0 })
+    out.push({ broker, servedTf, exact: servedTf === tf, alive, lastSeen, sourceStale, medianMs, weight: Number(broker.weight) || 0 })
   }
   out.sort((a, b) => {
     if (a.alive !== b.alive) return a.alive ? -1 : 1
@@ -211,6 +223,16 @@ function fmtTf(sec) {
   if (sec >= 3600 && sec % 3600 === 0) return `${sec / 3600}h`
   if (sec >= 60 && sec % 60 === 0) return `${sec / 60}m`
   return `${sec}s`
+}
+
+/**
+ * Honest staleness (T6 — Mechanism D): a response from this candidate is
+ * stale whenever the broker is not alive or its own stale flag is set
+ * ("connected but no ticks >60s"). A dead broker's buffered data is served
+ * but never labeled live.
+ */
+function isStale(cand) {
+  return !cand?.alive || Boolean(cand?.sourceStale)
 }
 
 /**
@@ -311,11 +333,11 @@ export async function getBestCandles(assetId, { timeframe = 60, count = 200, ens
         // T3 — prepend same-resolution older bars from another broker when the
         // primary under-fills the requested window (deep chart history).
         const withHistory = await withHistoryBackfill({ brokers, id, primary: sliced, servedTf: cand.servedTf, n, primarySlug: cand.broker.slug })
-        return { ...withHistory, source: cand.broker.slug, sourceMode: mode(cand.broker.slug), sources: markWinner(cand.broker.slug), stale: false, timeframe: cand.servedTf, resolved: cand.servedTf !== tf }
+        return { ...withHistory, source: cand.broker.slug, sourceMode: mode(cand.broker.slug), sources: markWinner(cand.broker.slug), stale: isStale(cand), timeframe: cand.servedTf, resolved: cand.servedTf !== tf }
       }
       // Thin data — keep as fallback but try next broker for better data
       if (!thinData || sliced.length > thinData.candles.length) {
-        thinData = { candles: sliced, source: cand.broker.slug, sourceMode: mode(cand.broker.slug), sources: markWinner(cand.broker.slug), stale: true, timeframe: cand.servedTf, resolved: cand.servedTf !== tf, historyDepth: sliced.length, backfilled: 0, historySpanMs: spanMs(sliced), historySource: null }
+        thinData = { candles: sliced, source: cand.broker.slug, sourceMode: mode(cand.broker.slug), sources: markWinner(cand.broker.slug), stale: isStale(cand), timeframe: cand.servedTf, resolved: cand.servedTf !== tf, historyDepth: sliced.length, backfilled: 0, historySpanMs: spanMs(sliced), historySource: null }
       }
     } catch { /* broker unavailable — fall through */ }
   }
@@ -325,12 +347,12 @@ export async function getBestCandles(assetId, { timeframe = 60, count = 200, ens
   // on-demand fetch. This preserves existing behavior during the transition.
   if (typeof ensureWatch === "function" && !thinData) {
     try {
-      const { ohlc: eoCandles, servedTf } = await eoWatchAndFetch(id, tf, n)
+      const { ohlc: eoCandles, servedTf, alive: eoAlive, staleFlag: eoStaleFlag } = await eoWatchAndFetch(id, tf, n)
       if (servedTf !== null && eoCandles.length >= 30) {
         const withHistory = await withHistoryBackfill({ brokers, id, primary: eoCandles.slice(-n), servedTf, n, primarySlug: "live" })
-        return { ...withHistory, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: false, timeframe: servedTf, resolved: servedTf !== tf }
+        return { ...withHistory, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: !eoAlive || eoStaleFlag, timeframe: servedTf, resolved: servedTf !== tf }
       }
-      if (servedTf !== null && eoCandles.length) thinData = { candles: eoCandles, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: true, timeframe: servedTf, resolved: servedTf !== tf, historyDepth: eoCandles.length, backfilled: 0, historySpanMs: spanMs(eoCandles), historySource: null }
+      if (servedTf !== null && eoCandles.length) thinData = { candles: eoCandles, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: !eoAlive || eoStaleFlag, timeframe: servedTf, resolved: servedTf !== tf, historyDepth: eoCandles.length, backfilled: 0, historySpanMs: spanMs(eoCandles), historySource: null }
     } catch { /* EO fetch failed — last resort stands or honest emptiness */ }
   }
 

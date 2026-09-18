@@ -128,6 +128,47 @@ describe("unified market data bus", () => {
     vi.doUnmock("../services/yahoo.mjs")
   })
 
+  it("tags the EO watch-and-fetch bridge stale when EO is not alive (never 'EO live')", async () => {
+    vi.resetModules()
+    vi.doMock("../services/liveEO.mjs", () => ({
+      liveEOData: () => { throw new Error("down") },
+      fetchAssetCandles: async () => ({ ohlc: synthCandles(40) }),
+      ensureWatchingAsset: async () => null,
+      liveEOStats: () => ({ status: "disconnected", stale: false })
+    }))
+    vi.doMock("../services/liveCCXT.mjs", () => ({ liveCCXTData: () => { throw new Error("down") } }))
+    vi.doMock("../services/yahoo.mjs", () => ({ getHistory: async () => { throw new Error("offline") } }))
+    const fresh = await import("../services/marketDataBus.mjs")
+    // No registered broker serves; buffered EO data (≥30 bars) still comes
+    // back through the bridge — but a disconnected EO is STALE data, never live.
+    const out = await fresh.getBestCandles("ZZZZZ", { timeframe: 60, count: 50, ensureWatch: async () => null })
+    expect(out.source).toBe("live")
+    expect(out.candles.length).toBeGreaterThanOrEqual(30)
+    expect(out.stale).toBe(true)
+    vi.doUnmock("../services/liveEO.mjs")
+    vi.doUnmock("../services/liveCCXT.mjs")
+    vi.doUnmock("../services/yahoo.mjs")
+  })
+
+  it("tags the EO bridge fresh when EO is connected and healthy", async () => {
+    vi.resetModules()
+    vi.doMock("../services/liveEO.mjs", () => ({
+      liveEOData: () => { throw new Error("down") },
+      fetchAssetCandles: async () => ({ ohlc: synthCandles(40) }),
+      ensureWatchingAsset: async () => null,
+      liveEOStats: () => ({ status: "connected", stale: false })
+    }))
+    vi.doMock("../services/liveCCXT.mjs", () => ({ liveCCXTData: () => { throw new Error("down") } }))
+    vi.doMock("../services/yahoo.mjs", () => ({ getHistory: async () => { throw new Error("offline") } }))
+    const fresh = await import("../services/marketDataBus.mjs")
+    const out = await fresh.getBestCandles("ZZZZZ", { timeframe: 60, count: 50, ensureWatch: async () => null })
+    expect(out.source).toBe("live")
+    expect(out.stale).toBe(false)
+    vi.doUnmock("../services/liveEO.mjs")
+    vi.doUnmock("../services/liveCCXT.mjs")
+    vi.doUnmock("../services/yahoo.mjs")
+  })
+
   it("tracks per-source latency once a tier answers", async () => {
     const stats = bus.dataBusStats()
     for (const v of Object.values(stats)) {

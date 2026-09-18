@@ -45,7 +45,10 @@ afterAll(() => {
 const testBrokerSlugs = []
 function registerTestBroker(adapter) {
   testBrokerSlugs.push(adapter.slug)
-  try { registerBroker(adapter) } catch { /* already registered */ }
+  // T6 (Mechanism D): every fixture here models a HEALTHY provider. A broker
+  // left live-less runs as dead (registry default), which would flip its whole
+  // served series to stale — declaring liveness preserves the fixture's intent.
+  try { registerBroker({ isAlive: () => true, ...adapter }) } catch { /* already registered */ }
 }
 
 afterEach(() => {

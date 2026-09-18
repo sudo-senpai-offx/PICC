@@ -240,3 +240,61 @@ describe("T2 sourceMode + sources[] (additive honesty)", () => {
     expect(out.sourceMode).toBe("forced")
   })
 })
+
+describe("T6 honest staleness (Mechanism D)", () => {
+  it("a DEAD broker's ≥30-bar buffered data is tagged stale, never 'live'", async () => {
+    registerTestBroker({
+      slug: "s-dead-only",
+      label: "S Dead Only",
+      weight: 100,
+      isAlive: () => false,
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    registerTestBroker({
+      slug: "s-zombie-empty",
+      label: "S Zombie Empty",
+      weight: 10,
+      isAlive: () => true,
+      getCandles: () => []
+    })
+    // No alive source serves — the dead broker's buffer wins (sinks but stays
+    // try-able), yet the response must say stale: dead data ≠ "EO live".
+    const out = await getBestCandles("EURUSD", { timeframe: 60, count: 50 })
+    expect(out.source).toBe("s-dead-only")
+    expect(out.candles.length).toBeGreaterThanOrEqual(30)
+    expect(out.stale).toBe(true)
+    // The alive-but-empty broker ranks first and is tried first; the dead
+    // broker's buffer still wins the fetch — and the winner's reason says it.
+    const winner = out.sources.find((s) => s.slug === "s-dead-only")
+    expect(winner.winner).toBe(true)
+    expect(winner.reason).toContain("disconnected")
+  })
+
+  it("an alive broker with its stale flag set (connected but no ticks) is tagged stale", async () => {
+    registerTestBroker({
+      slug: "s-ticks-stale",
+      label: "S Ticks Stale",
+      weight: 100,
+      isAlive: () => true,
+      stats: () => ({ status: "connected", error: null, lastSeen: 0, stale: true, upstream: {} }),
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    const out = await getBestCandles("EURUSD", { timeframe: 60, count: 50 })
+    expect(out.source).toBe("s-ticks-stale")
+    expect(out.stale).toBe(true)
+  })
+
+  it("an alive healthy ≥30-bar winner is tagged not-stale", async () => {
+    registerTestBroker({
+      slug: "s-healthy",
+      label: "S Healthy",
+      weight: 100,
+      isAlive: () => true,
+      stats: () => ({ status: "connected", error: null, lastSeen: 5, stale: false, upstream: {} }),
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80) : [])
+    })
+    const out = await getBestCandles("EURUSD", { timeframe: 60, count: 50 })
+    expect(out.source).toBe("s-healthy")
+    expect(out.stale).toBe(false)
+  })
+})
