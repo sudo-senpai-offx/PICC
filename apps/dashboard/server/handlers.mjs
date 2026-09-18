@@ -2280,14 +2280,19 @@ async function _handleApiInner(req, res, url, reqId) {
     // so a 2000-bar request may honestly return far fewer (e.g. Yahoo 3y daily).
     const count = Math.min(Math.max(Number(body?.count) || 200, 20), 2000)
     if (!assetId) return writeJson(res, 400, { error: "assetId required" })
-    // Optional source pin (T6 source dropdown): naming a registered market-data
-    // broker slug ("expertoption", "ccxt", "yahoo", ...) fetches from that source
-    // ONLY; "auto"/omitted keeps the broker-priority fan-in (best/ideal source).
+    // Optional source pin (T6 source dropdown / T3 preference): naming a
+    // registered market-data broker slug ("expertoption", "ccxt", "yahoo", ...)
+    // FORCES that source first — it wins when it serves the request, and the
+    // fan-in falls through the quality order when it serves nothing
+    // (sourceMode:"fallback", never a blackout). "auto"/omitted keeps the
+    // quality-ordered fan-in (best/ideal source wins).
     const source = typeof body?.source === "string" ? body.source.trim() : "auto"
+    const preferredSource = typeof body?.preferredSource === "string" ? body.preferredSource.trim() : null
     try {
       // Unified fan-in: EO push buffers → live EO fetch → CCXT aggregates →
       // Yahoo daily fallback. Source + staleness tagged for honest labeling.
-      // A pinned `source` overrides the fan-in to view one specific lens.
+      // A pinned `source`/`preferredSource` is tried first and falls through
+      // the quality order when it serves nothing (sourceMode:"fallback").
       const { getBestCandles, listAvailableSources, getCrossSourceCandles } = await import("./services/marketDataBus.mjs")
       const { ensureWatchingAsset, feedProvenance } = await import("./services/liveEO.mjs")
       // Opt-in cross-source verification (verify:true): wraps the fan-in and
@@ -2296,14 +2301,14 @@ async function _handleApiInner(req, res, url, reqId) {
       // so the standard fan-in shape and cost stay unchanged for other callers.
       const fetchCandles = body?.verify === true ? getCrossSourceCandles : getBestCandles
       const [out, availableSources] = await Promise.all([
-        fetchCandles(assetId, { timeframe, count, ensureWatch: ensureWatchingAsset, source }),
+        fetchCandles(assetId, { timeframe, count, ensureWatch: ensureWatchingAsset, source, preferredSource }),
         listAvailableSources(assetId, { timeframe })
       ])
       // Leg-level provenance when the live EO leg served: studio bridge vs
       // data-source buffer frames (mirrors dataSources.collectSourceStatuses).
       const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : null
       if (!out.candles.length) {
-        return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources, verifySources: 0, verifiedCount: 0, verifiedRatio: 0 })
+        return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources, sourceMode: out.sourceMode ?? "auto", sources: out.sources ?? [], verifySources: 0, verifiedCount: 0, verifiedRatio: 0 })
       }
       writeJson(res, 200, {
         ok: true,
@@ -2318,6 +2323,10 @@ async function _handleApiInner(req, res, url, reqId) {
         // T6 — the selectable source set (additive). Frontend dropdown default:
         // "Auto" = the fan-in winner this response served.
         availableSources,
+        // T2 — who won and why (additive): forced/auto/fallback mode + the
+        // per-candidate option set with rank + reasons.
+        sourceMode: out.sourceMode ?? "auto",
+        sources: out.sources ?? [],
         // T3-additive depth tags (always present for a deterministic shape):
         historyDepth: out.historyDepth ?? out.candles.length,
         backfilled: out.backfilled ?? 0,

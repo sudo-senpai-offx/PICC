@@ -175,6 +175,11 @@ describe("POST /api/trading/candles resolution response", () => {
     expect(res.body.requestedTimeframe).toBe(5) // what the client asked
     expect(res.body.resolved).toBe(true) // warning path for the UI
     expect(res.body.candles.length).toBe(50)
+    // T2-additive: who won and why (mode + ranked option set).
+    expect(res.body.sourceMode).toBe("auto")
+    expect(Array.isArray(res.body.sources)).toBe(true)
+    expect(res.body.sources[0].slug).toBe("tf-endpoint-eo")
+    expect(res.body.sources[0].winner).toBe(true)
   })
 
   it("relaxes the clamp so a 4h request is not force-shifted before resolution", async () => {
@@ -220,13 +225,49 @@ describe("T6 source override (getBestCandles)", () => {
     // Without pin: t6-other wins (higher weight, more bars)
     const auto = await getBestCandles("EURUSD", { timeframe: 60, count: 50 })
     expect(auto.source).toBe("t6-other")
-    // With pin: t6-pinned is fetched (lower weight, fewer bars — but user asked)
+    expect(auto.sourceMode).toBe("auto")
+    // With pin: t6-pinned is fetched first (lower weight, fewer bars — but user asked)
     const pinned = await getBestCandles("EURUSD", { timeframe: 60, count: 50, source: "t6-pinned" })
     expect(pinned.source).toBe("t6-pinned")
     expect(pinned.stale).toBe(false)
+    expect(pinned.sourceMode).toBe("forced")
+    expect(pinned.sources[0].slug).toBe("t6-pinned")
+    expect(pinned.sources[0].winner).toBe(true)
   })
 
-  it("declines (honest emptiness) when the pinned source can't serve the resolution", async () => {
+  it("falls through the quality order when the forced source cannot serve (never a blackout)", async () => {
+    registerTestBroker({
+      slug: "t6-1h-only",
+      label: "T6 1h only",
+      weight: 100,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 900, 3600],
+      getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
+    })
+    registerTestBroker({
+      slug: "t6-1d-backup",
+      label: "T6 1d backup",
+      weight: 50,
+      isAlive: () => true,
+      availableTimeframes: () => [60, 300, 900, 3600, 86400],
+      getCandles: (id, opts) => (opts?.timeframe === 86400 ? synthCandles(80) : [])
+    })
+    const out = await getBestCandles("EURUSD", { timeframe: 14400, count: 50, source: "t6-1h-only" })
+    // The forced source is above its 1h cap for a 4h request → resolveTimeframe
+    // declines → the engine falls through instead of returning a blackout.
+    expect(out.source).toBe("t6-1d-backup")
+    expect(out.candles.length).toBe(50)
+    expect(out.stale).toBe(false)
+    expect(out.timeframe).toBe(86400) // honest daily tag
+    expect(out.resolved).toBe(true)
+    expect(out.sourceMode).toBe("fallback")
+    expect(out.sources[0].slug).toBe("t6-1d-backup")
+    expect(out.sources[0].winner).toBe(true)
+    // The declined forced source never made the option set (it can't serve).
+    expect(out.sources.find((s) => s.slug === "t6-1h-only")).toBeUndefined()
+  })
+
+  it("reports honest emptiness with sourceMode 'fallback' when the forced source declines and nothing else serves", async () => {
     registerTestBroker({
       slug: "t6-1h-only",
       label: "T6 1h only",
@@ -236,10 +277,10 @@ describe("T6 source override (getBestCandles)", () => {
       getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(120) : [])
     })
     const out = await getBestCandles("EURUSD", { timeframe: 14400, count: 50, source: "t6-1h-only" })
-    // Above its 1h cap — resolveTimeframe returns null — honest emptiness.
-    expect(out.source).toBe("t6-1h-only")
+    expect(out.source).toBe("none")
     expect(out.candles).toEqual([])
     expect(out.stale).toBe(true)
+    expect(out.sourceMode).toBe("fallback")
   })
 
   it("falls back to auto fan-in for an unknown source slug", async () => {
@@ -264,6 +305,8 @@ describe("T6 source override (getBestCandles)", () => {
     })
     const out = await getBestCandles("EURUSD", { timeframe: 60, count: 50, source: "auto" })
     expect(out.source).toBe("t6-auto-exact")
+    expect(out.sourceMode).toBe("auto")
+    expect(Array.isArray(out.sources)).toBe(true)
   })
 })
 

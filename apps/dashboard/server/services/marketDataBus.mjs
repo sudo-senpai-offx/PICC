@@ -1,16 +1,23 @@
 // PICC Unified Market Data Bus — the fan-in for every candle source.
 //
-// One call, best available candles: broker-priority fan-in with per-source
+// One call, best available candles: quality-ordered fan-in with per-source
 // latency tracking and honest staleness tags. Brokers register via the
 // broker registry — this module never imports broker modules directly.
 //
-// Source priority is determined by:
-//   1. Broker weight (user-configurable, higher = preferred)
-//   2. Liveness (alive brokers ranked above dead ones)
-//   3. Data freshness (how many candles are buffered)
+// Fan-in quality order (T2 — PICC_MULTISOURCE_ENGINE):
+//   1. Liveness — alive brokers rank above dead ones (dead ones stay
+//      try-able for buffered data, but sink below every live source)
+//   2. Exact resolution — a broker serving the REQUESTED timeframe beats
+//      one that would serve a relabel (never a silent resolution change)
+//   3. Freshness — newer stats().lastSeen wins
+//   4. Broker weight (user-configurable, higher = preferred)
+//   5. Latency — median fetch time breaks the final tie (faster wins)
 //
 // Every result is tagged with its source so the UI can label honesty
-// (live vs delayed) and the model matrix can weight accordingly.
+// (live vs delayed) and the model matrix can weight accordingly. Responses
+// also name the option set and mode: sourceMode ("auto"|"forced"|"fallback")
+// and per-candidate sources[] with rank + reasons, so the chart can explain
+// who won and why.
 
 import { canonicalAssetId } from "./assetCatalog.mjs"
 import { resolveTimeframeFor } from "./brokers/index.mjs"
@@ -157,88 +164,158 @@ function spanMs(candles) {
   return Number.isFinite(a) && Number.isFinite(b) ? (b - a) * 1000 : 0
 }
 
-/**
- * Fetch a single broker's best available candles for an asset, or null when it
- * has none at the requested resolution. Honesty preserved: the broker's own
- * resolveTimeframe decides the served resolution and a decline (null) returns
- * null — the caller decides what emptiness means (never a silent relabel).
- */
-async function fetchFromBroker(broker, id, tf, n) {
-  try {
-    const servedTf = broker.resolveTimeframe(tf)
-    if (servedTf === null || servedTf === undefined) return null
-    const candles = await timed(broker.slug, async () => broker.getCandles(id, { timeframe: servedTf, count: n }))
-    if (!Array.isArray(candles) || !candles.length) return null
-    return { candles: candles.slice(-n), source: broker.slug, servedTf }
-  } catch { return null }
+// ── Quality ordering (T2) ────────────────────────────────────────────────────
+// Phase 1 of the fan-in: resolution-capable candidates only. A broker that
+// DECLINES the request (resolveTimeframe null — e.g. a 4h request on a 1h-capped
+// source) is dropped entirely; paper is an execution source with no candle data.
+// Phase 2 sorts the survivors by liveness > exact resolution > freshness
+// (lastSeen) > weight > latency. Dead sinks, relabels sink, stale sinks,
+// low-weight sinks, slow sinks.
+function buildCandidates(brokers, tf) {
+  const out = []
+  for (const broker of brokers) {
+    if (broker.slug === "paper") continue
+    let servedTf
+    try { servedTf = broker.resolveTimeframe(tf) } catch { continue }
+    if (servedTf === null || servedTf === undefined) continue
+    let alive = false
+    try { alive = broker.isAlive ? broker.isAlive() === true : false } catch { alive = false }
+    let lastSeen = 0
+    try { lastSeen = Number(broker.stats?.()?.lastSeen) || 0 } catch { lastSeen = 0 }
+    const medianMs = dataBusStats()[broker.slug]?.medianMs ?? null
+    out.push({ broker, servedTf, exact: servedTf === tf, alive, lastSeen, medianMs, weight: Number(broker.weight) || 0 })
+  }
+  out.sort((a, b) => {
+    if (a.alive !== b.alive) return a.alive ? -1 : 1
+    if (a.exact !== b.exact) return a.exact ? -1 : 1
+    if (a.lastSeen !== b.lastSeen) return b.lastSeen - a.lastSeen
+    if (a.weight !== b.weight) return b.weight - a.weight
+    return (a.medianMs ?? Infinity) - (b.medianMs ?? Infinity)
+  })
+  return out
+}
+
+/** Human reason string for a candidate's rank (the chart's "why" line). */
+function reasonFor(cand, tf) {
+  const parts = []
+  parts.push(cand.alive ? "alive" : "disconnected — buffered data only")
+  parts.push(cand.exact ? `${fmtTf(cand.servedTf)} exact` : `serves ${fmtTf(cand.servedTf)} for ${fmtTf(tf)} request`)
+  if (cand.lastSeen > 0) parts.push(`fresh ${cand.lastSeen}s ago`)
+  if (cand.medianMs != null) parts.push(`${cand.medianMs} ms`)
+  return parts.join(" · ")
+}
+
+/** Compact timeframe label: 300 → "5m", 86400 → "1d". */
+function fmtTf(sec) {
+  if (sec >= 86400 && sec % 86400 === 0) return `${sec / 86400}d`
+  if (sec >= 3600 && sec % 3600 === 0) return `${sec / 3600}h`
+  if (sec >= 60 && sec % 60 === 0) return `${sec / 60}m`
+  return `${sec}s`
 }
 
 /**
  * Fetch the best available candles for an asset.
  *
- * `source` (optional) pins the request to ONE broker slug ("expertoption",
- * "ccxt", "yahoo", ...). When it names a registered market-data broker we fetch
- * from that source ONLY — resolveTimeframe (and honest decline) still apply, so
- * a pinned source that cannot serve the resolution returns honest emptiness,
- * never a relabel. When omitted, `"auto"`, or an unknown slug the current
- * broker-priority fan-in runs unchanged (the ideal/best source wins).
+ * Quality-ordered fan-in: resolution-capable brokers (those whose
+ * resolveTimeframe does not DECLINE the request) are ranked by liveness >
+ * exact resolution > freshness (lastSeen) > weight > latency and fetched in
+ * that order. The first ≥30-bar result wins; thinner data is kept as a last
+ * resort; then the EO watch-and-fetch bridge (transitional); then honest
+ * emptiness (source:"none").
  *
- * @returns {candles[], source, stale, timeframe, resolved} — never throws for
- *          data-absence (returns empty + source:"none"); network errors from
- *          a broker fall through to the next. `timeframe` is the SERVED
- *          resolution (post broker.resolveTimeframe), `resolved` is true when
- *          it differs from the request — the honest tag the UI must display.
- *          T3-additive keys when a same-resolution history source backfills:
- *          `historyDepth`, `backfilled`, `historySpanMs`, `historySource`
- *          (+ per-bar `backfilled:true` on appended older bars).
+ * `source` (optional) FORCES a broker slug ("expertoption", "ccxt", "yahoo",
+ * ...): that source is tried FIRST and wins when it serves ≥30 bars
+ * (sourceMode:"forced"); when it serves nothing the engine falls through the
+ * quality order — never a blackout — and the response says
+ * sourceMode:"fallback". `preferredSource` (T3 preference) is the same
+ * mechanism and takes precedence when both are set. "auto"/omitted/unknown
+ * slug runs the plain quality fan-in (sourceMode:"auto").
+ *
+ * Every response carries two additive keys:
+ *   sourceMode — "auto" | "forced" | "fallback" (who the winner is and why)
+ *   sources[]  — the candidates in the order they were tried, each
+ *                { slug, label, rank, alive, exact, servedTf, lastSeen,
+ *                  medianMs, reason, winner? }
+ *                `winner:true` marks the source that served this response
+ *                (absent when nothing served).
+ *
+ * @returns {candles[], source, sourceMode, sources[], stale, timeframe,
+ *           resolved} — never throws for data-absence (returns empty +
+ *          source:"none"); network errors from a broker fall through to the
+ *          next. `timeframe` is the SERVED resolution (post
+ *          broker.resolveTimeframe), `resolved` is true when it differs from
+ *          the request — the honest tag the UI must display. T3-additive keys
+ *          when a same-resolution history source backfills: `historyDepth`,
+ *          `backfilled`, `historySpanMs`, `historySource` (+ per-bar
+ *          `backfilled:true` on appended older bars).
  */
-export async function getBestCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null, source = "auto" } = {}) {
+export async function getBestCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null, source = "auto", preferredSource = null } = {}) {
   const tf = Math.min(Math.max(Number(timeframe) || 60, 5), 2592000) // up to 1M
   const n = Math.min(Math.max(Number(count) || 200, 20), 2000)
   const id = String(assetId ?? "").trim().toUpperCase() || "EURUSD"
 
   const { getActiveBrokers, getBroker } = await registry()
   const brokers = getActiveBrokers()
+  const candidates = buildCandidates(brokers, tf)
 
-  // Pinned source: fetch from that ONE broker. The EO watch-and-fetch bridge
-  // and the fan-in are both skipped — the user asked for a specific lens. An
-  // unknown slug falls through to the auto path (never a fabricated source).
-  if (typeof source === "string" && source !== "" && source !== "auto") {
-    const broker = getBroker(source)
-    if (broker) {
-      const single = await fetchFromBroker(broker, id, tf, n)
-      if (single) {
-        const withHistory = await withHistoryBackfill({ brokers, id, primary: single.candles, servedTf: single.servedTf, n, primarySlug: single.source })
-        return { ...withHistory, source: single.source, stale: false, timeframe: single.servedTf, resolved: single.servedTf !== tf }
+  // ── Forced source (T2): tried first, falls through on emptiness ───────────
+  // A forced slug that serves nothing must not black out the chart — the
+  // engine falls through the quality order and says so (sourceMode:"fallback").
+  // An unknown slug forces nothing: the plain auto fan-in runs (with a warn).
+  let forcedSlug = null
+  let tried = false
+  const pin = preferredSource && typeof preferredSource === "string" && preferredSource !== "auto"
+    ? preferredSource
+    : typeof source === "string" && source !== "" && source !== "auto"
+      ? source
+      : null
+  if (pin) {
+    if (getBroker(pin)) {
+      forcedSlug = pin
+      tried = true
+      const idx = candidates.findIndex((c) => c.broker.slug === pin)
+      if (idx >= 0) {
+        const [forced] = candidates.splice(idx, 1)
+        candidates.unshift(forced)
       }
-      return { candles: [], source, stale: true, timeframe: tf, resolved: false, historyDepth: 0, backfilled: 0, historySpanMs: 0, historySource: null }
+      // Registered but declined this resolution → no candidate entry; the
+      // remaining quality order is tried (never a blackout).
+    } else if (/^[a-z0-9-]+$/.test(pin)) {
+      console.warn(`[picc] candles: unknown source '${pin}' — falling back to auto (best)`)
     }
-    // Unknown slug — fall through to auto fan-in rather than error.
-    if (/^[a-z0-9-]+$/.test(source)) console.warn(`[picc] candles: unknown source '${source}' — falling back to auto (best)`)
   }
+
+  const sources = candidates.map((c, i) => ({
+    slug: c.broker.slug,
+    label: typeof c.broker.label === "string" && c.broker.label ? c.broker.label : c.broker.slug,
+    rank: i + 1,
+    alive: c.alive,
+    exact: c.exact,
+    servedTf: c.servedTf,
+    lastSeen: c.lastSeen,
+    medianMs: c.medianMs,
+    reason: reasonFor(c, tf)
+  }))
+  const mode = (winnerSlug) => (tried ? (winnerSlug === forcedSlug ? "forced" : "fallback") : "auto")
+  const markWinner = (slug) => sources.map((s) => (s.slug === slug ? { ...s, winner: true } : s))
 
   let thinData = null // best thin result so far (last-resort fallback)
 
-  for (const broker of brokers) {
+  for (const cand of candidates) {
     try {
-      // Resolution FIRST: ask what this broker will actually serve. A null
-      // resolution means the broker declines entirely (e.g. a 4h request on a
-      // 1h-cap source) — skip it instead of silently relabeling its bars.
-      const servedTf = broker.resolveTimeframe(tf)
-      if (servedTf === null || servedTf === undefined) continue
-      const candles = await timed(broker.slug, async () => broker.getCandles(id, { timeframe: servedTf, count: n }))
+      const candles = await timed(cand.broker.slug, async () => cand.broker.getCandles(id, { timeframe: cand.servedTf, count: n }))
       if (!Array.isArray(candles) || !candles.length) continue
 
       const sliced = candles.slice(-n)
       if (sliced.length >= 30) {
         // T3 — prepend same-resolution older bars from another broker when the
         // primary under-fills the requested window (deep chart history).
-        const withHistory = await withHistoryBackfill({ brokers, id, primary: sliced, servedTf, n, primarySlug: broker.slug })
-        return { ...withHistory, source: broker.slug, stale: false, timeframe: servedTf, resolved: servedTf !== tf }
+        const withHistory = await withHistoryBackfill({ brokers, id, primary: sliced, servedTf: cand.servedTf, n, primarySlug: cand.broker.slug })
+        return { ...withHistory, source: cand.broker.slug, sourceMode: mode(cand.broker.slug), sources: markWinner(cand.broker.slug), stale: false, timeframe: cand.servedTf, resolved: cand.servedTf !== tf }
       }
       // Thin data — keep as fallback but try next broker for better data
       if (!thinData || sliced.length > thinData.candles.length) {
-        thinData = { candles: sliced, source: broker.slug, stale: true, timeframe: servedTf, resolved: servedTf !== tf, historyDepth: sliced.length, backfilled: 0, historySpanMs: spanMs(sliced), historySource: null }
+        thinData = { candles: sliced, source: cand.broker.slug, sourceMode: mode(cand.broker.slug), sources: markWinner(cand.broker.slug), stale: true, timeframe: cand.servedTf, resolved: cand.servedTf !== tf, historyDepth: sliced.length, backfilled: 0, historySpanMs: spanMs(sliced), historySource: null }
       }
     } catch { /* broker unavailable — fall through */ }
   }
@@ -251,15 +328,15 @@ export async function getBestCandles(assetId, { timeframe = 60, count = 200, ens
       const { ohlc: eoCandles, servedTf } = await eoWatchAndFetch(id, tf, n)
       if (servedTf !== null && eoCandles.length >= 30) {
         const withHistory = await withHistoryBackfill({ brokers, id, primary: eoCandles.slice(-n), servedTf, n, primarySlug: "live" })
-        return { ...withHistory, source: "live", stale: false, timeframe: servedTf, resolved: servedTf !== tf }
+        return { ...withHistory, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: false, timeframe: servedTf, resolved: servedTf !== tf }
       }
-      if (servedTf !== null && eoCandles.length) thinData = { candles: eoCandles, source: "live", stale: true, timeframe: servedTf, resolved: servedTf !== tf, historyDepth: eoCandles.length, backfilled: 0, historySpanMs: spanMs(eoCandles), historySource: null }
+      if (servedTf !== null && eoCandles.length) thinData = { candles: eoCandles, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: true, timeframe: servedTf, resolved: servedTf !== tf, historyDepth: eoCandles.length, backfilled: 0, historySpanMs: spanMs(eoCandles), historySource: null }
     } catch { /* EO fetch failed — last resort stands or honest emptiness */ }
   }
 
   // Last resort: thin data from any broker, else honest emptiness.
   if (thinData) return thinData
-  return { candles: [], source: "none", stale: true, timeframe: tf, resolved: false, historyDepth: 0, backfilled: 0, historySpanMs: 0, historySource: null }
+  return { candles: [], source: "none", sourceMode: mode(null), sources: markWinner(null), stale: true, timeframe: tf, resolved: false, historyDepth: 0, backfilled: 0, historySpanMs: 0, historySource: null }
 }
 
 /**
@@ -325,12 +402,17 @@ async function fetchSiblingBars(broker, id, servedTf, count) {
   } catch { return null }
 }
 
-export async function getCrossSourceCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null, source = "auto" } = {}) {
-  const base = await getBestCandles(assetId, { timeframe, count, ensureWatch, source })
+export async function getCrossSourceCandles(assetId, { timeframe = 60, count = 200, ensureWatch = null, source = "auto", preferredSource = null } = {}) {
+  const base = await getBestCandles(assetId, { timeframe, count, ensureWatch, source, preferredSource })
   const zero = { verifySources: 0, verifiedCount: 0, verifiedRatio: 0 }
   if (!base?.candles?.length) return { ...base, ...zero }
   // Pinned single-source lens — verification is intentionally skipped.
-  if (typeof source === "string" && source !== "" && source !== "auto") return { ...base, ...zero }
+  const pinned = preferredSource && typeof preferredSource === "string" && preferredSource !== "auto"
+    ? preferredSource
+    : typeof source === "string" && source !== "" && source !== "auto"
+      ? source
+      : null
+  if (pinned) return { ...base, ...zero }
 
   const servedTf = base.timeframe
   const primarySlug = base.source
