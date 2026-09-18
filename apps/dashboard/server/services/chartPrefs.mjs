@@ -19,14 +19,18 @@ import { fileURLToPath } from "node:url"
 import { getBroker } from "./brokers/index.mjs"
 
 const isVitest = () => process.env.VITEST === "true"
-const PREFS_FILE = process.env.PICC_DATA_DIR
-  ? join(process.env.PICC_DATA_DIR, "chart-prefs.json")
-  : fileURLToPath(new URL("../data/chart-prefs.json", import.meta.url))
+// Resolved lazily so a PICC_DATA_DIR set AFTER this module loads is honored
+// (boot read, writes, and the renamed tmp target all agree on ONE path).
+function prefsFile() {
+  return process.env.PICC_DATA_DIR
+    ? join(process.env.PICC_DATA_DIR, "chart-prefs.json")
+    : fileURLToPath(new URL("../data/chart-prefs.json", import.meta.url))
+}
 
 let prefs = {}
 if (!isVitest()) {
   try {
-    const parsed = JSON.parse(readFileSync(PREFS_FILE, "utf8"))
+    const parsed = JSON.parse(readFileSync(prefsFile(), "utf8"))
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) prefs = parsed
   } catch { /* no prefs on disk yet — default */ }
 }
@@ -59,9 +63,10 @@ export function setSourcePref(userId, source) {
   prefs[k] = { source: s, updatedAt: Date.now() }
   if (!isVitest()) {
     try {
-      const tmp = `${PREFS_FILE}.${process.pid}.tmp`
+      const target = prefsFile()
+      const tmp = `${target}.${process.pid}.tmp`
       writeFileSync(tmp, JSON.stringify(prefs, null, 2))
-      renameSync(tmp, PREFS_FILE)
+      renameSync(tmp, target)
     } catch (err) {
       console.warn("[picc-prefs] chart source-pref write failed:", err.message)
     }
