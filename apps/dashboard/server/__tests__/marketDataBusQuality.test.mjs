@@ -98,6 +98,9 @@ describe("T2 fan-in quality order", () => {
   })
 
   it("fresher data (stats().lastSeen) beats older data at equal weight", async () => {
+    // lastSeen is an epoch-ms write timestamp (Date.now() convention): a
+    // 30-seconds-ago write beats a never-written (0) broker.
+    const now = Date.now()
     registerTestBroker({
       slug: "q-stale",
       label: "Q Stale",
@@ -111,7 +114,7 @@ describe("T2 fan-in quality order", () => {
       label: "Q Fresh",
       weight: 50,
       isAlive: () => true,
-      stats: () => ({ status: "connected", error: null, lastSeen: 30, stale: false, upstream: {} }),
+      stats: () => ({ status: "connected", error: null, lastSeen: now - 30_000, stale: false, upstream: {} }),
       getCandles: (id, opts) => (opts?.timeframe === 60 ? synthCandles(80, 150) : [])
     })
     const out = await getBestCandles("EURUSD", { timeframe: 60, count: 50 })

@@ -139,13 +139,25 @@ registerBroker({
     if (!_ccxtConn) return { status: "disconnected", error: null, lastSeen: 0, stale: false, upstream: {} }
     try {
       const ids = _ccxtConn.connectedExchangeIds()
-      return {
-        status: ids.length > 0 ? "connected" : "idle",
-        error: null,
-        lastSeen: 0,
-        stale: false,
-        upstream: { exchanges: ids }
+      let status = ids.length > 0 ? "connected" : "idle"
+      let lastSeen = 0
+      let stale = false
+      // T5 remainder — real freshness from the scheduler-fed buffers (max
+      // buffer write timestamp), audited by liveCCXT's own liveness gate:
+      // an open connection with no buffer writes in CCXT_STALE_MS (90s) is
+      // STALE — "connected" must never be inferred from the socket alone
+      // (audit §5.3). The bus's stale rule then labels such data honestly.
+      if (_liveCCXT) {
+        try {
+          const data = _liveCCXT.liveCCXTData()
+          for (const a of data?.assets ?? []) {
+            if (Number(a.updatedAt) > lastSeen) lastSeen = Number(a.updatedAt)
+          }
+          if (data?.status === "stale") { status = "stale"; stale = true }
+          else if (data?.status === "connected") status = "connected"
+        } catch { /* buffer read failed — connector-level values stand */ }
       }
+      return { status, error: null, lastSeen, stale, upstream: { exchanges: ids } }
     } catch { return { status: "error", error: "ccxt unavailable", lastSeen: 0, stale: true, upstream: {} } }
   },
 

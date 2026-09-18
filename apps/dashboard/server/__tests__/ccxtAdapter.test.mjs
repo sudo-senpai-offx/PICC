@@ -161,3 +161,82 @@ describe("ccxt adapter getCandles (T2 — real OHLCV history)", () => {
     expect(candles).toEqual([]) // never a fabricated series
   })
 })
+
+describe("ccxt adapter stats (T5 remainder — real freshness for the quality order)", () => {
+  it("reports real lastSeen = max buffer write once buffers exist (0 before)", async () => {
+    const adapter = await loadAdapter()
+    expect(adapter.stats().lastSeen).toBe(0) // no buffers yet — honest 0
+
+    const t0 = Date.now()
+    recordCandles({
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "5m",
+      candles: realConnector.normalizeCandles(rawRows(100, { stepMs: 300_000 }))
+    })
+    const s = adapter.stats()
+    expect(s.lastSeen).toBeGreaterThanOrEqual(t0)
+    expect(s.lastSeen).toBeLessThanOrEqual(t0 + 2000)
+    expect(s.status).toBe("connected")
+    expect(s.stale).toBe(false)
+    expect(s.error).toBeNull()
+  })
+
+  it("flips status to 'stale' + stale:true when the buffers stop receiving writes (CCXT_STALE_MS)", async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = await loadAdapter()
+      recordCandles({
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "5m",
+        candles: realConnector.normalizeCandles(rawRows(100, { stepMs: 300_000 }))
+      })
+      expect(adapter.stats().status).toBe("connected")
+      // 2 minutes pass with no poll writes — past the 90s liveness gate. The
+      // socket may still be open, but the DATA is stale (audit §5.3) and the
+      // adapter must say so — the bus then tags buffered bars stale, never live.
+      vi.setSystemTime(Date.now() + 120_000)
+      expect(adapter.stats().status).toBe("stale")
+      expect(adapter.stats().stale).toBe(true)
+      // lastSeen keeps the last write timestamp — staleness is a time gap, not
+      // a reset of what was observed.
+      expect(adapter.stats().lastSeen).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("the bus quality order picks fresh real-ccxt over a higher-weight never-written stub (freshness beats weight)", async () => {
+    // T5 acceptance: with EO absent (not registered here) and CCXT fresh,
+    // getBestCandles must choose ccxt over a weightier but never-written
+    // source — the real adapter's stats().lastSeen feeds the freshness key.
+    state.connected = ["binance"]
+    recordCandles({
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "5m",
+      candles: realConnector.normalizeCandles(rawRows(400, { stepMs: 300_000 }))
+    })
+    await loadAdapter()
+    registerBroker({
+      slug: "t5-heavy-stub",
+      label: "T5 Heavy Stub",
+      weight: 100, // heavier than ccxt's 40 — weight alone would give it the win
+      isAlive: () => true,
+      stats: () => ({ status: "connected", error: null, lastSeen: 0, stale: false, upstream: {} }),
+      availableTimeframes: () => [300],
+      getCandles: () => []
+    })
+    try {
+      const bus = await import("../services/marketDataBus.mjs")
+      const out = await bus.getBestCandles("BTCUSD", { timeframe: 300, count: 100 })
+      expect(out.source).toBe("ccxt")
+      expect(out.sources[0].slug).toBe("ccxt")
+      expect(out.candles).toHaveLength(100)
+      for (const c of out.candles) expect(c.timeframe).toBe(300)
+    } finally {
+      unregisterBroker("t5-heavy-stub")
+    }
+  })
+})

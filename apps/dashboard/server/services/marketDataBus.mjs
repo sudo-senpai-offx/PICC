@@ -9,7 +9,8 @@
 //      try-able for buffered data, but sink below every live source)
 //   2. Exact resolution — a broker serving the REQUESTED timeframe beats
 //      one that would serve a relabel (never a silent resolution change)
-//   3. Freshness — newer stats().lastSeen wins
+//   3. Freshness — newer stats().lastSeen wins (epoch-ms write timestamp,
+//      the Date.now() convention every adapter follows)
 //   4. Broker weight (user-configurable, higher = preferred)
 //   5. Latency — median fetch time breaks the final tie (faster wins)
 //
@@ -212,7 +213,13 @@ function reasonFor(cand, tf) {
   const parts = []
   parts.push(cand.alive ? "alive" : "disconnected — buffered data only")
   parts.push(cand.exact ? `${fmtTf(cand.servedTf)} exact` : `serves ${fmtTf(cand.servedTf)} for ${fmtTf(tf)} request`)
-  if (cand.lastSeen > 0) parts.push(`fresh ${cand.lastSeen}s ago`)
+  if (cand.lastSeen > 0) {
+    // lastSeen is the epoch-ms timestamp of the last data write (Date.now()
+    // convention, liveEO.mjs:353) — the "why" line shows a TRUE age in
+    // seconds, and only claims "fresh" for plausibly live buffers (≤24h).
+    const ageSec = Math.max(0, Math.round((Date.now() - cand.lastSeen) / 1000))
+    if (Number.isFinite(ageSec) && ageSec <= 86400) parts.push(`fresh ${ageSec}s ago`)
+  }
   if (cand.medianMs != null) parts.push(`${cand.medianMs} ms`)
   return parts.join(" · ")
 }
