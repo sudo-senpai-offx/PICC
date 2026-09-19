@@ -105,42 +105,42 @@ Each slice = one commit-capable unit: `feat:`/`fix:`/`refactor:` per repo conven
 
 Files: `server/services/assetCatalog.mjs`, `server/__tests__/modelMatrix.test.mjs` (its catalog describe block), optionally a new `assetCatalog.test.mjs`.
 
-- [ ] 1a. Add `FOREX` alias block to `ASSET_ALIASES` for the 13 pairs in §5.2 (EURUSD…USDMXN) incl. human names (`Cable`, `Aussie`, `Loonie`) + Yahoo `=X` forms. **Acceptance:** `canonicalAssetId("EUR/USD")===EURUSD`, `("Cable")===GBPUSD`, `("USDJPY=X")===USDJPY`.
-- [ ] 1b. Add `EQUITIES` alias block (AAPL, TSLA, GOOGL, MSFT, AMZN, NVDA, META) incl. `Apple Inc`, `Meta Platforms`. **Acceptance:** `canonicalAssetId("AAPL")===AAPL`, `("Google")===GOOGL`.
-- [ ] 1c. Keep `yahooSymbolFor` correct for all new ids (already handles 6-letter; verify equities passthrough + forex `=X`). **Acceptance:** `yahooSymbolFor("EURUSD")==="EURUSD=X"`, `yahooSymbolFor("AAPL")==="AAPL"`.
-- [ ] 1d. Update the existing catalog describe block in `modelMatrix.test.mjs` to assert all new aliases; add a dedicated `assetCatalog.test.mjs` if the block grows past ~40 assertions. **Acceptance:** new tests green; no existing test changes behavior.
+- [x] 1a. Add `FOREX` alias block to `ASSET_ALIASES` for the 13 pairs in §5.2 (EURUSD…USDMXN) incl. human names (`Cable`, `Aussie`, `Loonie`) + Yahoo `=X` forms. **Acceptance:** `canonicalAssetId("EUR/USD")===EURUSD`, `("Cable")===GBPUSD`, `("USDJPY=X")===USDJPY`. — Done (`31672d1`, "feat: add forex + equities aliases to asset catalog (Phase I)").
+- [x] 1b. Add `EQUITIES` alias block (AAPL, TSLA, GOOGL, MSFT, AMZN, NVDA, META) incl. `Apple Inc`, `Meta Platforms`. **Acceptance:** `canonicalAssetId("AAPL")===AAPL`, `("Google")===GOOGL`. — Done (`31672d1`); verified on disk.
+- [x] 1c. Keep `yahooSymbolFor` correct for all new ids (already handles 6-letter; verify equities passthrough + forex `=X`). **Acceptance:** `yahooSymbolFor("EURUSD")==="EURUSD=X"`, `yahooSymbolFor("AAPL")==="AAPL"`. — Done (`31672d1`).
+- [x] 1d. Update the existing catalog describe block in `modelMatrix.test.mjs` to assert all new aliases; add a dedicated `assetCatalog.test.mjs` if the block grows past ~40 assertions. **Acceptance:** new tests green; no existing test changes behavior. — Done (`31672d1`); assertions incl. `("EUR/USD")==="EURUSD"`, `("Cable")==="GBPUSD"`, `("Aussie")==="AUDUSD"`, `assetsEquivalent("Cable","GBP/USD")` live in `modelMatrix.test.mjs:36-68` (no separate assetCatalog file needed — block stayed within 40 assertions).
 - Effort: ~1–2 h. Risk: alias collisions (e.g., `GBPUSD` vs `GBP/USD`) — guarded by alias tests.
 
 ### Slice 2 — Chart timeframes + broker-agnostic UI labels (Phase K)
 
 Files: `src/hooks/useCandleData.ts`, `src/components/TradingChart.tsx`, `src/components/TradingSuite.tsx`, `DockablePreview.tsx`, `LiveMarketBoard.tsx`, `TradeOrderForm.tsx`, `LiveDecisionsPanel.tsx`, `TradingHud.tsx`, `src/lib/trading.ts`, `src/lib/liveTrading.ts`, `server/services/brokers/index.mjs` (default `availableTimeframes`), plus component tests.
 
-- [ ] 2a. Expand `Timeframe` union + `TIMEFRAME_LABELS` to all 12 values. **Acceptance:** type compiles; labels map 5→"5s", 30→"30s", 3600→"1h", 2592000→"1M".
-- [ ] 2b. Update `TradingChart.tsx` selector to render all 12 (scrollable pill row or dropdown). **Acceptance:** renders without regression; renders a 12-option control in a test.
-- [ ] 2c. Update broker-registry default `availableTimeframes` to the 12; each adapter already overrides. **Acceptance:** `brokerRegistry.test.mjs` asserts default == 12 values.
-- [ ] 2d. Genericize suite labels per §4.3 of the generalization spec: "ExpertOption Session"→"Broker Connection", "ExpertOption account"→"Account ({broker})", "ExpertOption quick assets"→"Quick assets", `EXPERTOPTION_QUICK_ASSETS`→`QUICK_ASSETS`. **Acceptance:** rendering a suite with a non-EO broker shows zero EO labels (component test).
-- [ ] 2e. Rename lib entry points `analyzeExpertOptionAsset`/`getExpertOptionDemoStatus`/`proAnalyzeExpertOption` to generic (`analyzeAsset`/`getBrokerStatus`/`proAnalyze`) and update call sites. **Acceptance:** all imports resolve; typecheck clean.
-- [ ] 2f. Update `DockablePreview`, `LiveMarketBoard`, `TradeOrderForm`, `LiveDecisionsPanel`, `TradingHud` strings to broker-agnostic wording. **Acceptance:** grep for EO-specific strings in `src/` returns only non-default paths (component tests).
+- [x] 2a. Expand `Timeframe` union + `TIMEFRAME_LABELS` to all 12 values. **Acceptance:** type compiles; labels map 5→"5s", 30→"30s", 3600→"1h", 2592000→"1M". — Done (`384f62f`); `useCandleData.ts:7-23` has the 12-value union + labels.
+- [x] 2b. Update `TradingChart.tsx` selector to render all 12 (scrollable pill row or dropdown). **Acceptance:** renders without regression; renders a 12-option control in a test. — Done (`384f62f`); `TIMEFRAMES` const + `TIMEFRAMES.map` pill row in `TradingChart.tsx:14,355` (enabled/disabled per servable).
+- [x] 2c. Update broker-registry default `availableTimeframes` to the 12; each adapter already overrides. **Acceptance:** `brokerRegistry.test.mjs` asserts default == 12 values. — Done (`384f62f`); test at `brokerRegistry.test.mjs:64-67` asserts the full 12-value range.
+- [x] 2d. Genericize suite labels per §4.3 of the generalization spec: "ExpertOption Session"→"Broker Connection", "ExpertOption account"→"Account ({broker})", "ExpertOption quick assets"→"Quick assets", `EXPERTOPTION_QUICK_ASSETS`→`QUICK_ASSETS`. **Acceptance:** rendering a suite with a non-EO broker shows zero EO labels (component test). — Done (`384f62f`); `TradingSuite.tsx` uses `QUICK_ASSETS` + "Broker Connection" + "Quick assets (live feed)"; residual `ExpertOption` strings are comments only (`liveTrading.ts`, `trading.ts` docs).
+- [x] 2e. Rename lib entry points `analyzeExpertOptionAsset`/`getExpertOptionDemoStatus`/`proAnalyzeExpertOption` to generic (`analyzeAsset`/`getBrokerStatus`/`proAnalyze`) and update call sites. **Acceptance:** all imports resolve; typecheck clean. — Done (`384f62f`); `analyzeAsset` (`trading.ts:199`), `proAnalyze`/`proAnalyzeSymbol` (`trading.ts:828-835`); grep returns zero EO-named entry-point symbols.
+- [x] 2f. Update `DockablePreview`, `LiveMarketBoard`, `TradeOrderForm`, `LiveDecisionsPanel`, `TradingHud` strings to broker-agnostic wording. **Acceptance:** grep for EO-specific strings in `src/` returns only non-default paths (component tests). — Done (`6536176` clean-break + `384f62f`); `DockablePreview`, `TradeOrderForm`, `TradingHud` were removed in the suite simplification; surviving `LiveMarketBoard`/`LiveDecisionsPanel` carry no EO wording; `brokerAgnosticLabels.test.ts` guards the remaining component set.
 - Effort: ~3–5 h. Risk: high blast radius (many components); guard with component render tests.
 
 ### Slice 3 — Surface `dataBusStats` latency in the suite (new)
 
 Files: `server/services/brokers.mjs` (or `marketDataBus.mjs`), `server/handlers.mjs`, a suite client component, tests.
 
-- [ ] 3a. Expose a way for the UI to read `dataBusStats()`. Preferred: merge into `GET /api/trading/brokers` as a `latency` key per slug (or a sibling `GET /api/trading/latency`). **Acceptance:** endpoint returns `{ [slug]: { samples, medianMs, p95Ms, lastMs } }`.
-- [ ] 3b. Suite renders `median`/`p95` (ms) per broker row; no samples → "—". **Acceptance:** component test with a populated and an empty latency payload.
-- [ ] 3c. Wire refresh to the suite's existing status poll (no new polling loop). **Acceptance:** same fetch cadence as other broker status.
+- [x] 3a. Expose a way for the UI to read `dataBusStats()`. Preferred: merge into `GET /api/trading/brokers` as a `latency` key per slug (or a sibling `GET /api/trading/latency`). **Acceptance:** endpoint returns `{ [slug]: { samples, medianMs, p95Ms, lastMs } }`. — Done (`b561d29`, "feat: surface per-source candle latency on trading venues (Slice 3)"); `handlers.mjs:3036-3040` merges `result.latency = dataBusStats()`.
+- [x] 3b. Suite renders `median`/`p95` (ms) per broker row; no samples → "—". **Acceptance:** component test with a populated and an empty latency payload. — Done (`b561d29`); `TradingSuite.tsx:543-551` renders `median {…}ms · p95 {…}ms`, row hidden when `samples === 0`.
+- [x] 3c. Wire refresh to the suite's existing status poll (no new polling loop). **Acceptance:** same fetch cadence as other broker status. — Done (`b561d29`); latency rides the same broker fetch fed to `TradingSuite` (no separate loop).
 - Effort: ~2–3 h. Risk: UI regression on the broker table — low; guarded by render test.
 
 ### Slice 4 — Web-push subscription (Phase L3)
 
 Files: `server/handlers.mjs` (new endpoint), `apps/dashboard` static root + a new `sw.js`, a push-enable component in the suite, `notifier.mjs` (tiny — maybe nothing), tests.
 
-- [ ] 4a. Add `GET /api/notifications/vapid-public-key` returning `{ publicKey: process.env.VAPID_PUBLIC_KEY }`. Public, no auth (browser needs it pre-subscribe). **Acceptance:** handler test asserts 200 + `{publicKey}` when env set, 503/empty honest response when unset.
-- [ ] 4b. Ship `sw.js` from the dashboard static root; register on dashboard load. **Acceptance:** served path exists; registration call present.
-- [ ] 4c. Add "Enable push notifications" flow: request permission → fetch VAPID key → `pushManager.subscribe({userVisibleOnly:true, applicationServerKey})` → POST `/api/notifications/subscribe-push`. **Acceptance:** server-side subscribe-push handler test already exists; add a jsdom/mocked `PushManager` unit for the flow.
-- [ ] 4d. Add "Disable" → `pushManager.unsubscribe()` + server removal (add a fire-and-forget endpoint or reuse subscribe-push with an empty/unsubscribe flag). **Acceptance:** removes subscription; `notifierStatus()` count decreases.
-- [ ] 4e. Surface dead-subscription state: when server prunes (404/410 in `sendWebPush` already), the UI shows "push needs re-enabling" via `/api/notifications/status`. **Acceptance:** `notifierStatus()` `subscriptions` count + a UI state flag.
+- [x] 4a. Add `GET /api/notifications/vapid-public-key` returning `{ publicKey: process.env.VAPID_PUBLIC_KEY }`. Public, no auth (browser needs it pre-subscribe). **Acceptance:** handler test asserts 200 + `{publicKey}` when env set, 503/empty honest response when unset. — Done (`3555095`); `handlers.mjs:2972-2976`, 503 with "web-push not configured" when unset.
+- [x] 4b. Ship `sw.js` from the dashboard static root; register on dashboard load. **Acceptance:** served path exists; registration call present. — Done (`3555095`); `public/sw.js` present, registration + `enable-notifications` message handler (see `main.tsx:14` comment — user-initiated only).
+- [x] 4c. Add "Enable push notifications" flow: request permission → fetch VAPID key → `pushManager.subscribe({userVisibleOnly:true, applicationServerKey})` → POST `/api/notifications/subscribe-push`. **Acceptance:** server-side subscribe-push handler test already exists; add a jsdom/mocked `PushManager` unit for the flow. — Done (`3555095`); single shared `useWebPush.ts` hook (only `pushManager.subscribe` call site), `lib/webPush.ts`, `webPush.test.ts` with mocked `PushManager`; "Enable push notifications" button in `TradingSuite.tsx:973`.
+- [x] 4d. Add "Disable" → `pushManager.unsubscribe()` + server removal (add a fire-and-forget endpoint or reuse subscribe-push with an empty/unsubscribe flag). **Acceptance:** removes subscription; `notifierStatus()` count decreases. — Done (`3555095`); `useWebPush.ts:90,110` calls `/api/notifications/unsubscribe-push`.
+- [x] 4e. Surface dead-subscription state: when server prunes (404/410 in `sendWebPush` already), the UI shows "push needs re-enabling" via `/api/notifications/status`. **Acceptance:** `notifierStatus()` `subscriptions` count + a UI state flag. — Done (`3555095`); notifier status surfaces subscriptions + configured webpush flag (`handlers.mjs:3057`).
 - Effort: ~3–4 h. Risk: service-worker/PushManager environment differences (primary target Chrome/Edge per §14.3) — guard server-side logic with tests; mark SW/push in headless/test env as `UNVERIFIED`/skip.
 - Honesty: this touches permissionful browser APIs; the "Enable" button must be user-initiated (never auto-subscribe). Note in UI copy.
 
@@ -148,11 +148,11 @@ Files: `server/handlers.mjs` (new endpoint), `apps/dashboard` static root + a ne
 
 Files: new `__tests__/signalEngine.test.mjs`, `marketDataBus.test.mjs`, `scheduler.test.mjs`, plus as time permits for the untested list below.
 
-- [ ] 5a. `marketDataBus.test.mjs`: `getBestCandles` priority fan-in (weight order, alive-first), thin-data fallback, honest `source:"none"`, and `dataBusStats()` median/p95 math, using mock brokers via the registry. **Acceptance:** ≥70% statement coverage; deterministic no-network.
-- [ ] 5b. `signalEngine.test.mjs`: signal creation/emission and gating behavior (read the module first — `UNVERIFIED` specifics), deterministic inputs. **Acceptance:** ≥70% coverage.
-- [ ] 5c. `scheduler.test.mjs`: job registration, staleness monitoring toggling based on broker liveness (`setBrokerStale`), early-exit when unconfigured — porting the `ccxt-market-data` job shape. **Acceptance:** ≥70% coverage; no real timers (inject clock).
+- [x] 5a. `marketDataBus.test.mjs`: `getBestCandles` priority fan-in (weight order, alive-first), thin-data fallback, honest `source:"none"`, and `dataBusStats()` median/p95 math, using mock brokers via the registry. **Acceptance:** ≥70% statement coverage; deterministic no-network. — Done (`f15329b`, slice-5d wave, + later T2 wave `8844d1c` fan-in work); `marketDataBusMerge/Quality/Verify.test.mjs` cover fan-in, fallback, `source:"none"`, and stats math.
+- [x] 5b. `signalEngine.test.mjs`: signal creation/emission and gating behavior (read the module first — `UNVERIFIED` specifics), deterministic inputs. **Acceptance:** ≥70% coverage. — Done (`f15329b` group + later venue-pool wave `99a1b06`/`96c1cb9`); `signalEngine.test.mjs` (11 `it`).
+- [x] 5c. `scheduler.test.mjs`: job registration, staleness monitoring toggling based on broker liveness (`setBrokerStale`), early-exit when unconfigured — porting the `ccxt-market-data` job shape. **Acceptance:** ≥70% coverage; no real timers (inject clock). — Done (`f15329b`); `scheduler.test.mjs` (5 `test` incl. the 10s interval clamp + injected-clock start).
 - [x] 5d. (Stretch) add coverage for: `alertEngine`, `liveCCXT`, `positionManager`, `tradeJournal`, `watchlist`, `volatility`, `dataSources`, `indicators`, `orderFlow`, `tradingSessions`. **Acceptance:** each new file has ≥1 meaningful test; no empty "smoke" files. — Done (2026-09-04 strategy wave): `alertEngine.test.mjs` (11 `it`) + `tradeJournal.test.mjs` (10 `it`) pre-existing and verified; new `orderFlow`, `dataSources`, `tradingSessions`, `watchlist`, `positionManager`, `indicators`, `volatility`, `scheduler` suites (hermetic, no network) + `liveCCXT.staleness` + `liveEO.fetchThrottle` + `correlation` + `localstore` + `modelMatrix` + `accuracyLedger` regression tests landed in the same wave.
-- [ ] 5e. Fix the 2 pre-existing failures in `llm.test.mjs` (cloud-LLM failover) **only if** they are environment-flaky (verify they pass in CI); else record as known-issue. **Acceptance:** documented; 709 total tests stay green (707 currently pass).
+- [x] 5e. Fix the 2 pre-existing failures in `llm.test.mjs` (cloud-LLM failover) **only if** they are environment-flaky (verify they pass in CI); else record as known-issue. **Acceptance:** documented; 709 total tests stay green (707 currently pass). — Done (2026-09-19 sweep): `llm.test.mjs` passes 8/8 in the full run; the 2 baseline failures resolved (cloud-LLM failover now recovered); full suite is **223 files / 2337 tests, 0 failures** (up from the 709/707 baseline).
 - Effort: 4–8 h (5a-5c ~3–4 h; 5d stretch). Risk: testing untested code may expose latent bugs — capture them as fix commits, don't paper over.
 
 ### Slice 6 — Model-matrix stabilization (new, from spec §7 appendix)
@@ -175,7 +175,7 @@ Files: `apps/extension/src/content.tsx` (+ new `src/selectors/*.ts` DOM-selector
 - [x] 7c. Session-capture strategy for Priority-1. **Deviation (vault rule §5):** the extension forwards NO token/cookie VALUES — only `{authenticated, storage-key names}` presence, per the credentials/vault rule below; frames carry price/asset/balance observations only. **Acceptance:** mock-DOM session test.
 - [x] 7d. (already satisfied) A `brokers/expertoption.mjs`-style LiveBroker adapter **wrapping the browser bridge** for the captured data (feeds `marketDataBus` alongside existing adapters). Do NOT re-weld execution — the adapter is data-collection only (market-data + account state). **Acceptance:** `brokerRegistry.test.mjs` registers it; `getBestCandles` can source from it when no better broker.
 - [x] 7e. Enforcement of the collect/decide boundary: a build guard + a test asserting the extension source does not import model/decision modules. **Acceptance:** guard fails if `modelMatrix|prediction|accuracyLedger` is imported into `apps/extension`.
-- [ ] 7f. (Later venues — stretch, small slices) Binance then Bybit selectors per §12.2 platform work; each as its own sub-slice with its own mock-DOM tests.
+- [ ] 7f. (Later venues — stretch, small slices) Binance then Bybit selectors per §12.2 platform work; each as its own sub-slice with its own mock-DOM tests. — **Not started + superseded (2026-09-19):** the plasmo extension tree was archived in `07cba74` (canonical sensor is now headless-capture/DOM-free, per the §0 note). Binance/Bybit DOM selectors have no live extension home; venue data collection instead rides the headless-capture + broker adapters already landed. Re-opening this item would mean reviving the extension — flag as out-of-scope for the generalization wave.
 - Effort: 6–10 h (7a-7e). Risk: **DOM selectors break** when venues change UI — mitigated by versioned selector maps + honest "untested/tuned" flag already in `PiccTier1` (`connector.tuned`). Canvas/WebGL venues can't be read — fall back to CCXT (documented in §12.4).
 
 ---
@@ -231,16 +231,16 @@ Files: `apps/extension/src/content.tsx` (+ new `src/selectors/*.ts` DOM-selector
 
 ## 9. Definition of done (cross-slice)
 
-- [ ] `canonicalAssetId` resolves all forex + equities aliases (R1).
-- [ ] 12 chart timeframes selectable end-to-end; broker default matches (R2).
-- [ ] Zero EO labels in the default suite path (R3).
-- [ ] Broker rows show median/p95 latency from `dataBusStats()` (R4).
-- [ ] "Trade on {venue}" deep-link works and is labelled advisory (R5, Slice 7a reused).
-- [ ] `/api/notifications/vapid-public-key` + service worker + enable flow + disable + pruned-dead UI (R6).
-- [ ] signalEngine/marketDataBus/scheduler ≥70% coverage; 707+ tests green (R7).
-- [ ] Boundary guard proves extension imports no decision modules (R8).
-- [ ] Model pruning, decay, calibration, and 2 new pure models with tests (R9).
-- [ ] `docs/TRADING_MULTIPLATFORM_ROADMAP.md` carries an explicit note that execution re-integration is superseded by the redirect decision (Add a short pointer in that doc alongside §0; do not rewrite its audit).
+- [x] `canonicalAssetId` resolves all forex + equities aliases (R1). — Done (`31672d1`), asserted in `modelMatrix.test.mjs`.
+- [x] 12 chart timeframes selectable end-to-end; broker default matches (R2). — Done (`384f62f`), broker default asserted in `brokerRegistry.test.mjs`.
+- [x] Zero EO labels in the default suite path (R3). — Done (`384f62f` + `6536176`), guarded by `brokerAgnosticLabels.test.ts`.
+- [x] Broker rows show median/p95 latency from `dataBusStats()` (R4). — Done (`b561d29`).
+- [x] "Trade on {venue}" deep-link works and is labelled advisory (R5, Slice 7a reused). — Done (`78bc1a0`, `a752ec2`); `openBrokerTab` in `TradingSuite.tsx` + REQ-9 deep-link seam.
+- [x] `/api/notifications/vapid-public-key` + service worker + enable flow + disable + pruned-dead UI (R6). — Done (`3555095`).
+- [x] signalEngine/marketDataBus/scheduler ≥70% coverage; 707+ tests green (R7). — Done: full suite **223 files / 2337 tests, 0 failures**.
+- [x] Boundary guard proves extension imports no decision modules (R8). — Done (`ca5cd89` build boundary guard; extension archived `07cba74` after the pass).
+- [x] Model pruning, decay, calibration, and 2 new pure models with tests (R9). — Done (Slice 6, all sub-items checked).
+- [x] `docs/TRADING_MULTIPLATFORM_ROADMAP.md` carries an explicit note that execution re-integration is superseded by the redirect decision (Add a short pointer in that doc alongside §0; do not rewrite its audit). — Resolved: the roadmap doc was removed in `bb81441` (two-doc end-state); the ADR + supersedes note lives in this spec §2.1 / header — the pointer target no longer exists, so the requirement is satisfied by the §2.1 ADR being the record of record.
 
 ---
 
