@@ -6,7 +6,7 @@
 // never fabricate a read when nothing is connected — an absent buffer reports
 // source "none" / stale / empty planes, which converge turns into NO TRADE with
 // "—" values (R10 honesty rule). The section cache TTL lives in realtimeSuite.
-import { loadConvergence, converge, setConvergenceOutcomeHook, PRESETS } from "./mtfConvergence.mjs"
+import { loadConvergence, converge, setConvergenceOutcomeHook, PRESETS, resolvePreset } from "./mtfConvergence.mjs"
 import { liveEOData } from "./liveEO.mjs"
 import { updateConvergence } from "./alertEngine.mjs"
 import { recordConvergence, flushConvergence } from "./convergenceLedger.mjs"
@@ -98,10 +98,14 @@ export async function convergenceSection({ now = Date.now() } = {}) {
     { mode, preset: SECTION_PRESET }
   )
   const applied = knobs.weights != null || knobs.conservative
+  const presetCfg = resolvePreset(SECTION_PRESET)
   const result = converge({
     planes,
     sourceByTf,
     staleByTf,
+    // spec 5c: the intraday preset reads momentum from the RSI 60/40 band
+    // (giua64 Intraday convention) — an RSI read, never StochRSI.
+    momentumRsi: presetCfg?.momentum?.mode === "rsi60_40",
     ...(applied ? { weights: knobs.weights, conservative: knobs.conservative } : {}),
     outcome: { assetId: asset?.id ?? null, asset: asset?.name ?? null, preset: SECTION_PRESET }
   })

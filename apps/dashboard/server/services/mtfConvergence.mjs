@@ -43,6 +43,14 @@ export const STOCHRSI_TRIGGER_BAND = Object.freeze({ lo: 40, hi: 60 })
  */
 export const STOCHRSI_OB_OS = Object.freeze({ over: 80, under: 20 })
 
+/**
+ * RSI 60/40 momentum band (spec R7 / slice 5c, giua64 Intraday convention).
+ * An RSI read — never StochRSI. When the `momentumRsi` option is on (intraday
+ * preset option), the momentum dimension votes from this band instead of the
+ * RSI>50 + MACD read. `band.hi` = bull trigger, `band.lo` = bear trigger.
+ */
+export const RSI_TRIGGER_BAND = Object.freeze({ lo: 40, hi: 60 })
+
 // ---------------------------------------------------------------------
 // Outcome-logging hook (spec 9a). converge() stays pure: a caller that OWNS
 // the decision context (asset identity, preset ladder) registers this hook and
@@ -94,11 +102,24 @@ export const PRESET_TOPS = Object.freeze({
 })
 
 /**
+ * Per-preset momentum mode (spec R7 / slice 5c). The intraday preset (giua64
+ * Intraday convention) may read momentum from the strict RSI 60/40 band
+ * instead of the default RSI>50 + MACD read. `null` = default momentum voter.
+ */
+export const PRESET_MOMENTUM = Object.freeze({
+  scalping: null,
+  intraday: { mode: "rsi60_40" },
+  swingIntraday: null,
+  swing: null,
+  position: null
+})
+
+/**
  * Resolve a preset into its timeframe ladder, role labels, and default weights.
  * @param {string} key - one of PRESETS keys
  * @param {object} [opts]
  * @param {boolean} [opts.top=false] - include the optional top plane (2c)
- * @returns {object|null} { key, tfs, labels, weights, top } or null for unknown keys
+ * @returns {object|null} { key, tfs, labels, weights, top, momentum } or null for unknown keys
  */
 export function resolvePreset(key, { top = false } = {}) {
   const p = PRESETS[key]
@@ -118,7 +139,7 @@ export function resolvePreset(key, { top = false } = {}) {
     labels[topPlane.tf] = topPlane.label
     weights[topPlane.tf] = 1 // neutral default for the optional context plane
   }
-  return { key, tfs, labels, weights, top: topPlane }
+  return { key, tfs, labels, weights, top: topPlane, momentum: PRESET_MOMENTUM[key] ?? null }
 }
 
 const NONE = Object.freeze({ enabled: true, observed: false, value: null, reason: "n/a" })
@@ -150,6 +171,21 @@ export function voteMomentum(dash) {
   if (r > 50 && h > 0) return vote(1, true, "rsi+macd bull")
   if (r < 50 && h < 0) return vote(-1, true, "rsi+macd bear")
   return vote(0, true, "rsi/macd mixed")
+}
+
+/**
+ * Momentum, RSI 60/40 band variant (giua64 Intraday preset option, spec R7/5c).
+ * An RSI 60/40 read — labeled "RSI 60/40", never StochRSI. RSI > 60 = bull
+ * trigger (+1), RSI < 40 = bear trigger (-1), 40..60 in-band = neutral (0).
+ * @param {object} dash - computeIndicatorDashboard output
+ * @param {object} [band=RSI_TRIGGER_BAND] - { lo, hi } threshold pair
+ */
+export function voteMomentumRsi60_40(dash, band = RSI_TRIGGER_BAND) {
+  const r = dash?.rsi?.value
+  if (r == null) return { ...NONE, reason: "rsi n/a" }
+  if (r > band.hi) return vote(1, true, "RSI 60/40 bull")
+  if (r < band.lo) return vote(-1, true, "RSI 60/40 bear")
+  return vote(0, true, "RSI 60/40 neutral")
 }
 
 /**
@@ -221,10 +257,10 @@ export function voteVolatility(dash) {
   return vote(0, true, "band extreme")
 }
 
-/** Dimension voters keyed by dimension name. ctx = { dash, sRSI, swings, lastIndex }. */
+/** Dimension voters keyed by dimension name. ctx = { dash, sRSI, swings, lastIndex, momentumRsi }. */
 export const VOTERS = Object.freeze({
   trend: (ctx) => voteTrend(ctx.dash),
-  momentum: (ctx) => voteMomentum(ctx.dash),
+  momentum: (ctx) => (ctx.momentumRsi ? voteMomentumRsi60_40(ctx.dash) : voteMomentum(ctx.dash)),
   market_structure: (ctx) => voteStructure(ctx.swings, ctx.lastIndex),
   trend_strength: (ctx) => voteTrendStrength(ctx.dash),
   momentum_trigger: (ctx) => voteMomentumTrigger(ctx.sRSI, ctx.lastIndex),
@@ -242,8 +278,10 @@ const ABSTAIN_LOW_BARS = (closedLen, minBars) =>
  * @param {boolean} [opts.dropOpen=false] - compute on [0..N-2] (drop the forming bar)
  * @param {object} [opts.dims={}] - dimension enable map (present for slice-3 parity; default all enabled)
  * @param {number} [opts.minBars=MIN_BARS]
+ * @param {boolean} [opts.momentumRsi=false] - use the RSI 60/40 band momentum
+ *   read (intraday-preset option, spec R7/5c) instead of RSI>50 + MACD.
  */
-export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN_BARS } = {}) {
+export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN_BARS, momentumRsi = false } = {}) {
   if (!Array.isArray(candles) || candles.length === 0) return { ...ABSTAIN_NO_DATA }
 
   const closed = dropOpen ? candles.slice(0, -1) : candles
@@ -252,7 +290,7 @@ export function planeScore({ candles, dropOpen = false, dims = {}, minBars = MIN
   const dash = computeIndicatorDashboard(closed)
   const { highs, lows, closes } = candleArrays(closed)
   const lastIndex = closed.length - 1
-  const ctx = { dash, sRSI: stochRSI(closes), swings: swingPoints(highs, lows), lastIndex }
+  const ctx = { dash, sRSI: stochRSI(closes), swings: swingPoints(highs, lows), lastIndex, momentumRsi }
 
   const votes = {}
   let amplitude = 0
@@ -320,13 +358,15 @@ export function adxGate(adx) {
  * @param {boolean} [opts.conservative=false] - HTF veto (R8): the two highest
  *   signed planes conflicting forces NO TRADE, even with entry aligned.
  * @param {number} [opts.minBars=MIN_BARS]
+ * @param {boolean} [opts.momentumRsi=false] - use the RSI 60/40 band momentum
+ *   read on every plane (intraday-preset option, spec R7/5c).
  * @param {object} [opts.outcome=null] - decision context ({ assetId, asset,
  *   preset, ... }) forwarded to the 9a outcome hook when one is registered.
  * @returns {object} { ok, meta, composite, compositeDirection, score5, quality, confidence, planes, state, why }
  *   score5 = round(5 * aligned/active); quality 1-10; confidence %. All three are
  *   null when no plane is active ("no samples -> \u2014", R5).
  */
-export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, staleByTf = {}, conservative = false, minBars = MIN_BARS, outcome = null } = {}) {
+export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims = {}, weights = null, labels = {}, staleByTf = {}, conservative = false, minBars = MIN_BARS, momentumRsi = false, outcome = null } = {}) {
   const tfKeys = Object.keys(planes)
   const requested = tfKeys.length
   const available = tfKeys.filter((tf) => Array.isArray(planes[tf]) && planes[tf].length > 0).length
@@ -346,7 +386,7 @@ export function converge({ planes = {}, sourceByTf = {}, dropOpen = false, dims 
     const source = sourceByTf[key] ?? "unknown"
     const label = labels[key] ?? labels[tf] ?? null
     const stale = staleByTf[key] ?? staleByTf[tf] ?? false
-    const ps = planeScore({ candles: planes[key], dropOpen, dims: dimsFor(tf), minBars })
+    const ps = planeScore({ candles: planes[key], dropOpen, dims: dimsFor(tf), minBars, momentumRsi })
     if (!ps.active) return { tf, ...ps, source, label, stale, abstain: ps.abstain }
     return { tf, ...ps, source, label, stale }
   })

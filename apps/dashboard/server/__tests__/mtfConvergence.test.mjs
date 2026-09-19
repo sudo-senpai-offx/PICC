@@ -4,11 +4,14 @@ import {
   MIN_BARS,
   STOCHRSI_TRIGGER_BAND,
   STOCHRSI_OB_OS,
+  RSI_TRIGGER_BAND,
   TF_SECONDS,
   PRESETS,
+  PRESET_MOMENTUM,
   resolvePreset,
   voteTrend,
   voteMomentum,
+  voteMomentumRsi60_40,
   voteStructure,
   voteTrendStrength,
   voteMomentumTrigger,
@@ -164,6 +167,21 @@ describe("dimension voters (unit)", () => {
     expect(STOCHRSI_TRIGGER_BAND).toEqual({ lo: 40, hi: 60 })
   })
 
+  it("momentum RSI 60/40 band variant labels itself RSI, never StochRSI (5c)", () => {
+    expect(RSI_TRIGGER_BAND).toEqual({ lo: 40, hi: 60 })
+    expect(voteMomentumRsi60_40({ rsi: { value: 61 } })).toEqual({ enabled: true, observed: true, value: 1, reason: "RSI 60/40 bull" })
+    expect(voteMomentumRsi60_40({ rsi: { value: 39 } })).toEqual({ enabled: true, observed: true, value: -1, reason: "RSI 60/40 bear" })
+    // 40..60 in-band is neutral, not a trigger
+    expect(voteMomentumRsi60_40({ rsi: { value: 50 } })).toEqual({ enabled: true, observed: true, value: 0, reason: "RSI 60/40 neutral" })
+    expect(voteMomentumRsi60_40({ rsi: { value: 40 } })).toEqual({ enabled: true, observed: true, value: 0, reason: "RSI 60/40 neutral" })
+    expect(voteMomentumRsi60_40({ rsi: { value: null } })).toEqual({ enabled: true, observed: false, value: null, reason: "rsi n/a" })
+    expect(voteMomentumRsi60_40({})).toEqual({ enabled: true, observed: false, value: null, reason: "rsi n/a" })
+    // banned-string guard: the RSI 60/40 read must never be labeled StochRSI
+    for (const v of [61, 39, 50]) {
+      expect(voteMomentumRsi60_40({ rsi: { value: v } }).reason.toLowerCase()).not.toContain("stochrsi")
+    }
+  })
+
   it("volatility votes on pull-from-band, not band escape", () => {
     const above = { last: 101, bollinger: { mid: 100, percentB: 0.6 } }
     const below = { last: 99, bollinger: { mid: 100, percentB: 0.4 } }
@@ -233,6 +251,21 @@ describe("plane score on synthetic series", () => {
     expect(empty.active).toBe(false)
     expect(empty.abstain).toBe("no data")
   })
+
+  it("momentumRsi option swaps the momentum read to the RSI 60/40 band (5c)", () => {
+    // default: RSI>50 + MACD agreement on the up feed
+    const dft = planeScore({ candles: up() })
+    expect(dft.votes.momentum.reason).toBe("rsi+macd bull")
+    // the band variant compares the same RSI value against 60/40; on a strong
+    // up feed RSI is far past 60 -> still bull, but labeled RSI 60/40.
+    const banded = planeScore({ candles: up(), momentumRsi: true })
+    expect(banded.votes.momentum.reason).toBe("RSI 60/40 bull")
+    expect(banded.votes.momentum.value).toBe(1)
+    // the RSI 60/40 read is RSI-only: MACD does not participate.
+    const bandedDown = planeScore({ candles: down(), momentumRsi: true })
+    expect(bandedDown.votes.momentum.value).toBe(-1)
+    expect(bandedDown.votes.momentum.reason).toBe("RSI 60/40 bear")
+  })
 })
 
 // ---------------------------------------------------------------------
@@ -288,6 +321,19 @@ describe("convergence aggregation (1b)", () => {
     expect(r.score5).toBe(5)
     expect(r.quality).toBe(10)
     expect(r.confidence).toBe(80)
+  })
+
+  it("converge threads momentumRsi through every plane (5c)", () => {
+    const c = converge({ planes: { 300: up(), 900: down() }, momentumRsi: true })
+    const upP = c.planes.find((p) => p.tf === 300)
+    const downP = c.planes.find((p) => p.tf === 900)
+    expect(upP.votes.momentum.reason).toBe("RSI 60/40 bull")
+    expect(upP.votes.momentum.value).toBe(1)
+    expect(downP.votes.momentum.reason).toBe("RSI 60/40 bear")
+    expect(downP.votes.momentum.value).toBe(-1)
+    // default (no flag) keeps the RSI>50 + MACD read
+    const dft = converge({ planes: { 300: up() } })
+    expect(dft.planes[0].votes.momentum.reason).toBe("rsi+macd bull")
   })
 
   it("signs cancel -> 0/5 no-alignment with exact bands", () => {
@@ -359,6 +405,15 @@ describe("five-tier presets (2a)", () => {
     expect(PRESETS.swingIntraday).toEqual({ entry: 900, confirm: 3600, bias: 14400, weights: { entry: 0.3, confirm: 0.3, bias: 0.4 } })
     expect(PRESETS.swing).toEqual({ entry: 3600, confirm: 14400, bias: 86400, weights: { entry: 0.25, confirm: 0.3, bias: 0.45 } })
     expect(PRESETS.position).toEqual({ entry: 86400, confirm: 604800, bias: 2592000, weights: { entry: 0.2, confirm: 0.35, bias: 0.45 } })
+  })
+
+  it("only the intraday preset opts into the RSI 60/40 momentum band (5c)", () => {
+    expect(PRESET_MOMENTUM.intraday).toEqual({ mode: "rsi60_40" })
+    for (const key of ["scalping", "swingIntraday", "swing", "position"]) {
+      expect(PRESET_MOMENTUM[key]).toBeNull()
+    }
+    expect(resolvePreset("intraday").momentum).toEqual({ mode: "rsi60_40" })
+    expect(resolvePreset("swing").momentum).toBeNull()
   })
 
   it("resolves role labels + default weights per plane", () => {
