@@ -1,4 +1,4 @@
-# PICC — Passive Income Command Center
+# PICC — Personal Income Command Centre
 
 **Cumulative master document** — the single source of truth for everything about this project.
 

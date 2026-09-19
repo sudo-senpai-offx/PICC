@@ -76,7 +76,9 @@ describe("CommandPalette pages", () => {
       typeQuery(m, "agents")
       expect(pageRowLabels().filter((l) => /Agents/i.test(l))).toEqual([])
       typeQuery(m, "income")
-      expect(pageRowLabels().filter((l) => /Income/i.test(l))).toEqual([])
+      // Reskin (T3): the "/" page is now "Income Command Centre", so the
+      // query resolves to the landing page instead of being a dead route.
+      expect(pageRowLabels().filter((l) => /Income/i.test(l))).toEqual(["Income Command Centre"])
     } finally {
       m.unmount()
     }

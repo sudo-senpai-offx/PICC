@@ -1,4 +1,4 @@
-# Passive Income Command Center (PICC)
+# Personal Income Command Centre (PICC)
 
 An AI-assisted **planning** platform for exploring and optimizing passive income streams. PICC
 combines a **sandbox emulator** (financial what-if simulations), a **passive browser sensor** (a

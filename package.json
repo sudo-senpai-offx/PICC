@@ -2,7 +2,7 @@
   "name": "picc",
   "version": "0.1.0",
   "private": true,
-  "description": "Passive Income Command Center - AI-assisted passive income planning platform (emulation + overlay architecture)",
+  "description": "Personal Income Command Centre - AI-assisted income planning platform (emulation + overlay architecture)",
   "workspaces": [
     "apps/dashboard"
   ],

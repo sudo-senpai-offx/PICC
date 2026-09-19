@@ -1,15 +1,13 @@
 // PICC passive income catalog — verified against public sources (2026).
 // Includes only services that were confirmed alive at verification time;
 // dead/broken platforms (Peer2Profit, PacketShare, SpeedShare, Wipter,
-// AntGain, GagaNode, earn.cc, WizardGain) are intentionally excluded.
+// AntGain, GagaNode, earn.cc, WizardGain) and the excluded families
+// (bandwidth/depin/storage/compute — see CONTEXT.md:31-33 and
+// docs/adr/0002-bandwidth-suite-rejected.md) are intentionally excluded.
 export interface CatalogEntry {
   id: string
   name: string
   category:
-    | "bandwidth"
-    | "depin"
-    | "storage"
-    | "compute"
     | "crypto"
     | "nft"
     | "p2p"
@@ -19,7 +17,6 @@ export interface CatalogEntry {
     | "rental"
     | "content"
     | "trading"
-    | "other"
   residential: boolean
   vps: boolean
   payout: string
@@ -28,7 +25,6 @@ export interface CatalogEntry {
 }
 
 export const STREAM_CATEGORY_LABELS: Record<string, string> = {
-  bandwidth: "Bandwidth",
   dividend: "Dividends",
   interest: "Interest",
   affiliate: "Affiliate",
@@ -39,34 +35,8 @@ export const STREAM_CATEGORY_LABELS: Record<string, string> = {
   defi: "DeFi & Yield",
   nft: "NFT & Royalties",
   agent: "AI Agent",
-  trading: "Trading Platform",
-  other: "Other"
+  trading: "Trading Platform"
 }
-
-export const DEPIN_APPS: CatalogEntry[] = [
-  { id: "helium", name: "Helium", category: "depin", residential: true, vps: false, payout: "Crypto (HNT)", url: "https://helium.com" },
-  { id: "deeper", name: "Deeper Network", category: "depin", residential: true, vps: false, payout: "Crypto (DPR)", url: "https://deeper.network" },
-  { id: "sentinel", name: "Sentinel dVPN", category: "depin", residential: false, vps: true, payout: "Crypto (DVPN)", url: "https://sentinel.co" },
-  { id: "theta-edge", name: "Theta Edge Node", category: "depin", residential: false, vps: true, payout: "Crypto (TFUEL)", url: "https://thetatoken.org" },
-  { id: "silencio", name: "Silencio", category: "depin", residential: true, vps: false, payout: "Crypto", url: "https://www.silencio.network", note: "Mobile app — earn by mapping noise levels. Phone can stay in your pocket." },
-  { id: "coin-app", name: "COIN (XYO)", category: "depin", residential: true, vps: false, payout: "Crypto (COIN/XYO)", url: "https://www.coinapp.co", note: "Location-data rewards via the COIN mobile app; $10M+ paid out historically." },
-  { id: "denet-watcher", name: "DeNet Watcher", category: "depin", residential: true, vps: false, payout: "Crypto", url: "https://denet.app", note: "Turn a phone into a storage watcher node for passive income." },
-  { id: "rustchain", name: "RustChain", category: "depin", residential: true, vps: false, payout: "Crypto", url: "https://rustchain.io", note: "Proof-of-Antiquity chain for vintage hardware — old machines outmine new ones. AI-powered hardware fingerprinting." },
-  { id: "solar-mining", name: "Project Solar Mining", category: "depin", residential: true, vps: false, payout: "Crypto (BTC)", url: "https://github.com/satoshiokaeritai/Project-Solar-Mining", note: "Open-source — mine BTC with excess solar from home panels." }
-]
-
-export const STORAGE_APPS: CatalogEntry[] = [
-  { id: "storj", name: "Storj", category: "storage", residential: false, vps: true, payout: "Crypto (STORJ)", url: "https://storj.dev", note: "Nodes on the same /24 subnet share allocation." }
-]
-
-export const COMPUTE_APPS: CatalogEntry[] = [
-  { id: "io-net", name: "io.net", category: "compute", residential: false, vps: true, payout: "Crypto", url: "https://io.net", note: "Requires a GPU." },
-  { id: "nosana", name: "Nosana", category: "compute", residential: false, vps: true, payout: "Crypto", url: "https://nosana.io", note: "Requires a GPU, 50GB+ storage." },
-  { id: "salad", name: "Salad", category: "compute", residential: true, vps: false, payout: "PayPal, Gift Cards", url: "https://salad.io", note: "Requires a GPU." },
-  { id: "vast-ai", name: "Vast.ai", category: "compute", residential: false, vps: true, payout: "Crypto, Bank", url: "https://cloud.vast.ai", note: "Rent out idle GPUs." },
-  { id: "golem", name: "Golem Network", category: "compute", residential: false, vps: true, payout: "Crypto (GLM)", url: "https://golem.network" },
-  { id: "flux", name: "Flux", category: "compute", residential: false, vps: true, payout: "Crypto (FLUX)", url: "https://runonflux.io", note: "220GB+ storage." }
-]
 
 export const CRYPTO_APPS: CatalogEntry[] = [
   { id: "luno", name: "Luno", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://www.luno.com/my", note: "SC-registered DAX. Buy & hold BTC/ETH; no local staking product — log gains as manual balance." },
@@ -165,9 +135,6 @@ export const TRADING_PLATFORM_APPS: CatalogEntry[] = [
 ]
 
 export const CATALOG = [
-  ...DEPIN_APPS,
-  ...STORAGE_APPS,
-  ...COMPUTE_APPS,
   ...CRYPTO_APPS,
   ...DEFI_APPS,
   ...NFT_APPS,

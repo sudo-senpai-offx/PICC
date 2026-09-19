@@ -4,7 +4,7 @@
 
 ## Overview
 
-PICC (Personal Income Command Center) is a self-hosted income/trading dashboard with an
+PICC (Personal Income Command Centre) is a self-hosted income/trading dashboard with an
 optional browser extension that reads live data from the trading venues you are logged into.
 It runs in one of two clearly distinct modes:
 

@@ -184,7 +184,7 @@ export function AppShell() {
             <span className="brand-mark">🧠</span>
             <div className="brand-text">
               <strong>PICC</strong>
-              <span className="brand-sub">Passive Income Command Center</span>
+              <span className="brand-sub">Personal Income Command Centre</span>
             </div>
           </div>
           <nav className="nav">

@@ -40,9 +40,9 @@ export function Login() {
       <Card className="auth-card">
         <div className="auth-brand">
           <span className="brand-mark">🧠</span>
-          <h1>Passive Income Command Center</h1>
+          <h1>Personal Income Command Centre</h1>
           <p className="muted">
-            Simulate, plan, and optimize passive income streams with AI — you stay in control.
+            Simulate, plan, and optimize income streams with AI — you stay in control.
           </p>
         </div>
 

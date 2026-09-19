@@ -3,7 +3,7 @@ import { NotificationCenter } from "@/components/NotificationCenter"
 import { SUITE_META } from "@/lib/suites"
 
 const TITLES: Record<string, string> = {
-  "/": "Command Center",
+  "/": "Income Command Centre",
   "/suites": "Suites",
   "/opportunities": "Opportunities",
   "/settings": "Settings",

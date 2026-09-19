@@ -5,7 +5,7 @@ import type { HealthInfo } from "@/lib/api"
 import { CatalogTab, OverviewTab, StreamsTab } from "@/components/IncomeStreams"
 import { getEarnings, getStreams } from "@/lib/streams"
 import { SUITE_META } from "@/lib/suites"
-import { familyToSuite } from "@/lib/registry"
+import { familyEntry, familyToSuite } from "@/lib/registry"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
 
 import type { IncomeStream } from "@/lib/types"
@@ -282,20 +282,6 @@ function usd(n: number) {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-const SUITE_PANELS: Record<string, React.FC> = {
-  nft: ConnectorsPanel,
-  defi: ConnectorsPanel,
-  crypto: ConnectorsPanel,
-  p2p: ConnectorsPanel,
-  agent: ConnectorsPanel,
-  uncategorized: ConnectorsPanel,
-  dividend: ConnectorsPanel,
-  interest: ConnectorsPanel,
-  affiliate: ConnectorsPanel,
-  content: ConnectorsPanel,
-  rental: ConnectorsPanel
-}
-
 function StreamInfo({ stream }: { stream: IncomeStream }) {
   const meta = SUITE_META[familyToSuite(stream.category) ?? "earnings"]
   const earnings = getEarnings().filter((e) => e.streamId === stream.id)
@@ -379,6 +365,9 @@ function LaunchBar({ stream }: { stream: IncomeStream }) {
   )
 }
 
+// Panel resolution is registry-driven (REQ-A.2): a family is panel-enabled iff
+// the classification registry knows it. No hardcoded category->panel map — the
+// registry is the single category authority.
 function SuitePanel({ category }: { category: string }) {
   if (category === "trading") {
     return (
@@ -390,8 +379,7 @@ function SuitePanel({ category }: { category: string }) {
       </Card>
     )
   }
-  const Panel = SUITE_PANELS[category]
-  if (!Panel) {
+  if (!familyEntry(category)) {
     return (
       <Card>
         <p className="muted small">
@@ -401,7 +389,7 @@ function SuitePanel({ category }: { category: string }) {
       </Card>
     )
   }
-  return <Panel />
+  return <ConnectorsPanel />
 }
 
 export function EarningsSimulatorRoom() {

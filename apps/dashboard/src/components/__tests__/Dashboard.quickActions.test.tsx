@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest"
 import { QUICK_ACTIONS } from "@/pages/Dashboard"
 
-// Whole-branch review 2026-09-08: the Command Center landing advertised 7
+// Whole-branch review 2026-09-08: the Income Command Centre landing advertised 7
 // quick-actions that navigated to de-linked top-level pages (/simulator,
 // /income, /agents) that have no routes in the ministry IA — every click
 // silently bounced to "/" via the * catch-all. This pins the regression:

@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   CATALOG,
-  DEPIN_APPS,
-  STORAGE_APPS,
-  COMPUTE_APPS,
   CRYPTO_APPS,
   DEFI_APPS,
   NFT_APPS,
@@ -17,9 +14,6 @@ import {
 } from "../streamCatalog"
 
 const GROUPS: Record<string, typeof CATALOG> = {
-  depin: DEPIN_APPS,
-  storage: STORAGE_APPS,
-  compute: COMPUTE_APPS,
   crypto: CRYPTO_APPS,
   defi: DEFI_APPS,
   nft: NFT_APPS,
@@ -45,10 +39,6 @@ describe("stream catalog integrity", () => {
 
   it("marks every entry's category as a known catalog category", () => {
     const known = new Set([
-      "bandwidth",
-      "depin",
-      "storage",
-      "compute",
       "crypto",
       "nft",
       "p2p",
@@ -57,11 +47,17 @@ describe("stream catalog integrity", () => {
       "dividend",
       "rental",
       "content",
-      "trading",
-      "other"
+      "trading"
     ])
     for (const e of CATALOG) {
       expect(known.has(e.category), `unknown category for ${e.id}: ${e.category}`).toBe(true)
+    }
+  })
+
+  it("excludes the rejected families (bandwidth/depin/storage/compute)", () => {
+    const rejected = ["bandwidth", "depin", "storage", "compute", "other"]
+    for (const e of CATALOG) {
+      expect(rejected.includes(e.category), `${e.id} still carries rejected category ${e.category}`).toBe(false)
     }
   })
 

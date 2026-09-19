@@ -3,7 +3,7 @@ import { Link, NavLink } from "react-router-dom"
 import type { SuiteId } from "@/lib/suites"
 import { pushStreamsSnapshot, syncCashPilot, getSessionPolicy, setSessionPolicy } from "@/lib/api"
 import type { SessionPolicyDecision } from "@/lib/api"
-import { STREAM_CATEGORY_LABELS, CATALOG, DEPIN_APPS, STORAGE_APPS, COMPUTE_APPS, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS, TRADING_PLATFORM_APPS } from "@/lib/streamCatalog"
+import { STREAM_CATEGORY_LABELS, CATALOG, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS, TRADING_PLATFORM_APPS } from "@/lib/streamCatalog"
 import { StreamSetupWizard } from "@/components/StreamSetupWizard"
 import { HoldingsEditor } from "@/components/HoldingsEditor"
 import {
@@ -595,12 +595,9 @@ function OverviewTab() {
 // Catalog tab
 // ---------------------------------------------------------------------
 function CatalogTab() {
-  const [filter, setFilter] = useState<"all" | "depin" | "storage" | "compute" | "crypto" | "defi" | "nft" | "p2p" | "agent" | "interest" | "dividend" | "rental" | "content" | "trading">("all")
+  const [filter, setFilter] = useState<"all" | "crypto" | "defi" | "nft" | "p2p" | "agent" | "interest" | "dividend" | "rental" | "content" | "trading">("all")
   const groups: Record<string, typeof CATALOG> = {
     all: CATALOG,
-    depin: DEPIN_APPS,
-    storage: STORAGE_APPS,
-    compute: COMPUTE_APPS,
     crypto: [...CRYPTO_APPS, ...DEFI_APPS],
     defi: DEFI_APPS,
     nft: NFT_APPS,
@@ -615,9 +612,6 @@ function CatalogTab() {
   const rows = groups[filter] ?? CATALOG
   const filters: { key: typeof filter; label: string }[] = [
     { key: "all", label: "All" },
-    { key: "depin", label: "DePIN" },
-    { key: "storage", label: "Storage" },
-    { key: "compute", label: "GPU / Compute" },
     { key: "interest", label: "Interest" },
     { key: "dividend", label: "Dividends" },
     { key: "rental", label: "Rental" },

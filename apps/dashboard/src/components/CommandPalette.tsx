@@ -16,7 +16,7 @@ interface CmdItem {
 }
 
 const NAV_PAGES: { path: string; label: string; icon: string; feature?: FeatureKey; keywords?: string }[] = [
-  { path: "/", label: "Command Center", icon: "▦", keywords: "dashboard home overview" },
+  { path: "/", label: "Income Command Centre", icon: "▦", keywords: "dashboard home overview" },
   { path: "/opportunities", label: "Opportunities", icon: "🧭", feature: "opportunities", keywords: "research bounties workflows" },
   { path: "/suites/trading", label: "Trading", icon: "📈", feature: "trading", keywords: "markets prediction paper ledger autopilot command centre signals watchlist" },
   { path: "/suites/earnings", label: "Earnings", icon: "💰", feature: "earnings", keywords: "cashback micro-task ux referral affiliate royalty yield income" },
