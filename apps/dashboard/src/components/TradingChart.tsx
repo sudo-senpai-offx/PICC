@@ -5,6 +5,8 @@ import { ChartErrorBoundary } from "@/components/ChartErrorBoundary"
 import { useCandleData, fetchCandles, TIMEFRAME_LABELS, type Timeframe } from "@/hooks/useCandleData"
 import { useBrokerCapabilities } from "@/hooks/useBrokerCapabilities"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
+import { useSourcePreference } from "@/hooks/useSourcePreference"
+import { SourceBadge } from "@/components/SourceBadge"
 import { getEntryLevels, openPaperTrade, type EntryLevelsResult } from "@/lib/trading"
 import { u4faMarkersFor } from "@/lib/u4faOverlay"
 import type { LiveEvent, LiveU4faSignal } from "@/lib/liveTrading"
@@ -26,19 +28,15 @@ function fmtPrice(n: number | null): string {
   return n < 10 ? n.toFixed(4) : n < 1000 ? n.toFixed(2) : n.toLocaleString("en-US", { maximumFractionDigits: 2 })
 }
 
-const SOURCE_BADGES: Record<string, { text: string; tone: "success" | "warn" | "muted" }> = {
-  live: { text: "EO live", tone: "success" },
-  buffer: { text: "EO live", tone: "success" },
-  yahoo: { text: "Yahoo daily · delayed", tone: "warn" },
-  "yahoo-daily": { text: "Yahoo daily · delayed", tone: "warn" }
-}
-
 export function TradingChart({ assetId, label, height = 380, onCrosshair, timeframe, onTimeframeChange }: TradingChartProps) {
+  // T10 — persisted per-user source preference (non-blocking; "auto" until the
+  // GET lands, and the server honors the stored pref on that first request).
+  const { pref, notice, persist } = useSourcePreference()
   const {
     candles, volumes, ema20, ema50, tenkan, kijun, senkouA, senkouB, kcUpper, kcMiddle, kcLower,
     sma20, bbUpper, bbMid, bbLower, rsiLine, macdLine, macdSignal, macdHist,
-    loading, error, streamError, lastPrice, timeframe: activeTf, setTimeframe, source, pinnedSource, availableSources, setSource, feed, resolvedTimeframe, resolved, verifySources, verifiedCount, verifiedRatio
-  } = useCandleData({ assetId, timeframe: timeframe ?? 300, count: 2000 }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
+    loading, error, streamError, lastPrice, timeframe: activeTf, setTimeframe, source, pinnedSource, availableSources, setSource, feed, resolvedTimeframe, resolved, verifySources, verifiedCount, verifiedRatio, stale, sourceMode, sources
+  } = useCandleData({ assetId, timeframe: timeframe ?? 300, count: 2000, source: pref }) // T3: request the full deep-history window (Yahoo intraday caps ~7d of 5m) — the server returns what each source can honestly serve
   // Slice C — when the parent controls the timeframe, its change wins; the
   // hook's own state stays in sync via the initialTf effect in useCandleData.
   const chooseTimeframe = (tf: Timeframe) => {
@@ -54,7 +52,16 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
     { value: "auto", label: "Auto (best)", serves: true },
     ...(availableSources ?? []).map((s) => ({ value: s.slug, label: s.label, serves: s.serves }))
   ]
-  const chooseSource = (slug: string) => setSource(slug)
+  const chooseSource = (slug: string) => {
+    // T10 — optimistic pin: the new source applies to the NEXT fetch now, and
+    // persist() reports whether the user-wide preference accepted it. A failed
+    // persist rolls the chart back to the previous pref (and the hook's notice
+    // says so) — the chart never silently serves a source the user didn't get.
+    setSource(slug)
+    void persist(slug).then((ok) => {
+      if (!ok) setSource(pref)
+    })
+  }
   const { servableTimeframes, sourceTimeframes } = useBrokerCapabilities()
   const [hover, setHover] = useState<{ open: number; high: number; low: number; close: number } | null>(null)
   const [showIchimoku, setShowIchimoku] = useState(false)
@@ -174,7 +181,6 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   const change = display ? display.close - display.open : 0
   const changePct = display && display.open ? (change / display.open) * 100 : 0
   const isUp = change >= 0
-  const sourceBadge = SOURCE_BADGES[source ?? ""] ?? null
   // The SERVED source (when known) gets the final say: restrict the enabled
   // button set to its curve. Legacy "live"/"buffer" labels mean EO buffers.
   const servedSource = source === "live" || source === "buffer" ? "expertoption" : source
@@ -235,8 +241,32 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
               {isUp ? "+" : ""}{change.toFixed(4)} ({isUp ? "+" : ""}{changePct.toFixed(2)}%)
             </Badge>
           ) : null}
-          {feed === "studio" ? <Badge tone="success">EO headless live</Badge>
-            : sourceBadge ? <Badge tone={sourceBadge.tone}>{sourceBadge.text}</Badge> : null}
+          <SourceBadge servedSource={source} feed={feed} stale={stale} streamError={Boolean(streamError)} />
+          {/* T11 — "why" line: the server's winner and reason, shown for the
+              active source. Forced (pinned) and fallback modes say how the
+              served source was chosen; auto shows the winner the fan-in
+              picked. Nothing here is invented client-side. */}
+          {sourceLabel !== "no visible source" ? (() => {
+            const winner = sources?.find((s) => s.winner)
+            const lbl = winner?.label ?? (source === "auto" ? null : sourceLabel) ?? null
+            if (lbl === null) return null
+            const reason = winner?.reason
+            const txt =
+              sourceMode === "forced"
+                ? `Source: Pinned to ${lbl}${reason ? ` — ${reason}` : ""}`
+                : sourceMode === "fallback"
+                  ? `Source: ${lbl}${reason ? ` — ${reason}` : ""} (fallback)`
+                  : reason
+                    ? `Auto · ${lbl} — ${reason}`
+                    : null
+            return txt ? <span className="small" style={{ color: "var(--muted)" }}>{txt}</span> : null
+          })() : null}
+          {/* T10 — non-blocking persistence notice (load or save failure). */}
+          {notice ? (
+            <span className="small danger-text" style={{ color: "var(--danger)", margin: 0 }}>
+              {notice}
+            </span>
+          ) : null}
           {/* T6 — show when the user pinned a specific source (not "auto"). */}
           {pinnedSource !== "auto" ? <span title={`Pinned to source: ${sourceLabel} — fetch from this broker only`}><Badge tone="muted">Source: {sourceLabel}</Badge></span> : null}
           {/* Cross-source verification (server `verify:true`). Honest: a badge

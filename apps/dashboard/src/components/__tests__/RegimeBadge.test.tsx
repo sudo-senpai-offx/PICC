@@ -5,12 +5,13 @@
 //   • null / missing    → the literal status "unknown", NEVER "0%"/garbage (R10)
 //   • mode:"off"        → "advisory, not applied" tag (the read did NOT shape
 //                         the displayed weights — R1 mitigation)
-// Mounts the dumb exported component directly (the wired panel itself rides the
-// SSE hook and stays untestable here — same seam as CountdownChip).
+// Mounts the exported chip directly. Relocated with its component on slice 7
+// (RegimeBadge.tsx) when the ConvergencePanel shell became a verified orphan —
+// the chip's shape and honesty contracts are unchanged.
 import { describe, expect, it } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
-import { RegimeBadge } from "@/components/ConvergencePanel"
+import { RegimeBadge } from "@/components/RegimeBadge"
 import type { RegimeBlock } from "@/lib/liveTrading"
 
 function mount(el: React.ReactNode) {

@@ -241,7 +241,7 @@ export function MarketsSuite() {
                   ))}
                 </Select>
                 <span className="muted small">
-                  {chartAsset} · {watchedAssets.includes(chartAsset) ? "EO live" : "Yahoo"}
+                  {chartAsset} · {watchedAssets.includes(chartAsset) ? "EO leg" : "Yahoo fallback"}
                 </span>
               </div>
             </div>

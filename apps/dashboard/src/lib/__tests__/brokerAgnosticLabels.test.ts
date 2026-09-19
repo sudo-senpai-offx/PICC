@@ -13,11 +13,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..") // 
  */
 const USER_FACING = [
   "components/TradingSuite.tsx",
-  "components/TradeOrderForm.tsx",
   "components/LiveMarketBoard.tsx",
   "components/LiveDecisionsPanel.tsx",
-  "components/TradingHud.tsx",
-  "components/ConfluencePanel.tsx",
   "lib/suites.ts",
   "lib/settings.ts"
 ]

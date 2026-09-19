@@ -41,6 +41,25 @@ export interface AvailableSource {
   serves: boolean
 }
 
+/**
+ * T11 — one entry of the server's per-candidate source report (T2 /
+ * PICC_MULTISOURCE_ENGINE): who was tried, in what rank, and why.
+ * `winner:true` marks whichever source served this response (absent when
+ * nothing served). The client only ever renders what the server reports.
+ */
+export interface SourceCandidate {
+  slug: string
+  label: string
+  rank: number
+  alive: boolean
+  exact: boolean
+  servedTf: number | null
+  lastSeen: number | null
+  medianMs: number | null
+  reason: string
+  winner?: boolean
+}
+
 interface UseCandleDataResult {
   candles: CandleDatum[]
   volumes: VolumeDatum[]
@@ -91,6 +110,13 @@ interface UseCandleDataResult {
   verifiedCount: number
   /** verifiedCount / returned bars (0..1). 0 when nothing cross-verified. */
   verifiedRatio: number
+  /** T11 — true when the served series is older than its freshness threshold. */
+  stale: boolean
+  /** T11 — "auto" fan-in vs a pinned source that served ("forced") or served
+   * nothing and fell through the quality order ("fallback"). */
+  sourceMode: "auto" | "forced" | "fallback" | null
+  /** T11 — the server's per-candidate source report (winner marked). */
+  sources: SourceCandidate[]
 }
 
 const BASE = "/api"
@@ -116,9 +142,15 @@ interface CandleResponse {
   verifiedCount?: number
   /** verifiedCount / returned bars (0..1). */
   verifiedRatio?: number
+  /** T11 — true when the served series is stale (omitted on empty responses). */
+  stale?: boolean
+  /** T11 — "auto" | "forced" | "fallback" (who the winner is and why). */
+  sourceMode?: "auto" | "forced" | "fallback"
+  /** T11 — the per-candidate source report (winner marked). */
+  sources?: SourceCandidate[]
 }
 
-export async function fetchCandles(assetId: string, timeframe: Timeframe, count: number, source: string = "auto", verify: boolean = false): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean; availableSources: AvailableSource[]; verifySources: number; verifiedCount: number; verifiedRatio: number }> {
+export async function fetchCandles(assetId: string, timeframe: Timeframe, count: number, source: string = "auto", verify: boolean = false): Promise<{ rows: CandleDatum[]; source: string | null; feed: string | null; resolvedTimeframe: number | null; resolved: boolean; availableSources: AvailableSource[]; verifySources: number; verifiedCount: number; verifiedRatio: number; stale: boolean; sourceMode: "auto" | "forced" | "fallback" | null; sources: SourceCandidate[] }> {
   const headers: Record<string, string> = { "Content-Type": "application/json" }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
@@ -148,7 +180,7 @@ export async function fetchCandles(assetId: string, timeframe: Timeframe, count:
   const served = typeof data.timeframe === "number" && data.timeframe > 0
     ? data.timeframe
     : (data.candles[0]?.timeframe ?? timeframe)
-  return { rows, source: data.source ?? null, feed: data.feed ?? null, resolvedTimeframe: served, resolved: data.resolved === true || served !== timeframe, availableSources: data.availableSources ?? [], verifySources: data.verifySources ?? 0, verifiedCount: data.verifiedCount ?? 0, verifiedRatio: data.verifiedRatio ?? 0 }
+  return { rows, source: data.source ?? null, feed: data.feed ?? null, resolvedTimeframe: served, resolved: data.resolved === true || served !== timeframe, availableSources: data.availableSources ?? [], stale: data.stale === true, sourceMode: data.sourceMode ?? null, sources: data.sources ?? [], verifySources: data.verifySources ?? 0, verifiedCount: data.verifiedCount ?? 0, verifiedRatio: data.verifiedRatio ?? 0 }
 }
 
 function computeEma(candles: CandleDatum[], period: number): EmaDatum[] {
@@ -268,6 +300,12 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
   const [verifySources, setVerifySources] = useState(0)
   const [verifiedCount, setVerifiedCount] = useState(0)
   const [verifiedRatio, setVerifiedRatio] = useState(0)
+  // T11 — the server's freshness + "who won and why" tags (additive; both the
+  // default states and the empty-candles response keep staleness OFF — the
+  // client never fabricates a stale/live claim for a series it didn't see).
+  const [stale, setStale] = useState(false)
+  const [sourceMode, setSourceMode] = useState<"auto" | "forced" | "fallback" | null>(null)
+  const [sources, setSources] = useState<SourceCandidate[]>([])
   const candlesRef = useRef<CandleDatum[]>([])
 
   // Allow a PARENT to drive the timeframe (Slice C — multi-timeframe). When the
@@ -286,7 +324,7 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
     setLoading(true)
     setError(null)
     fetchCandles(assetId, timeframe, count, pinned, true)
-      .then(({ rows, source: src, feed: fd, resolvedTimeframe: rtf, resolved: isResolved, availableSources: avail, verifySources, verifiedCount, verifiedRatio }) => {
+      .then(({ rows, source: src, feed: fd, resolvedTimeframe: rtf, resolved: isResolved, availableSources: avail, verifySources, verifiedCount, verifiedRatio, stale: isStale, sourceMode, sources }) => {
         if (!alive) return
         candlesRef.current = rows
         setCandles(rows)
@@ -298,6 +336,9 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
         setVerifySources(verifySources)
         setVerifiedCount(verifiedCount)
         setVerifiedRatio(verifiedRatio)
+        setStale(isStale)
+        setSourceMode(sourceMode)
+        setSources(sources)
         if (rows.length > 0) setLastPrice(rows[rows.length - 1].close)
         setLoading(false)
       })
@@ -397,6 +438,6 @@ export function useCandleData({ assetId, timeframe: initialTf = 60, count = 240,
     bbUpper: bb.upper, bbMid: bb.mid, bbLower: bb.lower,
     rsiLine,
     macdLine: macdSeries.line, macdSignal: macdSeries.signal, macdHist: macdSeries.hist,
-    loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source: served, pinnedSource: pinned, availableSources, setSource: handleSetSource, feed, resolvedTimeframe, resolved, verifySources, verifiedCount, verifiedRatio
+    loading, error, streamError, lastPrice, timeframe, setTimeframe: handleSetTimeframe, source: served, pinnedSource: pinned, availableSources, setSource: handleSetSource, feed, resolvedTimeframe, resolved, verifySources, verifiedCount, verifiedRatio, stale, sourceMode, sources
   }
 }
