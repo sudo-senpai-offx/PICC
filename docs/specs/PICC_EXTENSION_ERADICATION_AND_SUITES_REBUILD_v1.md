@@ -136,8 +136,8 @@ Novel-context patterns PICC's MTF engine currently lacks:
 
 **Firecrawl tasks (free-plan budget-minded):**
 - [x] ~~`firecrawl search "MTF confluence engine open source" --scrape` → `.firecrawl/mtf-confluence.md` (1 search, 2 credits).~~ SKIPPED — superseded: MTF research already consolidated in `MTF_CONVERGENCE_ENGINE.md` (Sobreiro honest-band discipline), and the B.3 slices were specified + shipped without needing new artifacts.
-- [ ] `firecrawl search "chopiness index regime detection trading"` → `.firecrawl/choppiness-regime.md` (only if needed). — not needed: Choppiness index shipped directly in `regimeEngine.mjs` (B.3 Regime layer, done in `bf99e09`).
-- [ ] `firecrawl research search-papers "regime detection multi-timeframe trading"` → `.firecrawl/research-regime.md` (free-plan credit; check balance first). — skipped with the other research tasks; regime detection delivered from existing domain knowledge + ADR-disciplined thresholds.
+- [x] `firecrawl search "chopiness index regime detection trading"` → `.firecrawl/choppiness-regime.md` (only if needed). — not needed: Choppiness index shipped directly in `regimeEngine.mjs` (B.3 Regime layer, done in `bf99e09`). Closed as superseded by direct implementation.
+- [x] `firecrawl research search-papers "regime detection multi-timeframe trading"` → `.firecrawl/research-regime.md` (free-plan credit; check balance first). — skipped with the other research tasks; regime detection delivered from existing domain knowledge + ADR-disciplined thresholds. Closed as superseded by direct implementation.
 
 ### B.3 Phase B slices (draft — to-spec needed before implementation)
 
