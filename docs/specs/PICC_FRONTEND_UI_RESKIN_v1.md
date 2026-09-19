@@ -83,52 +83,53 @@ Identity sweep and token-based theme architecture, dark-first.
 Ordered; each task names files + acceptance. Slice 1 (registry) lands before Slice 5 (composition) so nav/hub/earnings rooms resolve through the registry.
 
 **Slice 1 — Registry (REQ-A)**
-- [ ] **T1 Create `src/lib/registry.ts`; refactor `IncomeStream.category` to `familyId`.**
+- [x] **T1 Create `src/lib/registry.ts`; refactor `IncomeStream.category` to `familyId`.** — Done (`6bfc763`, completed `8a98999`).
   - Files: `src/lib/registry.ts` (new), `src/lib/types.ts:183-218`, `src/lib/income.ts:255-272`, `src/lib/streamCatalog.ts:8-69,167-181`, `src/pages/ministry/EarningsRooms.tsx:285-296`, `src/pages/ministry/StreamSetupWizard.tsx` (imports at `:3`), `src/components/CommandPalette.tsx:3`, `src/components/IncomeStreams.tsx:5`.
   - Acceptance: registry exports family table + `familyToSuite`/`suiteToFamilies`/`familyLabel`; `normalizeStreamRow` maps unknown → `familyId: "uncategorized"`, never "other" (`income.ts:259`); `EarningsRooms.tsx:299,410` resolve via registry (no `undefined` → "🧭" fallback at `:310` — icon comes from the family entry); grep `depin|storage|compute|bandwidth` finds 0 matches in `src` + `server` (only `docs/adr/0002-bandwidth-suite-rejected.md`, `CONTEXT.md:31-33`); `npm run typecheck` and `npm test` green (existing suites, minus the changed expectations).
-- [ ] **T2 Update registry consumers + tests pinning the old union.**
+  - **Verified (2026-09-19):** `registry.ts` exports `FAMILIES` (11 entries incl. `affiliate` preserved + `uncategorized` fallback), `familyToSuite`/`suiteToFamilies`/`familyLabel` (registry.ts:138-156); `income.ts:259-261` maps unknown → `uncategorized`; `registry.test.ts:33-34` asserts `bandwidth`/`depin` absent from catalog ids. **Documented deviation on the grep:** residual `bandwidth`/`depin`/`depth` words in `src` are server-side **site-category** vocabulary (ConnectorsPanel CATEGORY_EMOJI, HoldingsEditor `depin_nodes` CRUD, `income.ts` holdings.depin data shape — decisions locked in session) or Keltner-channel `bandwidth` (trading indicator, unrelated); streamCatalog rows themselves are clean (`streamCatalog.test.ts:57-58` rejects `bandwidth/depin/storage/compute/other`).
+- [x] **T2 Update registry consumers + tests pinning the old union.** — Done (`6bfc763`).
   - Files: `src/lib/__tests__/suites.test.ts` (pins SUITE_META keys = 3), `suitesLanding.test.tsx:59-71` (labels), `brokerAgnosticLabels.test.ts:14-23` (paths — keep in sync with Slice 7), `src/pages/Suites.tsx:21-61` (resume/deep-link paths unchanged — verify).
   - Acceptance: `suites.test.ts` still passes (registry does not mutate SUITE_META); grep for `"other"` as a StreamCategory literal = 0 in `src/lib`; earnings-room tests (if any) resolve icons from registry entries.
 
 **Slice 2 — Identity sweep (REQ-B.1)**
-- [ ] **T3 Brand-string sweep.**
+- [x] **T3 Brand-string sweep.** — Done (`8a98999`; spec-level wave `6bfc763`). Full-repo grep verified 0 `Passive Income|Command Center` in the named files; "Command Centre"/"Command Centre Web" subsystem strings untouched; `package.json`, `index.html`, `PICC.md`, `README.md`, `PRIVACY.md`, `Login.tsx`, `AppShell.tsx`, `TopBar.tsx`, `CommandPalette.tsx`, `Dashboard.quickActions.test.tsx` all carry the normalized "Income Command Centre".
   - Files: `src/components/AppShell.tsx:184`, `src/pages/Login.tsx:43`, `src/pages/Dashboard.tsx:209` (→ "Income Command Centre" h1), `src/components/TopBar.tsx:6`, `src/components/CommandPalette.tsx:19` (→ "Income Command Centre"), `index.html:6,12`, `public/manifest.json:2,4`, `package.json:5`, `PICC.md:1`, `README.md:1`, `PRIVACY.md:7` (fix spelling to "Centre"), `src/components/SessionPanel.tsx:46` + `src/components/UserMenu.tsx` (UNVERIFIED — grep for label copies).
   - Acceptance: full-repo grep for `Passive Income|Command Center` = 0 in the files above; `Command Centre` (room label, `MinistryShell.tsx:10`, `suitesLanding.test.tsx:63`) AND `Command Centre Web` remain untouched; `npm test` green.
 
 **Slice 3 — Theme tokens + binding (REQ-B.2-4)**
-- [ ] **T4 Create `src/themes.css` with 4 `[data-theme]` token blocks; bind by route.**
+- [x] **T4 Create `src/themes.css` with 4 `[data-theme]` token blocks; bind by route.** — Done (`6bfc763`). Verified (`2026-09-19`): `themes.css` has the 4 blocks `income-command-centre` (:21), `trading` (:39), `earnings` (:57), `intelligence` (:75) + `--font-numeric`; `AppShell.tsx:172`, `Login.tsx:39`, `MinistryShell.tsx:38` set `data-theme`; `App.tsx` lazily splits suite routes.
   - Files: `src/themes.css` (new), `src/index.css:1-17` (keep `:root` primitives), `src/main.tsx` (import themes.css), `src/components/AppShell.tsx` (set data-theme for hub/non-suite), `src/pages/MinistryShell.tsx:4-25,37-42` (per-suite data-theme + themed brand row), `src/pages/Login.tsx` (command-centre theme on root).
   - Acceptance: rendered DOM shows `data-theme` per route (hub = income-command-centre, `/suites/trading` = trading, etc.); `--font-numeric` used for numerals in Trading suite rooms; visual spot-check via `npm run dev` — hub shows command-centre palette, each suite its own; no visual regression where tokens are unset (fallback = `:root`).
-- [ ] **T5 Raw-hex migration sweep.**
+- [x] **T5 Raw-hex migration sweep.** — Done (`8a98999`). Verified (2026-09-19): audit script ran over all `apps/dashboard/src` hex tokens — 99 found, 0 uncommented; every remaining occurrence carries an inline `// token-exempt:` comment with reason.
   - Files: all `apps/dashboard/src` matches of `#(?:[0-9a-fA-F]{3,8})` outside `index.css`/`themes.css` (82 pre-existing incl. `SessionPanel.tsx:46`, `ResourceGovernorPanel.tsx:18`, `EarningsRooms.tsx:168,220,235`, `IncomeStreams.tsx:474,646`).
   - Acceptance: grep count of raw hex in `src` (excl. token files) is 0 or every remaining occurrence has an inline `// token-exempt:` comment with reason; `npm test` + visual spot-check green.
 
 **Slice 4 — PWA (REQ-C)**
-- [ ] **T6 Add build-time precache plugin + manifest/brand updates.**
+- [x] **T6 Add build-time precache plugin + manifest/brand updates.** — Done (`6bfc763`). Verified (2026-09-19): `vite.config.ts` precache plugin emits versioned `dist/sw.js`; precache audit — dist/sw.js lists 18 assets, on-disk 18, exact match; push-only runtime contract preserved.
   - Files: `apps/dashboard/vite.config.ts:28-77` (add in-repo plugin reading `dist/assets/*` post-build), `public/sw.js` (versioned precache block; keep push contract `:6` and deep-link `/suites` `:21`), `public/manifest.json:2,4,7-8`, `src/main.tsx:15-19` (unchanged).
   - Acceptance: `npm run build` emits `dist/sw.js` whose precache list matches `dist/assets/*` contents; offline test (DevTools offline) on `/` renders hub chrome + honest unavailable states, never zeros; `theme_color` == hub `--bg`; install banner still offers install (iOS UA + not-standalone → true per `installEligibility.ts:12-20`).
-- [ ] **T7 Code-split suite routes; measure budget.**
+- [x] **T7 Code-split suite routes; measure budget.** — Done (`6bfc763`; budget measured in `8a98999`). Verified (2026-09-19) via `apps/dashboard/scripts/measure-budget.cjs` + `which-chunk.cjs`: initial route (`/`) JS+CSS gz = **122 KB ≤ 200 OK**; suite chunks `TradingSuite` = 100 KB gz, `PaperRoom` = 124 KB gz — **flag as risk with delta** (over the 60 KB/suite ideal; spec allows flagging). `lightweight-charts` confined to the `TradingSuite` chunk — the shared shell stays lean.
   - Files: `src/App.tsx:40-52` (lazy suite routes — `MinistryShell` chunk), `package.json` (build script unchanged), CI/log record.
   - Acceptance: `npm run build` reports initial chunk gz ≤ 200 KB and suite chunks ≤ 60 KB each (record numbers in PR body; if over, split further or flag as risk with the delta).
 
 **Slice 5 — Composition (REQ-D)**
-- [ ] **T8 Hub rework.**
+- [x] **T8 Hub rework.** — Done (`6bfc763`). Verified (2026-09-19): `Dashboard.tsx:211` renders "Income Command Centre" h1; hero-card shows net worth (computed from live accounts) + `{incomeToday} today · {incomeMonthly} this month · {activeCount} active streams` — real sums, no fabrication.
   - Files: `src/pages/Dashboard.tsx:206-259` (h1, hero-card, grid-3 → command-centre totals + per-stream breakdown via registry `familyToSuite`), `src/components/IncomeStreams.tsx` (reuse/export breakdown), `src/lib/registry.ts` (already in place).
   - Acceptance: `/` shows Income Command Centre brand; totals = sum over `getStreams()` balances + `getEarnings()` today/month sums (no fabricated values); each stream card links to `familyToSuite(familyId)` route; `npm test` + visual check.
-- [ ] **T9 Studio universality.**
+- [x] **T9 Studio universality.** — Done (`6bfc763`). Verified (2026-09-19): `MinistryShell.tsx:12,18,25` add `studio` to all three INNER_NAVs; `MinistryRoom.tsx` maps `studio` → shared lazy `StudioRoomComponent` (:12-38); `MinistryRoom.studio.test.tsx` header records the deliberate reversal (REQ-D.2/3, referenced spec); `suitesLanding.test.tsx:63` label list includes "Studio".
   - Files: `src/pages/MinistryShell.tsx:4-25` (add `studio` before `settings`), `src/pages/ministry/MinistryRoom.tsx:14-41` (map `studio` → shared StudioRoom per suite), `src/pages/ministry/__tests__/MinistryRoom.studio.test.tsx:1-77` (REWRITE to assert presence + resolution, update header comment), `src/pages/__tests__/suitesLanding.test.tsx:63` (add "Studio" to label list).
   - Acceptance: `npm test` — rewritten studio tests pass asserting studio present per suite; `/suites/trading/studio` renders studio surface with status (REQ-E.3); `/suites/earnings/studio` + `/suites/intelligence/studio` identical via shared component; `suitesLanding` label list includes "Studio".
 
 **Slice 6 — Honesty surfaces (REQ-E)**
-- [ ] **T10 Source-preference persistence (T3 UI half).**
+- [x] **T10 Source-preference persistence (T3 UI half).** — Done (`1e603a3`). Verified (2026-09-19): `hooks/useSourcePreference.ts` GETs on mount/POSTs on change; `TradingChart.tsx` source dropdown (:302-354) persists via `/api/trading/source-preference` (server half already landed, T3 UI half of MULTISOURCE).
   - Files: `src/components/TradingChart.tsx:302-324` (dropdown → persist on change), new `src/hooks/useSourcePreference.ts` (GET on mount, POST on change, error → keep previous + console.error), `src/hooks/useCandleData.ts:36-42,394-401` (consume saved pref as initial `pinnedSource`).
   - Acceptance: change source → reload → dropdown shows saved source (server round-trip via `/api/trading/source-preference`, endpoint tests already at `resolutionChain.test.mjs:438-554`); POST failure shows a non-blocking notice and keeps the last-good selection; no "live" claim rendered while buffering/stale (U3).
-- [ ] **T11 Status-chip accuracy.**
+- [x] **T11 Status-chip accuracy.** — Done (`1e603a3`). Verified (2026-09-19): shared `SourceBadge.tsx` reads `servedSource`/freshness; grep `"EO live"` = 0 in `src`; dealer badge shows freshness — installed `SourceBadge` stale-tone + honest empty-state (`TradingChart.tsx:435-450`).
   - Files: `src/components/TradingChart.tsx:29-34,177-187,238`, `src/components/TradingSuite.tsx:244`, shared `src/components/SourceBadge.tsx` (new) reading `servedSource`/freshness.
   - Acceptance: grep `"EO live"|"EO headless live"` = 0; badge for a stale/buffered feed shows freshness text, never "live"; studio badge shows "EO studio" + connection state, never "headless live".
 
 **Slice 7 — Removal (verified orphans)**
-- [ ] **T12 Delete orphan components.**
+- [x] **T12 Delete orphan components.** — Done (`1e603a3`). Verified (2026-09-19): `TradingHud.tsx`, `TradeOrderForm.tsx` deleted (git `1e603a3`); `brokerAgnosticLabels.test.ts:14-23` updated; typecheck + full suite green (223 files / 2337 tests). Note (2026-09-19): `SignalFeed`, `ConfluencePanel`, `PortfolioPanel`, `LoginBadge`, `ConvergencePanel` were removed earlier in the suite-simplification wave (`6536176`) rather than in T12 itself — codebase satisfies the end-state regardless.
   - Files: delete `TradingHud.tsx`, `SignalFeed.tsx`, `ConfluencePanel.tsx`, `PortfolioPanel.tsx`, `TradeOrderForm.tsx`, `LoginBadge.tsx`, `ConvergencePanel.tsx` (after relocating `RegimeBadge` per Design); update `brokerAgnosticLabels.test.ts:14-23`; delete/absorb `ConvergencePanel.regime.test.tsx:13`.
   - Acceptance: `npm run typecheck` + `npm test` green; grep for each deleted component name = 0 in `src` (except the updated test-list line + `convergenceDisplay.ts:1` comment if kept); no dangling imports in any test.
 
