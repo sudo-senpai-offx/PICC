@@ -221,7 +221,7 @@ export function FinanceTracker() {
           {busy !== null ? "Saving…" : "Refresh"}
         </Button>
       </div>
-      {error ? <p className="muted" style={{ color: "#ff6b6b" }}>{error}</p> : null}
+      {error ? <p className="muted" style={{ color: "var(--danger)" }}>{error}</p> : null}
 
       {/* Computed net worth — never manual */}
       <div className="row wrap" style={{ gap: 16, alignItems: "baseline" }}>
@@ -286,7 +286,7 @@ export function FinanceTracker() {
                           variant="ghost"
                           disabled={busy === `del-account-${a.id}`}
                           onClick={() => removeAccount(a)}
-                          style={{ fontSize: 10, padding: "2px 8px", color: "#ff6b6b" }}
+                          style={{ fontSize: 10, padding: "2px 8px", color: "var(--danger)" }}
                         >
                           {busy === `del-account-${a.id}` ? "…" : "Delete"}
                         </Button>
@@ -388,7 +388,7 @@ export function FinanceTracker() {
                       <td>{t.description}</td>
                       <td>{t.category ? <Badge>{t.category}</Badge> : <span className="muted">—</span>}</td>
                       <td className="muted small">{t.tags ?? ""}</td>
-                      <td style={{ fontWeight: 700, color: t.amount >= 0 ? "var(--text)" : "#ff6b6b" }}>
+                      <td style={{ fontWeight: 700, color: t.amount >= 0 ? "var(--text)" : "var(--loss)" }}>
                         {formatMoney(t.amount, selectedAccount.currency)}
                       </td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
@@ -399,7 +399,7 @@ export function FinanceTracker() {
                           variant="ghost"
                           disabled={busy === `del-tx-${t.id}`}
                           onClick={() => removeTx(t)}
-                          style={{ fontSize: 10, padding: "2px 8px", color: "#ff6b6b" }}
+                          style={{ fontSize: 10, padding: "2px 8px", color: "var(--danger)" }}
                         >
                           {busy === `del-tx-${t.id}` ? "…" : "Delete"}
                         </Button>

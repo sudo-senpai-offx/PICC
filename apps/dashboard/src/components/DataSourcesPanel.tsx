@@ -79,6 +79,7 @@ export function DataSourcesPanel() {
         <h3 style={{ margin: 0 }}>Data Sources</h3>
         <span className="muted small">
           live feed:{" "}
+          {/* token-exempt: broker feed state hue (live green / offline amber) — categorical connectivity state */}
           <span style={{ color: liveProviderConnected ? "#4ade80" : "#fbbf24", fontWeight: 600 }}>
             {liveProviderConnected ? "live" : "offline"}
           </span>
@@ -96,7 +97,7 @@ export function DataSourcesPanel() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search sources (crypto, forex, binance, live…)"
-            style={{ width: "100%", boxSizing: "border-box", margin: "8px 0", padding: "7px", background: "#16162c", border: "1px solid #2a2a4a", color: "#eef0ff", borderRadius: 6 }}
+            style={{ width: "100%", boxSizing: "border-box", margin: "8px 0", padding: "7px", background: "var(--bg-elev)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 6 }}
           />
           {!filtered.length ? (
             <p className="muted small" style={{ margin: 0 }}>No sources match "{query}".</p>
@@ -106,9 +107,12 @@ export function DataSourcesPanel() {
                 const cov = COVERAGE[b.slug] ?? { live: [], eod: [] }
                 const lat = latency?.[b.slug]
                 const state = !b.configured
+                  // token-exempt: charge-state hue (unconfigured gray) — categorical per-state
                   ? { text: "unconfigured", color: "#666" }
                   : b.connected
+                    // token-exempt: charge-state hue (connected green) — categorical per-state
                     ? { text: "connected", color: "#4ade80" }
+                    // token-exempt: charge-state hue (configured idle amber) — categorical per-state
                     : { text: "configured · idle", color: "#fbbf24" }
                 const whyEmpty =
                   b.slug === "expertoption"
@@ -123,9 +127,9 @@ export function DataSourcesPanel() {
                         ? "EOD only — no intraday (5s..4h), but always available for daily/weekly/monthly."
                         : b.connected ? "Serving live data now." : "Not configured — enable this source in Settings → Trading."
                 return (
-                  <div key={b.slug} style={{ border: "1px solid #2a2a4a", borderRadius: 8, padding: "8px 10px" }}>
+                  <div key={b.slug} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
                     <div className="row-between" style={{ alignItems: "center" }}>
-                      <strong style={{ color: "#e6e8ff" }}>{b.label}</strong>
+                      <strong style={{ color: "var(--text)" }}>{b.label}</strong>
                       <span style={{ color: state.color, fontWeight: 600 }}>{state.text}</span>
                     </div>
                     <div className="muted small" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
@@ -148,7 +152,7 @@ export function DataSourcesPanel() {
                         {lat?.medianMs != null ? <> · fetch {lat.medianMs}ms</> : null}
                       </div>
                     ) : null}
-                    <div className="small" style={{ color: state.text === "unconfigured" ? "#888" : "#e2e8f0", marginTop: 4 }}>
+                    <div className="small" style={{ color: state.text === "unconfigured" ? "var(--text-muted)" : "var(--text)", marginTop: 4 }}>
                       {whyEmpty}
                     </div>
                     {b.slug === "ccxt" ? (
@@ -156,11 +160,11 @@ export function DataSourcesPanel() {
                         className="small"
                         style={{
                           marginTop: 6,
-                          background: "#101024",
-                          border: "1px solid #2a2a4a",
+                          background: "var(--bg-elev)",
+                          border: "1px solid var(--border)",
                           borderRadius: 6,
                           padding: "6px 8px",
-                          color: "#9ca3c8",
+                          color: "var(--text-muted)",
                           fontFamily: "ui-monospace, monospace",
                           lineHeight: 1.5,
                           overflowX: "auto",

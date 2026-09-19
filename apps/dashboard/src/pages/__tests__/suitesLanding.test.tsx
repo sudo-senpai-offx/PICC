@@ -60,7 +60,7 @@ describe("ministry index landing (UX-2/UX-3)", () => {
     const m = mountAt("/suites/trading")
     mounted.push(m)
     expect(m.host.querySelector("h1")?.textContent).toBe("Trading")
-    for (const label of ["Dashboard", "Markets", "Paper", "Autopilot", "Command Centre", "Simulator", "Settings"]) {
+    for (const label of ["Dashboard", "Markets", "Paper", "Autopilot", "Command Centre", "Simulator", "Studio", "Settings"]) {
       expect(m.host.textContent).toContain(label)
     }
     expect(m.host.textContent).not.toContain("Every income-source category")

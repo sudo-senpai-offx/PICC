@@ -38,11 +38,11 @@ export function CapabilitiesPanel() {
       </div>
 
       {error ? (
-        <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
+        <div style={{ fontSize: 11, color: "var(--danger)" }}>{error}</div>
       ) : !model ? (
         <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Probing instance…</div>
       ) : !model.signalEngine ? (
-        <div style={{ fontSize: 11, color: "#ffb86c", textAlign: "center", padding: 8 }}>
+        <div style={{ fontSize: 11, color: "var(--warn)", textAlign: "center", padding: 8 }}>
           Signal engine is disabled (PICC_SIGNAL_ENGINE=0) — capabilities hidden
         </div>
       ) : (

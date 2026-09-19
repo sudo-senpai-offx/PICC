@@ -33,10 +33,10 @@ export class ChartErrorBoundary extends Component<Props, State> {
           border: "1px solid rgba(255,107,107,0.3)",
           borderRadius: 6,
           fontSize: 12,
-          color: "#ff6b6b"
+          color: "var(--danger)"
         }}>
           <strong>Chart error</strong>
-          <p style={{ margin: "4px 0 0", fontSize: 11, color: "#a5a0ff" }}>
+          <p style={{ margin: "4px 0 0", fontSize: 11, color: "var(--accent)" }}>
             {this.state.error?.message ?? "Failed to render chart"}
           </p>
         </div>

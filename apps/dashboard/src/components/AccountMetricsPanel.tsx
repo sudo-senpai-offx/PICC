@@ -37,7 +37,7 @@ export function AccountMetricsPanel() {
       </div>
 
       {error ? (
-        <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
+        <div style={{ fontSize: 11, color: "var(--danger)" }}>{error}</div>
       ) : !model ? (
         <div aria-busy="true" className="skeleton-row">
           <Skeleton width="60%" />

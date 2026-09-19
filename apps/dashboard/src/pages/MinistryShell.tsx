@@ -9,17 +9,20 @@ export const INNER_NAV: Record<string, { to: string; label: string }[]> = {
     { to: "autopilot", label: "Autopilot" },
     { to: "command-centre", label: "Command Centre" },
     { to: "simulator", label: "Simulator" },
+    { to: "studio", label: "Studio" },
     { to: "settings", label: "Settings" }
   ],
   earnings: [
     { to: "dashboard", label: "Dashboard" },
     { to: "simulator", label: "Simulator" },
+    { to: "studio", label: "Studio" },
     { to: "settings", label: "Settings" }
   ],
   intelligence: [
     { to: "dashboard", label: "Dashboard" },
     { to: "governor", label: "Governor" },
     { to: "guidance", label: "Guidance" },
+    { to: "studio", label: "Studio" },
     { to: "settings", label: "Settings" }
   ]
 }
@@ -32,7 +35,7 @@ export default function MinistryShell() {
   const entries = INNER_NAV[suiteId!] ?? []
 
   return (
-    <div className="ministry-shell">
+    <div className="ministry-shell" data-theme={suiteId}>
       <aside className="ministry-sidebar">
         <div className="ministry-brand">
           <span style={{ fontSize: 22 }}>{meta.icon}</span>

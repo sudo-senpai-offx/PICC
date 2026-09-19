@@ -83,8 +83,8 @@ export function TradeJournalPanel() {
           {stats && (
             <div className="row gap" style={{ fontSize: 9, color: "var(--text-muted)" }}>
               <span>{stats.totalTrades} trades</span>
-              <span style={{ color: stats.winRate >= 50 ? "#4ade80" : "#ff6b6b" }}>{stats.winRate}% win</span>
-              <span style={{ color: stats.totalPnl >= 0 ? "#4ade80" : "#ff6b6b" }}>${stats.totalPnl.toFixed(0)}</span>
+              <span style={{ color: stats.winRate >= 50 ? "var(--gain)" : "var(--loss)" }}>{stats.winRate}% win</span>
+              <span style={{ color: stats.totalPnl >= 0 ? "var(--gain)" : "var(--loss)" }}>${stats.totalPnl.toFixed(0)}</span>
             </div>
           )}
           <Button variant="primary" onClick={() => setShowForm(!showForm)} style={{ fontSize: 10, padding: "3px 10px" }}>
@@ -97,11 +97,11 @@ export function TradeJournalPanel() {
       {stats && (
         <div style={{ display: "flex", gap: 4, marginBottom: 8, flexWrap: "wrap" }}>
           {[
-            { label: "Win Rate", value: `${stats.winRate}%`, color: stats.winRate >= 50 ? "#4ade80" : "#ff6b6b" },
-            { label: "Profit Factor", value: stats.profitFactor.toFixed(2), color: stats.profitFactor >= 1.5 ? "#4ade80" : stats.profitFactor >= 1 ? "#f59e0b" : "#ff6b6b" },
-            { label: "Avg R", value: stats.avgRMultiple.toFixed(2), color: stats.avgRMultiple >= 0 ? "#4ade80" : "#ff6b6b" },
-            { label: "Win Streak", value: String(stats.maxWinStreak), color: "#4ade80" },
-            { label: "Loss Streak", value: String(stats.maxLossStreak), color: "#ff6b6b" },
+            { label: "Win Rate", value: `${stats.winRate}%`, color: stats.winRate >= 50 ? "var(--gain)" : "var(--loss)" },
+            { label: "Profit Factor", value: stats.profitFactor.toFixed(2), color: stats.profitFactor >= 1.5 ? "var(--gain)" : stats.profitFactor >= 1 ? "var(--warn)" : "var(--loss)" },
+            { label: "Avg R", value: stats.avgRMultiple.toFixed(2), color: stats.avgRMultiple >= 0 ? "var(--gain)" : "var(--loss)" },
+            { label: "Win Streak", value: String(stats.maxWinStreak), color: "var(--gain)" },
+            { label: "Loss Streak", value: String(stats.maxLossStreak), color: "var(--loss)" },
           ].map((m) => (
             <div key={m.label} style={{ padding: "3px 6px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center", minWidth: 60 }}>
               <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{m.label}</div>
@@ -159,10 +159,10 @@ export function TradeJournalPanel() {
                 </td>
                 <td style={{ textAlign: "right", padding: "2px 4px" }}>{e.entryPrice.toFixed(4)}</td>
                 <td style={{ textAlign: "right", padding: "2px 4px" }}>{e.exitPrice?.toFixed(4) ?? "-"}</td>
-                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.pnl ?? 0) > 0 ? "#4ade80" : (e.pnl ?? 0) < 0 ? "#ff6b6b" : "var(--text-muted)", fontWeight: 600 }}>
+                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.pnl ?? 0) > 0 ? "var(--gain)" : (e.pnl ?? 0) < 0 ? "var(--loss)" : "var(--text-muted)", fontWeight: 600 }}>
                   {e.pnl != null ? `${e.pnl > 0 ? "+" : ""}${e.pnl.toFixed(2)}` : "-"}
                 </td>
-                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.rMultiple ?? 0) > 0 ? "#4ade80" : (e.rMultiple ?? 0) < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
+                <td style={{ textAlign: "right", padding: "2px 4px", color: (e.rMultiple ?? 0) > 0 ? "var(--gain)" : (e.rMultiple ?? 0) < 0 ? "var(--loss)" : "var(--text-muted)" }}>
                   {e.rMultiple != null ? `${e.rMultiple > 0 ? "+" : ""}${e.rMultiple.toFixed(1)}R` : "-"}
                 </td>
                 <td style={{ textAlign: "center", padding: "2px 4px" }}>
@@ -170,9 +170,9 @@ export function TradeJournalPanel() {
                 </td>
                 <td style={{ textAlign: "right", padding: "2px 4px" }}>
                   {e.status === "open" && (
-                    <button onClick={() => handleClose(e.id)} style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "#4ade80", marginRight: 4 }}>Close</button>
+                    <button onClick={() => handleClose(e.id)} style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "var(--success)", marginRight: 4 }}>Close</button>
                   )}
-                  <button onClick={() => handleDelete(e.id)} style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "#ff6b6b" }}>X</button>
+                  <button onClick={() => handleDelete(e.id)} style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "var(--danger)" }}>X</button>
                 </td>
               </tr>
             ))}

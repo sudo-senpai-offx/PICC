@@ -593,7 +593,7 @@ export function AutopilotSuite() {
           {((demo?.autopilot?.scopeHealth?.problems?.length ?? 0) > 0) ? (
             <div
               className="card pad"
-              style={{ border: "1px solid var(--danger, #e5484d)", color: "var(--danger, #e5484d)" }}
+              style={{ border: "1px solid var(--danger)", color: "var(--danger)" }}
               data-testid="scope-health-warning"
             >
               <strong>Unresolvable assets in scope</strong>

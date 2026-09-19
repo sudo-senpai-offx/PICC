@@ -44,15 +44,18 @@ export interface PaneSpec {
 
 const RSI_LINE: PaneSpec = {
   kind: "line",
+  // token-exempt: indicator-series hue (RSI violet)
   options: { color: "#a78bfa", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
 }
 
 const MACD_LINE: PaneSpec = {
   kind: "line",
+  // token-exempt: indicator-series hue (MACD line green)
   options: { color: "#4ade80", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
 }
 const MACD_SIGNAL: PaneSpec = {
   kind: "line",
+  // token-exempt: indicator-series hue (MACD signal amber)
   options: { color: "#f59e0b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
 }
 const MACD_HIST: PaneSpec = {

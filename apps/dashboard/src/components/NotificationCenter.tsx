@@ -178,7 +178,7 @@ export function NotificationCenter() {
         </svg>
         {unread > 0 && (
           <span style={{
-            position: "absolute", top: 0, right: 0, background: "#ff6b6b", color: "#fff",
+            position: "absolute", top: 0, right: 0, background: "var(--danger)", color: "var(--text)",
             fontSize: 8, fontWeight: 700, borderRadius: "50%", width: 14, height: 14,
             display: "flex", alignItems: "center", justifyContent: "center"
           }}>
@@ -228,7 +228,9 @@ export function NotificationCenter() {
                     key={`approval_${p.id}`}
                     style={{
                       padding: "8px 12px", borderBottom: "1px solid var(--border)",
+                      // token-exempt: per-source identity hues (trade cyan / alert pink) — categorical source color; alpha tint has no token
                       background: p.source === "trade" ? "#00d9ff11" : "#ec489811",
+                      // token-exempt: per-source identity hue (trade cyan solid / alert pink solid) — categorical source color
                       borderLeft: p.source === "trade" ? "3px solid #00d9ff" : "3px solid #ec4898"
                     }}
                   >
@@ -243,7 +245,7 @@ export function NotificationCenter() {
                     <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
                       <button
                         onClick={() => decideApproval(p.id, "approve")}
-                        style={{ fontSize: 10, padding: "2px 10px", borderRadius: 4, border: "none", background: "var(--accent)", color: "#fff", cursor: "pointer" }}
+                        style={{ fontSize: 10, padding: "2px 10px", borderRadius: 4, border: "none", background: "var(--accent)", color: "var(--text)", cursor: "pointer" }}
                       >
                         Approve
                       </button>
@@ -265,6 +267,7 @@ export function NotificationCenter() {
                   style={{
                     display: "block", width: "100%", textAlign: "left",
                     padding: "8px 12px", borderBottom: "1px solid var(--border)", cursor: "pointer",
+                    // token-exempt: alpha tint of accent — no alpha token exists
                     background: n.read ? "transparent" : "#6c63ff11",
                     borderLeft: n.read ? "3px solid transparent" : "3px solid var(--accent)",
                     borderRight: "none", borderTop: "none", borderRadius: 0,

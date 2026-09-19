@@ -367,7 +367,7 @@ export function ConnectorsPanel() {
                     </tr>
                     {browserOpen === c.slug ? (
                       <tr>
-                        <td colSpan={9} style={{ background: "var(--bg-soft, #141430)" }}>
+                        <td colSpan={9} style={{ background: "var(--bg-elev)" }}>
                           <SourceBrowserPrefs conn={c} pref={prefs[c.slug]} busy={browserBusy === c.slug} onSave={saveSourcePrefs} onOpen={openInStudio} />
                         </td>
                       </tr>

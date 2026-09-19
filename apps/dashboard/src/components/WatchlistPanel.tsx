@@ -64,7 +64,7 @@ export function WatchlistPanel() {
             style={{
               padding: "2px 8px", fontSize: 10, border: "none", borderRadius: 3, cursor: "pointer",
               background: activeId === w.id ? "var(--accent)" : "var(--bg)",
-              color: activeId === w.id ? "#fff" : "var(--text-muted)"
+              color: activeId === w.id ? "var(--text)" : "var(--text-muted)"
             }}
           >
             {w.name} ({w.symbols.length})
@@ -111,19 +111,19 @@ export function WatchlistPanel() {
                   <tr key={p.symbol} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "2px 4px", fontWeight: 600 }}>{p.symbol}</td>
                     <td style={{ textAlign: "right", padding: "2px 4px" }}>{p.last?.toFixed(4)}</td>
-                    <td style={{ textAlign: "right", padding: "2px 4px", color: p.change24h >= 0 ? "#4ade80" : "#ff6b6b" }}>
+                    <td style={{ textAlign: "right", padding: "2px 4px", color: p.change24h >= 0 ? "var(--gain)" : "var(--loss)" }}>
                       {p.change24h >= 0 ? "+" : ""}{p.change24h?.toFixed(2)}%
                     </td>
-                    <td style={{ textAlign: "right", padding: "2px 4px", color: p.changeWeek >= 0 ? "#4ade80" : "#ff6b6b" }}>
+                    <td style={{ textAlign: "right", padding: "2px 4px", color: p.changeWeek >= 0 ? "var(--gain)" : "var(--loss)" }}>
                       {p.changeWeek >= 0 ? "+" : ""}{p.changeWeek?.toFixed(2)}%
                     </td>
-                    <td style={{ textAlign: "right", padding: "2px 4px", color: p.changeMonth >= 0 ? "#4ade80" : "#ff6b6b" }}>
+                    <td style={{ textAlign: "right", padding: "2px 4px", color: p.changeMonth >= 0 ? "var(--gain)" : "var(--loss)" }}>
                       {p.changeMonth >= 0 ? "+" : ""}{p.changeMonth?.toFixed(2)}%
                     </td>
                     <td style={{ textAlign: "right", padding: "2px 4px" }}>
                       <button
                         onClick={() => handleRemove(p.symbol)}
-                        style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "#ff6b6b" }}
+                        style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "var(--danger)" }}
                         title="Remove"
                       >X</button>
                     </td>

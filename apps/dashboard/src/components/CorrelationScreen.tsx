@@ -52,7 +52,7 @@ export function CorrelationScreen({ symbols }: { symbols?: string[] | null }) {
       </div>
 
       {error ? (
-        <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
+        <div style={{ fontSize: 11, color: "var(--danger)" }}>{error}</div>
       ) : !data ? (
         <div aria-busy="true" className="skeleton-row">
           <Skeleton width="70%" />
@@ -104,6 +104,7 @@ export function CorrelationScreen({ symbols }: { symbols?: string[] | null }) {
                       {p.asset1} × {p.asset2}
                       {hot && <span style={{ marginLeft: 6 }}><Badge tone="danger">high corr</Badge></span>}
                     </span>
+                    {/* token-exempt: |corr|≥0.8 "hot pair" marker — categorical heat-flag hue */}
                     <span style={{ color: hot ? "#ffb86c" : "var(--text)", fontWeight: 700 }}>
                       {p.correlation >= 0 ? "+" : ""}{p.correlation.toFixed(2)}
                     </span>

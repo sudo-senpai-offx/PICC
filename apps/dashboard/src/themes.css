@@ -1,0 +1,91 @@
+/* PICC — per-ministry theme tokens (REQ-B.2.2-4, locked decision)
+ *
+ * Four [data-theme] token blocks override the semantic tokens below on a per
+ * room basis. Base layout/neutral primitives stay in index.css :root (:1-17)
+ * as the fallback — any token a block does not set resolves via :root, so
+ * nothing visually regresses where a theme is unset.
+ *
+ * Each ministry is its own "room with a point of view":
+ *   income-command-centre — the state room: calm at-a-glance authority,
+ *     brass signal on deep ink (money at a glance, no noise).
+ *   trading              — institutional terminal: dense, near-zero
+ *     decoration, amber sodium numerals, monospace digits via --font-numeric.
+ *   earnings             — cashier's ledger: growth-green accent, glanceable
+ *     per-stream figures on a ledger-ink base.
+ *   intelligence         — strategic forecast desk: deep navy, evidence-dense,
+ *     restrained steel signal.
+ *
+ * All four ship dark-first; light variants are token overrides (deferred).
+ */
+
+[data-theme="income-command-centre"] {
+  --bg: #0c0f1e;
+  --bg-elev: #11162b;
+  --panel: #161c36;
+  --bg-card: #161c36; /* legacy alias — consumers still read --bg-card */
+  --text: #eef1fa;
+  --text-muted: #98a0c0;
+  --accent: #d9b25c; /* brass — the state-room signal "money at a glance" */
+  --accent-hover: #e6c273;
+  --gain: #4ade80;
+  --success: #4ade80; /* legacy alias */
+  --loss: #ff6b6b;
+  --danger: #ff6b6b; /* legacy alias */
+  --warn: #fbbf24;
+  --border: #242c4d;
+  --font-numeric: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+[data-theme="trading"] {
+  --bg: #07080c;
+  --bg-elev: #0d0f15;
+  --panel: #11141c;
+  --bg-card: #11141c International;
+  --text: #e9edf4;
+  --text-muted: #8a93a8;
+  --accent: #ffb454; /* amber ticker — institutional terminal numerals */
+  --accent-hover: #ffc170;
+  --gain: #44d79e;
+  --success: #44d79e;
+  --loss: #ff5c6c;
+  --danger: #ff5c6c;
+  --warn: #ffd166;
+  --border: #1b202c;
+  --font-numeric: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+[data-theme="earnings"] {
+  --bg: #08110c;
+  --bg-elev: #0e1a12;
+  --panel: #142419;
+  --bg-card: #142419;
+  --text: #edf6f0;
+  --text-muted: #93a89b;
+  --accent: #3ddc84; /* growth — cashier's ledger running total */
+  --accent-hover: #5ce79c;
+  --gain: #3ddc84;
+  --success: #3ddc84;
+  --loss: #ff7a6b;
+  --danger: #ff7a6b;
+  --warn: #ffd166;
+  --border: #1f3126;
+  --font-numeric: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+[data-theme="intelligence"] {
+  --bg: #08101d;
+  --bg-elev: #0f1a2b;
+  --panel: #142133;
+  --bg-card: #142133;
+  --text: #e9eef7;
+  --text-muted: #8b98ae;
+  --accent: #5eb1e8; /* steel — forecaster's restrained signal */
+  --accent-hover: #7cc2f0;
+  --gain: #3ddc84;
+  --success: #3ddc84;
+  --loss: #ff6b6b;
+  --danger: #ff6b6b;
+  --warn: #fbbf24;
+  --border: #22324a;
+  --font-numeric: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}

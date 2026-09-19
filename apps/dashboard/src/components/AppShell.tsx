@@ -167,7 +167,10 @@ export function AppShell() {
   })).filter((section) => section.items.length > 0)
 
   return (
-    <div className={outer.collapsed ? "shell collapsed" : "shell"}>
+    <div
+      className={outer.collapsed ? "shell collapsed" : "shell"}
+      data-theme="income-command-centre"
+    >
       <TopBar
         collapsed={outer.collapsed}
   onToggleSidebar={() => {

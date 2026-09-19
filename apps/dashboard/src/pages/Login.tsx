@@ -36,7 +36,7 @@ export function Login() {
   }
 
   return (
-    <div className="auth-screen">
+    <div className="auth-screen" data-theme="income-command-centre">
       <Card className="auth-card">
         <div className="auth-brand">
           <span className="brand-mark">🧠</span>

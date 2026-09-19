@@ -43,7 +43,7 @@ function Sparkline({ closes }: { closes: number[] }) {
     .join(" ")
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="sparkline" aria-label="Historical price">
-      <polyline points={pts} fill="none" stroke="#6c63ff" strokeWidth="2" />
+      <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="2" />
     </svg>
   )
 }

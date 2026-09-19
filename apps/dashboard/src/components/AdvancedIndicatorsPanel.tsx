@@ -49,6 +49,7 @@ function VolumeProfileChart({ bins, poc, vah, val }: { bins: Array<{ price: numb
         const isVAL = val != null && b.price >= val - 0.001 && b.price <= val + 0.001
         return (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9 }}>
+            {/* token-exempt: level-type identity hues (POC red / VAH-VAL amber) — categorical level kinds */}
             <span style={{ width: 48, textAlign: "right", color: isPoc ? "#ff6b6b" : isVAH || isVAL ? "#f59e0b" : "var(--text-muted)", fontWeight: isPoc ? 700 : 400 }}>
               {fmt(b.price, 4)}
             </span>
@@ -56,6 +57,7 @@ function VolumeProfileChart({ bins, poc, vah, val }: { bins: Array<{ price: numb
               <div style={{
                 width: `${Math.max(2, pct)}%`,
                 height: "100%",
+                // token-exempt: level-type identity hue (POC red / VAH-VAL amber) — categorical level kinds
                 background: isPoc ? "#ff6b6b" : isVAH || isVAL ? "#f59e0b" : "var(--accent)",
                 borderRadius: 2,
                 opacity: isPoc ? 1 : 0.6
@@ -74,20 +76,26 @@ function PivotTable({ pivots }: { pivots: NonNullable<AdvancedIndicators["pivots
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
       <div>
+        {/* token-exempt: per-family accent hue (Classic indigo) — categorical family identity */}
         <div style={{ fontSize: 9, fontWeight: 600, color: "#6c63ff", marginBottom: 3 }}>Classic</div>
         {Object.entries(classic).map(([k, v]) => (
+            // token-exempt: resistance/support identity hues — categorical level kind
           <Row key={k} label={k}><span style={{ color: k.startsWith("R") ? "#ff6b6b" : k.startsWith("S") ? "#4ade80" : "var(--text)" }}>{fmt(v, 5)}</span></Row>
         ))}
       </div>
       <div>
+        {/* token-exempt: per-family accent hue (Camarilla amber) — categorical family identity */}
         <div style={{ fontSize: 9, fontWeight: 600, color: "#f59e0b", marginBottom: 3 }}>Camarilla</div>
         {Object.entries(camarilla).map(([k, v]) => (
+            // token-exempt: resistance/support identity hues — categorical level kind
           <Row key={k} label={k}><span style={{ color: k.startsWith("R") ? "#ff6b6b" : "#4ade80" }}>{fmt(v, 5)}</span></Row>
         ))}
       </div>
       <div>
+        {/* token-exempt: per-family accent hue (Woodie green) — categorical family identity */}
         <div style={{ fontSize: 9, fontWeight: 600, color: "#22c55e", marginBottom: 3 }}>Woodie</div>
         {Object.entries(woodie).map(([k, v]) => (
+            // token-exempt: resistance/support identity hues — categorical level kind
           <Row key={k} label={k}><span style={{ color: k.startsWith("R") ? "#ff6b6b" : k.startsWith("S") ? "#4ade80" : "var(--text)" }}>{fmt(v, 5)}</span></Row>
         ))}
       </div>
@@ -163,6 +171,7 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
           <button key={tab} onClick={() => setActiveTab(tab)} style={{
             padding: "2px 8px", fontSize: 10, fontWeight: activeTab === tab ? 700 : 400,
             background: activeTab === tab ? "var(--accent)" : "var(--bg)",
+            // token-exempt: active-tab marker hue — categorical selection state
             color: activeTab === tab ? "#fff" : "var(--text-muted)",
             border: "none", borderRadius: 4, cursor: "pointer", textTransform: "capitalize"
           }}>{tab}</button>
@@ -175,6 +184,7 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
         <>
           {(activeTab === "overview" || activeTab === "all") && (
             <>
+              {/* token-exempt: trend-state identity hues (bullish green / bearish red / neutral amber) — categorical state */}
               <Section title="Ichimoku Cloud" color={ind.ichimoku.trend === "bullish" ? "#4ade80" : ind.ichimoku.trend === "bearish" ? "#ff6b6b" : "#f59e0b"}>
                 <Row label="Tenkan-sen">{fmt(ind.ichimoku.tenkan, 5)}</Row>
                 <Row label="Kijun-sen">{fmt(ind.ichimoku.kijun, 5)}</Row>
@@ -188,22 +198,27 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
 
           {(activeTab === "overview" || activeTab === "fibonacci") && (
             <>
+              {/* token-exempt: per-section accent hue (fibonacci purple) — categorical identity */}
               <Section title="Fibonacci Levels" color="#a855f7">
                 {ind.fibonacci.swingHigh && <Row label="Swing High">{fmt(ind.fibonacci.swingHigh, 5)}</Row>}
                 {ind.fibonacci.swingLow && <Row label="Swing Low">{fmt(ind.fibonacci.swingLow, 5)}</Row>}
                 <Row label="Trend"><SignalBadge value={ind.fibonacci.trend} /></Row>
                 <div style={{ marginTop: 4 }}>
+                  {/* token-exempt: per-section divider hue (retracements green) — categorical identity */}
                   <div style={{ fontSize: 9, fontWeight: 600, color: "#4ade80", marginBottom: 2 }}>Retracements</div>
                   {ind.fibonacci.retracements.map(r => (
                     <Row key={r.label} label={r.label}>
+                      {/* token-exempt: golden-ratio level highlight hue (0.618 retracement green) — categorical ratio identity */}
                       <span style={{ color: r.ratio === 0.618 ? "#4ade80" : "var(--text)" }}>{fmt(r.price, 5)}</span>
                     </Row>
                   ))}
                 </div>
                 <div style={{ marginTop: 4 }}>
+                  {/* token-exempt: per-section divider hue (extensions red) — categorical identity */}
                   <div style={{ fontSize: 9, fontWeight: 600, color: "#ff6b6b", marginBottom: 2 }}>Extensions</div>
                   {ind.fibonacci.extensions.map(r => (
                     <Row key={r.label} label={r.label}>
+                      {/* token-exempt: golden-ratio level highlight hue (1.618 extension red) — categorical ratio identity */}
                       <span style={{ color: r.ratio === 1.618 ? "#ff6b6b" : "var(--text)" }}>{fmt(r.price, 5)}</span>
                     </Row>
                   ))}
@@ -214,6 +229,7 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
 
           {(activeTab === "overview" || activeTab === "pivots") && ind.pivots && (
             <>
+              {/* token-exempt: per-section accent hue (pivots amber) — categorical identity */}
               <Section title="Pivot Points" color="#f59e0b">
                 <PivotTable pivots={ind.pivots} />
               </Section>
@@ -222,7 +238,9 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
 
           {(activeTab === "overview" || activeTab === "volume") && (
             <>
+              {/* token-exempt: per-section accent hue (volume profile green) — categorical identity */}
               <Section title="Volume Profile" color="#22c55e">
+                {/* token-exempt: POC level identity hue (red) — categorical level kind */}
                 {ind.volumeProfile.poc && <Row label="POC"><span style={{ color: "#ff6b6b", fontWeight: 700 }}>{fmt(ind.volumeProfile.poc.price, 5)}</span></Row>}
                 {ind.volumeProfile.vah != null && <Row label="VAH">{fmt(ind.volumeProfile.vah, 5)}</Row>}
                 {ind.volumeProfile.val != null && <Row label="VAL">{fmt(ind.volumeProfile.val, 5)}</Row>}
@@ -233,6 +251,7 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
 
           {(activeTab === "overview" || activeTab === "all") && (
             <>
+              {/* token-exempt: per-section accent hue (keltner cyan) — categorical identity */}
               <Section title="Keltner Channels" color="#06b6d4">
                 <Row label="Upper">{fmt(ind.keltner.upper, 5)}</Row>
                 <Row label="Middle">{fmt(ind.keltner.middle, 5)}</Row>
@@ -240,6 +259,7 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
                 <Row label="Bandwidth">{ind.keltner.bandwidth != null ? `${fmt(ind.keltner.bandwidth)}%` : "—"}</Row>
               </Section>
 
+              {/* token-exempt: per-section accent hue (heikin-ashi pink) — categorical identity */}
               <Section title="Heikin-Ashi" color="#ec4899">
                 {ind.heikinAshi ? (
                   <>
@@ -258,6 +278,7 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
 
           {(activeTab === "all") && (
             <>
+              {/* token-exempt: per-section accent hue (core summary indigo) — categorical identity */}
               <Section title="Core Indicators Summary" color="#6c63ff">
                 <Row label="RSI(14)">{ind.rsi.value != null ? `${fmt(ind.rsi.value)} (${ind.rsi.read})` : "—"}</Row>
                 <Row label="MACD">{ind.macd.hist != null ? `${fmt(ind.macd.hist)} (${ind.macd.cross})` : "—"}</Row>
@@ -273,7 +294,9 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
               </Section>
 
               {niche && (
-                <Section title="Niche Indicators (in-house)" color="#f59e0b">
+                <>
+                  {/* token-exempt: per-section accent hue (niche indicators amber) — categorical identity */}
+                  <Section title="Niche Indicators (in-house)" color="#f59e0b">
                   <Row label="Choppiness(14)">
                     {fmt(niche.choppiness.at(-1)?.value ?? null)} { niche.choppiness.at(-1)?.value != null
                       ? niche.choppiness.at(-1)!.value > 61.8 ? "(choppy)" : niche.choppiness.at(-1)!.value < 38.2 ? "(trending)" : "(transitional)"
@@ -288,6 +311,7 @@ export function AdvancedIndicatorsPanel({ assetId, timeframe }: { assetId: strin
                     Computed from the current 200-bar chart series, not synced to the server indicator snapshot.
                   </p>
                 </Section>
+                </>
               )}
             </>
           )}

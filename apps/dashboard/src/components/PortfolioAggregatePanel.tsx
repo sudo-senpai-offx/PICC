@@ -54,7 +54,7 @@ export function PortfolioAggregatePanel({ paperAvailable }: { paperAvailable: bo
       </div>
 
       {error ? (
-        <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
+        <div style={{ fontSize: 11, color: "var(--danger)" }}>{error}</div>
       ) : !model ? (
         <div aria-busy="true" className="skeleton-row">
           <Skeleton width="70%" />
@@ -78,17 +78,17 @@ export function PortfolioAggregatePanel({ paperAvailable }: { paperAvailable: bo
               </div>
             ))}
             {model.todayPnl.paper && (
-              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.paper.pnl > 0 ? "#4ade80" : model.todayPnl.paper.pnl < 0 ? "#ff6b6b" : "var(--border)"}` }}>
+              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.paper.pnl > 0 ? "var(--gain)" : model.todayPnl.paper.pnl < 0 ? "var(--loss)" : "var(--border)"}` }}>
                 <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{paperIncome}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.paper.pnl > 0 ? "#4ade80" : model.todayPnl.paper.pnl < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.paper.pnl > 0 ? "var(--gain)" : model.todayPnl.paper.pnl < 0 ? "var(--loss)" : "var(--text-muted)" }}>
                   {model.todayPnl.paper.pnl > 0 ? "+" : ""}${model.todayPnl.paper.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.paper.trades} trades)</span>
                 </div>
               </div>
             )}
             {model.todayPnl.expertoption && (
-              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.expertoption.pnl > 0 ? "#4ade80" : model.todayPnl.expertoption.pnl < 0 ? "#ff6b6b" : "var(--border)"}` }}>
+              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.expertoption.pnl > 0 ? "var(--gain)" : model.todayPnl.expertoption.pnl < 0 ? "var(--loss)" : "var(--border)"}` }}>
                 <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{realPnl}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.expertoption.pnl > 0 ? "#4ade80" : model.todayPnl.expertoption.pnl < 0 ? "#ff6b6b" : "var(--text-muted)" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.expertoption.pnl > 0 ? "var(--gain)" : model.todayPnl.expertoption.pnl < 0 ? "var(--loss)" : "var(--text-muted)" }}>
                   {model.todayPnl.expertoption.pnl > 0 ? "+" : ""}${model.todayPnl.expertoption.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.expertoption.trades} trades)</span>
                 </div>
               </div>
@@ -141,7 +141,7 @@ export function PortfolioAggregatePanel({ paperAvailable }: { paperAvailable: bo
                   </span>
                 )}
                 {model.riskCheck.warnings.length > 0 && (
-                  <ul style={{ fontSize: 10, margin: "4px 0 0", paddingLeft: 14, color: "#ffb86c" }}>
+                  <ul style={{ fontSize: 10, margin: "4px 0 0", paddingLeft: 14, color: "var(--warn)" }}>
                     {model.riskCheck.warnings.map((w, i) => (
                       <li key={i}>{w}</li>
                     ))}

@@ -106,7 +106,7 @@ export function HoldingsEditor({ onChange }: { onChange?: () => void }) {
 
   return (
     <div className="stack" style={{ marginTop: 12 }}>
-      {error ? <p className="muted" style={{ color: "#ff6b6b" }}>{error}</p> : null}
+      {error ? <p className="muted" style={{ color: "var(--danger)" }}>{error}</p> : null}
 
       <div className="row wrap" style={{ gap: 12 }}>
         {/* NFT holdings */}
@@ -130,7 +130,7 @@ export function HoldingsEditor({ onChange }: { onChange?: () => void }) {
                         : ""}
                     </div>
                   </span>
-                  <Button variant="ghost" disabled={busy === `del-${r.id}`} onClick={() => removeRow("nft_holdings", String(r.id))} style={{ fontSize: 10, padding: "2px 8px", color: "#ff6b6b" }}>
+                  <Button variant="ghost" disabled={busy === `del-${r.id}`} onClick={() => removeRow("nft_holdings", String(r.id))} style={{ fontSize: 10, padding: "2px 8px", color: "var(--danger)" }}>
                     {busy === `del-${r.id}` ? "…" : "Delete"}
                   </Button>
                 </li>
@@ -183,7 +183,7 @@ export function HoldingsEditor({ onChange }: { onChange?: () => void }) {
                       {r.daily_earnings != null && Number(r.daily_earnings) > 0 ? ` · ≈$${(Number(r.daily_earnings) * 30).toFixed(2)}/mo` : ""}
                     </div>
                   </span>
-                  <Button variant="ghost" disabled={busy === `del-${r.id}`} onClick={() => removeRow("depin_nodes", String(r.id))} style={{ fontSize: 10, padding: "2px 8px", color: "#ff6b6b" }}>
+                  <Button variant="ghost" disabled={busy === `del-${r.id}`} onClick={() => removeRow("depin_nodes", String(r.id))} style={{ fontSize: 10, padding: "2px 8px", color: "var(--danger)" }}>
                     {busy === `del-${r.id}` ? "…" : "Delete"}
                   </Button>
                 </li>

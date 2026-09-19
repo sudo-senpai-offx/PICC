@@ -65,7 +65,10 @@ describe("public/manifest.json (REQ-1 installability fields)", () => {
 
   it("declares every REQ-1 field", () => {
     const m = JSON.parse(readFileSync(manifestPath, "utf8"))
-    expect(m.name.toLowerCase()).toContain("passive income command center")
+    // Reskin (Slice 3/T6): buyer brand is "Personal Income Command Centre" —
+    // the legacy "Passive Income Command Center" string must not return.
+    expect(m.name.toLowerCase()).toContain("personal income command centre")
+    expect(m.name.toLowerCase()).not.toContain("passive income command")
     expect(m.short_name).toBe("PICC")
     expect(m.display).toBe("standalone")
     expect(m.start_url).toBe("/")

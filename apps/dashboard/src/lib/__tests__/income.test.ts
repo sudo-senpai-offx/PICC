@@ -9,7 +9,7 @@ function makeStream(overrides: Partial<IncomeStream> = {}): IncomeStream {
     id: "s-1",
     name: "Grass",
     platform: "getgrass.io",
-    category: "bandwidth",
+    category: "uncategorized",
     status: "active",
     balance: 12.5,
     totalEarned: 90,

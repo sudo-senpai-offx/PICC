@@ -43,6 +43,7 @@ function SessionBar({ session, utcHour }: { session: SessionInfo["schedule"]["sc
         {/* Current time marker */}
         <div style={{
           position: "absolute", left: `${nowPos}%`, top: -1, width: 2, height: 8,
+          // token-exempt: "now" timeline marker — structural white line, not a status color
           background: "#fff", borderRadius: 1, zIndex: 2
         }} />
       </div>
@@ -80,6 +81,7 @@ export function SessionPanel() {
       {current && (
         <>
           {/* Current Status */}
+          // token-exempt: session-state identity hues (overlap pink / active accent) with alpha tints — categorical state; no alpha tokens
           <div style={{ padding: 8, borderRadius: 6, background: current.activeOverlaps.length > 0 ? "#ec489811" : current.activeSessions.length > 0 ? "#6c63ff11" : "var(--bg)", border: `1px solid ${current.activeOverlaps.length > 0 ? "#ec4898" : current.activeSessions.length > 0 ? "#6c63ff" : "var(--border)"}`, marginBottom: 8 }}>
             <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2 }}>
               {current.activeOverlaps.length > 0
@@ -106,7 +108,7 @@ export function SessionPanel() {
               <div style={{ fontSize: 10, fontWeight: 600, marginBottom: 4 }}>Best Assets Now</div>
               <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
                 {current.preferredAssets.map((a) => (
-                  <span key={a} style={{ padding: "1px 6px", fontSize: 9, background: "var(--accent)", color: "#fff", borderRadius: 3 }}>{a}</span>
+                  <span key={a} style={{ padding: "1px 6px", fontSize: 9, background: "var(--accent)", color: "var(--text)", borderRadius: 3 }}>{a}</span>
                 ))}
               </div>
             </div>

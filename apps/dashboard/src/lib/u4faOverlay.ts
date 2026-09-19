@@ -26,8 +26,11 @@ export interface U4faMarker {
 }
 
 const VERDICT_COLOR: Record<string, string> = {
+  // token-exempt: categorical per-verdict identity hue (TRADE green)
   TRADE: "#4ade80",
+  // token-exempt: categorical per-verdict identity hue (OBSERVE amber)
   OBSERVE: "#f59e0b",
+  // token-exempt: categorical per-verdict identity hue (NEUTRAL slate)
   NEUTRAL: "#94a3b8"
 }
 
@@ -100,6 +103,7 @@ export function u4faMarkersFor(events: LiveEvent[], assetId: string, candles: Ca
       time: bar.time, // reuse the bar's OWN time — always valid in setMarkers
       position: place.position,
       shape: place.shape,
+      // token-exempt: verdict fallback hue — categorical per-verdict identity
       color: VERDICT_COLOR[e.verdict] ?? "#94a3b8",
       text: e.verdict
     })

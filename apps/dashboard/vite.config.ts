@@ -1,4 +1,6 @@
 import { fileURLToPath, URL } from "node:url"
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { defineConfig, loadEnv } from "vite"
 import react from "@vitejs/plugin-react"
 import { handleApi, isApiRequest, writeJson } from "./server/handlers.mjs"
@@ -6,6 +8,49 @@ import { startTradingHud } from "./server/services/tradingHud.mjs"
 import { startLedger } from "./server/services/accuracyLedger.mjs"
 import { initErrorLog } from "./server/errorLog.mjs"
 import { startLivenessMonitor, startScheduler } from "./server/services/scheduler.mjs"
+
+// ---------------------------------------------------------------------------
+// T6 — build-time PWA shell precache.
+//
+// After `vite build` succeeds this plugin rewrites dist/sw.js (Vite copies the
+// hand-written public/sw.js verbatim) so its two placeholder declarations become
+// the real, versioned app-shell precache:
+//   PICC_SHELL_VERSION = "picc-shell-v0.0.0"  -> "picc-shell-v<pkg version>"
+//   PRECACHE_URLS = []                        -> every hashed dist/assets/* file
+//                                                + index.html + manifest + icons
+// Runs in closeBundle: by then the bundle AND the publicDir copy are on disk, so
+// dist/sw.js is guaranteed readable regardless of Vite's internal plugin order.
+// The SW only ever reads this list at install; runtime fetches are never cached.
+// ---------------------------------------------------------------------------
+function piccPrecachePlugin() {
+  return {
+    name: "picc-precache",
+    apply: "build",
+    closeBundle() {
+      const distDir = fileURLToPath(new URL("./dist", import.meta.url))
+      const urls: string[] = []
+      const assetsDir = join(distDir, "assets")
+      if (existsSync(assetsDir)) {
+        for (const file of readdirSync(assetsDir).sort()) urls.push(`/assets/${file}`)
+      }
+      for (const root of ["/index.html", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"]) {
+        if (existsSync(join(distDir, root.slice(1)))) urls.push(root)
+      }
+      const swPath = join(distDir, "sw.js")
+      if (!existsSync(swPath)) {
+        console.warn("[picc-precache] dist/sw.js missing — precache injection skipped")
+        return
+      }
+      const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8")) as { version: string }
+      const cacheName = `picc-shell-v${pkg.version}`
+      let sw = readFileSync(swPath, "utf8")
+      sw = sw.replace(/var PICC_SHELL_VERSION = "[^"]*"/, `var PICC_SHELL_VERSION = "${cacheName}"`)
+      sw = sw.replace(/var PRECACHE_URLS = \[[^\]]*\]/, `var PRECACHE_URLS = ${JSON.stringify(urls)}`)
+      writeFileSync(swPath, sw)
+      console.log(`[picc-precache] ${urls.length} shell assets cached under ${cacheName}`)
+    }
+  }
+}
 
 startTradingHud()
 startLedger()
@@ -32,6 +77,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      piccPrecachePlugin(),
       {
         name: "picc-api-dev-server",
         configureServer(server) {

@@ -5,7 +5,9 @@ import type { HealthInfo } from "@/lib/api"
 import { CatalogTab, OverviewTab, StreamsTab } from "@/components/IncomeStreams"
 import { getEarnings, getStreams } from "@/lib/streams"
 import { SUITE_META } from "@/lib/suites"
+import { familyToSuite } from "@/lib/registry"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
+
 import type { IncomeStream } from "@/lib/types"
 
 // ---------------------------------------------------------------------
@@ -165,7 +167,7 @@ function ChannelsTab() {
         {healthError ? (
           <Card>
             <h3>Backend unreachable</h3>
-            <p className="small" style={{ color: "#b91c1c" }}>
+            <p className="small" style={{ color: "var(--danger)" }}>
               {healthError} — status checks below may be stale.
             </p>
           </Card>
@@ -217,7 +219,7 @@ function ChannelsTab() {
         </div>
 
         {result && !result.ok && (
-          <p className="muted" style={{ color: "#b91c1c" }}>
+          <p className="muted" style={{ color: "var(--danger)" }}>
             {result.error}
           </p>
         )}
@@ -232,7 +234,7 @@ function ChannelsTab() {
                 <code>{result.orderId}</code>.
               </p>
             ) : (
-              <p style={{ color: "#b91c1c" }}>
+              <p style={{ color: "var(--danger)" }}>
                 Configure your TNG number (EWALLET_TNG_NUMBER) before accepting eWallet orders.
               </p>
             )}
@@ -281,13 +283,12 @@ function usd(n: number) {
 }
 
 const SUITE_PANELS: Record<string, React.FC> = {
-  depin: ConnectorsPanel,
   nft: ConnectorsPanel,
   defi: ConnectorsPanel,
   crypto: ConnectorsPanel,
   p2p: ConnectorsPanel,
   agent: ConnectorsPanel,
-  other: ConnectorsPanel,
+  uncategorized: ConnectorsPanel,
   dividend: ConnectorsPanel,
   interest: ConnectorsPanel,
   affiliate: ConnectorsPanel,
@@ -296,7 +297,7 @@ const SUITE_PANELS: Record<string, React.FC> = {
 }
 
 function StreamInfo({ stream }: { stream: IncomeStream }) {
-  const meta = SUITE_META[stream.category]
+  const meta = SUITE_META[familyToSuite(stream.category) ?? "earnings"]
   const earnings = getEarnings().filter((e) => e.streamId === stream.id)
   const today = earnings.filter((e) => {
     const d = new Date()
@@ -407,7 +408,7 @@ export function EarningsSimulatorRoom() {
   const streams = getStreams()
   const [streamId, setStreamId] = useState<string | null>(() => streams[0]?.id ?? null)
   const stream = streams.find((s) => s.id === streamId) ?? null
-  const suiteMeta = stream ? SUITE_META[stream.category] : undefined
+  const suiteMeta = stream ? SUITE_META[familyToSuite(stream.category) ?? "earnings"] : undefined
 
   return (
     <div className="stack stack-lg">

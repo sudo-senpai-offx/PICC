@@ -256,7 +256,9 @@ function normalizeStreamRow(r: Record<string, unknown>): IncomeStream {
   return {
     id: String(r.id ?? ""),
     name: String(r.name ?? r.platform ?? r.provider ?? "Unnamed stream"),
-    category: (r.category as IncomeStream["category"]) ?? "other",
+    // Unknown family ids map to the honest "uncategorized" marker (registry
+  // entries exist for every id: income inception has no catch-all "other").
+  category: (r.category as IncomeStream["category"]) ?? "uncategorized",
     platform: String(r.platform ?? ""),
     status: (r.status as IncomeStream["status"]) ?? "active",
     balance: Number(r.balance ?? 0) || 0,

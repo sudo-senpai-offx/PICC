@@ -149,7 +149,7 @@ function EquityCurveChart({ entries }: { entries: LedgerEntry[] }) {
   const ddPts = drawdown.map((d: { i: number; v: number }) => `${x(d.i).toFixed(1)},${yDd(d.v).toFixed(1)}`).join(" ")
   const ddFillPts = `0,0 ` + ddPts + ` ${W},0`
 
-  const returnColor = (stats?.totalReturn ?? 0) >= 0 ? "#4ade80" : "#ff6b6b"
+  const returnColor = (stats?.totalReturn ?? 0) >= 0 ? "var(--gain)" : "var(--loss)"
 
   return (
     <div className="stack" style={{ gap: 4 }}>
@@ -167,13 +167,13 @@ function EquityCurveChart({ entries }: { entries: LedgerEntry[] }) {
         <div style={{ flex: 2 }}>
           <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 80 }} preserveAspectRatio="none">
             <polygon points={eqFillPts} fill="rgba(74,222,128,0.08)" />
-            <polyline points={eqPts} fill="none" stroke="#4ade80" strokeWidth="1.5" />
+            <polyline points={eqPts} fill="none" stroke="var(--gain)" strokeWidth="1.5" />
           </svg>
         </div>
         <div style={{ flex: 1 }}>
           <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 80 }} preserveAspectRatio="none">
             <polygon points={ddFillPts} fill="rgba(255,107,107,0.12)" />
-            <polyline points={ddPts} fill="none" stroke="#ff6b6b" strokeWidth="1.5" />
+            <polyline points={ddPts} fill="none" stroke="var(--loss)" strokeWidth="1.5" />
           </svg>
           <div className="muted small" style={{ textAlign: "center" }}>drawdown</div>
         </div>

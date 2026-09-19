@@ -34,10 +34,10 @@ export class AppErrorBoundary extends Component<Props, State> {
           gap: 12,
           padding: 24,
           fontFamily: "inherit",
-          color: "#eef0ff"
+          color: "var(--text)"
         }}>
           <strong style={{ fontSize: 16 }}>Something went wrong</strong>
-          <div style={{ fontSize: 12, color: "#ff6b6b", maxWidth: 560, wordBreak: "break-word" }}>
+          <div style={{ fontSize: 12, color: "var(--danger)", maxWidth: 560, wordBreak: "break-word" }}>
             {this.state.error.message || "An unexpected render error occurred."}
           </div>
           <button
@@ -48,7 +48,7 @@ export class AppErrorBoundary extends Component<Props, State> {
               border: "1px solid rgba(42,42,74,0.8)",
               borderRadius: 6,
               background: "rgba(108,99,255,0.2)",
-              color: "#eef0ff",
+              color: "var(--text)",
               cursor: "pointer"
             }}
           >
@@ -61,7 +61,7 @@ export class AppErrorBoundary extends Component<Props, State> {
               fontSize: 11,
               border: "none",
               background: "none",
-              color: "#9aa0c0",
+              color: "var(--text-muted)",
               cursor: "pointer"
             }}
           >

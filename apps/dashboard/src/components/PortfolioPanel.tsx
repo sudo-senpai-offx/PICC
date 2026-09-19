@@ -5,16 +5,24 @@ import { getPortfolioAnalytics, type PortfolioAnalytics } from "@/lib/trading"
 const DEFAULT_SYMBOLS = ["EURUSD", "GOLD", "BTCUSD", "AAPL"]
 
 const SEGMENT_COLORS = [
+  // token-exempt: categorical per-suite donut segment hues
   "#6c63ff", "#4ade80", "#ff6b6b", "#f59e0b", "#06b6d4",
+  // token-exempt: (continued) categorical donut segment hues
   "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1"
 ]
 
 function corrColor(value: number) {
+  // token-exempt: correlation heat-scale hue band (|r|≥0.7) — categorical heat ramp
   if (value >= 0.7) return "#ff4444"
+  // token-exempt: correlation heat-scale hue band (0.3-0.7) — categorical heat ramp
   if (value >= 0.3) return "#ff8800"
+  // token-exempt: correlation heat-scale hue band (0-0.3) — categorical heat ramp
   if (value >= 0) return "#ffcc00"
+  // token-exempt: correlation heat-scale hue band (-0.3-0) — categorical heat ramp
   if (value >= -0.3) return "#88cc00"
+  // token-exempt: correlation heat-scale hue band (-0.7--0.3) — categorical heat ramp
   if (value >= -0.7) return "#44bb00"
+  // token-exempt: correlation heat-scale hue band (≤-0.7) — categorical heat ramp
   return "#00aa44"
 }
 
@@ -86,8 +94,8 @@ export function PortfolioPanel() {
   const corr = data?.corrMatrix ?? []
 
   const metricColor = (v: number, inverse = false) => {
-    if (inverse) return v > 10 ? "#ff6b6b" : v > 5 ? "#f59e0b" : "#4ade80"
-    return v > 1 ? "#4ade80" : v > 0 ? "#f59e0b" : "#ff6b6b"
+    if (inverse) return v > 10 ? "var(--loss)" : v > 5 ? "var(--warn)" : "var(--gain)"
+    return v > 1 ? "var(--gain)" : v > 0 ? "var(--warn)" : "var(--loss)"
   }
 
   return (
@@ -126,7 +134,7 @@ export function PortfolioPanel() {
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <Card style={{ flex: "0 0 130px", padding: 8, textAlign: "center" }}>
               <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>Diversification</div>
-              <div style={{ fontSize: 28, fontWeight: 700, color: data.diversificationScore > 60 ? "#4ade80" : data.diversificationScore > 30 ? "#f59e0b" : "#ff6b6b" }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: data.diversificationScore > 60 ? "var(--gain)" : data.diversificationScore > 30 ? "var(--warn)" : "var(--loss)" }}>
                 {data.diversificationScore}
               </div>
               <div style={{ fontSize: 9, color: "var(--text-muted)" }}>/100</div>
@@ -171,7 +179,7 @@ export function PortfolioPanel() {
                       </td>
                       <td style={{ textAlign: "right", padding: "2px 4px" }}>{a.weight.toFixed(1)}</td>
                       <td style={{ textAlign: "right", padding: "2px 4px" }}>{a.lastPrice.toFixed(4)}</td>
-                      <td style={{ textAlign: "right", padding: "2px 4px", color: a.change24h >= 0 ? "#4ade80" : "#ff6b6b" }}>
+                      <td style={{ textAlign: "right", padding: "2px 4px", color: a.change24h >= 0 ? "var(--gain)" : "var(--loss)" }}>
                         {a.change24h >= 0 ? "+" : ""}{a.change24h.toFixed(2)}%
                       </td>
                       <td style={{ textAlign: "right", padding: "2px 4px", color: "var(--text-muted)" }}>{a.dailyReturnVol.toFixed(1)}%</td>
@@ -207,7 +215,7 @@ export function PortfolioPanel() {
                               padding: "2px 6px",
                               textAlign: "center",
                               background: i === j ? "var(--border)" : corrColor(corr[i][j]),
-                              color: i === j ? "var(--text-muted)" : "#fff",
+                              color: i === j ? "var(--text-muted)" : "var(--text)",
                               fontWeight: i === j ? 400 : 600,
                               borderRadius: 2
                             }}

@@ -107,7 +107,7 @@ export function ScreenerPanel() {
       </div>
 
       {watchlistError && (
-        <div style={{ fontSize: 9, color: "var(--danger, #ff6b6b)", marginBottom: 4 }}>{watchlistError}</div>
+        <div style={{ fontSize: 9, color: "var(--danger)", marginBottom: 4 }}>{watchlistError}</div>
       )}
       {universeMode === "watchlist" && watchlistSymbols.length === 0 && !watchlistError && (
         <div style={{ fontSize: 9, color: "var(--text-muted)", marginBottom: 4 }}>add symbols to your watchlist to scope the screener</div>
@@ -132,13 +132,13 @@ export function ScreenerPanel() {
                 <td style={{ padding: "2px 4px", color: "var(--text-muted)" }}>{i + 1}</td>
                 <td style={{ padding: "2px 4px", fontWeight: 600 }}>{r.symbol}</td>
                 <td style={{ textAlign: "right", padding: "2px 4px" }}>{r.last?.toFixed(4)}</td>
-                <td style={{ textAlign: "right", padding: "2px 4px", color: r.change24h >= 0 ? "#4ade80" : "#ff6b6b", fontWeight: 600 }}>
+                <td style={{ textAlign: "right", padding: "2px 4px", color: r.change24h >= 0 ? "var(--gain)" : "var(--loss)", fontWeight: 600 }}>
                   {r.change24h >= 0 ? "+" : ""}{r.change24h?.toFixed(2)}%
                 </td>
-                <td style={{ textAlign: "right", padding: "2px 4px", color: r.changeWeek >= 0 ? "#4ade80" : "#ff6b6b" }}>
+                <td style={{ textAlign: "right", padding: "2px 4px", color: r.changeWeek >= 0 ? "var(--gain)" : "var(--loss)" }}>
                   {r.changeWeek >= 0 ? "+" : ""}{r.changeWeek?.toFixed(2)}%
                 </td>
-                <td style={{ textAlign: "right", padding: "2px 4px", color: r.changeMonth >= 0 ? "#4ade80" : "#ff6b6b" }}>
+                <td style={{ textAlign: "right", padding: "2px 4px", color: r.changeMonth >= 0 ? "var(--gain)" : "var(--loss)" }}>
                   {r.changeMonth >= 0 ? "+" : ""}{r.changeMonth?.toFixed(2)}%
                 </td>
                 <td style={{ textAlign: "right", padding: "2px 4px", color: "var(--text-muted)", fontSize: 9 }}>

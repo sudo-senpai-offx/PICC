@@ -15,8 +15,8 @@ import {
   verdictSummary
 } from "@/lib/resourceGovernorDisplay"
 
-const th: React.CSSProperties = { textAlign: "left", padding: "4px 10px 4px 0", fontSize: 12, color: "#999", borderBottom: "1px solid #333" }
-const td: React.CSSProperties = { padding: "4px 10px 4px 0", fontSize: 13, borderBottom: "1px solid #222" }
+const th: React.CSSProperties = { textAlign: "left", padding: "4px 10px 4px 0", fontSize: 12, color: "var(--text-muted)", borderBottom: "1px solid var(--border)" }
+const td: React.CSSProperties = { padding: "4px 10px 4px 0", fontSize: 13, borderBottom: "1px solid var(--border)" }
 
 export function ResourceGovernorPanel() {
   const [data, setData] = useState<ResourceOverview | null>(null)
@@ -71,8 +71,11 @@ export function ResourceGovernorPanel() {
       </p>
 
       <div style={{ marginTop: 4 }}>
+        {/* token-exempt: verdict-category hue (accepted green) — categorical verdict identity */}
         {verdictCell("Accepted", v.accepted, "#8bc34a")}
+        {/* token-exempt: verdict-category hue (throttled amber) — categorical verdict identity */}
         {verdictCell("Throttled", v.throttled, "#d4a017")}
+        {/* token-exempt: verdict-category hue (failed red) — categorical verdict identity */}
         {verdictCell("Failed", v.failed, "#e05656")}
       </div>
 

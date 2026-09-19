@@ -278,7 +278,7 @@ export function Settings() {
             {Object.values(llm.providers).map((p) => {
               const test = llmTests[p.id]
               return (
-                <div key={p.id} style={{ borderTop: "1px solid #333", paddingTop: 10 }}>
+                <div key={p.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
                   <div className="row" style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <strong>{p.label}</strong>
                     <span className="muted">
@@ -333,7 +333,7 @@ export function Settings() {
               )
             })}
 
-            <div style={{ borderTop: "1px solid #333", paddingTop: 10 }}>
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
               <strong>Failover order</strong>
               <p className="muted">Providers are tried top to bottom on every request.</p>
               <div className="stack">

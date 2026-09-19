@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, NavLink } from "react-router-dom"
+import type { SuiteId } from "@/lib/suites"
 import { pushStreamsSnapshot, syncCashPilot, getSessionPolicy, setSessionPolicy } from "@/lib/api"
 import type { SessionPolicyDecision } from "@/lib/api"
 import { STREAM_CATEGORY_LABELS, CATALOG, DEPIN_APPS, STORAGE_APPS, COMPUTE_APPS, CRYPTO_APPS, DEFI_APPS, NFT_APPS, P2P_APPS, AGENT_APPS, INTEREST_APPS, DIVIDEND_APPS, RENTAL_APPS, CONTENT_APPS, TRADING_PLATFORM_APPS } from "@/lib/streamCatalog"
@@ -29,9 +30,82 @@ import {
   useIncomeOverview
 } from "@/lib/income"
 
-const CATEGORIES: StreamCategory[] = ["bandwidth", "dividend", "interest", "affiliate", "content", "rental", "p2p", "crypto", "defi", "nft", "agent", "other"]
+// Creatable families come from the registry: active + coming-soon, never the
+// unconfigured marker (rows with unknown families are shown as "Uncategorized").
+import { FAMILIES, familyLabel, familyToSuite } from "@/lib/registry"
+const CATEGORIES: StreamCategory[] = FAMILIES.filter((f) => f.status !== "unconfigured").map((f) => f.familyId)
 
 export { StreamsTab, OverviewTab, CatalogTab }
+
+// ---------------------------------------------------------------------
+// Hub per-stream breakdown (UI-reskin REQ-D.1 / T8) — shared by the Income
+// Command Centre. Every card resolves its owning ministry through the
+// registry (familyToSuite), never a hardcoded path; an unknown family
+// renders honestly (no dead link, "Uncategorized"); zero streams renders an
+// honest empty state, never fabricated cards.
+// ---------------------------------------------------------------------
+export interface HubStreamRow {
+  id: string
+  name: string
+  category: IncomeStream["category"]
+  family: string
+  suite: SuiteId | null
+  to: string
+  balance: number
+}
+
+export function hubBreakdown(streams: IncomeStream[]): HubStreamRow[] {
+  return streams.map((s) => {
+    const suite = familyToSuite(s.category)
+    return {
+      id: s.id,
+      name: s.name,
+      category: s.category,
+      family: familyLabel(s.category) ?? "Uncategorized",
+      suite,
+      to: suite ? `/suites/${suite}` : "",
+      balance: s.balance
+    }
+  })
+}
+
+export function StreamBreakdown({ streams }: { streams: IncomeStream[] }) {
+  const rows = hubBreakdown(streams)
+  if (rows.length === 0) {
+    return <p className="muted">No streams yet — add one in the Earnings suite.</p>
+  }
+  return (
+    <div className="row wrap" style={{ gap: 12 }}>
+      {rows.map((r) => {
+        const inner = (
+          <>
+            <div style={{ fontWeight: 600 }}>{r.name}</div>
+            <div className="muted small">
+              {r.family}
+              {r.suite ? ` · ${r.suite} suite` : " · unlinked (unknown family)"}
+            </div>
+            <div className="metric-value">{usd(r.balance)}</div>
+          </>
+        )
+        return r.to ? (
+          <NavLink
+            key={r.id}
+            to={r.to}
+            data-testid="stream-card"
+            className="nav-link card"
+            style={{ flex: "1 1 220px" }}
+          >
+            {inner}
+          </NavLink>
+        ) : (
+          <div key={r.id} data-testid="stream-card" className="card" style={{ flex: "1 1 220px" }}>
+            {inner}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------
 // Streams tab
@@ -137,7 +211,7 @@ function StreamsTab() {
           payoutThreshold: svc.threshold,
           collector: "cashpilot",
           status: "active",
-          category: "bandwidth",
+          category: "uncategorized",
           lastCollected: new Date().toISOString()
         })
       }
@@ -145,7 +219,7 @@ function StreamsTab() {
         const { stream } = upsertPlatformStream("CashPilot (all services)", {
           collector: "cashpilot",
           status: "active",
-          category: "bandwidth",
+          category: "uncategorized",
           balance: snap.summary.total,
           totalEarned: snap.summary.total,
           estimatedDaily: estimateDailyFromHistory(snap.daily),
@@ -168,8 +242,8 @@ function StreamsTab() {
     }
   }
 
-  const resetForm = () => setForm({ name: "", category: "bandwidth", platform: "", estimatedDaily: "", threshold: "", payoutMethod: "PayPal", balance: "", totalEarned: "", url: "" })
-  const [form, setForm] = useState({ name: "", category: "bandwidth" as StreamCategory, platform: "", estimatedDaily: "", threshold: "", payoutMethod: "PayPal", balance: "", totalEarned: "", url: "" })
+  const resetForm = () => setForm({ name: "", category: CATEGORIES[0], platform: "", estimatedDaily: "", threshold: "", payoutMethod: "PayPal", balance: "", totalEarned: "", url: "" })
+  const [form, setForm] = useState({ name: "", category: CATEGORIES[0] as StreamCategory, platform: "", estimatedDaily: "", threshold: "", payoutMethod: "PayPal", balance: "", totalEarned: "", url: "" })
 
   const submitStream = () => {
     if (!form.name.trim()) return
@@ -471,7 +545,7 @@ function OverviewTab() {
                     <td>{typeof s.today === "number" ? usd(s.today) : "—"}</td>
                     <td>
                       {s.status === "error" ? (
-                        <span className="badge" style={{ color: "#b91c1c", fontWeight: 600 }}>⚠ error</span>
+                        <span className="badge" style={{ color: "var(--danger)", fontWeight: 600 }}>⚠ error</span>
                       ) : s.status === "stale" ? (
                         <span className="muted">stale</span>
                       ) : s.status === "unconfigured" ? (
@@ -643,7 +717,7 @@ function TradingSyncSettings() {
   }
 
   if (loading) return <div className="card"><p className="muted">Loading sync settings…</p></div>
-  if (error) return <div className="card"><p className="muted" style={{ color: "#b91c1c" }}>{error}</p></div>
+  if (error) return <div className="card"><p className="muted" style={{ color: "var(--danger)" }}>{error}</p></div>
 
   return (
     <div className="card">

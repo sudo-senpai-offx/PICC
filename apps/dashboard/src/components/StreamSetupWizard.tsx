@@ -94,10 +94,10 @@ const STEPS: StepDef[] = [
       "PICC ships a CrewAI crew in agents/picc_agents. Set PICC_AGENTS_URL in .env and sell the reports it produces. Log each sale here."
   },
   {
-    category: "other",
+    category: "uncategorized",
     title: "Everything else",
     description:
-      "Any other income that doesn't fit above — cashback, surveys, cash-out residuals, one-off gigs you've automated away.",
+      "Any other income that doesn't fit a named family above — cashback, surveys, cash-out residuals, one-off gigs you've automated away.",
     examples: ["Cashback", "Surveys", "Residuals", "One-off sales"],
     defaultName: "Other income",
     setupHint: "Keep this category for anything unusual. Log earnings the same way as any other stream."

@@ -31,7 +31,7 @@ export function ModelMatrixPanel({ assetId }: { assetId: string }) {
   }, [assetId])
 
   const c = matrix?.consensus
-  const dirColor = c?.direction === "up" ? "#4ade80" : c?.direction === "down" ? "#ff6b6b" : "#f59e0b"
+  const dirColor = c?.direction === "up" ? "var(--gain)" : c?.direction === "down" ? "var(--loss)" : "var(--warn)"
   const dirArrow = c?.direction === "up" ? "▲" : c?.direction === "down" ? "▼" : "◆"
 
   const refreshNow = () => {
@@ -87,7 +87,7 @@ export function ModelMatrixPanel({ assetId }: { assetId: string }) {
               </thead>
               <tbody>
                 {(matrix.votes ?? []).map((v) => {
-                  const vc = v.direction === "up" ? "#4ade80" : v.direction === "down" ? "#ff6b6b" : "var(--text-muted)"
+                  const vc = v.direction === "up" ? "var(--gain)" : v.direction === "down" ? "var(--loss)" : "var(--text-muted)"
                   const arrow = v.direction === "up" ? "▲" : v.direction === "down" ? "▼" : "◆"
                   return (
                     <tr key={v.short}>

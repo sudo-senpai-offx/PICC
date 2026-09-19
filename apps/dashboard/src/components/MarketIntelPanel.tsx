@@ -47,7 +47,7 @@ function IntelCard({ intel, compact }: { intel: MarketIntel; compact?: boolean }
 
   const isTradable = Boolean(r)
   return (
-    <Card className="pad stack" style={{ borderColor: isTradable ? "var(--success, #22c55e)" : undefined }}>
+    <Card className="pad stack" style={{ borderColor: isTradable ? "var(--success)" : undefined }}>
       <div className="row-between wrap" style={{ gap: 8 }}>
         <div className="row" style={{ gap: 8 }}>
           <strong style={{ fontSize: "1.05rem" }}>{best.asset}</strong>

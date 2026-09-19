@@ -91,8 +91,8 @@ export function AlertPanel() {
           {stats && (
             <>
               <span>{stats.total} total</span>
-              <span style={{ color: "#4ade80" }}>{stats.armed} armed</span>
-              <span style={{ color: "#f59e0b" }}>{stats.triggered} fired</span>
+              <span style={{ color: "var(--success)" }}>{stats.armed} armed</span>
+              <span style={{ color: "var(--warn)" }}>{stats.triggered} fired</span>
             </>
           )}
         </div>
@@ -107,7 +107,7 @@ export function AlertPanel() {
               style={{
                 padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
                 background: symbol === s ? "var(--accent)" : "var(--bg)",
-                color: symbol === s ? "#fff" : "var(--text-muted)"
+                color: symbol === s ? "var(--text)" : "var(--text-muted)"
               }}
             >{s}</button>
           ))}
@@ -159,7 +159,7 @@ export function AlertPanel() {
                 fontSize: 9, display: "flex", alignItems: "center", gap: 2, cursor: "pointer",
                 padding: "1px 5px", borderRadius: 3, border: "1px solid var(--border)",
                 background: band.includes(s) ? "var(--accent)" : "var(--bg)",
-                color: band.includes(s) ? "#fff" : "var(--text-muted)"
+                color: band.includes(s) ? "var(--text)" : "var(--text-muted)"
               }}
             >
               <input
@@ -211,12 +211,12 @@ export function AlertPanel() {
                 <Badge tone={statusColor(a.status)}>{a.status}</Badge>
                 <button
                   onClick={() => handleToggle(a.id, a.status !== "armed")}
-                  style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: a.status === "armed" ? "#f59e0b" : "#4ade80" }}
+                  style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: a.status === "armed" ? "var(--warn)" : "var(--success)" }}
                   title={a.status === "armed" ? "Disable" : "Enable"}
                 >{a.status === "armed" ? "Pause" : "Resume"}</button>
                 <button
                   onClick={() => handleDelete(a.id)}
-                  style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "#ff6b6b" }}
+                  style={{ fontSize: 9, border: "none", background: "none", cursor: "pointer", color: "var(--danger)" }}
                   title="Delete"
                 >X</button>
               </div>

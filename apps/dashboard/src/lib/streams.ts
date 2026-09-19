@@ -199,7 +199,7 @@ export function upsertPlatformStream(
       id: uid(),
       name: platform,
       platform,
-      category: "other",
+      category: "uncategorized",
       status: "active",
       balance: 0,
       totalEarned: 0,

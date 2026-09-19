@@ -3,8 +3,11 @@ import { Card, Badge, Button } from "@/components/ui"
 import { getPatterns, type PatternDetection, type PatternSummary } from "@/lib/trading"
 
 const DIRECTION_COLORS: Record<string, string> = {
+  // token-exempt: categorical bias identity hue (bullish green)
   bullish: "#4ade80",
+  // token-exempt: categorical bias identity hue (bearish red)
   bearish: "#ff6b6b",
+  // token-exempt: categorical bias identity hue (neutral gray)
   neutral: "#9aa0c0"
 }
 
@@ -61,14 +64,20 @@ export function PatternPanel() {
             <div style={{ fontSize: 14, fontWeight: 700 }}>{summary.uniquePatterns}</div>
           </div>
           <div style={{ padding: "4px 8px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center" }}>
+            {/* token-exempt: categorical bias identity hue (bullish green) */}
             <div style={{ fontSize: 9, color: "#4ade80" }}>Bullish</div>
+            {/* token-exempt: categorical bias identity hue (bullish green) */}
             <div style={{ fontSize: 14, fontWeight: 700, color: "#4ade80" }}>{summary.bullishBias}</div>
           </div>
           <div style={{ padding: "4px 8px", borderRadius: 4, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center" }}>
+            {/* token-exempt: categorical bias identity hue (bearish red) */}
             <div style={{ fontSize: 9, color: "#ff6b6b" }}>Bearish</div>
+            {/* token-exempt: categorical bias identity hue (bearish red) */}
             <div style={{ fontSize: 14, fontWeight: 700, color: "#ff6b6b" }}>{summary.bearishBias}</div>
           </div>
-          <div style={{ padding: "4px 8px", borderRadius: 4, background: summary.bias === "bullish" ? "#4ade8022" : summary.bias === "bearish" ? "#ff6b6b22" : "var(--bg)", border: `1px solid ${summary.bias === "bullish" ? "#4ade80" : summary.bias === "bearish" ? "#ff6b6b" : "var(--border)"}`, textAlign: "center" }}>
+          <div style={{ padding: "4px 8px", borderRadius: 4,
+            // token-exempt: categorical bias identity hues with alpha tints — no alpha tokens
+            background: summary.bias === "bullish" ? "#4ade8022" : summary.bias === "bearish" ? "#ff6b6b22" : "var(--bg)", border: `1px solid ${summary.bias === "bullish" ? "#4ade80" : summary.bias === "bearish" ? "#ff6b6b" : "var(--border)"}`, textAlign: "center" }}>
             <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Bias</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: DIRECTION_COLORS[summary.bias] }}>{summary.bias}</div>
           </div>

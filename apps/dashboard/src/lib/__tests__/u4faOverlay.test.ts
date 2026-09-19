@@ -43,6 +43,7 @@ describe("u4faMarkersFor", () => {
     expect(m).toBeDefined()
     expect(m.position).toBe("aboveBar")
     expect(m.shape).toBe("arrowUp")
+    // token-exempt: asserts the categorical verdict identity hue verbatim
     expect(m.color).toBe("#4ade80")
     expect(m.text).toBe("TRADE")
     expect(m.time).toBe(T0) // snapped to the owning bar's own time value
@@ -57,6 +58,7 @@ describe("u4faMarkersFor", () => {
     expect(m).toBeDefined()
     expect(m.position).toBe("belowBar")
     expect(m.shape).toBe("arrowDown")
+    // token-exempt: asserts the categorical verdict identity hue verbatim
     expect(m.color).toBe("#f59e0b")
     expect(m.text).toBe("OBSERVE")
     expect(m.time).toBe(T0 + 5 * 300)

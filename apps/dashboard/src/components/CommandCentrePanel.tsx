@@ -196,7 +196,7 @@ export function CommandCentrePanel() {
       </div>
 
       {error ? (
-        <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
+        <div style={{ fontSize: 11, color: "var(--danger)" }}>{error}</div>
       ) : !overview ? (
         <div aria-busy="true" className="skeleton-row">
           <Skeleton width="60%" />
@@ -206,7 +206,7 @@ export function CommandCentrePanel() {
       ) : (
         <>
           {globalKill && (
-            <div style={{ fontSize: 11, color: "#ff6b6b", marginBottom: 8 }}>
+            <div style={{ fontSize: 11, color: "var(--danger)", marginBottom: 8 }}>
               GLOBAL KILL ACTIVE — every site below is BLOCKED until the human rearms
             </div>
           )}
@@ -481,7 +481,7 @@ function OrdersBlock({
       )}
 
       {orderResult && (
-        <div style={{ marginTop: 6, fontSize: 11, color: orderResult.ok ? "#3f9e65" : "#ff6b6b", whiteSpace: "pre-wrap" }}>
+        <div style={{ marginTop: 6, fontSize: 11, color: orderResult.ok ? "var(--success)" : "var(--danger)", whiteSpace: "pre-wrap" }}>
           {orderResult.ok ? "✓ " : "✗ "}
           {orderResult.text}
         </div>

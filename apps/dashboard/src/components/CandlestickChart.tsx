@@ -92,7 +92,7 @@ interface CandlestickChartProps {
 const THEME: DeepPartial<TimeChartOptions> = {
   layout: {
     background: { type: ColorType.Solid, color: "transparent" },
-    textColor: "#9aa0c0",
+    textColor: "var(--text-muted)",
     fontSize: 11,
     fontFamily: "inherit"
   },
@@ -102,15 +102,15 @@ const THEME: DeepPartial<TimeChartOptions> = {
   },
   crosshair: {
     mode: 0,
-    vertLine: { color: "rgba(108, 99, 255, 0.4)", width: 1, style: 2, labelBackgroundColor: "#6c63ff" },
-    horzLine: { color: "rgba(108, 99, 255, 0.4)", width: 1, style: 2, labelBackgroundColor: "#6c63ff" }
+    vertLine: { color: "rgba(108, 99, 255, 0.4)", width: 1, style: 2, labelBackgroundColor: "var(--accent)" },
+    horzLine: { color: "rgba(108, 99, 255, 0.4)", width: 1, style: 2, labelBackgroundColor: "var(--accent)" }
   },
   rightPriceScale: {
-    borderColor: "#2a2a4a",
+    borderColor: "var(--border)",
     scaleMargins: { top: 0.1, bottom: 0.25 }
   },
   timeScale: {
-    borderColor: "#2a2a4a",
+    borderColor: "var(--border)",
     timeVisible: true,
     secondsVisible: false
   }
@@ -119,8 +119,11 @@ const THEME: DeepPartial<TimeChartOptions> = {
 // T10 — RSI/MACD secondary pane series options, mirroring the specs in
 // lib/chartOverlays.ts (single source of truth lives there; these are the
 // concrete v5 options the chart passes to addSeries).
+// token-exempt: indicator-series hue (RSI violet)
 const RSI_LINE_OPTIONS: DeepPartial<LineSeriesOptions> = { color: "#a78bfa", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
+// token-exempt: indicator-series hue (MACD line green)
 const MACD_LINE_OPTIONS: DeepPartial<LineSeriesOptions> = { color: "#4ade80", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
+// token-exempt: indicator-series hue (MACD signal amber)
 const MACD_SIGNAL_OPTIONS: DeepPartial<LineSeriesOptions> = { color: "#f59e0b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }
 const MACD_HIST_OPTIONS: DeepPartial<HistogramSeriesOptions> = { color: "rgba(108, 99, 255, 0.35)", priceLineVisible: false, lastValueVisible: false }
 
@@ -257,12 +260,12 @@ function CandlestickChartInner({
     })
 
     const cs = chart.addSeries(CandlestickSeries, {
-      upColor: "#4ade80",
-      downColor: "#ff6b6b",
-      borderUpColor: "#4ade80",
-      borderDownColor: "#ff6b6b",
-      wickUpColor: "#4ade80",
-      wickDownColor: "#ff6b6b",
+      upColor: "var(--gain)",
+      downColor: "var(--loss)",
+      borderUpColor: "var(--gain)",
+      borderDownColor: "var(--loss)",
+      wickUpColor: "var(--gain)",
+      wickDownColor: "var(--loss)",
       borderVisible: true,
       wickVisible: true
     })
@@ -277,6 +280,7 @@ function CandlestickChartInner({
     })
 
     const e20 = chart.addSeries(LineSeries, {
+      // token-exempt: indicator-series hue (EMA20 green)
       color: "#4ade80",
       lineWidth: 1,
       priceLineVisible: false,
@@ -285,6 +289,7 @@ function CandlestickChartInner({
     })
 
     const e50 = chart.addSeries(LineSeries, {
+      // token-exempt: indicator-series hue (EMA50 amber)
       color: "#f59e0b",
       lineWidth: 1,
       priceLineVisible: false,
@@ -293,9 +298,11 @@ function CandlestickChartInner({
     })
 
     const tk = chart.addSeries(LineSeries, {
+      // token-exempt: indicator-series hue (Ichimoku cloud cyan)
       color: "#06b6d4", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false
     })
     const kj = chart.addSeries(LineSeries, {
+      // token-exempt: indicator-series hue (Keltner purple)
       color: "#a855f7", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false
     })
     const sA = chart.addSeries(LineSeries, {
@@ -316,6 +323,7 @@ function CandlestickChartInner({
 
     // T10 — SMA(20) + Bollinger (20, 2σ): always created, visibility-gated.
     const sm20 = chart.addSeries(LineSeries, {
+      // token-exempt: indicator-series hue (SMA20 sky)
       color: "#38bdf8", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: showSma
     })
     const bu = chart.addSeries(LineSeries, {
@@ -331,6 +339,7 @@ function CandlestickChartInner({
     // MTF overlay — a higher-timeframe close line (e.g. 4h/1D) plotted over the
     // active candle series so the chart itself shows multiple timeframes.
     const htf = chart.addSeries(LineSeries, {
+      // token-exempt: indicator-series hue (HTF close line indigo)
       color: "#818cf8", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, lineStyle: 0, visible: showHtf
     })
 

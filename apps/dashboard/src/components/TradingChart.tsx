@@ -148,12 +148,12 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
     if (!showLevels || !levels?.ok) return []
     const lines: PriceLine[] = []
     const zoneLines = (zone: NonNullable<EntryLevelsResult["buyZone"]>, color: string, label: string, emphasized: boolean) => {
-      lines.push({ price: zone.anchor, color: emphasized ? "#fbbf24" : color, title: emphasized ? `▶ ${label}` : label })
+      lines.push({ price: zone.anchor, color: emphasized ? "var(--warn)" : color, title: emphasized ? `▶ ${label}` : label })
       lines.push({ price: zone.low, color: emphasized ? "rgba(251,191,36,0.75)" : `${color}66`, title: "" })
       lines.push({ price: zone.high, color: emphasized ? "rgba(251,191,36,0.75)" : `${color}66`, title: "" })
     }
-    if (levels.buyZone) zoneLines(levels.buyZone, "#4ade80", `BUY ${levels.buyZone.strength}x`, hoverZone === "buy")
-    if (levels.sellZone) zoneLines(levels.sellZone, "#ff6b6b", `SELL ${levels.sellZone.strength}x`, hoverZone === "sell")
+    if (levels.buyZone) zoneLines(levels.buyZone, "var(--gain)", `BUY ${levels.buyZone.strength}x`, hoverZone === "buy")
+    if (levels.sellZone) zoneLines(levels.sellZone, "var(--loss)", `SELL ${levels.sellZone.strength}x`, hoverZone === "sell")
     return lines
   }, [showLevels, levels, hoverZone])
 
@@ -310,7 +310,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
                 borderRadius: 4,
                 border: "1px solid rgba(148,163,184,0.3)",
                 background: "rgba(30,41,59,0.8)",
-                color: "#e2e8f0",
+                color: "var(--text)",
                 cursor: "pointer"
               }}
               title="Data source: Auto uses the best available; picking a source fetches from that broker only."
@@ -457,16 +457,21 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
       ) : null}
 
       <div className="row gap" style={{ alignItems: "center", paddingLeft: 4 }}>
-        <span className="muted small" style={{ color: "#e2e8f0" }}>Price</span>
+        <span className="muted small" style={{ color: "var(--text)" }}>Price</span>
+        {/* token-exempt: per-series legend hue (EMA20 green) */}
         <span className="muted small" style={{ color: "#4ade80" }}>EMA20</span>
+        {/* token-exempt: per-series legend hue (EMA50 amber) */}
         <span className="muted small" style={{ color: "#f59e0b" }}>EMA50</span>
+        {/* token-exempt: per-series legend hue (SMA20 sky) */}
         <span className="muted small" style={{ color: "#38bdf8" }}>SMA20</span>
+        {/* token-exempt: per-series legend hue (BB yellow) */}
         <span className="muted small" style={{ color: "#facc15" }}>BB</span>
         <button
           onClick={() => setShowLevels(!showLevels)}
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showLevels ? "rgba(74, 222, 128, 0.25)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (levels green)
             color: showLevels ? "#4ade80" : "var(--text-muted)"
           }}
         >
@@ -477,6 +482,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showIchimoku ? "rgba(6, 182, 212, 0.3)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (ichimoku cyan)
             color: showIchimoku ? "#06b6d4" : "var(--text-muted)"
           }}
         >
@@ -487,6 +493,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showKeltner ? "rgba(236, 72, 153, 0.3)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (keltner pink)
             color: showKeltner ? "#ec4899" : "var(--text-muted)"
           }}
         >
@@ -498,6 +505,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showSma ? "rgba(56, 189, 248, 0.3)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (sma20 sky)
             color: showSma ? "#38bdf8" : "var(--text-muted)"
           }}
         >
@@ -509,6 +517,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showBollinger ? "rgba(250, 204, 21, 0.3)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (bollinger yellow)
             color: showBollinger ? "#facc15" : "var(--text-muted)"
           }}
         >
@@ -520,6 +529,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showVolume ? "rgba(148, 163, 184, 0.3)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (volume slate)
             color: showVolume ? "#94a3b8" : "var(--text-muted)"
           }}
         >
@@ -531,6 +541,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showRsi ? "rgba(167, 139, 250, 0.3)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (rsi violet)
             color: showRsi ? "#a78bfa" : "var(--text-muted)"
           }}
         >
@@ -542,6 +553,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showMacd ? "rgba(74, 222, 128, 0.25)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (macd green)
             color: showMacd ? "#4ade80" : "var(--text-muted)"
           }}
         >
@@ -553,6 +565,7 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
           style={{
             padding: "1px 6px", fontSize: 9, border: "none", borderRadius: 3, cursor: "pointer",
             background: showU4fa ? "rgba(74, 222, 128, 0.25)" : "transparent",
+            // token-exempt: categorical per-indicator active hue (u4fa green)
             color: showU4fa ? "#4ade80" : "var(--text-muted)"
           }}
         >

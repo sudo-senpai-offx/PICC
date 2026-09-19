@@ -46,8 +46,8 @@ export function CalendarPanel() {
         <div className="row gap" style={{ alignItems: "center" }}>
           {summary && (
             <div className="row gap" style={{ fontSize: 9, color: "var(--text-muted)" }}>
-              <span style={{ color: "#ff6b6b" }}>{summary.high} high</span>
-              <span style={{ color: "#f59e0b" }}>{summary.medium} med</span>
+              <span style={{ color: "var(--danger)" }}>{summary.high} high</span>
+              <span style={{ color: "var(--warn)" }}>{summary.medium} med</span>
               <span>{summary.low} low</span>
             </div>
           )}

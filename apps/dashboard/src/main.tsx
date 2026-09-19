@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom"
 import App from "./App"
 import { installErrorLog } from "@/lib/errorLog"
 import "./index.css"
+import "./themes.css"
 
 // Track every possible error (browser console + uncaught) into the
 // root-level error log — gated by PICC_ERROR_LOG in .env.

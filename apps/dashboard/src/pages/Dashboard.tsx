@@ -10,6 +10,7 @@ import { formatMoney, listAccounts, listTransactions, netWorthTotals, syncTradin
 import { getPaperOverview, getTradingStatus } from "@/lib/trading"
 import type { TradingStatus } from "@/lib/trading"
 import { getStreams, getEarnings, streamSummary } from "@/lib/streams"
+import { StreamBreakdown } from "@/components/IncomeStreams"
 import { CryptoMarkets } from "@/components/CryptoMarkets"
 
 // Control-deck entry points. Destinations must be LIVE P1 routes only — the
@@ -199,6 +200,7 @@ export function Dashboard() {
         ? "No accounts yet — add one on the Profile page → Finance tracker."
         : `computed from ${netWorth.accountCount} live account${netWorth.accountCount === 1 ? "" : "s"}`
   const summary = streamSummary(getStreams(), getEarnings())
+  const incomeToday = summary.today ? `$${Math.round(summary.today).toLocaleString("en-US")}` : "—"
   const incomeMonthly = summary.monthly ? `$${Math.round(summary.monthly).toLocaleString("en-US")}/mo` : "—"
 
   const quickActions = QUICK_ACTIONS.map((a) => ({ ...a, onClick: () => navigate(a.to) }))
@@ -206,7 +208,7 @@ export function Dashboard() {
   return (
     <div className="stack stack-lg">
       <header>
-        <h1>Command Center</h1>
+        <h1>Income Command Centre</h1>
         <p className="muted">
           Welcome{user?.email ? `, ${user.email}` : ""}. Everything financial lives here at a glance —
           your AI agents analyze; you decide.
@@ -228,7 +230,7 @@ export function Dashboard() {
                     <Badge tone="muted">Finance tracker</Badge>
                   )}
                   <span className="muted small">
-                    {incomeMonthly} passive · {summary.activeCount} active stream{summary.activeCount === 1 ? "" : "s"}
+                    {incomeToday} today · {incomeMonthly} this month · {summary.activeCount} active stream{summary.activeCount === 1 ? "" : "s"}
                   </span>
                 </div>
               </div>
@@ -247,7 +249,7 @@ export function Dashboard() {
                 <div className="row gap" style={{ alignItems: "center" }}>
                   <span style={{ fontSize: 24 }}>📈</span>
                   <div>
-                    <div style={{ fontWeight: 600 }}>Trading</div>
+                    <div style={{ fontWeight: 600 }}>Launch Trading Suite</div>
                     <div className="muted small">
                       {tradingStatus
                         ? `${formatMoney(tradingStatus.paper.cash)} cash · ${tradingStatus.paper.openCount} open`
@@ -262,7 +264,7 @@ export function Dashboard() {
                 <div className="row gap" style={{ alignItems: "center" }}>
                   <span style={{ fontSize: 24 }}>💰</span>
                   <div>
-                    <div style={{ fontWeight: 600 }}>Earnings</div>
+                    <div style={{ fontWeight: 600 }}>Launch Earnings Suite</div>
                     <div className="muted small">
                       {summary.activeCount > 0
                         ? `${summary.activeCount} stream${summary.activeCount === 1 ? "" : "s"} · ${incomeMonthly}`
@@ -277,7 +279,7 @@ export function Dashboard() {
                 <div className="row gap" style={{ alignItems: "center" }}>
                   <span style={{ fontSize: 24 }}>🧠</span>
                   <div>
-                    <div style={{ fontWeight: 600 }}>Intelligence</div>
+                    <div style={{ fontWeight: 600 }}>Launch Intelligence Suite</div>
                     <div className="muted small">
                       {health
                         ? `${Object.values(health.providers).filter(Boolean).length} providers configured`
@@ -288,6 +290,16 @@ export function Dashboard() {
               </NavLink>
             </Card>
           </div>
+
+          {/* ── Per-stream breakdown (REQ-D.1): each stream links to its owning
+               ministry, resolved through the classification registry ── */}
+          <Card className="stack">
+            <h2 className="h2" style={{ margin: 0 }}>Income streams</h2>
+            <p className="muted small">
+              Every stream links to the ministry that owns its family, resolved through the registry.
+            </p>
+            <StreamBreakdown streams={getStreams()} />
+          </Card>
 
           {/* ── Ministry summary grid (real client reads, no fabricated values) ── */}
           <Card className="stack">

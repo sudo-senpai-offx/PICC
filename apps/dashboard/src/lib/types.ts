@@ -180,19 +180,13 @@ export interface NetWorthSnapshot {
 // ---------------------------------------------------------------------
 // Income streams (passive income orchestration)
 // ---------------------------------------------------------------------
-export type StreamCategory =
-  | "bandwidth"
-  | "dividend"
-  | "interest"
-  | "affiliate"
-  | "content"
-  | "rental"
-  | "p2p"
-  | "crypto"
-  | "defi"
-  | "nft"
-  | "agent"
-  | "other"
+// Family ids come from the classification registry (src/lib/registry.ts) — the
+// registry is the ONLY place a family id exists / maps to its owning ministry.
+// Bound as a local alias so `IncomeStream.category` can be typed here without
+// a re-export (a re-export would not bind the name locally). Consumers import
+// the alias; registry.ts remains the single source of family ids.
+import type { FamilyId } from "./registry"
+export type StreamCategory = FamilyId
 
 export type StreamStatus = "active" | "paused" | "retired"
 

@@ -39,7 +39,7 @@ export function SpreadPanel({ assetId }: { assetId: string }) {
       </div>
 
       {error ? (
-        <div style={{ fontSize: 11, color: "#ff6b6b" }}>{error}</div>
+        <div style={{ fontSize: 11, color: "var(--danger)" }}>{error}</div>
       ) : !model ? (
         <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Checking live quotes…</div>
       ) : (
@@ -56,13 +56,14 @@ export function SpreadPanel({ assetId }: { assetId: string }) {
             <div
               style={{
                 padding: "4px 8px", borderRadius: 4, textAlign: "center",
+                // token-exempt: alpha tint of success — no alpha token exists
                 background: model.state === "measured" ? (model.opportunity ? "#4ade8022" : "var(--bg)") : "var(--bg)",
-                border: `1px solid ${model.state === "measured" ? (model.opportunity ? "#4ade80" : "var(--border)") : "var(--border)"}`
+                border: `1px solid ${model.state === "measured" ? (model.opportunity ? "var(--success)" : "var(--border)") : "var(--border)"}`
               }}
             >
               <div style={{ fontSize: 9, color: "var(--text-muted)" }}>Net edge (after fees)</div>
               {/* Honesty: unmeasured => "n/a", never 0.00% */}
-              <div style={{ fontSize: 14, fontWeight: 700, color: model.edgePct === null ? "var(--text-muted)" : model.edgePct >= 0 ? "#4ade80" : "#ff6b6b" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: model.edgePct === null ? "var(--text-muted)" : model.edgePct >= 0 ? "var(--gain)" : "var(--loss)" }}>
                 {model.edgePct === null ? "n/a" : `${model.edgePct >= 0 ? "+" : ""}${model.edgePct}%`}
               </div>
             </div>
