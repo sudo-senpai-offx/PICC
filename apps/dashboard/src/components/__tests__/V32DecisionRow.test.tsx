@@ -78,4 +78,19 @@ describe("V32DecisionRow (Decision Register v3.2 branch)", () => {
     expect(text).toContain("TRADE")
     unmount(); document.body.removeChild(host)
   })
+
+  it("renders a ctx-bailout row honestly: OBSERVE, no zeros, no spurious failed gates", () => {
+    const host = document.createElement("div")
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const bail = { engine: "v3.2", assetId: "EURUSD", verdict: "OBSERVE" } as Row
+    flushSync(() => { root.render(<V32DecisionRow row={bail} explain={null} />) })
+    const text = host.textContent ?? ""
+    expect(text).toContain("OBSERVE")
+    expect(text).toContain("not tradeable")
+    expect(text).not.toContain("0/0")
+    expect(text).not.toContain("✗")
+    flushSync(() => { root.unmount() })
+    document.body.removeChild(host)
+  })
 })

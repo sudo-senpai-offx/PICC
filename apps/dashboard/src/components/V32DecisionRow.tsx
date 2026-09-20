@@ -35,7 +35,7 @@ export function V32DecisionRow({ row, explain }: { row: Row; explain: V32Explain
       </div>
 
       <div className="row gap small" style={{ marginTop: 6 }} title="execution pillars (measured / total)">
-        <span className="muted">pillars {measured}/{total}</span>
+        <span className="muted">pillars {row.score?.pillars?.length ? `${measured}/${total}` : "—"}</span>
         {(row.score?.pillars ?? []).map((p) => (
           <span key={p.pillar} className={p.available === false ? "muted" : ""} title={p.pillar}>
             {pillarGlyph(p)}
@@ -46,7 +46,7 @@ export function V32DecisionRow({ row, explain }: { row: Row; explain: V32Explain
       <div className="grid grid-3 small" style={{ marginTop: 6, gap: 4 }}>
         <span className="muted">EV <strong>{fmtNum(row.costLine?.ev, true)}</strong></span>
         <span className="muted">EV/RR <strong>{row.costLine?.evRR != null ? row.costLine.evRR.toFixed(1) : "—"}</strong></span>
-        <span className="muted">margin <strong className={marginOk ? "" : "danger-text"}>{marginOk ? "✓" : "✗"} (≥{EV_RR_MIN})</strong></span>
+        <span className="muted">margin <strong className={marginOk ? "" : "danger-text"}>{row.costLine == null ? "—" : `${marginOk ? "✓" : "✗"} (≥${EV_RR_MIN})`}</strong></span>
         <span className="muted">payout <strong>{row.costLine?.payoutBeats ? "beats BE" : "—"}</strong></span>
         <span className="muted">expiry <strong>{row.expiry != null ? `${row.expiry}s` : "—"}</strong></span>
         <span className="muted">explain <strong>{explain?.verdict ?? row.verdict}</strong></span>
@@ -60,7 +60,8 @@ export function V32DecisionRow({ row, explain }: { row: Row; explain: V32Explain
         <p className="muted small" style={{ marginTop: 4 }}>{row.copilot?.blockedBy?.join(", ") || "not tradeable"}</p>
       ) : null}
       {/* Ruling I: rows may be a 4-field OBSERVE ctx-bailout (no asset, no reasons) —
-          rendered honestly, all figures "—". */}
+          rendered honestly: no zeros when nothing was measured, no spurious failed
+          gates — every absent figure is "—". */}
       {(row.reasons ?? []).length ? <p className="muted small" style={{ marginTop: 4 }}>{(row.reasons ?? []).slice(0, 2).join(" · ")}</p> : null}
     </div>
   )
