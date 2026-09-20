@@ -48,6 +48,7 @@ export function recordDecision(d) {
     priceRR: d.priceRR ?? null,
     evRR: d.evRR ?? null,
     gates: d.gates ?? null,
+    engine: d.engine ?? "legacy", // REQ-STG-1/2: which engine produced the decision (ADR-0004)
     status: "pending",
     result: null,
     entryPrice: null,
@@ -151,6 +152,32 @@ export function flushLedger({ now = Date.now(), resolve = null } = {}) {
 
 export function ledgerHistory(limit = 200) {
   return entries.slice(-limit).reverse()
+}
+
+/**
+ * REQ-STG-1/2 (ADR-0004) — correctly-answered (hit/miss) resolution counts per
+ * engine per expiry, over the shared ledger. Pushes are EXCLUDED: a push is not
+ * a correct answer, so it never dilutes the flip-gate ratio. Pending/unresolved
+ * rows never count. This is the aggregate clock's per-engine table.
+ */
+export function correctlyAnsweredByEngine() {
+  const map = new Map() // `${engine}|${expirySec}` -> { engine, expiry, hits, misses, total }
+  for (const e of entries) {
+    if (e.status !== "resolved") continue
+    if (e.result !== "hit" && e.result !== "miss") continue
+    const engine = e.engine ?? "legacy"
+    const expiry = String(e.expirySec ?? "?")
+    const key = `${engine}|${expiry}`
+    let row = map.get(key)
+    if (!row) {
+      row = { engine, expiry, hits: 0, misses: 0, total: 0 }
+      map.set(key, row)
+    }
+    row.total++
+    if (e.result === "hit") row.hits++
+    else row.misses++
+  }
+  return [...map.values()]
 }
 
 /** EV per 1 unit staked: hit pays b (fraction), miss loses the stake. */

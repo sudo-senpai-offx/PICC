@@ -8,6 +8,7 @@ import {
   backtestGates,
   resetLedger,
   sampleEntryPrice,
+  correctlyAnsweredByEngine,
   MAX_PENDING_MS
 } from "../services/accuracyLedger.mjs"
 
@@ -185,5 +186,47 @@ describe("accuracy ledger — entry sampling without look-ahead (audit §5.6)", 
     const entry = recordDecision({ ...trade, price: 123.45 })
     expect(entry.entryPrice).toBe(123.45)
     expect(entry.entryCandleTime).toBeNull()
+  })
+
+  describe("engine tag + correctly-answered comparator (REQ-STG-1/2, ADR-0004)", () => {
+    beforeEach(() => resetLedger())
+
+    test("recordDecision tags entries engine:legacy by default, honoring an explicit engine", () => {
+      expect(recordDecision(trade)).toMatchObject({ engine: "legacy" })
+      expect(recordDecision({ ...trade, engine: "v3.2" })).toMatchObject({ engine: "v3.2" })
+    })
+
+    test("correctlyAnsweredByEngine excludes pushes (a push is never a correct answer)", () => {
+      const base = Date.now()
+      const hit = recordDecision({ ...trade, engine: "legacy" })
+      hit.status = "resolved"; hit.result = "hit"
+      const miss = recordDecision({ ...trade, engine: "legacy" })
+      miss.status = "resolved"; miss.result = "miss"
+      const push = recordDecision({ ...trade, engine: "legacy" })
+      push.status = "resolved"; push.result = "push"
+      const rows = correctlyAnsweredByEngine()
+      const legacy = rows.find((r) => r.engine === "legacy")
+      expect(legacy).toEqual({ engine: "legacy", expiry: "60", hits: 1, misses: 1, total: 2 })
+    })
+
+    test("splits per engine and per expiry", () => {
+      const base = Date.now()
+      const mk = (engine, expiry, result) => {
+        const e = recordDecision({ ...trade, engine, expiry })
+        e.status = "resolved"; e.result = result
+      }
+      mk("legacy", 60, "hit"); mk("legacy", 60, "hit"); mk("v3.2", 60, "hit")
+      mk("legacy", 120, "miss"); mk("v3.2", 120, "hit"); mk("v3.2", 120, "miss")
+      const rows = correctlyAnsweredByEngine()
+      expect(rows.find((r) => r.engine === "legacy" && r.expiry === "60")).toEqual({ engine: "legacy", expiry: "60", hits: 2, misses: 0, total: 2 })
+      expect(rows.find((r) => r.engine === "v3.2" && r.expiry === "60")).toEqual({ engine: "v3.2", expiry: "60", hits: 1, misses: 0, total: 1 })
+      expect(rows.find((r) => r.engine === "v3.2" && r.expiry === "120")).toEqual({ engine: "v3.2", expiry: "120", hits: 1, misses: 1, total: 2 })
+    })
+
+    test("unresolved and pending entries never count as answers", () => {
+      recordDecision({ ...trade, engine: "legacy" }) // pending
+      const rows = correctlyAnsweredByEngine()
+      expect(rows).toEqual([])
+    })
   })
 })

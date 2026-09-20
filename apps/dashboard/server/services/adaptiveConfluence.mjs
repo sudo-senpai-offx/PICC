@@ -380,7 +380,7 @@ export function evGate({ winProb, payoutPct, margin = PAYOUT_MARGIN, evRRMin = E
 // Single-asset evaluation across candidate expiries
 // ---------------------------------------------------------------------
 
-export function evaluateAsset({ id, name, candles, volume, observedPayout = null, now = Date.now(), period = ANALYSIS_PERIOD, asset = null, sentimentOverride = null, strategies = null } = {}) {
+export function evaluateAsset({ id, name, candles, volume, observedPayout = null, now = Date.now(), period = ANALYSIS_PERIOD, asset = null, sentimentOverride = null, strategies = null, constitution = null } = {}) {
   // ── U4FA strategy dimension (spec M4) ──────────────────────────────────
   // Default OFF per asset: without an enabled strategy the decision object
   // below is byte-identical to the pre-M4 shape (T9 regression lock). When
@@ -567,6 +567,17 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
 
   const reasons = []
   if (read.phaseLabel) reasons.push(read.phaseLabel)
+  // v3.2 Constitution veto (REQ-CON-1..5): when invoked, a failing real-money
+  // floor downgrades TRADE → NEUTRAL and the block reasons are surfaced on the
+  // composite gates. NULL/undefined means "not yet wired" — legacy behavior is
+  // byte-identical (the 2341-test floor pins this).
+  const constitutionGate = constitution && constitution.ok === true
+  const constitutionBlocked = constitution != null && constitution.ok !== true
+  const finalVerdict = typeof constitutionBlocked === "boolean" && constitutionBlocked && best.verdict === "TRADE" ? "NEUTRAL" : best.verdict
+  if (constitutionBlocked) {
+    for (const r of Array.isArray(constitution.reasons) ? constitution.reasons : []) reasons.push(`Constitution: ${r}`)
+    if (constitutionBlocked && best.verdict === "TRADE") reasons.push("Constitution floors unmet — real-money execution locked (paper/demo open)")
+  }
   if (best.verdict === "TRADE") {
     reasons.push(
       `est. win prob ${(best.winProb * 100).toFixed(0)}% (empirical ${best.empirical != null ? (best.empirical * 100).toFixed(0) + "%" : "n/a"}, n=${best.sampled})`,
@@ -591,7 +602,7 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
   return {
     assetId: id,
     asset: name ?? id,
-    verdict: best.verdict,
+    verdict: finalVerdict,
     direction: best.direction,
     score: read.score,
     confidence: best.confidence,
@@ -612,7 +623,9 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     favorable: best.favorable,
     adverse: best.adverse,
     mttdSec: best.mttdSec,
-    gates: best.gates,
+    // Keep the legacy shallow reference when Constitution is absent so the
+    // byte-identical floor really is byte-identical (no new object identity).
+    gates: constitution != null ? { ...best.gates, constitution: constitutionGate } : best.gates,
     groups: read.groups,
     volume: read.volume,
     bars: read.bars,
