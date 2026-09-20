@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Badge, Card, Spinner } from "@/components/ui"
 import type { LiveDecision, LiveDecisions } from "@/lib/liveTrading"
 import { getTradingDecisions } from "@/lib/liveTrading"
+import { V32DecisionRow } from "@/components/V32DecisionRow"
 
 const REFRESH_MS = 12_000
 
@@ -138,26 +139,38 @@ export function LiveDecisionsPanel() {
           {trades.length ? (
             <div className="stack">
               <h4 className="small">TRADE candidates — every gate passed</h4>
-              {trades.map((d) => (
-                <DecisionRow key={d.assetId} d={d} />
-              ))}
+              {trades.map((d) =>
+                d.strategies?.v32?.enabled === true && d.strategies.v32.result ? (
+                  <V32DecisionRow key={d.assetId} row={d.strategies.v32.result} explain={null} />
+                ) : (
+                  <DecisionRow key={d.assetId} d={d} />
+                )
+              )}
             </div>
           ) : null}
           {observes.length ? (
             <div className="stack">
               <h4 className="small">Observe — gates not all met</h4>
-              {observes.map((d) => (
-                <DecisionRow key={d.assetId} d={d} />
-              ))}
+              {observes.map((d) =>
+                d.strategies?.v32?.enabled === true && d.strategies.v32.result ? (
+                  <V32DecisionRow key={d.assetId} row={d.strategies.v32.result} explain={null} />
+                ) : (
+                  <DecisionRow key={d.assetId} d={d} />
+                )
+              )}
             </div>
           ) : null}
           {neutral.length ? (
             <details className="muted small">
               <summary>Neutral — stand aside ({neutral.length})</summary>
               <div className="stack">
-                {neutral.map((d) => (
-                  <DecisionRow key={d.assetId} d={d} />
-                ))}
+                {neutral.map((d) =>
+                  d.strategies?.v32?.enabled === true && d.strategies.v32.result ? (
+                    <V32DecisionRow key={d.assetId} row={d.strategies.v32.result} explain={null} />
+                  ) : (
+                    <DecisionRow key={d.assetId} d={d} />
+                  )
+                )}
               </div>
             </details>
           ) : null}
