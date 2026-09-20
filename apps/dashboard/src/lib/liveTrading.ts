@@ -10,6 +10,7 @@
 
 import { getToken } from "@/lib/auth"
 import type { DispatchEntry } from "@/lib/dispatch"
+import type { V32DecisionRow, V32RegisterSnapshot } from "@/lib/v32"
 import type {
   ClosedTrade,
   DemoAnalyticsResult,
@@ -167,6 +168,8 @@ export interface LiveDecision {
   groups?: { trend: number; momentum: number; volatility: number; volume: number }
   mtf?: { agree: number; total: number; details: { tf: number; dir: number; matches: boolean }[] }
   sentiment?: { score: number; source: string; aligned: boolean }
+  /** v3.2 lane row, attached when the lane is enabled (additive). Absent for legacy decisions. */
+  strategies?: { v32?: { enabled: boolean; result: V32DecisionRow } }
 }
 
 export interface LiveDecisions {
@@ -275,6 +278,8 @@ export interface TradingSuiteSnapshot {
   analytics: DemoAnalyticsResult | null
   convergence: ConvergenceResult | null
   dispatch: { unread: number; entries: DispatchEntry[] } | null
+  /** v3.2 soak bay + register (C2) — additive section; absent when the lane is off or the section failed. */
+  v32: V32RegisterSnapshot | null
 }
 
 // ── MTF convergence engine (spec MTF_CONVERGENCE_ENGINE, slices 1-7) ────────
