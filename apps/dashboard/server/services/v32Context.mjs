@@ -266,6 +266,7 @@ export function sessionClassify({ tz, start, end, nowMs = Date.now(), events = [
   else if (redFolder) reason = `blackout ${blackout.hits.length}min away`
   else if (deadZone) reason = `outside session ${start}-${end}`
   return {
+    available: true,
     label,
     source: observed ? "observed" : "fallback-schedule",
     window,
