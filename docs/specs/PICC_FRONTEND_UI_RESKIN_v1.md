@@ -1,6 +1,6 @@
 # PICC Frontend UI Reskin — spec v1
 
-**Status:** For execution
+**Status:** For execution · **Resolution:** COMPLETE — T1-T12 all landed and verified on disk; closure commit `a105d96` (**Date:** 2026-09-19)
 **Date:** 2026-09-18
 **Extends:** `docs/specs/PICC_FRONTEND_UI_ENGINE.md` (U-series/T-series honesty surfaces), `docs/specs/PICC_SUITE_MINISTRY_MODEL_v1.md` (ministry IA + Decision C classification), `docs/specs/PICC_MULTISOURCE_ENGINE.md` (source-preference backend at `:45`, `:99` — already landed), `CONTEXT.md:8-64` (the 11 locked decisions, of record)
 **Grounding rule:** every file:line below was read this session; anything not re-read is marked UNVERIFIED.
@@ -151,3 +151,19 @@ Ordered; each task names files + acceptance. Slice 1 (registry) lands before Sli
 - Studio stays a status surface: the universal studio rooms surface the same running/connected/feed state as the standalone page; the studio never fabricates "live" for a stopped headless session (U5 + U3 contracts, unchallenged).
 - UNVERIFIED this session (verify before relying): `src/components/UserMenu.tsx` and any other unreviewed string files for brand copies (T3 greps will catch them at execution); `Dashboard.tsx` test files covering the hub (T8 calls for a check); exact line spans of `suites.test.ts` pins beyond the grep hit at `:13-22`; `packages/*` or extension (`apps/extension`) brand strings — extension is out of scope here but flagged for the sweep.
 - The single most likely breakage: **T9 flipping the studio-gating suite** — the tests exist to enforce the old decision, so the flip looks like a regression unless the header comment and the spec reference land in the same commit.
+
+## Resolution (2026-09-19)
+
+**Disposition: COMPLETE.** All twelve tasks (T1–T12, REQ-A..REQ-E) are implemented, exported as `[x]` in the checklist above, and closed by the documented verification commit `a105d96` (2026-09-19) — itself the successor of the landing commits `6bfc763` (T1–T9 reskin wave), `8a98999` (T1/T3/T5 + budget record), and `1e603a3` (T10–T12 honesty surfaces + orphan removal).
+
+**Evidence (re-verified on disk this session):**
+- `apps/dashboard/src/lib/registry.ts` exports `FAMILIES` (incl. `uncategorized` fallback) + `familyToSuite` (registry.ts:26,42,86,145); `registry.test.ts` present.
+- `apps/dashboard/src/themes.css` has exactly the 4 `[data-theme]` blocks `income-command-centre` (:21), `trading` (:39), `earnings` (:57), `intelligence` (:75).
+- Brand: `Dashboard.tsx:211` renders the "Income Command Centre" h1; copies in `Login.tsx:43`, `AppShell.tsx:187`, `TopBar.tsx:6`, `CommandPalette.tsx:19`.
+- Studio universality: `studio` in all three `MinistryShell.tsx` INNER_NAVs (:12, :18, :25); `MinistryRoom.studio.test.tsx`, `suitesLanding.test.tsx` present.
+- Honesty surfaces: `SourceBadge.tsx`, `hooks/useSourcePreference.ts` present; `TradingHud.tsx`/`TradeOrderForm.tsx` absent on disk (deleted in `1e603a3`).
+- PWA: `vite.config.ts` `picc-precache` plugin (T6) present; `public/sw.js` precache contract; budget scripts `measure-budget.cjs`/`which-chunk.cjs` present.
+
+**NOT verified (test-run claims only):** the task annotations' suite-tail numbers (223 files / 2337 tests, raw-hex audit counts) were recorded by the prior session's tooling; re-running the full gate was out of scope for this docs pass. No concrete task is left unimplemented — every slice has a landed artifact.
+
+No remaining/future slices — the spec does not gate on the trading-logic rebuild, and nothing here is still queued. The two doc-reference specs it extends remain governed as documented at their own headers; per the 2026-09-19 closing, this file is archived by resolution.

@@ -1,6 +1,6 @@
 # PICC Explicit Audit — spec v1 (Phase 2)
 
-**Status:** Draft for execution · **Date:** 2026-08-28
+**Status:** Draft for execution · **Date:** 2026-08-28 · **Resolution:** COMPLETE — all audit tasks A1–A8 closed with verified test/commit evidence; the ledger it created was absorbed into `PICC.md` in the two-doc end-state (`bb81441`) (**Date:** 2026-09-19)
 **Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` §0 audit table · `docs/specs/EXTENSION_CONNECTIVITY_ENGINE.md` (Phase 1, shipped first)
 **Supersedes:** the audit *list* role of `docs/full-implementation-roadmap.md`; that file becomes an archive pointer once this table is complete.
 **Grounding rule:** every finding cites `file:line` read this session (or marked UNVERIFIED). Phase 2 changes no behavior until each finding gains an acceptance + test guard.
@@ -50,3 +50,21 @@
 - No demo/live gates or rate limiters touched; each fix is test-guarded (REQ-4).
 - Fabricated-state audit angle: F4/F5 are both *silent-emptiness* defects — the handout here is honest `source:"none"` labels, never zero-filled bars.
 - UNVERIFIED re-read list: `background.js`/`popup.js` exact lines (F2), `yahoo.mjs` exports (F4, via Phase 1 T7), `brokers.mjs` shape (needed by Phase 1 T6).
+
+---
+
+## Resolution (2026-09-19)
+
+**Disposition: COMPLETE** — every audit task A1–A8 is closed with evidence, verified against the current tree.
+
+**Per-task closure verification:**
+- **A1 (ledger)** — `docs/EXPLICIT_AUDIT_LEDGER.md` created in `07cba74`/`4410a72`; later absorbed into the cumulative master doc by the two-doc end-state `bb81441` (2026-09-05, "audit ledger F1-F8 / F-01..F-12 / D1-D13" is now a PICC.md section; `docs/` and its 24-file corpus were retired). Ledger no longer exists as a standalone file — delivered and absorbed, not lost.
+- **A2 (F1 plasmo archival)** — `git mv apps/extension apps/extension-archived` in `07cba74`; `apps/extension-archived/` present in HEAD, `apps/extension` absent.
+- **A3 (F3 resolution-regression lock)** — `server/__tests__/resolutionChain.test.mjs` present in tree (shipped with the T5 resolution-honesty chain, `23d814f`).
+- **A4 (F5 strict 400)** — `e2a8d7c` (+ `indicatorsTimeframe.test.mjs` in tree) — verified present, line drift 1724→2343 already noted.
+- **A5 (F6 doc purge)** — `bb81441` deleted `SETUP.md`/`TRADING_RUNBOOK.md`/`ARCHITECTURE.md`/`COMPLIANCE.md`/`PRIVACY.md` + the rest of the legacy `docs/` corpus; HEAD has README.md + PICC.md as the only docs. The purge-triggering RUNBOOK reload instruction is moot — the extension itself was later removed (D1, `9d7d460`).
+- **A6 (F7 plasmo doc correction)** — `NEXT_WAVE_generalization.md` plasmo slice marked archived (`07cba74`; later noted in `aea5091` as superseded by the extension archive).
+- **A7 (F8 triage)** — ledger F8 row records schedule/decline per §7 leftover.
+- **A8 (F2/F4 closure)** — F2 closed via the extension-feed-chain E2E test (machine leg `7108c8f`); F4 via `yahooAdapter.test.mjs` (present, shipped `726398f`). Honest note: the F2 closure test (`e2eExtensionFeedChain.test.mjs`) was later deleted in `b85e83e` along with the extension surface it verified — the closure evidence stands historically, and the underlying defect class (extension sensor, `content.js`) no longer exists post-eradication.
+
+**Not superseded** — the audit executed and completed; no later spec replaces it (its own supersedes line refers to the roadmap's audit-list role, now archived).

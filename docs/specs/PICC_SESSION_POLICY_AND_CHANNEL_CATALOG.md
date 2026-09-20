@@ -1,6 +1,6 @@
 # PICC Session Policy + Channel Catalog (+ Extension Active-Tab Sync — removed)
 
-Status: draft → implementing (user directive 2026-08-31) · committed `0159703` (delivered)
+Status: draft → implementing (user directive 2026-08-31) · committed `0159703` (delivered). **Resolution:** COMPLETE — delivered `0159703`; all checklist items [x]; re-confirmed `2866779`/`a773cf2`/`da52233` (**Date:** 2026-09-19)
 Spec owner: user + executor (big-pickle). Not part of PICC_TRADING_SUITE_UPGRADE.md;
 it is a separate user-authorized workstream that takes priority over T11 for now.
 
@@ -107,3 +107,11 @@ None are caused by, or block, this workstream.
 7. [x] Extension active-tab sync row (content/background/popup) — **removed with the extension, D1 clean break 2026-09-17**.
 8. [x] Full `npx vitest run` (116 files / 1303 tests) + `npx tsc -b --noEmit`
        green; committed `0159703`.
+
+## Resolution (2026-09-19)
+
+**Disposition:** COMPLETE. Delivered in `0159703` and re-confirmed by `2866779` (mark complete + novel-sources finding), `a773cf2` and `da52233` (terminology/annotate).
+
+**Evidence (code, this session):** items 1–6 + 8 all [x] and verified — `firstLoginGate` + `session-policy.json` (`captureProfiles.mjs:377,495-659`), `GET/POST /api/trading/session-policy` (`handlers.mjs` + `src/lib/api.ts`), R5 trading-platform category at `src/lib/streamCatalog.ts:124-147` (`TRADING_PLATFORM_APPS`, category "trading"), `ChannelsTab` from health payload; gate persistence/interventions covered at `accountMetricsApi.test.mjs:243-298`. Item 7 (extension active-tab sync) was removed with the D1 clean break per the spec's own 2026-09-17 note — the strip is complete, not a deferral.
+
+**Successor:** none — feature shipped; notifier channel list corrected per `PICC_NOTIFICATION_AND_ALERT_UX_v1.md` T10/T11.

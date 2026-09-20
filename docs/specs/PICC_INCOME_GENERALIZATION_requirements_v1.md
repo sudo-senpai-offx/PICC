@@ -1,6 +1,6 @@
 # Income Generalization (Q5) — Requirements — spec v1
 
-**Status:** Draft for execution · **Date:** 2026-09-03
+**Status:** APPROVED — absorbed into design + checklist, executed · **Date:** 2026-09-03 · **Resolution:** COMPLETE — requirements realized through the design + checklist artifacts; all 13 checklist tasks executed 2026-09-04 on `master` (commits `04381f0`…`ce4b3a0`, one per task, tests green). Income is the first generalized platform kind (registry, autodetect, ingest, snapshot/cadence, ws relay, host generalization, grass-by-config, server-backed streams, Overview). (**Date:** 2026-09-19)
 **Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (registry + extension collection rows) · `docs/specs/EXTENSION_CONNECTIVITY_ENGINE.md` (sensor division of labor) · existing connector registry `apps/dashboard/server/services/connectors.mjs` · existing localstore CRUD `apps/dashboard/server/services/localstore.mjs` + `apps/dashboard/server/handlers.mjs:3222-3254`
 **Supersedes:** nothing destructive — see Risks. Refactors only where noted.
 **Grounding rule:** every claim below carries a `file:line` read in this session; anything not re-read is marked **UNVERIFIED** and must be re-checked at execution start.

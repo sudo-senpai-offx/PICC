@@ -1,5 +1,7 @@
 # PICC Trading Suite Upgrade — spec v1
 
+**Status:** planned → executed. **Resolution:** SUPERSEDED — P1 delivered (see commit trail); remaining P2/P3 backlog superseded by the reskin, the suite rebuild and the v3.2 layered-engine rebuild (ADR-0003/0004) (**Date:** 2026-09-19)
+
 **Scope:** chart-history depth (Yahoo intraday + CCXT OHLCV), asset breadth, parked-endpoint integration, suite UI transformation. Write-only planning artifact — no code changes in this session.
 
 **Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (suite roadmap), `docs/specs/PICC_UNIVERSAL_4FA_ENGINE.md` (advisory-first posture, honesty keys), `docs/specs/PICC_MULTISOURCE_ENGINE.md` (data-source honesty, pin convention at `:105`), `docs/PROMPT_PATTERNS.md` P4/P5 (structured-output contracts; negative-space guardrails).
@@ -165,3 +167,12 @@ Group the 26 panels (`TradingSuite.tsx:176-206`) into tabs (Markets / Signals / 
 **Phase 3 (3):** T17 4h aggregation · T18 Screener click-to-chart · T19 Backtest provenance hygiene
 
 **Decisions to review:** A) deep history = server-side merge in `marketDataBus` (option a; history param rejected); B) 14400 dropped for Yahoo (no aggregation in P1); C) client mixed-resolution guard byte-identical; D) new `GET /api/trading/catalog` grounded in `assetCatalog` + `QUICK_ASSETS`.
+
+## Resolution (2026-09-19)
+
+**Disposition:** SUPERSEDED. The P1 work shipped across the cited commit trail (all verified on disk this session); the spec's planning direction (esp. P2/P3 backlog) is superseded by the suite-reskin wave, the suite rebuild, and the v3.2 layered-engine rebuild.
+
+**Evidence (P1 delivered):** T1 `8e88756` (Yahoo intraday 1m/5m/15m/30m/1h OHLCV) · T2 `ccxtAdapter.mjs` real OHLCV (`getCandles` at `:164`, `fetchOHLCV` at `:29,:53`) · T3 `marketDataBus.mjs:114-166` merge with `historyDepth`/`backfilled`/`historySource` + per-bar `backfilled:true` · T4 `58f0ecd` (`GET /api/trading/catalog`; Decision D) · T5 `9f7d51f` (spread + aggregate panels) · T6 `AccountMetricsPanel.tsx` + `CapabilitiesPanel.tsx` on disk · T7 `6f83871` (U4FA chart overlay) · T8 `08d43b7`/`3555095` shared web-push subscription (`useWebPush`) · T9 `alertEngine.mjs:64-83,218-242` multi-condition + AND/OR logic · T10 `CandlestickChart.tsx` indicator overlay series + `AdvancedIndicatorsPanel.tsx` (Volume) · T13 `WatchlistPanel.tsx` exists (import/export not re-verified) · T16 `chartPrefs.mjs` (persisted layout prefs).
+**Evidence (superseded):** suite UI was redefined by the income command-centre reskin (`6bfc763`, then `8a98999`) and the suite-rebuild regime/fusion/paper-separation (`bf99e09`); the remaining execution/aggregation backlog (T17 4h; P2/P3) is covered by ADR-0003 (15s execution granularity) + ADR-0004 + `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md`, which supersede this spec's forward path per its §7 out-of-scope note.
+
+**Successor:** `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md` (+ ADR-0003/ADR-0004) for the trading-logic remainder; the reskin wave for the UI remainder.

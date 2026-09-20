@@ -1,6 +1,6 @@
 # PICC Extension Eradication + Trading-Suite Rebuild — spec v1
 
-**Status:** IN PROGRESS (tracking document — updated every slice)
+**Status:** IN PROGRESS (tracking document — updated every slice) · **Resolution:** COMPLETE — Phase A (extension eradication) shipped across A-1..A-7 with the absence pinned by tests; Phase B (suite rebuild) shipped in `bf99e09`; the only open item, Phase C push-notification intervention, is explicitly deferred to a separate future spec (carried forward, not lost) (**Date:** 2026-09-19)
 **Date:** 2026-09-17
 **Scope:** (A) Remove every remaining Chrome-extension concept/leg from the dashboard (the extension is gone; Browser Studio is the mechanism). (B) Full-aware rebuild of the trading suite foundation: regime detection + novel-context enhancements on top of the MTF engine, advisory + execution paths, paper trading with income kept separate from real PnL. (C) Push-notification-based intervention in the separate Browser Studio window (expands later).
 **Grounding rule:** every `file:line` below was read or verified this session where marked; audit rows come from a subagent sweep + targeted greps. Anything not re-read is marked **UNVERIFIED**. The mission brief is authoritative; where a requirement says "DATA-GAP" it degrades to honest emptiness, never a fabricated value.
@@ -177,3 +177,18 @@ Novel-context patterns PICC's MTF engine currently lacks:
 - Execution path: paper/real opt-in never weakens the existing 4FA/demo gates; advisory is the default forever.
 - Unconfigured ≠ zero-filled; `source:"none"` honest emptiness everywhere.
 - Verify-before-claim: every slice runs its own tests; full suite + typecheck before any "done" report.
+
+---
+
+## Resolution (2026-09-19)
+
+**Disposition: COMPLETE** for the committed scope; **Phase C carried forward** by explicit deferral (D6 — the todo is recorded in these md files, never forgotten).
+
+**Phase A — extension eradication (verified shipped):**
+- A-1 deleted the extension leg in `liveEO.mjs` (feed-mode set `["auto","studio"]`, `ingestAppFrame` gone); A-2 removed consumer seams (`handlers.mjs`, `dataSources.mjs`, `autopilot.mjs`, `adaptiveConfluence.mjs:863`, `scheduler.mjs` — audit rows A1.2–A1.12 closed); A-3 rewrote `brokerLink.ts` + client copy (rows A2.1/A2.2/A2.5/A2.6, A3.6/A3.7); A-4 cleared capture/pack layer comments + kill-switch (A3.1–A3.5, A3.11; A3.9 "keep" decision respected); A-5 deleted `e2e/extension-sync.mjs`, `extensionSelectors.test.mjs`, `extensionBoundary.test.mjs` and fixed mock fixtures (A3.10, A4.1 "remove all imports from extension-archived" fulfilled).
+- Commit trail: `6536176` (clean-break purge + studio simplification), `9d7d460` (removed the Chrome extension capture leg + dead tests), `b85e83e` (removed `/api/extension/*` routes + owning tests). Verified in tree: `apps/extension-archived/` retained as git history; `extensionAbsence.test.mjs` pins zero extension occurrences across 25 modules.
+- A-6 absence sweep: done, 14 legit matches remain (Fibonacci levels, Automatad note, Chromium `extensions_crx_cache`, intentional feed-mode legacy-coercion test). A-7 docs sweep: 12 fixed files + exempt list, re-grepped clean.
+
+**Phase B — trading-suite rebuild (verified shipped):** spec `docs/specs/PICC_TRADING_SUITE_REBUILD_v1.md` (created `6046b63`); regime layer (`regimeEngine.mjs` + `regimeDetection.mjs`, present in tree), fusion documentary layers, human-approved execution gate, and paper/real income separation all shipped in `bf99e09` with pins (`executionAbsence.test.mjs`, `paperRealSeparation.test.mjs`, `interventions.suiteTrade.test.mjs`, `regimeEngine.test.mjs`, `regimeDetectionAdapter.test.mjs` all present). The two B.2 firecrawl rows are SKIPPED/superseded (closed in `6551dab`/`a49c441`).
+
+**Carried forward (not closed):** the lone `[ ]` row — Push-notification intervention — is Phase C, deferred by design to its own separate spec (`PICC_PUSH_INTERVENTION_v1.md`, not yet drafted). This is the only unclosed item in the document and it is intentionally out of this document's scope.

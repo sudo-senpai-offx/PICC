@@ -1,6 +1,6 @@
 # PICC Studio Simplification + Free-Source Landing — Plan v1
 
-**Status:** PLAN — awaiting owner approval (review in plan canvas).
+**Status:** PLAN — awaiting owner approval (review in plan canvas). · **Resolution:** COMPLETE — executed as part of the D1 clean break: viewport slideshow + unwanted studio settings removed, extension language purged end-to-end, studio slimmed to a subtle manager of streaming + suite linking (`6536176`); suite regime/fusion/execution gates + paper/real separation alongside (`bf99e09`); spec annotation `6046b63`. The "awaiting approval" PLAN status is superseded by execution. (**Date:** 2026-09-19)
 **Date:** 2026-09-16
 **Owner directive (verbatim intent):** keep the browser studio simplified and optimized; remove the viewport slideshow and unwanted studio settings (fullscreen toggle); make the studio a subtle manager of streaming + suite linking; every setting has clean, clear separation — no setting overlap unless explicitly requested; proceed with planning everything unverified, with suggestions.
 

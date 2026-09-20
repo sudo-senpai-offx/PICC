@@ -1,6 +1,6 @@
 # PICC Resource Governor (v1) — local-first LLM rotation + resource governance
 
-- **Status:** APPROVED (2026-09-12) — §3 hybrid, §5 pack order, §6 Q1–Q6 all approved; §8 complete. Amendment: multiple providers/stack models allowed; max RAM/storage/CPU usage limits configurable (owner decision).
+- **Status:** APPROVED (2026-09-12) — §3 hybrid, §5 pack order, §6 Q1–Q6 all approved; §8 complete. Amendment: multiple providers/stack models allowed; max RAM/storage/CPU usage limits configurable (owner decision). **Resolution:** COMPLETE — slices G1–G5 all landed (G4/G5 `0729544`, G3 `47fbe3d`) and verified on disk (**Date:** 2026-09-19)
 - **Classification:** ARCHITECTURAL — the resource-governance layer of the country-ministry model: every ministry (trading, earnings, bandwidth, intelligence...) draws on a shared, budgeted pool of compute + data sources, never unbounded
 - **Owner answers (this session, governing):**
   - **A1:** models up to 8B; smaller models **continuous** run, larger **burst/intermittent** "run only when needed". Hardware: Core 5 120U (iGPU only, no dGPU), 16GB DDR4, strict/configurable CPU/GPU/RAM allocation including iGPU, conserve power. **Design target = Celeron N-series Chromebook** (the floor everything must run on).
@@ -112,3 +112,17 @@ Owner: approve order / reorder / add packs. Each pack ships only when its resour
 3. §6 Q1–Q6 — **all answers approved as recommended** (full budget sheet incl. data-source rpm; Observability ledger as the additional feature; soft-degrade then hard-stop; power-aware+rate+daily burst combination; local JSON ledger; Resource tab on `/settings/llm`).
 4. Sequencing: G1→G4→G5 (G4 already landed as a separate slice).
 5. **Owner amendment (binding):** multiple providers / stack models may be included as needed; **max RAM / storage / CPU usage limits must be configurable** (settings surface, conservative defaults — §4.2.1 and §3 tables are defaults, not hardcoded ceilings).
+
+## Resolution (2026-09-19)
+
+**Disposition:** COMPLETE. Every §7 slice landed and is verified on disk:
+
+- **G1** — `server/services/resourceGovernor.mjs` exists (routeTask/recordCall/governorStats/budget envelope; ceilings from env).
+- **G2** — `llm.mjs:53-74,134-136`: every call routes via `routeTask` then records `recordCall` whenever `o.governor === true` or `PICC_RESOURCE_GOVERNOR === "on"` (Q3/Q4 hybrid semantics); covered by `llmGovernor.test.mjs`.
+- **G3** — `src/components/ResourceGovernorPanel.tsx` exists + `GET /api/settings/llm/resource` surface; committed `47fbe3d`.
+- **G4** — Supabase sync/billing belt dropped in `0729544` ("drop paypal/supabase"); no `supabase.mjs`/`paypal.mjs` service files remain.
+- **G5** — Pack 1 "Local Trading Core" (registry/runner/observers, news digest, webfetch) landed `0729544` — see `PICC_PACK1_LOCAL_TRADING_CORE_v1.md`.
+
+§8 approvals (2026-09-13) all recorded in this doc; the §8.5 amendment (configurable caps) is encoded in the env surface. G4's sequencing note ("G4 already landed as a separate slice") is confirmed — it landed inside the Pack-1 build, not here.
+
+**Successor:** the Pack-1 execution spec continues as `PICC_PACK1_LOCAL_TRADING_CORE_v1.md`; the tiered-router concept feeds the v3.2 copilot design but nothing in this spec is re-opened.

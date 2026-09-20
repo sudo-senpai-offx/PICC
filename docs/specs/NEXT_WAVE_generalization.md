@@ -1,6 +1,6 @@
 # Next Wave: Trading-Suite Generalization & Data-Collection Architecture — spec v1
 
-> **Status:** Approved (planning artifact — no code changed by its author)
+> **Status:** Approved (planning artifact — no code changed by its author). **Resolution:** COMPLETE — slices 1–6 + DoD closed (`aea5091`); 7f closed permanently (`24e5353`); artifacts verified on disk (**Date:** 2026-09-19)
 > **Date:** 2026-08-27
 > **Supersedes:** the execution-re-integration plan in `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (see §ADR below).
 > **Extends:** `docs/TRADING_SUITE_GENERALIZATION_SPEC.md` (Phases I, K, L) — this spec makes those phases actionable as an independently-shippable slice sequence, and adds two slices the generalization spec does not cover (latency surfacing, model-matrix stabilization).
@@ -255,3 +255,20 @@ Files: `apps/extension/src/content.tsx` (+ new `src/selectors/*.ts` DOM-selector
 7. `feat: extension data-collection layer (platformKind, selectors, session capture, LiveBroker wrap)` (Slice 7)
 
 Each commit lands green (its tests + full regression suite), is independently shippable, and never crosses the advisory boundary.
+
+## Resolution (2026-09-19)
+
+**Disposition:** COMPLETE. Every slice shipped and is verified against code:
+
+- **Slice 1** `31672d1` — forex + equities aliases in the asset catalog.
+- **Slice 2** `384f62f` + `6536176` — broker-agnostic suite labels + 12 timeframes.
+- **Slice 3** `b561d29` — dataBus latency surface in broker rows (`marketDataBus.mjs` heartbeat/age).
+- **Slice 4** `3555095` — web-push subscribe/unsubscribe + service worker (later corrected by the notifications spec).
+- **Slice 5** `f15329b` + subsequent waves — `marketDataBus`/`signalEngine`/`scheduler` (+8 services) coverage.
+- **Slice 6** `460b62e` — model-matrix prune/decay/calibrate + 2 pure models.
+- **Slice 7** `ca5cd89` (`feat: extension data-collection layer`) + `07cba74` (extension archived with D1) — EO platform selectors + session capture + build boundary guard; late-extension era, superseded by the studio browser as sole capture leg.
+- **7f** (Binance/Bybit selectors) closed **permanently** `24e5353` (2026-09-19) — venue data now rides headless capture + broker adapters.
+
+DoD all [x] (`aea5091`). The roadmap as execution plan is superseded per the spec's own §2.1 note (roadmap removed `bb81441`).
+
+**Successor:** the generalization wave merged into the suite-reskin (`6bfc763`) and the suite-rebuild (`bf99e09`); the decision core is now governed by `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md`.

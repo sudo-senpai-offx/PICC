@@ -1,6 +1,6 @@
 # PICC Trading Sites Catalog (v1)
 
-- **Status:** APPROVED (2026-09-12) — format, expansion priority, multiplex rule, SITE_INDEX handling all approved per §7.
+- **Status:** APPROVED (2026-09-12) — format, expansion priority, multiplex rule, SITE_INDEX handling all approved per §7. · **Resolution:** ACTIVE — still the referenced source of truth for venue/source data (governor spec anchors §5; kept studio-current by the D1 spec sweep); carried forward with §6 slices C1–C4 and §4 expansion unshipped and §7 questions still open (**Date:** 2026-09-19)
 - **Classification:** DATA CATALOG — the trading ministry's site/venue/data-source catalog (EO + CCXT focus per Q4), research-only, no keys
 - **Owner directives (this session):** C6/7 — reroute to multiple always-free sources with resettable rate limits or unlimited usage, multiplex every functionality across PICC suites, web-search to find these sources; D8 — remove Supabase, keep everything local; E9 — proceed with workflow pack, adhere to "country-ministry-resource concept"; E10 — all data in docs catalog, develop mini-(lite) AI/ML platform for PICC functionality
 - **Anchors:** `PICC_SUITE_MINISTRY_MODEL_v1.md` (ministry model, advisory-first); `PICC_EARNINGS_AGENTIC_MINISTRY_v1.md` §11 (tiered infra, Cactus Needle Tier-0); `EXTENSION_CONNECTIVITY_ENGINE.md` (broker capability contract, resolution honesty); `PICC_SIGNAL_VENUE_POOL_DECISION.md` (liveEO-only venue narrowing); `PICC_TRADING_SUITE_UPGRADE.md` (REQ-1..REQ-11, T1-T11 ground work)
@@ -111,3 +111,19 @@ Rule for every expansion candidate: `verified:false` until a live probe succeeds
 ## 8. Country-ministry-resource adherence (E9)
 
 This catalog is the trading ministry's resource ledger, consistent with the ministry model: every entry names what it *automates* (data reads) and what it *never touches* (execution, keys, signed sends). Data reads are RUN-class; anything beyond reads (orders, withdrawals) is L-class and stops at the human. The catalog is also the instrument the Celeron-N resource floor uses: at any rpm budget, the cheapest verified source wins (Yahoo/CoinGecko before CCXT-burst before EO-poll), matching the tiny→cheap→heavy policy in `PICC_RESOURCE_GOVERNOR_v1.md` §3.
+
+---
+
+## Resolution (2026-09-19)
+
+**Disposition: ACTIVE — carried forward.** The catalog is approved (`2026-09-12`) and remains the referenced source of truth for venue/source facts.
+
+**Evidence it is still the source of truth:** `PICC_RESOURCE_GOVERNOR_v1.md:13,61` anchors its shared rpm-envelope / multiplexing contract to this file's §5; the D1-era spec sweep in `PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md:100` **fixed** this file to studio reality (it was treated as current, not historical); `PICC_PACK1_LOCAL_TRADING_CORE_v1.md:48` defers news-source hookup to this catalog's §4 candidates. Verified §3 rows (`expertoption`, `ccxt:<exchange>`, `yahoo`, `coingecko`, browserStudio SITE_INDEX) match live code (`ccxtAdapter`, `yahooAdapter`, `captureProfiles.mjs`, `browserStudio.mjs:479-577` SITE_INDEX).
+
+**What could NOT be verified (carried forward, not closed):**
+- **§6 C1** — `server/services/siteCatalog.mjs` does **not** exist (grep: zero hits for `siteCatalog`/`catalogByKind`/`multiplexFor` across code and docs; the PACK-1 spec itself confirms "no siteCatalog.mjs"). The catalog's data was never materialized as a code module.
+- **§6 C2** — §4 expansion candidates remain `verified:false` / RESEARCH PENDING; no expansion probe tests exist.
+- **§6 C3/C4** — no governor wiring to per-source caps and no catalog-driven "Data sources" UI (Serper badge removal claim unverifiable — `serper.mjs` status not checked this pass).
+- **§7** — the four open questions (format-ok, expansion priority, multiplex rule, SITE_INDEX trim-to-EO) still have no recorded answer in the repo.
+
+Because its *data content* is current and actively referenced while its *implementation slices* and *open questions* are outstanding, this spec is carried forward rather than archived, superseded, or closed.

@@ -1,6 +1,6 @@
 # PICC Extension & Selenium IDE Research — Findings v1
 
-Status: FINDINGS (aggregated analysis for suite improvement)
+Status: FINDINGS (aggregated analysis for suite improvement) · **Resolution:** RESEARCH-ARCHIVE — static research record on four third-party MV3 extensions/Selenium IDE; consumed by the extension connectivity engine (now superseded by D1 clean-break) and the headless-capture engine (studio-evolved); no successor to the findings themselves (**Date:** 2026-09-19)
 Sources (all extracted under `C:\Users\sharv\AppData\Local\Temp\opencode\re\` — kept outside the repo):
 - `selenium-ide/` — Selenium IDE 4.0.1-beta.14 source (pnpm monorepo, 21 packages)
 - `ext-a/` — Requestly v26.7.27 (MV3)
@@ -142,3 +142,11 @@ Only the browser half is present (3 MB). The native host is in the Postman deskt
 - `C:\Users\sharv\AppData\Local\Temp\opencode\re\selenium-ide\selenium-ide-4.0.1-beta.14\`
 - `C:\Users\sharv\AppData\Local\Temp\opencode\re\ext-a\` (Requestly) / `ext-b\` (Postman Interceptor) / `ext-c\` (SimpleWS)
 - Keep outside the repo; do not commit extension payloads or the Selenium source tree.
+
+---
+
+## Resolution (2026-09-19)
+
+**Disposition: RESEARCH-ARCHIVE (COMPLETE-as-research)** — a static findings record (Selenium IDE 4.0.1-beta.14, Requestly 26.7.27, Postman Interceptor 3.2.1, Simple WebSocket Client v0.3.14), created in `ed81b5f`. Nothing in the repo supersedes the analysis itself; no task boxes, no implementation claims to verify.
+
+**Consumption record (evidence):** the borrow list fed `EXTENSION_CONNECTIVITY_ENGINE.md` (DNR-static tiering, nativeMessaging-to-local-daemon shape, minimal WS feed client) and the capture-engine direction (`PICC_HEADLESS_CAPTURE_ENGINE.md`). Post-D1 those downstream plans were replaced by the studio-capture model (`PICC_EMBEDDED_BROWSER_STUDIO_v1.md`); the findings themselves remain the accurate record of what those four artifacts contained (source trees kept outside the repo at `C:\Users\sharv\AppData\Local\Temp\opencode\re\`). The A-7 spec sweep classified this file EXEMPT as research (`PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md:102`).

@@ -1,6 +1,6 @@
 # PICC Algory Reverse-Engineering — Findings v1
 
-Status: FINDINGS (source of truth for the trading-suite borrow list)
+Status: FINDINGS (source of truth for the trading-suite borrow list) · **Resolution:** RESEARCH-ARCHIVE — static third-party reverse-engineering findings record; produced by the plan in `PICC_ALGORY_REVERSE_ENGINEERING_v1.md`; consumed by trading-suite improvement but superseded by no successor spec (**Date:** 2026-09-19)
 Source: `Algory_Setup_1.5.1.3.3.exe` (248 MB, VAGAFX LTD-signed PyInstaller bundle)
 Extraction: `C:\Users\sharv\AppData\Local\Temp\opencode\re\algory-exe\Algory_Setup_1.5.1.3.3.exe_extracted\` (2511 files)
 Plan: `docs/specs/PICC_ALGORY_REVERSE_ENGINEERING_v1.md`
@@ -208,3 +208,9 @@ This is a full **strategy-crafting lab pipeline**. **Borrow for PICC:** the grad
 
 Primary copy: `C:\Users\sharv\AppData\Local\Temp\opencode\re\algory-exe\Algory_Setup_1.5.1.3.3.exe_extracted\`
 (kept outside the repo — do not commit the 248 MB installer or the extracted tree).
+
+---
+
+## Resolution (2026-09-19)
+
+**Disposition: RESEARCH-ARCHIVE (COMPLETE-as-research)** — a static findings record from `Algory_Setup_1.5.1.3.3.exe` (PyArmor-encrypted PyInstaller bundle), created in `ed81b5f`. No successor spec supersedes the analysis; the source tree stays outside the repo per §10. Nothing in this file needed code verification (it is a findings record, not an implementation spec); all task-level closure evidence is embedded in the file itself (readable MQ5 residue, `duka_starter_seeds.json` taxonomy, `locked_grade` acceptance criteria, borrow list = deliverable for trading-suite improvement).

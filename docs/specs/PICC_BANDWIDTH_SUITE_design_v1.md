@@ -1,6 +1,6 @@
 # Bandwidth Command-Centre Suite — Design v1
 
-**Status:** REJECTED (struck by owner decision 2026-09-15 — see [ADR-0002](../adr/0002-bandwidth-suite-rejected.md): not profitable in the user's real segment) · **Date:** 2026-09-06
+**Status:** REJECTED (struck by owner decision 2026-09-15 — see [ADR-0002](../adr/0002-bandwidth-suite-rejected.md): not profitable in the user's real segment) · **Date:** 2026-09-06 · **Resolution:** REJECTED — confirmed by ADR-0002 + end-to-end removal (**Date:** 2026-09-19)
 **Extends:** executed Q5 income generalization (`docs/specs/PICC_INCOME_GENERALIZATION_*`) · Command Centre slices 1–6 (`COMMAND_CENTRE_WEB_SPEC.md`) · Automator collectors (`apps/dashboard/server/services/automator.mjs`) · extension income leg (`apps/dashboard/extensions/picc-overlay/`)
 **Supersedes:** nothing destructive — extends only. Trading suite (`HYPERLIQUID_CONNECT_RUNBOOK.md`) is unaffected and stays in flight.
 **Grounding rule:** every claim carries a file:line read this session. Anything only seen via grep (function bodies not yet read) is marked **UNVERIFIED** and must be re-read at execution start.
@@ -129,3 +129,11 @@
 | CC payout-claim leg | Command Centre slice 5 (changelog `CHANGELOG.md`); `policyGraphCatalog.mjs` **UNVERIFIED** |
 | Q5 executed/gates | `docs/specs/PICC_INCOME_GENERALIZATION_checklist_v1.md` (Tasks 1–13 done; 14–15 unticked) |
 | Trading suite (unaffected) | `docs/runbooks/HYPERLIQUID_CONNECT_RUNBOOK.md` |
+
+## Resolution (2026-09-19)
+
+**Disposition:** REJECTED — the spec's Status line already records the reject; this section confirms it with commit evidence.
+
+**Evidence:** `docs/adr/0002-bandwidth-suite-rejected.md` (accepted; commit `e5a235c`) · `a11721e` refactor(bandwidth-suite) removes the suite + automator machinery end-to-end · `8a98999` drops bandwidth/depin/storage/compute from the stream catalog in the reskin. M1 (segment registry) briefly shipped (`1a3d9d4`) then was removed with the suite. Shared generic machinery (collectors, claim idempotency, income ledger) remains per ADR-0002 — it is not tied to this rejected candidate.
+
+**Successor:** none. ADR-0002 §consequences: any future reconsideration requires a NEW design document, not resurrection of this one.

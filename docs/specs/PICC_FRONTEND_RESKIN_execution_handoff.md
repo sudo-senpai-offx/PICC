@@ -1,5 +1,7 @@
 # PICC Frontend Reskin — Execution Handoff (2026-09-19)
 
+**Status:** Complete-as-handoff · **Resolution:** SUPERSEDED — handoff executed; slices T8/T9/T10/T11/T12 landed (`6bfc763`/`1e603a3`) and closed (`a105d96`) (**Date:** 2026-09-19)
+
 Purpose: let a fresh, clean-sensor session finish Slices 5–7 + final commit/push
 without re-deriving anything. **Governs:** `docs/specs/PICC_FRONTEND_UI_RESKIN_v1.md`
 (the source of truth for all REQ-A..E acceptance). This handoff overrides nothing;
@@ -78,3 +80,7 @@ accuracy. Slice 7: T12 orphan deletion (verify orphans first; update
   T7 code-split (hub shell = `income-command-centre`).
 - Born honest: every redundant "under development / unavailable" state stays; no
   fake "live" claims.
+
+## Resolution (2026-09-19)
+
+**Disposition: SUPERSEDED** (complete-as-handoff). This handoff set Slice 5 (T8 hub rework + T9 studio universality) and Slices 6–7 (T10/T11/T12) as the remaining work for a fresh session. All of it has since landed: T8–T9 in `6bfc763` (studio in all three `MinistryShell` INNER_NAVs, registry-driven hub at `Dashboard.tsx:211`), T10–T12 in `1e603a3` (`useSourcePreference.ts`, `SourceBadge.tsx`, orphan deletions incl. `TradingHud`/`TradeOrderForm`), checklists closed by `a105d96`. The handoff's red lines (no fabricated data, honest states, `data-theme` binding surviving the T7 code-split) are satisfied by the landed artifacts verified this session. Original body preserved verbatim; annotation-only.

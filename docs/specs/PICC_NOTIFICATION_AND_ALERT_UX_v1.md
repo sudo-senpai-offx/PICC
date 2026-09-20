@@ -1,5 +1,7 @@
 # PICC Notification & Alert UX — spec v1
 
+**Status:** planned → executed T1–T10. **Resolution:** COMPLETE — every task landed and is verified against code (**Date:** 2026-09-19)
+
 **Scope:** PWA installability (manifest), interactive web-push payloads (View / Snooze actions), deep-link landing in the Trading Suite, static window copy + in-app countdown, venue-tab handling via the studio bridge (`studioTab "open"` — the extension `open-broker-tab` action was removed with the D1 clean break, 2026-09-17, replaced by A-3's RPC per decision D2), email-channel removal. Write-only planning artifact — no code changes in this session.
 
 **Extends:** `docs/PICC_FULL_SCOPE.md` (guardrails), `docs/specs/PICC_TRADING_SUITE_UPGRADE.md` (REQ-8 "one push subscription"; conventions), `docs/specs/PICC_SESSION_POLICY_AND_CHANNEL_CATALOG.md` (channel catalog, notifier honesty), `docs/specs/MTF_CONVERGENCE_ENGINE.md:26` and `docs/TRADING_SUITE_GENERALIZATION_SPEC.md:638-875` (historical Resend references this spec removes), `docs/PROMPT_PATTERNS.md` P4/P5 (structured-output contracts; negative-space guardrails), and the master plan `C:\Users\sharv\Downloads\PICC_NOTIFICATIONS_AND_ASSISTED_TRADING_PLAN.md` (authoritative requirements — code claims verified and, where they disagreed with the repo, corrected below with file:line evidence).
@@ -155,3 +157,22 @@ Every correction below was verified by reading the cited file this session:
 4. **`panel=chart` tab mapping — plan claim NOT APPLICABLE.** `MarketsSuite` is a flat panel stack (`TradingSuite.tsx:107,187-206`), no tabs. Corrected: panel anchor scroll/focus (Decision E, T6).
 5. **`resend` package dependency — plan silent, verified none.** No `resend` in package.json (grep this session); no uninstall step exists (Decision H).
 6. **`PICC_AUDIT_9c51ce6_AND_GAP_PLAN.md` — NOT FOUND** in `C:\Users\sharv\Downloads\` (glob this session). Linked by intended path in Extends; unverified.
+
+## Resolution (2026-09-19)
+
+**Disposition:** COMPLETE. All ten P1 tasks landed and are verified against code (not the doc):
+
+- T1 manifest `4479740` (REQ-1; `apps/dashboard/public/manifest.json` on disk)
+- T2 iOS install gate `8b884a5` (REQ-2; `src/lib/installEligibility.ts`)
+- T3 web-push payload v2 `c4f802d` (REQ-3/4; SW `push`/`notificationclick` actions)
+- T4 snooze ledger + endpoint + flusher `7be2bfa` (REQ-5)
+- T5 window text + venue resolution `c88872d` (Decision D)
+- T6 deep links `a752ec2` (REQ-9; `/suites?asset=A&panel=chart[&venue=V]`)
+- T7 countdown chip (REQ-8; `SignalWindowChip.tsx`; `signalEngine.mjs:31-47,116,165,190` `since`/`windowEndAt`)
+- T8 studioTab `5b5956b` — marked DONE in the spec as superseded by D2/A-3 studio RPC (extension `open-broker-tab` removed with D1)
+- T9 email/RESEND removal `6066216` (REQ-11; no email transport left in `notifier.mjs`)
+- T10 docs/grep hygiene `a773cf2`
+
+Eight commits are the whole delivery trail: `1213d3f` (created) → `c4f802d`/`7be2bfa`/`c88872d`/`a752ec2`/`6066216`/`a773cf2` → `da52233` (annotated).
+
+**Successor:** none — the feature shipped; follow-ups live in the suite-reskin and v3.2 workstreams, not this spec.

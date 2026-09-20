@@ -1,6 +1,6 @@
 # Income Generalization (Q5) — Checklist — spec v1
 
-**Status:** Tasks 1–13 EXECUTED on `master` (main checkout) — one commit per task, tests green · **Date:** 2026-09-03 (executed 2026-09-04)
+**Status:** Tasks 1–13 EXECUTED on `master` (main checkout) — one commit per task, tests green · **Date:** 2026-09-03 (executed 2026-09-04) · **Resolution:** COMPLETE — as filed. T1–T12 landed one-commit-per-task (`04381f0`…`ce4b3a0`), T13 = this-file/specs sweep; suite green at T13 (141 files / 1499 tests; only red = sandbox PORT=0 artifact in profile.test.mjs); no dirty state. T14/T15 + launch+verify + commit/push stay USER-GATED (intentionally unticked). (**Date:** 2026-09-19)
 **Commits:** `04381f0` T1 registry surface · `622429d` T2 autodetect · `13e4c2c` T3 autodetect endpoint · `076a5ea` T4 forExtension snapshot · `65b02b5` T5 ingest income branch · `8f3b9fe` T6 snapshot+cadence · `48a11a9` T7 wsFrames relay · `47f867e` T8 host generalization · `fddd435` T9 grass by config · `9212e9a` T10 server-backed streams+migration · `43ac1c0` T11 overview endpoint · `ce4b3a0` T12 Overview/Streams UI · T13 sweep (this file + specs tracked).
 **Grounding rules:** server logic → vitest in `apps/dashboard/server/__tests__/` (repo pattern). Extension logic → `node --check` minimum per edited `.js` file, plus the existing `extensionIntegrity.test.mjs` pin. **The user launches and confirms workability before any commit** — so the FINAL gate is a launch+verify, then commit/push.
 

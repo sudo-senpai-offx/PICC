@@ -1,5 +1,7 @@
 # Signal venue pool — decision (T5 / Decision D follow-up)
 
+**Status:** DECISION. **Resolution:** COMPLETE — narrow-to-liveEO-verified executed (`99a1b06`); filter live in code (**Date:** 2026-09-19)
+
 ## Question
 Should `resolveAlertVenue`'s exactly-one candidate pool narrow to liveEO-verified venues only, or keep IS-mode (integration-speculative) venues as candidates?
 
@@ -35,3 +37,11 @@ The pool filters to venues whose capture path is a *verified live-session* path.
 - `signalEngine.test.mjs:72-78` (single-EO, REAL resolver) stays green and becomes the real-catalog exemplar.
 - `signalEngine.test.mjs:88-98` — catalog-only / multiple-venue cases keep `undefined`, but the `candidateConfigs` injection must apply the same `"liveEO"` filter first or its multi-candidate semantics diverge from the real catalog.
 - Not affected: `browserStudio.test.mjs:66-90`, the studio bridge contract tests (successor to the extension integrity pins, which were removed with the extension), feed/headless paths.
+
+## Resolution (2026-09-19)
+
+**Disposition:** COMPLETE — the DECISION was executed, not merely recorded.
+
+**Evidence:** `99a1b06` "narrow signal venue pool to liveEO-verified" landed. `signalEngine.mjs:76-90` `resolveAlertVenue` filters `studioCaptureCatalog()` candidates to `c.via === "liveEO"` and emits on exactly-one liveEO candidate with `mode !== "none"` and a `url`; otherwise `undefined` (no fabricated venue). The flipped assertions from this spec's risk notes are live: `signalEngine.test.mjs:80-86` (EO wins), `:110-113` (IQ-alone → undefined), `:72-78` (single-EO real-catalog exemplar). `captureProfiles.mjs:62,730-735` enumerates `captureProfile`/liveEO sessions. Per this spec's D1 note (2026-09-17) the catalog anchor is now `studioCaptureCatalog()` — resolution behavior unchanged.
+
+**Successor:** none — the narrowed pool is the live behavior and stays consistent with the v3.2 rebuild (EO remains the verified live capture venue).

@@ -1,6 +1,6 @@
 # PICC Earnings — Agentic Ministry (v1)
 
-- **Status:** DRAFT — awaiting owner answers to Open Questions (§9)
+- **Status:** DRAFT — awaiting owner answers to Open Questions (§9). **Resolution:** ACTIVE — still the governing plan for earnings automation; §9 answered 2026-09-11; §11 tiered-router infra delivered via RESOURCE_GOVERNOR G1–G5; Phase A/B wiring unbuilt and §10-gated on trading-suite trust (now the v3.2 decision-core rebuild, ADR-0004) (**Date:** 2026-09-19)
 - **Classification:** ARCHITECTURAL — a web of AI, agentic features, models and workflows inside the Earnings ministry (country-ministry concept)
 - **Owner directive (this session):** "Automate as much as possible unless strict/risky where advice + manual." Semi-automatic workflows: agents prepare, humans execute the restricted class.
 - **Anchors:** PICC_SUITE_MINISTRY_MODEL_v1.md — REQ-5/REQ-6 (advisory-first, sovereignty envelope), REQ-13 ("Earnings may emulate/spawn sub-agents for a particular task in its broad field"), T9 (localized vs de-localized — Phase 2, out of scope)
@@ -228,3 +228,11 @@ word list drives it (unit-tested positive/negative cases).
   (crypto signers, order signatures), state-changing API calls with your auth, approvals, acceptances,
   commitments, bookings.
 - Exception (runs): fully reversible, no-reputation, zero-value reads (GET-style observability only).
+
+## Resolution (2026-09-19)
+
+**Disposition:** ACTIVE — this is the standing source of truth for the earnings-ministry automation plan. Remaining work is intentional and unbuilt: Phase A (AgentRunner + the earnings agents room) and Phase B (workflow registry `earningsWorkflows.ts`, gate classifier, advice-quality ledger). §10 gates live capability on **trading-suite trust** — which is currently the v3.2 decision-core rebuild (ADR-0004) and therefore the thing holding this ministry's automation keyed.
+
+**Evidence:** (1) the only commit ever touching this file is `ed81b5f` (batch docs write); no implementation commit references it. (2) `src/components/agents/AgentRunner.tsx` and `src/lib/earningsWorkflows.ts` DO NOT EXIST (globbed this session); `ministry/EarningsRooms.tsx` has only overview/streams/catalog/settings/simulator tabs — no agents room. (3) The §11 tiered-router infrastructure landed through the Governor instead: `server/services/resourceGovernor.mjs` (routeTask/recordCall/governorStats), `llm.mjs:53-74,134-136` (G2), `ResourceGovernorPanel.tsx`, pack registry (Pack 1, `0729544`) — so §11 is effectively implemented, not pending. (4) Owner answers confirmed: depin/fleet_monitor dropped (Q6), investment parked (Q1), Algory RE split out to its own spec.
+
+**Successor / gate:** the trading-suite trust gate (§10) is now represented by ADR-0004 + `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md`; the ministry's A/B wiring is designed to be switched live the moment that gate passes.

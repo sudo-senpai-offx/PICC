@@ -2,7 +2,7 @@
 
 > **D1 clean break (2026-09-17) — historical record:** this spec's T13 direction made the **extension the PRIMARY capture leg** (studio fallback). That was reversed by the D1 decision: the extension is removed and the **studio browser is the only capture leg**. REQ-D/Mechanism D (extension status framing) and the `extensionIntegrity`/`extensionSessionCapture` pins referenced below no longer exist. Headless capture itself (the spec's core subject) is unaffected; treat extension-derived rows as history.
 
-**Status:** Draft for execution · **Date:** 2026-08-29
+**Status:** EXECUTED — all T1–T13 completed (Phase 5 series) · **Date:** 2026-08-29 · **Resolution:** COMPLETE — engine landed 2026-08-29/30 (`3ddbe4a` T1–T4 core → `0d19475` T13): captureProfiles registry, captureVenue runner (vault gate → needs-credentials; never fabricate login), 60s scheduler with per-venue cadence gate + flap guard, accountMetrics, headless-status endpoint, first-login approval, iqoption T11, contract locks T12, extension capture leg T13. The D1 clean break later removed the extension leg (`9d7d460`) per the banner above — headless capture itself remains the studio-side capture/delivery engine (`browserStudio.mjs`), ALIGNED with the suite+ministry model. (**Date:** 2026-09-19)
 **Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (multi-venue integration; Platform-Kind taxonomy at
 `apps/dashboard/server/services/browserStudio.mjs:541-552`) · the Phase-1 read-only bridge contract
 (suite never executes trades) · the Phase-4 token-refresh-revive wiring (`handlers.mjs:1292-1302`,

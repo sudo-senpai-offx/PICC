@@ -1,6 +1,6 @@
 # Extension↔Web-App Connectivity Engine — spec v1 (Phase 1)
 
-**Status:** Draft for execution · **Date:** 2026-08-28
+**Status:** Draft for execution · **Date:** 2026-08-28 · **Resolution:** SUPERSEDED — phase-1 tasks T1-T10 shipped and landed green, but the entire extension sensor surface was removed by the extension clean break (D1); successor = extension eradication + Browser Studio (**Date:** 2026-09-19)
 **Extends:** `docs/TRADING_MULTIPLATFORM_ROADMAP.md` (quote/candle bus row + §6 checklist item 5) · `docs/specs/NEXT_WAVE_generalization.md` (R8 division of labor)
 **Supersedes:** nothing — new work at the extension sensor layer.
 **Grounding rule:** every claim below carries a `file:line` I read this session; anything not re-read this session is marked **UNVERIFIED** and must be re-verified at execution start.
@@ -83,3 +83,15 @@ Third defect: the "always available" lowest-priority fallback is a no-op — `ya
 - Demo/live gates: untouched (REQ-8). Rate limiters: untouched; T3 may *correct* the heartbeat cadence claim, not the limit.
 - Fabricated-state risk: the `piccSensorStatus` writes at `content.js:29,37` are the only state the sensor owns; after T2 they are guarded and honest (offline = `online:false`, never "online" when dead).
 - Unverified-this-session items to re-verify at execution: `liveEO.mjs:872-926` (subscribe/stats region), `popup.js`/`background.js` exact handler lists, `/api/trading/brokers` response shape, `yahoo.mjs` exports, `useRealtimeSuite.ts` line refs, `extensionIntegrity.test.mjs` line refs.
+
+---
+
+## Resolution (2026-09-19)
+
+**Disposition: SUPERSEDED** — this document was the Phase-1 extension-sensor connectivity spec; that surface no longer exists in the live tree.
+
+**Evidence of closure (the work it specified was real and shipped):** T1→T10 landed green with commits `59da6aa` (guarded chrome accessor + teardown), `123f576` (background resurrection + popup round trip), `b274ad2` (hybrid feed mode), `23d814f` (resolution honesty chain), `744f536` (capability-driven buttons), `726398f` (Yahoo daily fallback), `e0c9622` (SSE coalescing), `9c46310` (integrity contract lock), `7ac5853` + `4373755` (docs copy purge). T11 was machine-verified in `7108c8f` with the real-Chrome rows honestly left UNVERIFIED-HUMAN.
+
+**Evidence it is superseded (the surface was removed):** decision D1 (extension eradicity / clean break) in `docs/specs/PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md` §0; `9d7d460` deleted `apps/dashboard/extensions/picc-overlay/` (content.js, background.js, popup.js) and removed `extensionIntegrity.test.mjs` + `sensorContentLifecycle.test.mjs`; `b85e83e` removed the `/api/extension/*` routes and `e2eExtensionFeedChain.test.mjs` + `extensionIngestEndpoint.test.mjs`; `6536176` purged residual extension language. HEAD `apps/dashboard/` contains no `extensions/` directory; the only surviving artifact is the absence-pinning `extensionAbsence.test.mjs`. The plasmo tree survives only as the git-history archive `apps/extension-archived/` (kept per A4.1). Feed-mode, resolution-honesty, and SSE-coalescing outcomes that this spec pioneered live on in the studio/headless architecture (`PICC_EMBEDDED_BROWSER_STUDIO_v1.md`, `PICC_MULTISOURCE_ENGINE.md`).
+
+**Successor:** the extension eradication `/` clean-break decision D1 and, for the capture/feed role, the Browser Studio (`browserStudio.mjs`). T11 row carries the same superseded annotation from `a49c441`.

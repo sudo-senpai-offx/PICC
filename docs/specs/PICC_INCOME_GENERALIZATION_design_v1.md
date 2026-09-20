@@ -1,6 +1,6 @@
 # Income Generalization (Q5) — Design — spec v1
 
-**Status:** Draft for execution · **Date:** 2026-09-03
+**Status:** ACCEPTED — executed via the checklist · **Date:** 2026-09-03 · **Resolution:** COMPLETE — executed per the checklist (Tasks 1–13, commits `04381f0`…`ce4b3a0`, suite green). Verified: registry connector rows + `positionConnectorSignedIn("income")` tests; origin-routed ingest; 2m snapshot cadence; wsFrames relay; server-backed streams + migration; revenue-branded Overview. Deviation per D1 clean break: extension-derived income rows are inert/history (extension leg removed `9d7d460`). (**Date:** 2026-09-19)
 **Grounding rule:** every claim carries a `file:line` read this session; anything not re-read is **UNVERIFIED** and must be re-checked at execution start.
 
 This design reuses the server-side connector registry and the unused localstore CRUD before inventing anything. It is the backbone the user asked for: **config-driven site registry + autodetect + extension collection + unified server-backed income surface**.

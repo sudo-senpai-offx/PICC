@@ -1,6 +1,6 @@
 # Command Centre Web — Design Spec
 
-**Status:** ready-for-agent (living spec — continuously improved through implementation)
+**Status:** ready-for-agent (living spec — continuously improved through implementation) · **Resolution:** ACTIVE — slices 1–6 landed & verified; slice 7 (ExpertOption ExpertBot demo + expansion docs) still queued (**Date:** 2026-09-19)
 **Date:** 2026-09-05
 **Author:** PICC executor (brainstorm + codebase check + design presented & approved in conversation)
 **Location note:** This spec is one of the authoritative sources for the cumulative, exhaustive
@@ -536,3 +536,20 @@ follows the same protocol:
   and audit are outside their reach.
 - **This is a design/planning artifact** — nothing here is yet implemented; production wiring and
   tests are required before any slice is claimed done, and verification is observed, never assumed.
+
+## Resolution (2026-09-19)
+
+**Disposition: ACTIVE.** This is the governing, living source of truth for the Command Centre feature. Rollout slices 1–6 are landed and verified (below); slice 7 — ExpertOption ExpertBot demo pattern (rules config, cloud-analytics signal leg, journal) + expansion docs/checklist — is genuinely unimplemented and still queued.
+
+**Evidence (re-verified on disk this session):**
+- All slice-1..6 modules present under `apps/dashboard/server/services/commandCentre/`: `agentRoster.mjs` (TRADING_ROSTER + EXPERTOPTION_ROSTER, `AGENT_REGISTRY` :19), `policyGraphCatalog.mjs` (2 templates: `trading:ccxt` sanctioned + `expertoption` forbidden/demo — the `bandwidth:browser` template is gone), `policyGraphValidator.mjs`, `modeEngine.mjs`, `auditTrail.mjs`, `safetySidecar.mjs`, `deliberation.mjs` + `metalearning.mjs`, `commandCentreRuntime.mjs`, `commandCentreOverview.mjs`, `commandCentreExecution.mjs`, `ccxtExecution.mjs`, plus `ccxtOrdering.mjs`.
+- Tests present: `server/__tests__/commandCentre.{test,sidecar,auditTrail,modeEngine,modeEngine.slice3,deliberation,metalearning,execution,runtime,overviewApi,ordersApi}.test.mjs`.
+- Frontend: `src/components/CommandCentrePanel.tsx` mounted via `src/pages/ministry/CommandCentreRoom.tsx`, wired into `MinistryRoom.tsx:21`; panel tests at `CommandCentrePanel.test.tsx`.
+- Each slice's "Landed 2026-09-05" commit chain verified in git: `8a3d6df` (slice 1) → `c44d293` (2) → `9f556f1` (3) → `35df9e3` (4) → `c339a47` (5) → `d779ecc` (6), with `e2aa6f9`/`da52233` pinning follow-ups.
+
+**Remaining / caveats:**
+- **Slice 7 (ExpertOption ExpertBot demo) is unimplemented**: catalog template + roster exist, but `commandCentreOverview.mjs:273` itself records `"demo surface reported by the ExpertBot runtime — finishes slice 7"` and no ExpertBot runtime module exists in the service tree. This is the spec's one open slice.
+- **Bandwidth content is obsoleted**: slice 1's `bandwidth:browser` template and slice 5's bandwidth-claim live leg pertained to the bandwidth suite, which was removed end-to-end (`a11721e`); the catalog now ships only `trading:ccxt` + `expertoption`. The remaining web (mode engine, sidecar, deliberation, CCXT execution) is untouched by that removal and stays governed here.
+- **Overlap with the trading-logic rebuild**: the v3.2 rebuild (B-IND-0 §12.4) intentionally reuses the existing `safetySidecar` + `interventions` for its trip-wires, so this spec remains the referenced home of those seams. Where the rebuild's decision surface (Constitution → Context/Regime → 5-point) supersedes the mode-engine verdict path, that boundary is owned by `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md`, not this file; no rewriting was done here.
+
+**Actionable now:** slice 7 execution (ExpertOption ExpertBot pattern demo + expansion docs/checklist) if/when the project proceeds with it. This file was annotated only — body preserved verbatim.

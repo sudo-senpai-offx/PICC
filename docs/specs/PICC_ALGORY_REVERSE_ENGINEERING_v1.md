@@ -1,7 +1,7 @@
 # PICC — Algory Reverse-Engineering Project (v1)
 
 - **Status:** DRAFT — plan agreed in scope (owner Q5: "everything required to generate a full-fledged spec,
-  100% understandable by AI agents"); execution pending owner approval to proceed.
+  100% understandable by AI agents"); execution pending owner approval to proceed. · **Resolution:** COMPLETE — the research project the plan specified was executed and its deliverable (`docs/specs/PICC_ALGORY_FINDINGS_v1.md`) was produced; the plan's own "DRAFT / execution pending approval" line is stale post-execution (**Date:** 2026-09-19)
 - **Goal:** extract everything from the Algory installer → produce an AI-agent-readable findings spec that
   feeds trading-suite improvement (and the earnings trust gate, which depends on trading-suite health).
 - **Artifact:** `C:\Users\sharv\Downloads\Algory_Setup_1.5.1.3.3.exe`
@@ -39,3 +39,15 @@
   behavior is ever needed → sandbox/VM only.
 - Owner-provided download links for Chrome-extension candidates feed the same findings pipeline.
 - 7-Zip 26.03 installed via winget this session (tool, reported).
+
+---
+
+## Resolution (2026-09-19)
+
+**Disposition: COMPLETE** — the reverse-engineering project this plan scoped produced its planned deliverable.
+
+**Evidence:** `docs/specs/PICC_ALGORY_FINDINGS_v1.md` exists and names this file as its plan (`"Plan: docs/specs/PICC_ALGORY_REVERSE_ENGINEERING_v1.md"`); the extraction was performed (2,511 files unpacked from the installer, outside the repo) — commit `ed81b5f` created both files. §3 acceptance's "findings doc contains feature map, endpoint inventory, logic summaries, security notes, borrow list" is met by the findings doc (§2–§8).
+
+**One honest correction recorded:** §1's "verified findings" (TclApp-style VFS, `Tcl/Tk`, ~12,019 entries) were revised by actual execution — the findings doc establishes a **PyInstaller** `PYZ.pyz` bundle (PyArmor-encrypted, 2,511 files, `.pyc` residue) with customtkinter/WebView2, not TclApp. The findings doc is authoritative over the plan's preliminary interpretation.
+
+**Nothing supersedes this plan** (research-end; natural disposition archive-equivalent, but the plan itself was fully executed — hence COMPLETE with a stale-status note).

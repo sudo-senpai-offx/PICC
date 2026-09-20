@@ -1,6 +1,6 @@
 # PICC Trading Suite Rebuild — spec v1
 
-**Status:** PLAN — Phase B of `PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md` (`docs/specs/`, §2). Write-only planning artifact: no code changes in this session, no other files touched.
+**Status:** PLAN — Phase B of `PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1.md` (`docs/specs/`, §2). Write-only planning artifact: no code changes in this session, no other files touched. **Resolution:** SUPERSEDED — Phase B landed as implemented suite code (`bf99e09`); the decision-core remainder is superseded by ADR-0003/0004 + the v3.2 layered-engine rebuild (**Date:** 2026-09-19)
 
 **Directives:** D4 (advisory AND execution paths; paper income separate from real income/PnL on every surface) · D5 (regime detection + MTF enhancement, both — the full-aware rebuild basis).
 
@@ -183,3 +183,12 @@ Module contract (mirrors `mtfConvergence` purity + voter style):
 1. **"Paper → real opt-in" reading (D4).** This spec interprets "real" as the venue DEMO account (PICC §0 forbids live-money orders; `openPaperTrade` is the only order path). Phase B builds the human-approved gate for PAPER orders only; venue-demo placement stays the existing manual human-clicked surface (`/api/trading/demo/place`). Confirm this reading — if "real" ever means live money, that is out of scope for PICC entirely (ADR-level decision).
 2. **`regimeEngine.mjs` as new sibling vs extending `mtfConvergence.mjs`** — recommended and spec'd as new sibling (R1-style pin preservation). Confirm, or the executor stops at B-REG-1.
 3. **Soft-blend default-on** with confidence floor 60 + additive labeling + `mode:"off"` escape hatch — confirm the UX default (affects what users see on the MTF matrix after B lands).
+
+## Resolution (2026-09-19)
+
+**Disposition:** SUPERSEDED. The rebuild's shipping slices (D4/D5) LANDED and are in the tree; the spec's forward-looking execution/decision-core direction is superseded by the current rebuild.
+
+**Evidence (landed):** `bf99e09` "feat(suite): regime/fusion/execution gates and paper/real money separation". On disk: `server/services/regimeEngine.mjs` (D1, B-REG), `proanalysis.mjs:250,761` regimeLayer/mtfLayer groups (`source:"regimeEngine"` / `"liveEO-buffers"`; D3, B-FUS), `server/__tests__/paperRealSeparation.test.mjs` + `executionAbsence.test.mjs` (D4/D5, B-PAP/B-EXE), `docs/specs/notes/B-PAP-1-paper-ledger-audit.md` (B-PAP-1). The spec's §0 committed quote ("U4FA is the decision engine; this build enhances it") no longer governs.
+**Evidence (superseded):** `docs/specs/notes/B-IND-0-current-engine-coverage-2026-09-19.md` (ADX keep, VWAP-4H keep, EMA 9/21 keep, U4FA verdict relabeled → demoted from the decision path), ADR-0003 (15s execution pipeline + 15s HUD inside the 60s engine core), ADR-0004 (U4FA `verdict` retires; parallel soak then flip), and `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md` (Status: Draft for execution, 2026-09-19) — which names this pre-rebuild era explicitly.
+
+**Successor:** `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md` (+ ADR-0003/ADR-0004). Suite UI continues on under the reskin (`6bfc763`); regime/fusion/paper-separation survive as landed machinery.

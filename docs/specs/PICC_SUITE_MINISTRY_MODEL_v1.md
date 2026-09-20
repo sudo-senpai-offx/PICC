@@ -1,5 +1,7 @@
 # PICC Suite + Ministry Model & IA Rebuild — spec v1
 
+> **Status/Resolution (2026-09-19):** PASSED-INTO-IMPL — partially executed (post-D1). Trust scope: written speculation unless executed/verified. Executed slices: ministry shell + inner sidebar (`1a382b8`), ministry rooms + suites landing + in-app browser rerouting (`47fbe3d`), studio as a cross-suite universal resource (`52091a3`), legacy bandwidth suite retired (`a11721e`, as cited below). Pending/aspirational: the authority/consent governance (autopilot/copilot flip-switch, confidence gates), sovereign envelope, and de-localized agent governance — VOTED-SAVE, untouched by code.
+
 **Scope:** Rebuild PICC as a country of *ministries* (suites) over a shared spine. Establishes (a) the 3-suite inventory — **Trading** (production), **Earnings** (broad income ministry), **Intelligence for PICC** (prime-minister/governor suite) — with expandability, (b) the governance model (localized vs. de-localized agents, the *governor*, the *Godlike* user), (c) the authority/consent model (per-suite **autopilot/copilot flip-switch**, confidence-gated, sovereign envelope), (d) the two-level route/nav IA, (e) per-ministry encapsulation + shared spine, (f) the folding rules that retired the old category suites. Write-only planning artifact — no code changes in this session.
 
 **Supersedes / retires:** `docs/specs/PICC_BANDWIDTH_SUITE_design_v1.md` (bandwidth suite removed in commit `a11721e`). This spec defines what comes after that removal.

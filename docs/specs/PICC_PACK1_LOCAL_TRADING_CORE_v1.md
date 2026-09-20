@@ -3,7 +3,7 @@
 > **D1 clean break (2026-09-17) — historical record:** the "existing engine" rows below describe the extension as the PRIMARY capture leg (`extensions/picc-overlay/content.js`). The extension is removed; the **studio browser is the only capture leg** (`browserStudio.captureExpertOptionSession`, `sourceLeg:"studio"`). Pack-1 content (EO session capture, CCXT poll, news digest, signal notifications) is unaffected; extension rows are history.
 
 ## Status
-PROPOSED — one blocker category (`DEPENDENCY-NOT-YET-AVAILABLE` for the Cactus Needle T0 runtime) and three open-owner questions (§Open questions) before approval. No code landed from this spec.
+PROPOSED — one blocker category (`DEPENDENCY-NOT-YET-AVAILABLE` for the Cactus Needle T0 runtime) and three open-owner questions (§Open questions) before approval. No code landed from this spec. **Resolution:** COMPLETE — build slices S0–S5 landed and verified on disk; the Status block above is stale, predating Pack-1's execution (**Date:** 2026-09-19)
 
 **Owner decisions (2026-09-13):** Q1 — **Serper is REPLACED, never supplemented**: digest sources are free/reliable only (RSS/Atom + catalog §4 free candidates), with locally resettable rate limits (shared polite rate limiter), optionally fed by a local webcrawling service that is a **global PICC capability** (usable by other features, not Pack-1-only). Q2 — approved: re-login uses the existing studio/extension session, demo-token 30min lifecycle OK, and **any manual-login need must surface a proper workflow PATHWAY prompt (structured steps + ack), never silent autodetection/automation**. Q3 — confirmed: MarketsRoom placement. S1/S3/S5 and the S6 live-run expectations carry these decisions.
 
@@ -193,3 +193,17 @@ Excluded: barchart (200 but text/html, not feed XML); investing.com/rss/news_1.r
 **Env surface** — `PICC_NEWS_FEEDS` (comma-separated URLs; garbage entries dropped, never counted), `PICC_WEBFETCH_MAX_RPM` (default 30/min/host), `PICC_WEBFETCH_SOLVER` (empty off), `PICC_NEWS_DIGEST_SYNTHESIS` (off), `PICC_NEWS_DIGEST_MAX_ROWS` (200).
 
 **Verification** — batch 136/136 (packRegistry, packRunner, packRegistryApi, packObservers, handlers, scheduler, newsDigest, webfetch, webfetchApi). Full suite 206 files / 2123 tests green; `npm run typecheck` clean (exit 0). Live on the dev instance: unconfigured → registry `p1-3-news-digest => skipped-unconfigured | no-news-source-configured` + scheduler "news digest pass skipped — no feeds configured (honest skip)"; configured (2 feeds) → pass `feeds:2 ok:2 gated:0 rateLimited:0 items:50`, registry → `running | news digest active (2 feeds configured; last pass … - 50 items)`; GET `/api/webfetch/limits` → honest stats showing both observed hosts, `limited:0`.
+
+## Resolution (2026-09-19)
+
+**Disposition:** COMPLETE — the Pack-1 build shipped. The stale "PROPOSED / No code landed" Status block above predates execution; S3 execution notes were appended to this spec during delivery, and everything in them is verified on disk:
+
+- **S0 pack registry+runner+observers** — `server/services/packRegistry.mjs`, `packRunner.mjs`, `packObservers.mjs` on disk.
+- **S1 EO studio capture** — `browserStudio` session capture under the studio browser (extension rows in this spec are history per the D1 clean-break note at top).
+- **S2 CCXT market-data poll + S4 signal-notification observer** — `scheduler.mjs:358` observation blocks; ccxt adapter (`ccxtAdapter.mjs`).
+- **S3/S5 news digest + webfetch + governor/billing** — `newsDigest.mjs`, `webfetch.mjs`; resource governor + Pack settings; landed `0729544` as Pack-1 "Local Trading Core"; `PackRegistryStrip.tsx` UI in `47fbe3d` (S5).
+- **G4** Supabase/PayPal drop executed with the Pack (`0729544`); **Owner decisions** (2026-09-13: Serper replaced by free RSS/Atom + local crawler seam; re-login workflow pathway; MarketsRoom placement) all carried into the shipped slices.
+
+**Carry-forward:** the S6 manual live-observation gate (G5 acceptance) was recorded in this spec's verification block (dev-instance observations), which is a human/human-verifiable item — git cannot re-prove a live run, so it stays a recorded manual gate, not a git claim. **Cactus Needle T0 runtime remains `DEPENDENCY-NOT-YET-AVAILABLE`** exactly as the Status block flags — an honest open dependency, not a shipped item.
+
+**Successor:** Pack-2/3 (Earnings Monitor, Review & Strategy) are future work per Governor §5; the decision-core direction now follows `PICC_V3_2_LAYERED_ENGINE_REBUILD_v1.md`.

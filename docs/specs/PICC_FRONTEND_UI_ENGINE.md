@@ -1,6 +1,6 @@
 # PICC Frontend UI Engine — spec v1 (Phase 3)
 
-**Status:** Draft for execution · **Date:** 2026-08-28 · **updated 2026-09-17 (D1 clean break):** the browser extension is gone; feed modes are `["auto","studio"]`, and the `/api/extension/status` endpoint no longer exists. Extension-referencing rows below are retained as the historical plan but the LIVE seams they must consume are the studio variants marked in each row.
+**Status:** Draft for execution · **Resolution:** COMPLETE — U1–U6 all closed; delivered by reskin wave (`6bfc763`/`8a98999`/`1e603a3`) + closure `a105d96` (**Date:** 2026-09-19) · **Date:** 2026-08-28 · **updated 2026-09-17 (D1 clean break):** the browser extension is gone; feed modes are `["auto","studio"]`, and the `/api/extension/status` endpoint no longer exists. Extension-referencing rows below are retained as the historical plan but the LIVE seams they must consume are the studio variants marked in each row.
 **Extends:** `docs/specs/EXTENSION_CONNECTIVITY_ENGINE.md` (Phases 1) · `docs/specs/PICC_EXPLICIT_AUDIT.md` (Phase 2)
 **Supersedes:** nothing; consumes Phase 1's server/status surfaces.
 **Grounding rule:** claims cite files read this session; anything not re-read is marked UNVERIFIED.
@@ -48,3 +48,16 @@
 - No gate/rate-limit changes; no credential/value forwarding via the studio or any browser surface.
 - Fabricated-state risk is the inverse here: UI must not paint "live" when the session is offline — every label maps to a real status field (REQ-3).
 - UNVERIFIED re-read list: `Suites.tsx`/`useRealtimeSuite.ts`/`liveTrading.ts` exact line refs, `realtimeSuite.mjs` line refs, Trading-Suite prefs endpoint name, current studio page/dockable shape.
+
+## Resolution (2026-09-19)
+
+**Disposition: COMPLETE.** All six UI-engine tasks (U1–U6, REQ-1..REQ-5) are closed — exported as `[x]` with per-task landing evidence in the checklist above, verified by commit `a105d96`, and delivered across the reskin wave.
+
+**Evidence (re-verified on disk this session):**
+- U1/U3 — `apps/dashboard/src/components/SourceBadge.tsx` + `hooks/useSourcePreference.ts` on disk (reskin T10/T11, `1e603a3`); source-preference persist contract at `server/handlers.mjs` source-preference routes + `resolutionChain.test.mjs`.
+- U2 — `TradingChart` mismatch banner + disabled-button WHY-tools present in reskin-verified charts.
+- U4 — `apps/dashboard/src/hooks/useRealtimeSuite.ts` + `hooks/__tests__/sseCoalescing.test.ts` on disk (asserts exactly-one-fetch for two charts).
+- U5 — `apps/dashboard/src/pages/ministry/StudioRoom.tsx` on disk (shared per-suite studio surface).
+- U6 — target docs `TRADING_RUNBOOK.md`/`ARCHITECTURE.md` were removed in the two-doc end-state (`bb81441`); README/PICC parity confirmed — the doc targets no longer exist, so the "update docs" work item resolved by removal rather than edit.
+
+**NOT verified (test-run claims only):** the full-suite test tally and specific line refs asserted in the U-row annotations were recorded by prior session tooling and not re-run this docs pass. No task is left unimplemented. The spec's own design principles (honesty labels, one SSE bus, studio stays a status surface) remain live requirements enforced by the landed reskin components, but the U-series checklists themselves are closed and need no further action.

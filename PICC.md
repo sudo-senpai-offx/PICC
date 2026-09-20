@@ -427,29 +427,54 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 
 ---
 
-## §10 Specs Registry (16 files in `docs/specs/`)
+## §10 Specs Registry (34 spec/note files in `docs/specs/`)
 
-> Statuses are as stamped in each spec header, cross-checked 2026-09-05. Checkboxes inside specs
-> are aspirations until a test is green (§1).
+> Statuses are as stamped in each spec header, cross-checked **2026-09-19** (older-spec resolution
+> pass: every non-trading-logic spec received a `Resolution:` disposition). Checkboxes inside specs
+> are aspirations until a test is green (§1). Trading-logic specs (MTF, U4FA, MULTISOURCE) are the
+> v3.2 rebuild's lineage and were deliberately left **untouched** pending the rebuild execution.
 
-| Spec | Status stamp | Reality |
+| Spec | Resolution (2026-09-19) | Successor / note |
 | :-- | :-- | :-- |
-| **COMMAND_CENTRE_WEB_SPEC** | ready-for-agent (living) | newest; design approved; implementation = this repo's next phase (§11) |
-| EXTENSION_CONNECTIVITY_ENGINE (Phase 1) | Draft for execution, 2026-08-28 | largely landed; T11 A/B machine-verified, C/D human-pending |
-| MTF_CONVERGENCE_ENGINE | Approved (planning) | engine + convergence ledger landed |
-| NEXT_WAVE_generalization | Approved (planning) | slices R5–R8 executed; Slice 7f (Binance/Bybit extension selectors) open, user-gated |
-| PICC_EXPLICIT_AUDIT (Phase 2) | Draft for execution | delivered as `EXPLICIT_AUDIT_LEDGER.md` (all F1–F8, F-01..F-12 closed, §12) |
-| PICC_FRONTEND_UI_ENGINE (Phase 3) | Draft for execution | status chips reflect fault-isolated sources; UI wave landed |
-| PICC_HEADLESS_CAPTURE_ENGINE | Draft for execution, 2026-08-29 | capture engine + session policy landed |
-| PICC_INCOME_GENERALIZATION_checklist_v1 | Tasks 1–13 EXECUTED 2026-09-04 | verified |
-| PICC_INCOME_GENERALIZATION_design_v1 | Draft for execution, 2026-09-03 | executed via checklist (above) |
-| PICC_INCOME_GENERALIZATION_requirements_v1 | Draft for execution, 2026-09-03 | absorbed into design+checklist |
-| PICC_MULTISOURCE_ENGINE (Phase 4) | Draft for execution, 2026-08-29 | T7 landed (live probe deviation recorded); cross-source `verified` candles shipped 2026-09-04 |
-| PICC_NOTIFICATION_AND_ALERT_UX_v1 | draft (no status header) | alertEngine/notificationCenter/notifier exist |
-| PICC_SESSION_POLICY_AND_CHANNEL_CATALOG | draft + implementing, 2026-08-31 | session-policy route + channel catalog tabs landed |
-| PICC_SIGNAL_VENUE_POOL_DECISION | decision (T5/D) | venue pool: expertoption/ccxt/paper verdicts |
-| PICC_TRADING_SUITE_UPGRADE | draft | engine tags + read-only EO bridge correspond |
-| PICC_UNIVERSAL_4FA_ENGINE | Draft for execution, 2026-08-30 | U4FA shipped (`adaptiveConfluence`) |
+| **PICC_V3_2_LAYERED_ENGINE_REBUILD_v1** | ACTIVE — Draft for execution (new) | v3.2 rebuild; supersedes U4FA decision path; see ADR-0003/0004 |
+| COMMAND_CENTRE_WEB_SPEC | ACTIVE | slices 1–6 landed; slice 7 (ExpertBot demo + expansion docs) queued (§11 here) |
+| EXTENSION_CONNECTIVITY_ENGINE | SUPERSEDED | extension clean break (D1) → Browser Studio |
+| MTF_CONVERGENCE_ENGINE | ACTIVE (trading logic — untouched) | reference registers during v3.2 soak |
+| NEXT_WAVE_generalization | COMPLETE | slices 1–6 + DoD closed; 7f closed forever |
+| PICC_ALGORY_FINDINGS_v1 | RESEARCH-ARCHIVE | static findings; consumed by suite borrow-list |
+| PICC_ALGORY_REVERSE_ENGINEERING_v1 | COMPLETE | delivered as FINDINGS v1 |
+| PICC_BANDWIDTH_SUITE_design_v1 | REJECTED | ADR-0002 struck; removed end-to-end |
+| PICC_EARNINGS_AGENTIC_MINISTRY_v1 | ACTIVE | §9 answered; Phase A/B gated on v3.2 trust |
+| PICC_EMBEDDED_BROWSER_STUDIO_v1 | COMPLETE | Phase 0/A/C landed; B human-gated |
+| PICC_EXPLICIT_AUDIT | COMPLETE | A1–A8 closed; ledger absorbed into `PICC.md` |
+| PICC_EXTENSIONS_RESEARCH_v1 | RESEARCH-ARCHIVE | static findings; consumed by D1-era work |
+| PICC_EXTENSION_ERADICATION_AND_SUITES_REBUILD_v1 | COMPLETE | Phase A/B shipped; Phase C deferred to future spec |
+| PICC_FRONTEND_RESKIN_execution_handoff | SUPERSEDED | handoff executed; reskin closed |
+| PICC_FRONTEND_UI_ENGINE | COMPLETE | U1–U6 closed |
+| PICC_FRONTEND_UI_RESKIN_execution_handoff | SUPERSEDED | handoff executed; reskin closed |
+| PICC_FRONTEND_UI_RESKIN_resume | SUPERSEDED | handoff executed; reskin closed |
+| PICC_FRONTEND_UI_RESKIN_v1 | COMPLETE | T1–T12 verified on disk |
+| PICC_HEADLESS_CAPTURE_ENGINE | COMPLETE | T1–T13 landed; extension leg removed (D1) |
+| PICC_INCOME_GENERALIZATION_checklist_v1 | COMPLETE-as-filed | T1–T13 executed; T14/T15 user-gated |
+| PICC_INCOME_GENERALIZATION_design_v1 | COMPLETE | executed via checklist |
+| PICC_INCOME_GENERALIZATION_requirements_v1 | COMPLETE | absorbed into design+checklist |
+| PICC_MULTISOURCE_ENGINE | ACTIVE (trading logic — untouched) | data-source honesty for the v3.2 rebuild |
+| PICC_NOTIFICATION_AND_ALERT_UX_v1 | COMPLETE | T1–T10 landed |
+| PICC_PACK1_LOCAL_TRADING_CORE_v1 | COMPLETE | S0–S5 landed; S6 live-gate manual |
+| PICC_RESOURCE_GOVERNOR_v1 | COMPLETE | G1–G5 landed |
+| PICC_SESSION_POLICY_AND_CHANNEL_CATALOG | COMPLETE | delivered; checklist all [x] |
+| PICC_SIGNAL_VENUE_POOL_DECISION | COMPLETE | narrow-to-liveEO-verified executed |
+| PICC_STUDIO_SIMPLIFICATION_AND_SOURCE_LANDING_v1 | COMPLETE | executed via D1 clean break |
+| PICC_SUITE_MINISTRY_MODEL_v1 | PASSED-INTO-IMPL | executed slices landed; governance slices VOTED-SAVE |
+| PICC_TRADING_SITES_CATALOG_v1 | ACTIVE | venue/source source-of-truth; §6 C1–C4 + §4 unshipped |
+| PICC_TRADING_SUITE_REBUILD_v1 | SUPERSEDED | Phase B landed; decision core → v3.2 rebuild |
+| PICC_TRADING_SUITE_UPGRADE | SUPERSEDED | P1 delivered; P2/P3 → reskin + v3.2 |
+| PICC_UNIVERSAL_4FA_ENGINE | ACTIVE (trading logic — untouched) | decision path retires under ADR-0004; legs re-homed |
+| notes/B-IND-0-current-engine-coverage-2026-09-19 | ACTIVE (inventory) | authoritative engine inventory for the v3.2 rebuild |
+
+> **Delete-zone** (see ADR-0002): `PICC_BANDWIDTH_SUITE_design_v1` is struck — recreate only via a
+> new ADR after evidence the segment is profitable. Extension-era concept docs (CONNECTIVITY,
+> EXTENSIONS_RESEARCH, ALGORY, explicit-audit ledger) are disposition records, not live contracts.
 
 ---
 
