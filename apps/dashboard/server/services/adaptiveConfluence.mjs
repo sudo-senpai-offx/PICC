@@ -981,6 +981,49 @@ async function u4faRuntimeContext() {
   }
 }
 
+/**
+ * REQ-P3-11 (ADR-0004/REQ-STG-3) — flip-gate readiness surface. Data plumbing
+ * only: the toggle state + per-engine hit/miss counts + the `constitution.flipGate`
+ * comparison over the shared ledger. The actual flip stays an OPERATOR action
+ * after the ~2-4-week soak (≥100 paper trades each); this surface just reports
+ * whether the gate would say yes. Under a powered-OFF toggle it still reports
+ * the comparison numbers for the soak dashboard (`mode:"shadow"`).
+ */
+export async function v32Status({ rows = null, config = null, at = Date.now() } = {}) {
+  let led = rows
+  if (led == null) {
+    try {
+      led = correctlyAnsweredByEngine()
+    } catch {
+      led = []
+    }
+  }
+  let cfg = config
+  if (cfg == null) {
+    try {
+      const mod = await import("./v32Config.mjs")
+      cfg = (await mod.loadV32Config({})).config ?? {}
+    } catch {
+      cfg = {}
+    }
+  }
+  const gate = flipGate({ rows: led })
+  const enabled = cfg.enabled === true
+  return {
+    enabled,
+    mode: enabled ? "powered" : "shadow",
+    flipGate: {
+      flip: gate.flip,
+      legacyExpectancy: gate.legacyExpectancy,
+      candidateExpectancy: gate.candidateExpectancy,
+      legacyTrades: gate.legacyTrades,
+      candidateTrades: gate.candidateTrades,
+      reason: gate.reason
+    },
+    at
+  }
+}
+
 async function computeNow() {
   // Phase 9: fold the read-only CCXT exchange candles (liveCCXT.mjs, fed by the
   // scheduler's ccxt-market-data job) into the same decision batch so exchange
@@ -1008,9 +1051,14 @@ async function computeNow() {
   const observedPayout = await loadObservedPayouts()
   const u4faContext = await u4faRuntimeContext()
   const decisions = await decideAssets({ data, observedPayout, now: Date.now(), u4faContext })
+  // REQ-P3-11 — v3.2 flip-gate readiness rides `status.v32` on the live payload,
+  // but ONLY under a powered toggle (OFF keeps the response byte-identical).
+  const status = u4faContext?.v32Config?.enabled === true
+    ? { ...(data.status ?? {}), v32: await v32Status({ rows: u4faContext.v32Rows, config: u4faContext.v32Config }) }
+    : data.status
   cached = {
     ts: Date.now(),
-    status: data.status,
+    status,
     mode: data.mode,
     account: data.account,
     viewed: data.viewed,

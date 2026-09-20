@@ -11,7 +11,8 @@ import {
   decideAssets,
   evaluateAsset,
   logTradeVerdicts,
-  resetU4faRegimeStates
+  resetU4faRegimeStates,
+  v32Status
 } from "../services/adaptiveConfluence.mjs"
 import { ledgerHistory } from "../services/accuracyLedger.mjs"
 
@@ -153,5 +154,67 @@ describe("ON (v32Config.enabled: true) — the lane rides the live chain", () =>
     expect(row.engine).toBe("v3.2")
     expect(row.verdict).toBe("OBSERVE")
     expect(row.reason).toMatch(/no v3.2 context/)
+  })
+})
+
+describe("v32Status() — flip-gate readiness surface (REQ-P3-11)", () => {
+  it("reports shadow mode + flip:false under the 100-trade soak minimum", async () => {
+    const st = await v32Status({
+      rows: [
+        { engine: "v3.2", expiry: "60", hits: 5, misses: 5, total: 10 },
+        { engine: "legacy", expiry: "60", hits: 6, misses: 4, total: 10 }
+      ],
+      config: { enabled: false },
+      at: FIXED_NOW
+    })
+    expect(st.enabled).toBe(false)
+    expect(st.mode).toBe("shadow")
+    expect(st.flipGate.flip).toBe(false)
+    expect(st.flipGate.legacyTrades).toBe(10)
+    expect(st.flipGate.candidateTrades).toBe(10)
+    expect(st.flipGate.reason).toMatch(/under 100 paper trades/)
+    expect(st.flipGate.legacyExpectancy).toBeCloseTo((6 * 0.82 - 4) / 10, 6)
+    expect(st.flipGate.candidateExpectancy).toBeCloseTo((5 * 0.82 - 5) / 10, 6)
+    expect(st.at).toBe(FIXED_NOW)
+  })
+
+  it("reports powered mode when the toggle is on (numbers identical)", async () => {
+    const st = await v32Status({
+      rows: [
+        { engine: "v3.2", expiry: "60", hits: 5, misses: 5, total: 10 },
+        { engine: "legacy", expiry: "60", hits: 6, misses: 4, total: 10 }
+      ],
+      config: { enabled: true },
+      at: FIXED_NOW
+    })
+    expect(st.enabled).toBe(true)
+    expect(st.mode).toBe("powered")
+    expect(st.flipGate.legacyTrades).toBe(10)
+    expect(st.flipGate.flip).toBe(false)
+  })
+
+  it("flips only when both engines clear 100 trades and candidate expectancy ≥ legacy", async () => {
+    const st = await v32Status({
+      rows: [
+        { engine: "v3.2", expiry: "60", hits: 55, misses: 45, total: 100 },
+        { engine: "legacy", expiry: "60", hits: 48, misses: 52, total: 100 }
+      ],
+      config: { enabled: true }
+    })
+    expect(st.flipGate.flip).toBe(true)
+    expect(st.flipGate.reason).toMatch(/candidate expectancy ≥ legacy/)
+    expect(st.flipGate.legacyTrades).toBe(100)
+    expect(st.flipGate.candidateTrades).toBe(100)
+    expect(st.flipGate.candidateExpectancy).toBeGreaterThanOrEqual(st.flipGate.legacyExpectancy)
+  })
+
+  it("reads the live ledger when rows are not injected (no writes)", async () => {
+    const st = await v32Status({})
+    expect(st.at).toBeGreaterThan(0)
+    expect(Number.isFinite(st.flipGate.legacyTrades)).toBe(true)
+    expect(Number.isFinite(st.flipGate.candidateTrades)).toBe(true)
+    const after = ledgerHistory(500)
+    // v32Status is read-only: it must never append a ledger entry.
+    expect(after.filter((r) => r.engine === "v3.2" && r.assetId === "v32-status-probe")).toHaveLength(0)
   })
 })
