@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useParams } from "react-router-dom"
 import { suiteMeta } from "@/lib/suites"
+import { DispatchBell } from "@/pages/ministry/DispatchBell"
 
 export const INNER_NAV: Record<string, { to: string; label: string }[]> = {
   trading: [
@@ -8,6 +9,7 @@ export const INNER_NAV: Record<string, { to: string; label: string }[]> = {
     { to: "paper", label: "Paper" },
     { to: "autopilot", label: "Autopilot" },
     { to: "command-centre", label: "Command Centre" },
+    { to: "dispatch", label: "Dispatch" },
     { to: "simulator", label: "Simulator" },
     { to: "studio", label: "Studio" },
     { to: "settings", label: "Settings" }
@@ -45,15 +47,19 @@ export default function MinistryShell() {
           </div>
         </div>
         <nav className="nav">
-          {entries.map((e) => (
-            <NavLink
-              key={e.to}
-              to={e.to}
-              className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-            >
-              <span className="nav-label">{e.label}</span>
-            </NavLink>
-          ))}
+          {entries.map((e) =>
+            e.to === "dispatch" ? (
+              <DispatchBell key={e.to} />
+            ) : (
+              <NavLink
+                key={e.to}
+                to={e.to}
+                className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+              >
+                <span className="nav-label">{e.label}</span>
+              </NavLink>
+            )
+          )}
         </nav>
       </aside>
       <div className="ministry-content">

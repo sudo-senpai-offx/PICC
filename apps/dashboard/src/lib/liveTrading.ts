@@ -9,6 +9,7 @@
  */
 
 import { getToken } from "@/lib/auth"
+import type { DispatchEntry } from "@/lib/dispatch"
 import type {
   ClosedTrade,
   DemoAnalyticsResult,
@@ -273,6 +274,7 @@ export interface TradingSuiteSnapshot {
   deals: { ok: boolean; deals: DemoDeal[] } | null
   analytics: DemoAnalyticsResult | null
   convergence: ConvergenceResult | null
+  dispatch: { unread: number; entries: DispatchEntry[] } | null
 }
 
 // ── MTF convergence engine (spec MTF_CONVERGENCE_ENGINE, slices 1-7) ────────
