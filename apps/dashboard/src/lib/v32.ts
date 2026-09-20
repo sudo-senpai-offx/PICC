@@ -44,7 +44,7 @@ export interface V32DecisionRow {
     payoutBeats: boolean
     evRR: number | null
     evRRPass: boolean
-  }
+  } | null
   confidence: number | null
   regime: unknown
   copilot: { ok: boolean; wires: V32CopilotWire[]; blockedBy: (string | number)[] }
@@ -60,7 +60,7 @@ export interface V32ExplainState {
   verdict: "TRADE" | "NEUTRAL"
   blockedBy: (string | number)[]
   wires: V32CopilotWire[]
-  costLine: V32DecisionRow["costLine"] | null
+  costLine: V32DecisionRow["costLine"]
   score: { available: boolean; score: number | null; direction: string } | null
   regime: { adx: { available: boolean; chop: boolean | null } | null; session: { available: boolean; label: string | null } | null }
   risk: { dayStartBalance: unknown; pnl: unknown; proposalsToday: unknown }
