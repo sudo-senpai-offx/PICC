@@ -24,11 +24,13 @@ import { computeIndicatorDashboard, detectMarketPhase } from "./indicators.mjs"
 import { getBrokerData, subscribeBroker } from "./brokers/index.mjs"
 import { mergeCCXTAssets } from "./liveCCXT.mjs"
 import { recordSignal } from "./trading.mjs"
-import { recordDecision } from "./accuracyLedger.mjs"
+import { recordDecision, correctlyAnsweredByEngine } from "./accuracyLedger.mjs"
+import { flipGate } from "./constitution.mjs"
 import { getSentiment } from "./sentimentEngine.mjs"
 import { quickMtfCheck } from "./multiTimeframe.mjs"
 import { evaluateU4FA, MIN_5M_BARS } from "./fourFactor.mjs"
 import { U4FA_DEFAULTS, resolveAssetConfig } from "./u4faConfig.mjs"
+import { v32ContextForAsset, v32DecisionForAsset } from "./v32Engine.mjs"
 
 export const CANDIDATE_EXPIRIES = [60, 120, 300, 900] // seconds (15s excluded: 60s bar resolution can't estimate it honestly)
 /**
@@ -418,6 +420,31 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
     ? (u4faStrat.veto ?? U4FA_DEFAULTS.u4faVeto ?? true) !== false && u4faResult?.verdict === "NEUTRAL"
     : false
 
+  // ── v3.2 lane (REQ-P3-1, toggle ON only) ─────────────────────────────
+  // Carried on `strategies.v32` (built by decideAssets when enabled). OFF →
+  // `v32Enabled` false → `withV32` returns the strategies object untouched,
+  // so the decision shape is byte-identical to the pre-v32 era. When ON, the
+  // v3.2 row is composed from the SAME `best` confluence economics (winProb /
+  // payout / direction) the legacy row used — one lane, no invented feed.
+  const v32Enabled = strategies?.v32?.enabled === true
+  const v32Row = (bestEntry) =>
+    v32Enabled
+      ? v32DecisionForAsset({
+          ctx: strategies.v32.context,
+          v32Config: strategies.v32.config ?? {},
+          now: now ?? Date.now(),
+          data: {
+            winProb: bestEntry?.winProb ?? null,
+            payout: bestEntry?.payout ?? null,
+            spreadPips: 1.5,
+            slippagePips: 0,
+            rows: strategies.v32.rows ?? [],
+            risk: strategies.v32.risk ?? {}
+          }
+        })
+      : null
+  const withV32 = (out, entry) => (v32Enabled ? { ...out, v32: { enabled: true, result: v32Row(entry) } } : out)
+
   const read = confluenceRead(candles, volume)
   if (!read.ok || read.direction === 0) {
     return {
@@ -437,7 +464,7 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
       bars: read.bars,
       reasons: read.ok ? ["no directional confluence — stand aside"] : [read.error],
       ts: now,
-      strategies: strategiesOut
+      strategies: withV32(strategiesOut, null)
     }
   }
   const { closes, times } = arraysOf(cleanCandles(candles))
@@ -643,7 +670,8 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
               result: u4faResult
             }
           : {})
-      }
+      },
+      ...(v32Enabled ? { v32: { enabled: true, result: v32Row(best) } } : {})
     }
   }
 }
@@ -695,6 +723,36 @@ function buildU4faStrategy(a, ctx, now) {
   }
 }
 
+/**
+ * v3.2 lane (REQ-P3-1 / REQ-STG-1/2, ADR-0004). Returns `null` unless the
+ * runtime context carries `v32Config.enabled === true` — OFF means this code
+ * path is never reached and the decision object carries no `v32` field at all
+ * (the byte-identical floor pins that: same contract as the `constitution`
+ * param, adaptiveConfluence.mjs:574). ON: assembles the per-asset v3.2
+ * context (regime registers + venue + resolved class) exactly once per tick;
+ * the decision row itself is built later in `evaluateAsset` from the same
+ * `best` confluence economics that drive the legacy row.
+ */
+function buildV32Strategy(a, ctx, now) {
+  const vcfg = ctx?.v32Config
+  if (!vcfg || vcfg.enabled !== true) return null
+  try {
+    const context = v32ContextForAsset(a, ctx, vcfg)
+    return {
+      enabled: true,
+      context,
+      config: vcfg,
+      rows: Array.isArray(ctx?.v32Rows) ? ctx.v32Rows : [],
+      risk: ctx?.risk ?? {}
+    }
+  } catch {
+    // Fail-closed, per-asset: one asset's lane blowing up must never take down
+    // the decision batch (mirrors u4faRuntimeContext's null-on-failure). The
+    // decision builder turns a null context into an honest OBSERVE row.
+    return { enabled: true, context: null, config: vcfg, rows: [], risk: {} }
+  }
+}
+
 export async function decideAssets({ data, observedPayout = null, now = Date.now(), u4faContext = null } = {}) {
   const assets = Array.isArray(data?.assets) ? data.assets : []
   const sentimentMap = await Promise.all(
@@ -716,6 +774,8 @@ export async function decideAssets({ data, observedPayout = null, now = Date.now
       const candles = a?.periods?.[ANALYSIS_PERIOD] ?? []
       if (!Array.isArray(candles) || candles.length < MIN_BARS) return null
       const strategies = u4faContext ? buildU4faStrategy(a, u4faContext, now) : null
+      const v32lane = strategies ? buildV32Strategy(a, u4faContext, now) : null
+      if (v32lane) strategies.v32 = v32lane
       const d = evaluateAsset({ id: a.id, name: a.name, candles, volume: a.ticks, observedPayout, now, asset: a, sentimentOverride: sentimentMap[a.id] || null, strategies })
       // Regime latch continuity: persist whatever the pure engine reported
       // (refused/insufficient carry the prior latch through untouched).
@@ -802,9 +862,29 @@ export async function observedPayouts({ limit = 200 } = {}) {
   }
 }
 
-async function logTradeVerdicts(decisions) {
+export async function logTradeVerdicts(decisions) {
   const now = Date.now()
   for (const d of decisions) {
+    // v3.2 lane (REQ-P3-1, toggle ON only): log its own TRADE rows with
+    // `engine:"v3.2"` BEFORE the legacy guard so a v3.2 TRADE is recorded even
+    // when the legacy verdict is not TRADE. OFF → `strategies.v32` absent →
+    // this block never runs → the legacy loop below is byte-identical.
+    const v32row = d?.strategies?.v32?.enabled === true ? d.strategies.v32.result : null
+    if (v32row && v32row.verdict === "TRADE" && v32row.expiry != null) {
+      const key = `v32:${v32row.assetId ?? d.assetId}:${v32row.expiry}`
+      const last = logCooldowns.get(key) ?? 0
+      if (now - last < LEDGER_LOG_COOLDOWN_MS) {
+        /* cooldown */
+      } else {
+        logCooldowns.set(key, now)
+        if (logCooldowns.size > 400) logCooldowns.clear()
+        try {
+          await recordDecision({ ...v32row, winProb: d.winProb ?? null })
+        } catch {
+          /* accuracy ledger write must never break the engine */
+        }
+      }
+    }
     if (d.verdict !== "TRADE" || d.expiry == null) continue
     const key = `${d.assetId}:${d.expiry}`
     const last = logCooldowns.get(key) ?? 0
@@ -844,12 +924,30 @@ async function logTradeVerdicts(decisions) {
 async function u4faRuntimeContext() {
   if (process.env.VITEST) return null
   try {
-    const [{ loadU4faConfig }, { getEconomicCalendar }, { ledgerHistory }] = await Promise.all([
+    const [{ loadU4faConfig }, { getEconomicCalendar }, { ledgerHistory, correctlyAnsweredByEngine }] = await Promise.all([
       import("./u4faConfig.mjs"),
       import("./economicCalendar.mjs"),
       import("./accuracyLedger.mjs")
     ])
     const { config } = await loadU4faConfig({})
+    // v3.2 toggle (REQ-P3-1) — loaded ISOLATED from the u4fa config: a missing
+    // or corrupt v32-config file must NEVER degrade the legacy u4fa context.
+    // Absent from the repo = defaults = `enabled:false`.
+    let v32Config = { enabled: false }
+    try {
+      const mod = await import("./v32Config.mjs")
+      v32Config = (await mod.loadV32Config({})).config ?? { enabled: false }
+    } catch {
+      v32Config = { enabled: false }
+    }
+    // Flip-gate data (REQ-P3-11): v3.2 engine rows from the shared ledger so
+    // `v32Status()` / the confidence register can read them live.
+    let v32Rows = []
+    try {
+      v32Rows = correctlyAnsweredByEngine()
+    } catch {
+      v32Rows = []
+    }
     let events = []
     try {
       const cal = await getEconomicCalendar()
@@ -873,7 +971,10 @@ async function u4faRuntimeContext() {
       calendarSource: events.length ? "feed" : "fallback-schedule",
       spread: null, // T6: no bid/ask feed in PICC → F1 spread honestly unmeasurable (abort, never fabricate)
       losses,
-      candleSource: "liveEO"
+      candleSource: "liveEO",
+      v32Config,
+      v32Rows,
+      risk: {} // no balance/closed-trades feed in the live cycle → wire 1 fails closed honestly
     }
   } catch {
     return null
