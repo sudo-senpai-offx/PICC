@@ -15,6 +15,7 @@ import { getBrokerStats } from "./brokers/index.mjs"
 import { getMarketIntel } from "./marketIntel.mjs"
 import { convergenceSection } from "./marketConvergence.mjs"
 import { dispatchSection } from "./dispatchSection.mjs"
+import { v32Section } from "./v32Section.mjs"
 
 const SECTIONS = {
   trading: { ttl: 4000, load: () => tradingStatus() },
@@ -43,7 +44,10 @@ const SECTIONS = {
   // fast intraday sections and the slow demo ones — aggregation of 30m/4h from
   // the M1 buffer is cheap, but the read should not flap every suite tick.
   convergence: { ttl: 10000, load: () => convergenceSection() },
-  dispatch: { ttl: 2000, load: () => dispatchSection() }
+  dispatch: { ttl: 2000, load: () => dispatchSection() },
+  // v3.2 soak bay digits + register (C2). Own TTL like the other slow lanes; a
+  // failing section degrades to `snapshot.v32 = null`, never kills the suite.
+  v32: { ttl: 8000, load: () => v32Section() }
 }
 
 const cache = Object.fromEntries(Object.keys(SECTIONS).map((k) => [k, { at: 0, data: null }]))

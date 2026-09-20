@@ -42,6 +42,23 @@ vi.mock("../services/liveEO.mjs", () => ({
   liveEOStats: vi.fn(() => ({ status: "idle" })),
   liveEOData: vi.fn(async () => ({ status: "idle", mode: null, account: null, viewed: null, assets: [] }))
 }))
+vi.mock("../services/v32Section.mjs", () => ({
+  v32Section: vi.fn(async () => ({
+    ok: true,
+    enabled: false,
+    mode: "shadow",
+    at: 1,
+    assets: [],
+    assetCount: 0,
+    soak: { resolved: 0, breakeven: null, reason: "v3.2 lane off — soak digits require a powered toggle" },
+    flipGate: { flip: false, legacyExpectancy: null, candidateExpectancy: null, legacyTrades: 0, candidateTrades: 0, reason: "no decided rows for one engine — soak not comparable" },
+    watch: { total: 0, buffered: 0, reason: "waiting for the live watch set — broker feeds absent" },
+    decisions: { resolved: 0, total: 100 },
+    breakeven: null,
+    uptime: { seconds: null, reason: "v3.2 lane off — uptime requires a powered toggle" },
+    explain: []
+  }))
+}))
 
 const mockBrokerStats = vi.fn(() => ({ status: "idle" }))
 vi.mock("../services/brokers/index.mjs", () => ({
@@ -62,6 +79,7 @@ const ledger = await import("../services/accuracyLedger.mjs")
 const autopilot = await import("../services/autopilot.mjs")
 const liveEO = await import("../services/liveEO.mjs")
 const marketConvergence = await import("../services/marketConvergence.mjs")
+const v32SectionMock = await import("../services/v32Section.mjs")
 
 let m
 beforeAll(async () => {
@@ -87,6 +105,10 @@ describe("tradingSuiteSnapshot", () => {
     expect(snap.intel).toMatchObject({ ok: true, best: null, ranked: [] })
     expect(snap.convergence.state).toBe("LONG BIAS")
     expect(snap.convergence.score5).toBe(5)
+    expect(snap.v32.ok).toBe(true)
+    expect(snap.v32.enabled).toBe(false)
+    expect(snap.v32.watch.buffered).toBe(0)
+    expect(snap.v32.decisions.total).toBe(100)
   })
 
   it("serves cached sections without re-loading within the TTL", async () => {
@@ -125,6 +147,17 @@ describe("tradingSuiteSnapshot", () => {
     // A healthy convergence section still streams on later ticks.
     const snap2 = await m.tradingSuiteSnapshot()
     expect(snap2.convergence.state).toBe("LONG BIAS")
+    m.bustRealtimeSuite()
+  })
+
+  it("fault-isolates a failing v32 section to null (soak bay never kills the suite)", async () => {
+    m.bustRealtimeSuite()
+    vi.mocked(v32SectionMock.v32Section).mockRejectedValueOnce(new Error("engine down"))
+    const snap = await m.tradingSuiteSnapshot()
+    expect(snap.v32).toBeNull()
+    expect(snap.trading.ok).toBe(true)
+    const snap2 = await m.tradingSuiteSnapshot()
+    expect(snap2.v32.ok).toBe(true)
     m.bustRealtimeSuite()
   })
 
