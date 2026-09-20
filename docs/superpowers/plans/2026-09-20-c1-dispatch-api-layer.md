@@ -1,5 +1,7 @@
 # C1 — Dispatch + API Layer Implementation Plan
 
+**Status:** Complete · **Resolution:** COMPLETE — T1–T8 all landed and verified on disk; commits `fee72c4` (program docs) → `992da0a` (T1), `30a044b` (T2), `7a95fcf` (T3), `289f45a` (T4), `2c0f315` (T5), `e6d393c` (T6), `a51bdbf` (T7), this status edit is the Task 8 closure commit (**Date:** 2026-09-20). Full floor: 239 files / 2557 tests green, `npm run typecheck` clean.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the copilot's notification spine — a dispatch inbox service, its additive API endpoints, additive realtime sections, the on-demand v3.2 engine register endpoint, and the frontend Dispatch bell + room.
@@ -1045,6 +1047,16 @@ git commit -m "docs(copilot): C1 dispatch layer closure"
 ```
 
 ---
+
+## Plan Deviations (recorded at closure)
+
+These deliberate divergences from the plan text were discovered during implementation and are the source of truth for future work in this area:
+
+1. **T1 caps test (limit):** the service default `listDispatch` limit is 50, so the 500 cap test must call `listDispatch({ limit: 500 })` to observe the cap. The `dispatch.test.mjs` cap test does this; the plan snippet omitted the arg.
+2. **T1/T2 persistence re-import:** `_resetDispatchForTest()` clears the module store, so the "persists and reloads" case needs `vi.resetModules()` in `beforeEach`/`afterEach` to force a fresh import after reset — otherwise the reloaded module and the tested module are the same instance.
+3. **T2 POST body parsing:** `readBody` at `handlers.mjs:4711` pre-parses JSON into `req.body` (object), so the dispatch `/read` branch reads `body?.id` directly. The plan's `JSON.parse(req.body)` snippet was wrong for this handler and was not used (matches the `session-policy` branch pattern).
+4. **T4 shadow-mode fields:** when `enabled === false`, `v32Register` must zero `assets`/`assetCount` (`assets: [], assetCount: 0`) — plan Step 3 code emitted the collected assets even in shadow mode, contradicting the Step 1 test which asserts `assets: []`. Implemented to match the test.
+5. **T5 token plumbing:** the dispatch lib uses `getToken()` from `@/lib/auth` (matches every other frontend fetcher), not the plan's literal `localStorage.getItem("picc.session.token")`.
 
 ## Self-Review
 
