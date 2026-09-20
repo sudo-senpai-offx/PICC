@@ -19,6 +19,7 @@ const TRADING_ROOMS: Record<string, LazyExoticComponent<ComponentType>> = {
   paper: lazy(() => import("./PaperRoom").then((m) => ({ default: m.PaperRoom }))),
   autopilot: lazy(() => import("./AutopilotRoom").then((m) => ({ default: m.AutopilotRoom }))),
   "command-centre": lazy(() => import("./CommandCentreRoom").then((m) => ({ default: m.CommandCentreRoom }))),
+  dispatch: lazy(() => import("./DispatchRoom").then((m) => ({ default: m.DispatchRoom }))),
   simulator: lazy(() => import("./SimulatorRoom").then((m) => ({ default: m.SimulatorRoom }))),
   studio: StudioRoomComponent,
   settings: lazy(() => import("./SettingsRoom").then((m) => ({ default: m.SettingsRoom }))),
