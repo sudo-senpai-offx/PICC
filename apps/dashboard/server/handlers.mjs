@@ -81,6 +81,7 @@ import { subscribeDecisions, subscribeU4faEvents, getDecisions, observedPayouts 
 import { getMarketIntel } from "./services/marketIntel.mjs"
 import { ledgerHistory, ledgerStats, ledgerEngineStats, flushLedger, backtestGates } from "./services/accuracyLedger.mjs"
 import { pushDispatch, listDispatch, unreadDispatchCount, markDispatchRead } from "./services/dispatch.mjs"
+import { onDispatchLive } from "./services/dispatchSection.mjs"
 import {
   saveLLMSettings,
   llmSettingsView,
@@ -1159,6 +1160,7 @@ async function _handleApiInner(req, res, url, reqId) {
     let offDecisions = null
     let offU4fa = null
     let offCCXT = null
+    let offDispatch = null
     let keepalive = null
     let suiteTimer = null
     const detach = () => {
@@ -1168,6 +1170,7 @@ async function _handleApiInner(req, res, url, reqId) {
       if (offDecisions) offDecisions()
       if (offU4fa) offU4fa()
       if (offCCXT) offCCXT()
+      if (offDispatch) offDispatch()
       if (keepalive) clearInterval(keepalive)
       if (suiteTimer) clearInterval(suiteTimer)
       try {
@@ -1194,6 +1197,7 @@ async function _handleApiInner(req, res, url, reqId) {
     // shape (canonical assetId), so the chart routes them on assetId exactly
     // like EO ticks. No-op fan-out until a connected exchange polls data.
     offCCXT = subscribeLiveCCXT((msg) => send(msg.type, msg))
+    offDispatch = onDispatchLive((entry) => send("dispatch", entry))
     keepalive = setInterval(() => {
       try {
         res.write(": ping\n\n")

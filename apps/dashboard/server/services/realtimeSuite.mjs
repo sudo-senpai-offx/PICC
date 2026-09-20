@@ -14,6 +14,7 @@ import { demoStatus, demoDeals, demoAnalytics } from "./autopilot.mjs"
 import { getBrokerStats } from "./brokers/index.mjs"
 import { getMarketIntel } from "./marketIntel.mjs"
 import { convergenceSection } from "./marketConvergence.mjs"
+import { dispatchSection } from "./dispatchSection.mjs"
 
 const SECTIONS = {
   trading: { ttl: 4000, load: () => tradingStatus() },
@@ -41,7 +42,8 @@ const SECTIONS = {
   // MTF convergence read for the viewed asset (slice 7b). Own TTL between the
   // fast intraday sections and the slow demo ones — aggregation of 30m/4h from
   // the M1 buffer is cheap, but the read should not flap every suite tick.
-  convergence: { ttl: 10000, load: () => convergenceSection() }
+  convergence: { ttl: 10000, load: () => convergenceSection() },
+  dispatch: { ttl: 2000, load: () => dispatchSection() }
 }
 
 const cache = Object.fromEntries(Object.keys(SECTIONS).map((k) => [k, { at: 0, data: null }]))
