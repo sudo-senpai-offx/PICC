@@ -136,3 +136,28 @@ describe("loadV32Config / saveV32Config — tmp-dir round-trip (REQ-P3-9)", () =
     rmSync(dir, { recursive: true, force: true })
   })
 })
+
+import { stampV32Config } from "../services/v32Config.mjs"
+
+describe("v32Config enabledAt stamp (C2 uptime source)", () => {
+  it("stamps a fresh enabled-at when a config first turns enabled", () => {
+    const out = stampV32Config({ enabled: true, proposalCap: 3, consecutiveLossThreshold: null }, 12345)
+    expect(out.enabledAt).toBe(12345)
+    expect(out.enabled).toBe(true)
+  })
+
+  it("keeps an existing stamp while enabled (uptime is continuous)", () => {
+    const out = stampV32Config({ enabled: true, enabledAt: 111 }, 222)
+    expect(out.enabledAt).toBe(111)
+  })
+
+  it("clears the stamp when disabled so a re-enable re-stamps", () => {
+    const out = stampV32Config({ enabled: false, enabledAt: 111 }, 222)
+    expect(out.enabledAt).toBeNull()
+  })
+
+  it("leaves unrelated config keys untouched", () => {
+    const out = stampV32Config({ enabled: true, proposalCap: 7 }, 5)
+    expect(out.proposalCap).toBe(7)
+  })
+})

@@ -20,10 +20,11 @@ import { fileURLToPath } from "node:url"
 export const V32_DEFAULTS = Object.freeze({
   enabled: false,                // REQ-P3-1: OFF ⇒ legacy decision path byte-identical
   proposalCap: 0,                // REQ-P3-9: 0 = unlimited; supersedes maxDailyTrades/U4FA_MAX_DAILY_PROPOSALS
-  consecutiveLossThreshold: null // REQ-P3-7 wire 7: null = voluntary-pause disabled until owner sets a threshold
+  consecutiveLossThreshold: null, // REQ-P3-7 wire 7: null = voluntary-pause disabled until owner sets a threshold
+  enabledAt: null // C2: additive soak "uptime" anchor, stamped when enabled (honest null when never enabled)
 })
 
-const TOP_KEYS = new Set(["enabled", "proposalCap", "consecutiveLossThreshold"])
+const TOP_KEYS = new Set(["enabled", "proposalCap", "consecutiveLossThreshold", "enabledAt"])
 
 function checkType(v, kind, errors, path) {
   if (kind === "boolean" && typeof v !== "boolean") errors.push(`${path}: expected boolean, got ${typeof v}`)
@@ -51,6 +52,9 @@ export function validateV32Config(raw) {
     if (raw.consecutiveLossThreshold != null && (!Number.isInteger(raw.consecutiveLossThreshold) || raw.consecutiveLossThreshold < 1)) {
       errors.push("consecutiveLossThreshold: null (disabled) or positive integer")
     }
+  }
+  if (raw.enabledAt != null) {
+    checkType(raw.enabledAt, "number", errors, "enabledAt")
   }
   return { ok: errors.length === 0, errors }
 }
@@ -122,12 +126,30 @@ export async function loadV32Config({ file = null, config = null } = {}) {
 }
 
 /**
+ * Additive enabled-at stamp (C2). Pure so tests never touch the data dir:
+ * enabled without a stamp → stamp now; disabled → clear the stamp so a
+ * re-enable reflects a new soak start. Any other payload is returned unchanged.
+ */
+export function stampV32Config(value, now = Date.now()) {
+  if (value == null || typeof value !== "object") return value
+  if (value.enabled === true) {
+    if (value.enabledAt != null) return value
+    return { ...value, enabledAt: now }
+  }
+  if (value.enabled === false && value.enabledAt != null) {
+    return { ...value, enabledAt: null }
+  }
+  return value
+}
+
+/**
  * Atomic tmp+rename write (same pattern as u4faConfig.saveU4faConfig). VITEST-suppressed:
  * tests never touch the real data dir.
  */
 export async function saveV32Config(value, { file = null } = {}) {
   if (process.env.VITEST) return true
-  const payload = JSON.stringify(validateV32Config(value).ok ? value : V32_DEFAULTS, null, 2)
+  const stamped = stampV32Config(value)
+  const payload = JSON.stringify(validateV32Config(stamped).ok ? stamped : V32_DEFAULTS, null, 2)
   const filePath = file ?? CONFIG_FILE()
   const tmp = `${filePath}.${process.pid}.tmp`
   try {
