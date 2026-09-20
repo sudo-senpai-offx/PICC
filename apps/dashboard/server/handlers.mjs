@@ -1297,6 +1297,24 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  if (path === "/api/trading/engine/v32" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      const [{ getDecisions }, { loadV32Config }] = await Promise.all([
+        import("./services/adaptiveConfluence.mjs"),
+        import("./services/v32Config.mjs")
+      ])
+      const { v32Register } = await import("./services/v32Register.mjs")
+      const payload = (await getDecisions())?.decisions ?? []
+      const { config } = await loadV32Config({})
+      writeJson(res, 200, await v32Register({ decisions: payload, config }))
+    } catch (err) {
+      console.warn("[picc] engine/v32 failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/observed-payouts" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
     const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 200), 1), 1000)
