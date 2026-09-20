@@ -80,6 +80,7 @@ import { tradingSuiteSnapshot, bustRealtimeSuite } from "./services/realtimeSuit
 import { subscribeDecisions, subscribeU4faEvents, getDecisions, observedPayouts } from "./services/adaptiveConfluence.mjs"
 import { getMarketIntel } from "./services/marketIntel.mjs"
 import { ledgerHistory, ledgerStats, ledgerEngineStats, flushLedger, backtestGates } from "./services/accuracyLedger.mjs"
+import { pushDispatch, listDispatch, unreadDispatchCount, markDispatchRead } from "./services/dispatch.mjs"
 import {
   saveLLMSettings,
   llmSettingsView,
@@ -1266,6 +1267,29 @@ async function _handleApiInner(req, res, url, reqId) {
   if (path === "/api/trading/ledger/backtest" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
     writeJson(res, 200, await backtestGates())
+    return
+  }
+
+  if (path === "/api/trading/dispatch" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 50), 1), 500)
+    const unreadOnly = parsed.searchParams.get("unreadOnly") === "true"
+    writeJson(res, 200, { ok: true, unread: unreadDispatchCount(), entries: listDispatch({ limit, unreadOnly }) })
+    return
+  }
+
+  if (path === "/api/trading/dispatch/read" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const id = typeof body?.id === "string" ? body.id.trim() : ""
+    if (!id || id.length > 96) {
+      writeJson(res, 400, { ok: false, error: "id required" })
+      return
+    }
+    if (!markDispatchRead(id)) {
+      writeJson(res, 404, { ok: false, error: `no dispatch entry ${id}` })
+      return
+    }
+    writeJson(res, 200, { ok: true, id, read: true })
     return
   }
 
