@@ -10,14 +10,18 @@
 //
 //   11. perps-leverage-band   — proposal leverage in [PICC_CCXT_LEVERAGE_MIN,
 //                               PICC_CCXT_LEVERAGE_MAX]; absent/NaN → deny.
-//   12. perps-margin-cap      — implied margin (notionalUsd / leverage) <=
+//   12. perps-margin-cap      — implied margin from the PROPOSAL's notional
+//                               (proposal.notionalUsd / leverage — the margin
+//                               THIS order deploys) <=
 //                               PICC_CCXT_MARGIN_PER_POSITION_CAP_USD.
 //   13. perps-isolated-only   — proposal marginMode must be "isolated".
 //   14. perps-position-cap    — net open perps positions after this action
 //                               within PICC_CCXT_PERPS_MAX_OPEN_POSITIONS.
 //   15. perps-funding-fresh   — a funding observation within
 //                               PICC_CCXT_FUNDING_STALE_MS; absent/stale deny
-//                               with the observed age.
+//                               with the observed age. A future-dated
+//                               `funding.at` (negative age) passes — the
+//                               intended within-window reading.
 //
 // Cascade: the gates run in the fixed order 11→15; the FIRST deny stops the
 // rail and names itself (only that one deny is audited/reported).
@@ -130,7 +134,7 @@ export function evaluatePerpsGate({ template, proposal, observation, audit = nul
   if (!reduceOnly) {
     const capEnv = envNumber("PICC_CCXT_MARGIN_PER_POSITION_CAP_USD")
     if (!capEnv.ok) return block("perps-margin-cap", `invalid-environment: ${capEnv.varName}=${capEnv.raw}`)
-    const margin = observation.notionalUsd / leverage
+    const margin = proposal.notionalUsd / leverage
     if (!Number.isFinite(margin)) {
       return block("perps-margin-cap", "implied margin not computable — notionalUsd missing or not a number")
     }

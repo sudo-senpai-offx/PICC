@@ -155,8 +155,8 @@ describe("perps gate 12 — perps-margin-cap", () => {
   test("implied margin exactly at the cap (10.00) is allowed", () => {
     const r = evaluatePerpsGate({
       template: template(),
-      proposal: cleanProposal({ leverage: 4 }),
-      observation: cleanObservation({ notionalUsd: 40 })
+      proposal: cleanProposal({ leverage: 4, notionalUsd: 40 }),
+      observation: cleanObservation()
     })
     expect(r.allow).toBe(true)
   })
@@ -164,11 +164,22 @@ describe("perps gate 12 — perps-margin-cap", () => {
   test("implied margin over the cap (10.01) is denied naming perps-margin-cap", () => {
     const r = evaluatePerpsGate({
       template: template(),
-      proposal: cleanProposal({ leverage: 4 }),
-      observation: cleanObservation({ notionalUsd: 40.04 })
+      proposal: cleanProposal({ leverage: 4, notionalUsd: 40.04 }),
+      observation: cleanObservation()
     })
     expect(r.allow).toBe(false)
     expect(r.blockedBy).toBe("perps-margin-cap")
+  })
+
+  test("first open from a flat book uses the ORDER's implied margin (proposal notional), not the pre-action book — denies over-cap", () => {
+    const r = evaluatePerpsGate({
+      template: template(),
+      proposal: cleanProposal({ notionalUsd: 100000 }),
+      observation: cleanObservation({ notionalUsd: 0 })
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("perps-margin-cap")
+    expect(r.reason).toContain("25000")
   })
 
   test("reduce-only close with any margin passes gate 12 (post-close zero exposure)", () => {
@@ -271,7 +282,9 @@ describe("perps gate 15 — perps-funding-fresh", () => {
     })
     expect(r.allow).toBe(false)
     expect(r.blockedBy).toBe("perps-funding-fresh")
-    expect(r.reason).toContain(String(3 * 60 * 60 * 1000))
+    const m = r.reason.match(/observed age (\d+)ms/)
+    expect(m).not.toBeNull()
+    expect(Number(m[1])).toBeGreaterThanOrEqual(3 * 60 * 60 * 1000)
   })
 
   test("funding null is denied naming absent funding, even for a reduce-only close", () => {
