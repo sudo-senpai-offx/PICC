@@ -33,6 +33,11 @@
 // ccxtConnector.instances) because guardReadOnly would strip createOrder off a
 // shared instance. Everything is lazy: importing this module never pays ccxt's
 // startup cost, and tests inject a fixture library via _setCcxtLibForTests.
+//
+// Market type: instances are cached per market type keyed `id:defaultType`
+// (spot vs swap for the same exchange coexist — a future Hyperliquid perps
+// adapter builds a `defaultType:"swap"` instance alongside the existing spot
+// ones). Existing callers pass no defaultType and stay on the spot path.
 
 import { createLogger } from "../logger.mjs"
 import { toCcxtSymbol } from "./ccxtConnector.mjs"
@@ -77,7 +82,7 @@ async function ccxtLib() {
   return ccxt
 }
 
-const sessions = new Map() // exchangeId -> un-guarded instance
+const sessions = new Map() // "exchangeId:defaultType" -> un-guarded instance (spot and swap coexist)
 
 /** Test seam only — drop instances + in-memory equity (file wiped when permitted). */
 export function _resetCcxtOrderingState() {
@@ -130,11 +135,20 @@ export function ccxtKeysForExchange(exchangeId) {
  * requireKeys=true (the default) refuses an instance without configured
  * credentials — private endpoints (fetchBalance/fetchOrder/createOrder) cannot
  * work without them, and the seam must never quietly connect keyless.
+ * defaultType selects the market type: "spot" (the default, matching today's
+ * behavior) or "swap" (the perps leg a future Hyperliquid adapter uses as the
+ * "hyperliquid:swap" cache key). Any other value is refused loudly — never
+ * silently coerced. Spot and swap instances for the same exchange id coexist
+ * because the instance cache is keyed `id:defaultType`, not id alone.
  */
-export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox = null } = {}) {
+export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox = null, defaultType = "spot" } = {}) {
   const id = String(exchangeId ?? "").trim().toLowerCase()
   if (!id) throw new Error("ccxt ordering seam requires an exchange id")
-  const cached = sessions.get(id)
+  if (defaultType !== "spot" && defaultType !== "swap") {
+    throw new Error(`ccxt ordering seam: unsupported defaultType "${defaultType}" — only "spot" and "swap" are supported`)
+  }
+  const cacheKey = `${id}:${defaultType}`
+  const cached = sessions.get(cacheKey)
   if (cached) return cached
 
   const keys = ccxtKeysForExchange(id)
@@ -151,7 +165,7 @@ export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox 
   const opts = {
     enableRateLimit: true,
     timeout: 15_000,
-    options: { defaultType: "spot" }
+    options: { defaultType }
   }
   if (keys?.apiKey) opts.apiKey = keys.apiKey
   if (keys?.secret) opts.secret = keys.secret
@@ -172,7 +186,7 @@ export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox 
       log.warn(`sandbox requested but ${id} has no sandbox — live endpoints will be used`)
     }
   }
-  sessions.set(id, instance)
+  sessions.set(cacheKey, instance)
   return instance
 }
 
