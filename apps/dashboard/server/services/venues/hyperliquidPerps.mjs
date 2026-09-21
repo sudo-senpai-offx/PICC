@@ -134,13 +134,24 @@ async function swapInstance() {
   return ccxtInstanceFor(EXCHANGE_ID, { requireKeys: true, defaultType: DEFAULT_TYPE, sandbox: true })
 }
 
+let marketsPromise = null
 let marketsCache = null
 
+/** Promise-memoized: concurrent first callers share ONE in-flight loadMarkets. */
 async function loadMarketsOnce() {
   if (marketsCache) return marketsCache
-  const inst = await swapInstance()
-  marketsCache = await inst.loadMarkets()
-  return marketsCache
+  if (!marketsPromise) {
+    marketsPromise = (async () => {
+      const inst = await swapInstance()
+      marketsCache = await inst.loadMarkets()
+      return marketsCache
+    })()
+    // a failed load must not be cached — the next caller re-attempts honestly
+    marketsPromise.catch(() => {
+      marketsPromise = null
+    })
+  }
+  return marketsPromise
 }
 
 function numOrNull(v) {
@@ -182,13 +193,29 @@ async function markets() {
 }
 
 // ── idempotent per-symbol setup (loadMarkets → swap assert → isolated → leverage) ──
+// Promise-memoized per symbol: concurrent first orders for the same symbol await
+// the SAME in-flight setup (the second waiter never re-runs setMarginMode /
+// setLeverage), and a resolved promise IS the cached "done" bit.
 
-const setupDoneForSymbol = new Set()
+const setupPromiseForSymbol = new Map()
 
 async function ensureSymbolSetup(symbol, leverage) {
-  if (setupDoneForSymbol.has(symbol)) return { ok: true }
-  const inst = await swapInstance()
+  const inFlight = setupPromiseForSymbol.get(symbol)
+  if (inFlight) return inFlight
+  const p = (async () => {
+    const result = await doSymbolSetup(symbol, leverage)
+    // a FAILED setup is not memoized — the next order re-attempts honestly
+    if (!result.ok) setupPromiseForSymbol.delete(symbol)
+    return result
+  })()
+  setupPromiseForSymbol.set(symbol, p)
+  return p
+}
+
+async function doSymbolSetup(symbol, leverage) {
+  let inst
   try {
+    inst = await swapInstance()
     await loadMarketsOnce()
   } catch {
     return { ok: false, reason: "setup-failed: loadMarkets" }
@@ -206,7 +233,6 @@ async function ensureSymbolSetup(symbol, leverage) {
   } catch {
     return { ok: false, reason: "setup-failed: setLeverage" }
   }
-  setupDoneForSymbol.add(symbol)
   return { ok: true }
 }
 
@@ -361,9 +387,10 @@ async function verifyFill({ symbol, orderId } = {}) {
 async function observeEquity() {
   const mode = modeOf()
   if (!mode.ok) return { ok: false, reason: mode.reason }
-  const inst = await swapInstance()
+  let inst
   let balance
   try {
+    inst = await swapInstance()
     balance = await inst.fetchBalance()
   } catch {
     return { ok: false, reason: "equity-unobservable" }
@@ -433,9 +460,9 @@ function toPositionRecord(raw) {
 async function positionView() {
   const mode = modeOf()
   if (!mode.ok) return { ok: false, reason: mode.reason }
-  const inst = await swapInstance()
   let rows
   try {
+    const inst = await swapInstance()
     rows = await inst.fetchPositions()
   } catch {
     return { ok: false, reason: "positions-unobservable" }
@@ -470,9 +497,9 @@ async function observeFunding({ symbol } = {}) {
   const mode = modeOf()
   if (!mode.ok) return { ok: false, reason: mode.reason }
   if (!symbol) return { ok: false, reason: "invalid-order: symbol" }
-  const inst = await swapInstance()
   let raw
   try {
+    const inst = await swapInstance()
     raw = await inst.fetchFundingRate(symbol)
   } catch {
     return { ok: false, reason: "funding-unobservable" }

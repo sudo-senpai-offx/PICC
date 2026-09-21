@@ -136,6 +136,14 @@ const HYPERLIQUID_KEYS = {
   PICC_CCXT_PRIVATEKEY_HYPERLIQUID: "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 }
 
+const RISK_FIELD_BY_KEY = {
+  PICC_CCXT_LEVERAGE_MIN: "leverageBandMin",
+  PICC_CCXT_LEVERAGE_MAX: "leverageBandMax",
+  PICC_CCXT_MARGIN_PER_POSITION_CAP_USD: "marginPerPositionCapUsd",
+  PICC_CCXT_PERPS_MAX_OPEN_POSITIONS: "maxOpenPositions",
+  PICC_CCXT_FUNDING_STALE_MS: "fundingStaleMs"
+}
+
 // margin = 0.001 * 20000 / 4 = 5 — comfortably inside the $10 margin cap.
 const HAPPY = {
   symbol: SWAP_SYMBOL,
@@ -418,6 +426,17 @@ describe("hyperliquidPerps — refusal surface + sandbox ordering (fixture ccxt)
     expect(await adapter.observeFunding({ symbol: SWAP_SYMBOL })).toEqual({ ok: false, reason: "funding-unobservable" })
   })
 
+  it("missing wallet/key pair ⇒ observers return the honest <step>-unobservable, never a raw rejection", async () => {
+    process.env.PICC_CCXT_SANDBOX = "1"
+    delete process.env.PICC_CCXT_WALLETADDRESS_HYPERLIQUID
+    delete process.env.PICC_CCXT_PRIVATEKEY_HYPERLIQUID
+    const ex = makeExchange()
+    seam._setCcxtLibForTests(libFor(ex))
+    await expect(adapter.observeEquity()).resolves.toEqual({ ok: false, reason: "equity-unobservable" })
+    await expect(adapter.positionView()).resolves.toEqual({ ok: false, reason: "positions-unobservable" })
+    await expect(adapter.observeFunding({ symbol: SWAP_SYMBOL })).resolves.toEqual({ ok: false, reason: "funding-unobservable" })
+  })
+
   it("invalid env (min>max) reports invalid-environment — never a silent fallback", async () => {
     process.env.PICC_CCXT_SANDBOX = "1"
     process.env.PICC_CCXT_LEVERAGE_MIN = "7"
@@ -429,6 +448,27 @@ describe("hyperliquidPerps — refusal surface + sandbox ordering (fixture ccxt)
     expect(ex.calls.createOrder).toHaveLength(0) // the refusal happened before any venue call
   })
 
+  it.each(
+    Object.entries(RISK_FIELD_BY_KEY).flatMap(([key, field]) =>
+      ["abc", "0", "-1"].map((bad) => ({ key, field, bad }))
+    )
+  )("invalid env: $key=$bad ⇒ invalid-environment at the riskModel gate and in submitOrder — never a silent fallback", async ({ key, field, bad }) => {
+    process.env.PICC_CCXT_SANDBOX = "1"
+    process.env[key] = bad
+    const ex = makeExchange()
+    seam._setCcxtLibForTests(libFor(ex))
+    // riskModel gate: the lazy getter reflects the raw garbage (NaN/0/negative), never the default
+    const view = adapter.riskModel[field]
+    if (bad === "abc") expect(Number.isNaN(view)).toBe(true)
+    else expect(view).toBe(Number(bad))
+    // readRiskModel gate: submitOrder refuses with the exact reason, before any venue call
+    await expect(adapter.submitOrder({ ...HAPPY })).resolves.toEqual({
+      ok: false,
+      reason: `invalid-environment: ${key}=${bad}`
+    })
+    expect(ex.calls.createOrder).toHaveLength(0)
+  })
+
   it("setup is idempotent per symbol: two orders run loadMarkets/setMarginMode/setLeverage once", async () => {
     process.env.PICC_CCXT_SANDBOX = "1"
     const ex = makeExchange()
@@ -436,6 +476,22 @@ describe("hyperliquidPerps — refusal surface + sandbox ordering (fixture ccxt)
     const first = await adapter.submitOrder({ ...HAPPY })
     expect(first.ok).toBe(true)
     const second = await adapter.submitOrder({ ...HAPPY, clientOrderId: "picc-perps-again" })
+    expect(second.ok).toBe(true)
+    expect(ex.calls.loadMarkets).toBe(1)
+    expect(ex.calls.setMarginMode).toEqual([["isolated", SWAP_SYMBOL]])
+    expect(ex.calls.setLeverage).toEqual([[4, SWAP_SYMBOL]])
+    expect(ex.calls.createOrder).toHaveLength(2)
+  })
+
+  it("concurrent first submitOrders for the same symbol share ONE in-flight setup (no double loadMarkets/setMarginMode/setLeverage)", async () => {
+    process.env.PICC_CCXT_SANDBOX = "1"
+    const ex = makeExchange()
+    seam._setCcxtLibForTests(libFor(ex))
+    const [first, second] = await Promise.all([
+      adapter.submitOrder({ ...HAPPY, clientOrderId: "picc-perps-a" }),
+      adapter.submitOrder({ ...HAPPY, clientOrderId: "picc-perps-b" })
+    ])
+    expect(first.ok).toBe(true)
     expect(second.ok).toBe(true)
     expect(ex.calls.loadMarkets).toBe(1)
     expect(ex.calls.setMarginMode).toEqual([["isolated", SWAP_SYMBOL]])
