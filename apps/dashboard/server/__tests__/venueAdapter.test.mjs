@@ -53,6 +53,18 @@ const CONTRACT_MEMBERS = [
   "riskModel"
 ]
 
+const RISK_MODEL_NUMBER_FIELDS = [
+  "leverageBandMin",
+  "leverageBandMax",
+  "marginPerPositionCapUsd",
+  "maxOpenPositions",
+  "fundingStaleMs"
+]
+
+const RISK_MODEL_BOOLEAN_FIELDS = ["isolatedOnly", "testnetOnly"]
+
+const RISK_MODEL_FIELDS = [...RISK_MODEL_NUMBER_FIELDS, ...RISK_MODEL_BOOLEAN_FIELDS]
+
 function adapterWithout(adapter, ...members) {
   const removed = new Set(members)
   return Object.fromEntries(Object.entries(adapter).filter(([key]) => !removed.has(key)))
@@ -92,6 +104,51 @@ describe("venueAdapterContract — validateVenueAdapter", () => {
     expect(missingNames(validateVenueAdapter({ ...venueFixtureAdapter, riskModel: [] }).errors)).toContain("riskModel")
     expect(missingNames(validateVenueAdapter({ ...venueFixtureAdapter, id: "" }).errors)).toContain("id")
     expect(missingNames(validateVenueAdapter({ ...venueFixtureAdapter, id: 42 }).errors)).toContain("id")
+  })
+})
+
+describe("venueAdapterContract — validateVenueAdapter riskModel field surface (R1.5)", () => {
+  it("rejects an empty riskModel and names ALL R1.5 missing fields", () => {
+    const result = validateVenueAdapter({ ...venueFixtureAdapter, riskModel: {} })
+    expect(result.ok).toBe(false)
+    expect(missingNames(result.errors)).toEqual(expect.arrayContaining(RISK_MODEL_FIELDS))
+    expect(missingNames(result.errors)).toHaveLength(RISK_MODEL_FIELDS.length)
+    expect(result.errors.every((e) => e.code === "missing-member")).toBe(true)
+  })
+
+  it.each(RISK_MODEL_FIELDS)("rejects riskModel missing %s and names it", (field) => {
+    const riskModel = { ...venueFixtureAdapter.riskModel }
+    delete riskModel[field]
+    const result = validateVenueAdapter({ ...venueFixtureAdapter, riskModel })
+    expect(result.ok).toBe(false)
+    expect(missingNames(result.errors)).toContain(field)
+  })
+
+  it.each(RISK_MODEL_NUMBER_FIELDS)("rejects a non-number %s and names it", (field) => {
+    const result = validateVenueAdapter({
+      ...venueFixtureAdapter,
+      riskModel: { ...venueFixtureAdapter.riskModel, [field]: "ten" }
+    })
+    expect(result.ok).toBe(false)
+    expect(missingNames(result.errors)).toContain(field)
+  })
+
+  it.each(RISK_MODEL_BOOLEAN_FIELDS)("rejects a non-boolean %s and names it", (field) => {
+    const result = validateVenueAdapter({
+      ...venueFixtureAdapter,
+      riskModel: { ...venueFixtureAdapter.riskModel, [field]: 1 }
+    })
+    expect(result.ok).toBe(false)
+    expect(missingNames(result.errors)).toContain(field)
+  })
+
+  it("rejects a NaN number field (finite values only)", () => {
+    const result = validateVenueAdapter({
+      ...venueFixtureAdapter,
+      riskModel: { ...venueFixtureAdapter.riskModel, fundingStaleMs: NaN }
+    })
+    expect(result.ok).toBe(false)
+    expect(missingNames(result.errors)).toContain("fundingStaleMs")
   })
 })
 

@@ -10,6 +10,16 @@ const CONTRACT_MEMBERS = Object.freeze([
   ["riskModel", "object"]
 ])
 
+const RISK_MODEL_FIELDS = Object.freeze({
+  leverageBandMin: "number",
+  leverageBandMax: "number",
+  marginPerPositionCapUsd: "number",
+  maxOpenPositions: "number",
+  fundingStaleMs: "number",
+  isolatedOnly: "boolean",
+  testnetOnly: "boolean"
+})
+
 const registry = new Map()
 
 export function validateVenueAdapter(adapter) {
@@ -25,8 +35,23 @@ export function validateVenueAdapter(adapter) {
     }
     if (kind === "function" && typeof value !== "function") {
       errors.push({ code: "invalid-member", message: `venue adapter member "${member}" must be a function` })
-    } else if (kind === "object" && (typeof value !== "object" || Array.isArray(value))) {
-      errors.push({ code: "invalid-member", message: `venue adapter member "${member}" must be an object` })
+    } else if (kind === "object") {
+      if (typeof value !== "object" || Array.isArray(value)) {
+        errors.push({ code: "invalid-member", message: `venue adapter member "${member}" must be an object` })
+      } else if (member === "riskModel") {
+        for (const [field, fieldKind] of Object.entries(RISK_MODEL_FIELDS)) {
+          const fieldValue = value[field]
+          if (fieldValue == null) {
+            errors.push({ code: "missing-member", message: `venue adapter riskModel missing field "${field}"` })
+            continue
+          }
+          if (fieldKind === "number" && (typeof fieldValue !== "number" || !Number.isFinite(fieldValue))) {
+            errors.push({ code: "invalid-member", message: `venue adapter riskModel field "${field}" must be a finite number` })
+          } else if (fieldKind === "boolean" && typeof fieldValue !== "boolean") {
+            errors.push({ code: "invalid-member", message: `venue adapter riskModel field "${field}" must be a boolean` })
+          }
+        }
+      }
     } else if (kind === "string" && (typeof value !== "string" || value.trim() === "")) {
       errors.push({ code: "invalid-member", message: `venue adapter member "${member}" must be a non-empty string` })
     }
