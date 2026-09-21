@@ -10,7 +10,7 @@
 // the same dir proves persistence. The fixture adapter is a plain stub — F3
 // holds no ccxt instance, it only calls the injected adapter's observer methods.
 import { afterEach, expect, test, vi } from "vitest"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -178,10 +178,11 @@ test("recordReduction nets an opposite-side fill: size shrinks, entry/side kept,
   const m = await boot()
   m.trackOpen({ position: openPosition({ id: "p-net", symbol: "SOL/USDC:USDC", size: 2, entryPrice: 100 }), now: Date.parse(T(10)) })
   const reduced = m.recordReduction({ positionId: "p-net", filledSize: 1, avgPrice: 105, now: Date.parse(T(10, 30)) })
-  expect(reduced).toMatchObject({ id: "p-net", size: 1, entryPrice: 100, side: "long" })
+  expect(reduced).toMatchObject({ id: "p-net", size: 1, entryPrice: 100, side: "long", realizedAccruedUsd: 5 })
   expect(m.openPositions()).toHaveLength(1) // the same position, never a second one
   const closed = m.recordReduction({ positionId: "p-net", filledSize: 1, avgPrice: 110, now: Date.parse(T(10, 40)) })
-  expect(closed).toMatchObject({ positionId: "p-net", realizedPnlUsd: 10, fees: "unobserved" }) // (110−100)×1 remaining
+  // round-trip total = the verified-fill sum (105−100)+(110−100) = 15, NOT the understated 10
+  expect(closed).toMatchObject({ positionId: "p-net", realizedPnlUsd: 15, fees: "unobserved" })
   expect(m.openPositions()).toHaveLength(0)
 })
 
@@ -309,4 +310,152 @@ test("observePerpsWallet reports an unobservable wallet honestly and never fabri
   const res = await m.observePerpsWallet(bad, { now: Date.parse(T(8)) })
   expect(res.ok).toBe(false)
   expect(res.reason).toBe("equity-unobservable")
+})
+
+// ── Fix round 1 (review): not-latched boot reconcile, interior funding boundary,
+//    accrued reduction P&L, corrupt-store refusal, netted-record drain ──────
+
+test("F1 a FAILED boot reconcile is not latched: the failure is surfaced and the next successful read DOES reconcile", async () => {
+  const m = await boot()
+  m.trackOpen({ position: openPosition({ id: "p-boot", symbol: "BTC/USDC:USDC", side: "long" }), now: Date.parse(T(10)) })
+
+  const flaky = {
+    observeEquity: async () => ({ ok: true, equityUsd: 100, currency: "USDT", at: T(10) }),
+    positionView: async () => {
+      throw new Error("venue read hiccup")
+    }
+  }
+  const r1 = await m.observePerpsWallet(flaky, { now: Date.parse(T(10)) })
+  expect(r1.ok).toBe(true) // the equity observation itself succeeded
+  expect(r1.reconcile).toBeDefined() // the reconcile failure is surfaced, NOT swallowed
+  expect(r1.reconcile.ok).toBe(false)
+  expect(r1.reconcile.reason).toContain("venue read hiccup")
+
+  // Second call with a healthy read MUST run reconcile (not latched by the failure):
+  // the venue-only SOL row gets adopted and p-boot (absent from the observable
+  // venue) is honestly closed-unobserved.
+  const healthy = {
+    observeEquity: async () => ({ ok: true, equityUsd: 100, currency: "USDT", at: T(10, 5) }),
+    positionView: async () => [venueRow("SOL/USDC:USDC", "long")]
+  }
+  const r2 = await m.observePerpsWallet(healthy, { now: Date.parse(T(10, 5)) })
+  expect(r2.reconcile.ok).toBe(true)
+  expect(m.openPositions().map((p) => p.id)).toEqual(["venue:SOL/USDC:USDC:long"])
+  expect(m.openPositions()[0].source).toBe("venue-observed")
+})
+
+test("F2 hourly-spaced in-hold funding observations (an interior gap of EXACTLY one interval) capture every boundary ⇒ observed, accrual included", async () => {
+  const m = await boot()
+  m.trackOpen({ position: openPosition(), now: Date.parse(T(10)) }) // notional 200
+  const res = m.recordClose({
+    positionId: "0xopen1",
+    fill: { id: "f6", symbol: "BTC/USDC:USDC", side: "sell", filled: 2, average: 110, status: "closed", at: T(12) },
+    fundingObservations: [
+      { rate: 0.001, at: T(10, 30) },
+      { rate: 0.002, at: T(11, 30) } // exactly one FUNDING_INTERVAL after the prior in-hold obs
+    ],
+    now: Date.parse(T(12))
+  })
+  // gaps: open→10:30 = 30m, 10:30→11:30 = exactly 1h (interior, captured by the
+  // 11:30 bookend), 11:30→close 12:00 = 30m ⇒ 0 missed boundaries ⇒ observed
+  expect(res.fundingAccrual).toBe("observed")
+  expect(res.reason).toContain("funding accrual")
+  expect(res.realizedPnlUsd).toBeCloseTo(20.6, 5) // (0.001+0.002)×200 = 0.6 → 20 + 0.6
+})
+
+test("F3 partial reductions book realized P&L at EVERY reduction: the round-trip total equals the verified-fill sum (gain and loss)", async () => {
+  const m = await boot()
+  // gain path: size 2 @ 100, reduce 1 @ 105, close 1 @ 110 ⇒ (105−100)+(110−100) = 15
+  m.trackOpen({ position: openPosition({ id: "p-gain", size: 2, entryPrice: 100 }), now: Date.parse(T(10)) })
+  const r1 = m.recordReduction({ positionId: "p-gain", filledSize: 1, avgPrice: 105, now: Date.parse(T(10, 30)) })
+  expect(r1.realizedAccruedUsd).toBe(5)
+  expect(r1.size).toBe(1)
+  const c1 = m.recordReduction({ positionId: "p-gain", filledSize: 1, avgPrice: 110, now: Date.parse(T(10, 40)) })
+  expect(c1.realizedPnlUsd).toBe(15)
+  expect(m.openPositions()).toHaveLength(0)
+
+  // symmetric loss path: reduce 1 @ 95, close 1 @ 110 ⇒ (95−100)+(110−100) = 5, NOT 10
+  m.trackOpen({ position: openPosition({ id: "p-loss", size: 2, entryPrice: 100 }), now: Date.parse(T(11)) })
+  const l1 = m.recordReduction({ positionId: "p-loss", filledSize: 1, avgPrice: 95, now: Date.parse(T(11, 30)) })
+  expect(l1.realizedAccruedUsd).toBe(-5)
+  const lc = m.recordReduction({ positionId: "p-loss", filledSize: 1, avgPrice: 110, now: Date.parse(T(11, 40)) })
+  expect(lc.realizedPnlUsd).toBe(5)
+  expect(m.openPositions()).toHaveLength(0)
+})
+
+test("F4 corrupt or future-version stores are refused loudly on boot — never silently booted as empty and never overwritten", async () => {
+  // positions store: unparseable
+  const d = await mkdtemp(join(tmpdir(), "picc-lpm-"))
+  dir = d
+  process.env.PICC_COMMAND_CENTRE_DATA_DIR = d
+  await writeFile(join(d, "ccxt-perps-positions.json"), "{ definitely not json", "utf8")
+  vi.resetModules()
+  const m = await import("../services/livePositionManager.mjs")
+
+  expect(m.storeHealth().positions).toEqual({ ok: false, reason: "positions-store-unreadable" })
+
+  // mutations refuse loudly — never "boot clean as if empty"
+  expect(() => m.trackOpen({ position: openPosition() })).toThrow(/positions-store-unreadable/)
+
+  // reconcile refuses and does not close/relabel anything
+  const rec = await m.reconcileWithVenue([])
+  expect(rec.ok).toBe(false)
+  expect(rec.reason).toBe("positions-store-unreadable")
+
+  // the boot observer surfaces the failure instead of silently reconciling empty
+  const w = await m.observePerpsWallet(walletAdapter({ equityUsd: 100, at: T(8) }), { now: Date.parse(T(8)) })
+  expect(w.reconcile.ok).toBe(false)
+  expect(w.reconcile.reason).toBe("positions-store-unreadable")
+
+  // the corrupt file is still on disk, byte-for-byte — NOT wiped by an empty write
+  expect(await readFile(join(d, "ccxt-perps-positions.json"), "utf8")).toBe("{ definitely not json")
+})
+
+test("F4a a future-version positions store is refused loudly (never downgraded to version 1 empty)", async () => {
+  const d = await mkdtemp(join(tmpdir(), "picc-lpm-"))
+  dir = d
+  process.env.PICC_COMMAND_CENTRE_DATA_DIR = d
+  await writeFile(join(d, "ccxt-perps-positions.json"), JSON.stringify({ version: 2, positions: [{ id: "x" }] }), "utf8")
+  vi.resetModules()
+  const m = await import("../services/livePositionManager.mjs")
+
+  expect(m.storeHealth().positions).toEqual({ ok: false, reason: "positions-store-version-mismatch" })
+  expect(() => m.trackOpen({ position: openPosition() })).toThrow(/positions-store-version-mismatch/)
+  expect(JSON.parse(await readFile(join(d, "ccxt-perps-positions.json"), "utf8")).version).toBe(2)
+})
+
+test("F4b a corrupt risk store is refused loudly — the day baseline is never silently reset and the file is preserved", async () => {
+  const d = await mkdtemp(join(tmpdir(), "picc-lpm-"))
+  dir = d
+  process.env.PICC_COMMAND_CENTRE_DATA_DIR = d
+  await writeFile(join(d, "ccxt-perps-risk.json"), "{{ not json", "utf8")
+  vi.resetModules()
+  const m = await import("../services/livePositionManager.mjs")
+
+  expect(m.storeHealth().risk).toEqual({ ok: false, reason: "risk-store-unreadable" })
+
+  const w = await m.observePerpsWallet(walletAdapter({ equityUsd: 90, at: T(8) }), { now: Date.parse(T(8)) })
+  expect(w.ok).toBe(false)
+  expect(w.reason).toBe("risk-store-unreadable")
+  expect(await readFile(join(d, "ccxt-perps-risk.json"), "utf8")).toBe("{{ not json")
+})
+
+test("F5 recordReduction drains ACROSS same-(symbol, side) records in open order instead of throwing while the netted group covers the fill", async () => {
+  const m = await boot()
+  // two of our opens on the SAME (symbol, side) that the venue netted into one row
+  m.trackOpen({ position: openPosition({ id: "net-a", symbol: "BTC/USDC:USDC", side: "long", size: 1, entryPrice: 100, openedAt: T(9), openOrderId: "c-a" }), now: Date.parse(T(9)) })
+  m.trackOpen({ position: openPosition({ id: "net-b", symbol: "BTC/USDC:USDC", side: "long", size: 1, entryPrice: 100, openedAt: T(10), openOrderId: "c-b" }), now: Date.parse(T(10)) })
+
+  const closedA = m.recordReduction({ positionId: "net-a", filledSize: 1.5, avgPrice: 105, now: Date.parse(T(10, 30)) })
+  expect(closedA.realizedPnlUsd).toBe(5) // net-a drained to zero: (105−100)×1
+  const remaining = m.openPositions()
+  expect(remaining).toHaveLength(1)
+  expect(remaining[0].id).toBe("net-b") // the over-fill drained into the next record
+  expect(remaining[0].size).toBe(0.5)
+  expect(remaining[0].realizedAccruedUsd).toBe(2.5) // (105−100)×0.5 booked at THIS reduction
+
+  // exceeding the NETTED group total still throws (the position is not flat-guard)
+  expect(() =>
+    m.recordReduction({ positionId: "net-b", filledSize: 1, avgPrice: 120, now: Date.parse(T(10, 40)) })
+  ).toThrow(/exceeds/)
 })

@@ -51,6 +51,47 @@
 //   • openPositions() is a pure persisted read (it has no adapter); the
 //     reconcile-on-first-boot (plan §3.4) rides observePerpsWallet, which holds
 //     the adapter.
+//
+// Fix round 1 (review — see the T4 report "Fix round 1" section):
+//   • A FAILED boot reconcile is NOT latched: `reconciledOnBoot` is only set
+//     once the venue returned an array and reconcileWithVenue reported
+//     `ok:true`. A throwing read / `{ok:false}` venue leaves the latch open and
+//     the failure is SURFACED (never swallowed) as a `reconcile` field on the
+//     observePerpsWallet return, so a transient boot failure can never
+//     permanently disarm reconcile for the rest of the process.
+//   • Store-corruption guard: an unparseable or version-≠1 store on disk marks
+//     that store UNHEALTHY at boot. Mutations (trackOpen / recordReduction /
+//     recordClose) refuse loudly and reconcile / observePerpsWallet surface
+//     `{ ok:false, reason: "…-store-unreadable" | "…-store-version-mismatch" }`;
+//     the on-disk file is PRESERVED (never overwritten with an empty store)
+//     until an operator repairs it — persisted P&L baselines and open positions
+//     are never silently reset (non-negotiable #4). Store health is inspectable
+//     via the `storeHealth()` export.
+//   • Funding boundary count: a gap of EXACTLY one interval is missed only for
+//     the open→first-observation and last-observation→close segments (a boundary
+//     that aligns with an in-hold observation IS captured by that bookend). An
+//     INTERIOR gap (between two in-hold observations) counts as missed only when
+//     strictly greater than the interval — hourly-spaced in-hold observations
+//     always report fundingAccrual:"observed".
+//   • Reduction P&L is booked at EACH reduction: partial reductions accumulate
+//     `realizedAccruedUsd` (per-fill, direction-signed, additive on the live
+//     record while it stays open, ADR-0005), and the final close (reduction-to-
+//     zero OR recordClose) computes its leg on top — the round-trip total always
+//     equals the sum of the verified fills. Reduction legs are booked GROSS (the
+//     reduction fill has no fee parameter); the final close still carries its own
+//     fee label from the verified fill.
+//   • Netting across records (#5 choice — OPTION B, "drain across records"):
+//     R3.6's open-position cap counts the POST-FILL NET position, so when a
+//     venue row netted several of our same-(symbol, side) records, a single
+//     verified reduction fill must be able to drain THEM. recordReduction now
+//     drains the whole (symbol, side) group in OPEN ORDER (earliest openedAt
+//     first) rather than throwing when the single named record is smaller than
+//     the fill; `/exceeds/` is thrown only when the fill exceeds the NETTED group
+//     total. Option B was picked over collapsing the records on reconcile
+//     because per-record ids/entries/source labels are provenance we must never
+//     invent away (ADR-0005 — reconcile only relabels), and the netted-count
+//     consistency is delivered at the reduction/close seam exactly where the
+//     venue-style net size is consumed.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -71,41 +112,69 @@ const round2 = (x) => Math.round(Number(x) * 100) / 100
 
 // ── in-memory stores (boot-from-disk; write-through on every mutation) ──────
 
+// Boot health: `{ ok: true }` unless the on-disk store was unparseable or a
+// future version — then `{ ok:false, reason }`. While unhealthy, mutations
+// refuse loudly and no write ever overwrites the file (non-negotiable #4: an
+// unreadable store must not silently boot as empty / reset baselines).
+let positionsStoreHealth = { ok: true }
+let riskStoreHealth = { ok: true }
+
+/** Inspect the boot health of both persisted stores — the honest alternative to
+ *  a silent empty boot when a store on disk is corrupt or a future version. */
+export function storeHealth() {
+  return { positions: { ...positionsStoreHealth }, risk: { ...riskStoreHealth } }
+}
+
 let positionsStore = bootPositions()
 let riskStore = bootRisk()
 let reconciledOnBoot = false
 
 function bootPositions() {
   if (!canTouchDisk() || !existsSync(POSITIONS_FILE)) return []
+  let data
   try {
-    const parsed = JSON.parse(readFileSync(POSITIONS_FILE, "utf8"))
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.positions)) return []
-    return parsed.positions
+    data = JSON.parse(readFileSync(POSITIONS_FILE, "utf8"))
   } catch {
+    positionsStoreHealth = { ok: false, reason: "positions-store-unreadable" }
     return []
   }
+  if (!data || typeof data !== "object" || data.version !== 1 || !Array.isArray(data.positions)) {
+    const versionMismatch = data && typeof data === "object" && data.version !== 1
+    positionsStoreHealth = {
+      ok: false,
+      reason: versionMismatch ? "positions-store-version-mismatch" : "positions-store-unreadable"
+    }
+    return []
+  }
+  return data.positions
 }
 
 function bootRisk() {
   if (!canTouchDisk() || !existsSync(RISK_FILE)) return null
+  let data
   try {
-    const parsed = JSON.parse(readFileSync(RISK_FILE, "utf8"))
-    if (!parsed || parsed.version !== 1) return null
-    const { version, ...record } = parsed
-    return record
+    data = JSON.parse(readFileSync(RISK_FILE, "utf8"))
   } catch {
+    riskStoreHealth = { ok: false, reason: "risk-store-unreadable" }
     return null
   }
+  if (!data || typeof data !== "object" || data.version !== 1) {
+    const versionMismatch = data && typeof data === "object" && data.version !== 1
+    riskStoreHealth = { ok: false, reason: versionMismatch ? "risk-store-version-mismatch" : "risk-store-unreadable" }
+    return null
+  }
+  const { version, ...record } = data
+  return record
 }
 
 function persistPositions() {
-  if (!canTouchDisk()) return
+  if (!canTouchDisk() || positionsStoreHealth.ok !== true) return
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(POSITIONS_FILE, JSON.stringify({ version: 1, positions: positionsStore }, null, 2), "utf8")
 }
 
 function persistRisk() {
-  if (!canTouchDisk()) return
+  if (!canTouchDisk() || riskStoreHealth.ok !== true) return
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(RISK_FILE, JSON.stringify({ version: 1, ...riskStore }, null, 2), "utf8")
 }
@@ -113,21 +182,31 @@ function persistRisk() {
 // ── P&L core (shared by recordClose and reduction-to-zero) ─────────────────
 
 /** Count funding interval boundaries crossed between two timestamps with the
- *  observed bookends taken as captured. A gap >= one interval means a boundary
- *  may have settled unobserved — counted, never assumed away. */
+ *  observed bookends taken as captured. A gap >= one interval counts a missed
+ *  boundary ONLY for the open→first-observation and last-observation→close
+ *  segments; an INTERIOR gap (between two in-hold observations) counts as missed
+ *  only when strictly greater than the interval — a boundary aligned with the
+ *  later in-hold observation IS captured by that bookend, so hourly-spaced
+ *  in-hold observations always report "observed". */
 function missingFundingBoundaries(openMs, closeMs, inHold) {
   if (!Number.isFinite(openMs) || !Number.isFinite(closeMs) || closeMs <= openMs) return 0
   const bookends = [openMs, ...inHold.map((o) => Date.parse(o.at)), closeMs]
   let boundaries = 0
   for (let i = 1; i < bookends.length; i++) {
     const gap = bookends[i] - bookends[i - 1]
-    if (gap >= FUNDING_INTERVAL_MS) boundaries += Math.floor((gap + 1e-3) / FUNDING_INTERVAL_MS)
+    const interior = i > 1 && i < bookends.length - 1
+    if (interior ? gap > FUNDING_INTERVAL_MS : gap >= FUNDING_INTERVAL_MS) {
+      boundaries += Math.floor((gap + 1e-3) / FUNDING_INTERVAL_MS)
+    }
   }
   return boundaries
 }
 
 /** The honest close record — direction-signed realized P&L, fee label, funding
- *  label. Requires a verified fill average (never invents an exit price). */
+ *  label. Requires a verified fill average (never invents an exit price).
+ *  `position.realizedAccruedUsd` (accumulated from prior partial reductions,
+ *  Fix round 1) is added so the round-trip total always equals the verified-fill
+ *  sum. */
 function closeRecordFor(position, fill, fundingObservations, { now = Date.now() } = {}) {
   const exit = Number(fill?.average ?? NaN)
   if (!Number.isFinite(exit) || exit <= 0) {
@@ -138,7 +217,8 @@ function closeRecordFor(position, fill, fundingObservations, { now = Date.now() 
   const size = Number(position.size)
   const entry = Number(position.entryPrice)
   const notional = size * entry
-  let realized = position.side === "long" ? (exit - entry) * size : (entry - exit) * size
+  const accrued = Number(position.realizedAccruedUsd ?? 0)
+  let realized = (position.side === "long" ? (exit - entry) * size : (entry - exit) * size) + accrued
 
   let fees = "unobserved"
   const feeRaw = fill?.fee
@@ -168,6 +248,9 @@ function closeRecordFor(position, fill, fundingObservations, { now = Date.now() 
   }
 
   const parts = []
+  if (accrued !== 0) {
+    parts.push(`prior reduction legs accrued ${round2(accrued)} (booked per verified fill)`)
+  }
   if (fundingAccrual === "unobserved-portion") {
     parts.push(
       `funding: ${boundaries} funding interval${boundaries > 1 ? "s" : ""} crossed without an observation — no funding adjustment (unobserved-portion)`
@@ -194,6 +277,9 @@ function closeRecordFor(position, fill, fundingObservations, { now = Date.now() 
  * Duplicate venue order ids are refused loudly — never silently overwritten.
  */
 export function trackOpen({ position, now = Date.now() } = {}) {
+  if (positionsStoreHealth.ok !== true) {
+    throw new Error(`live position manager: ${positionsStoreHealth.reason} — refusing to mutate the open-position store`)
+  }
   if (!position || typeof position !== "object") {
     throw new Error("live position manager: trackOpen requires a position object")
   }
@@ -241,10 +327,22 @@ export function trackOpen({ position, now = Date.now() } = {}) {
  * place (original entry/side kept), never opens a second one. A reduction that
  * reaches zero CLOSES the position and returns the recordClose-shaped result;
  * otherwise the UPDATED open position is returned.
+ *
+ * Netting across records (Fix round 1, option B): a verified reduction fill
+ * drains the whole same-(symbol, side) group in OPEN ORDER — earliest openedAt
+ * first — rather than throwing when the single named record is smaller than the
+ * fill. This is how a single venue fill nets a (symbol, side) that the venue
+ * aggregated from several of our records (R3.6 — the cap counts the POST-FILL
+ * NET position). Partial drains book realized P&L at EVERY reduction into the
+ * record's `realizedAccruedUsd`; `/exceeds/` is thrown only when the fill
+ * exceeds the NETTED group total (or the position is already flat).
  */
 export function recordReduction({ positionId, filledSize, avgPrice, now = Date.now() } = {}) {
-  const pos = positionsStore.find((p) => p.id === positionId)
-  if (!pos) {
+  if (positionsStoreHealth.ok !== true) {
+    throw new Error(`live position manager: ${positionsStoreHealth.reason} — refusing to mutate the open-position store`)
+  }
+  const primary = positionsStore.find((p) => p.id === positionId)
+  if (!primary) {
     throw new Error(`live position manager: no open position with id "${positionId}" — nothing to reduce`)
   }
   const filled = Number(filledSize)
@@ -255,27 +353,45 @@ export function recordReduction({ positionId, filledSize, avgPrice, now = Date.n
   if (!Number.isFinite(price) || price <= 0) {
     throw new Error("live position manager: avgPrice must be a positive number")
   }
-  const closedSize = pos.size
-  const remaining = round2(pos.size - filled)
-  if (remaining < -1e-9) {
+
+  const group = positionsStore
+    .filter((p) => p.symbol === primary.symbol && p.side === primary.side)
+    .sort((a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt) || (a.id < b.id ? -1 : 1))
+  const groupTotal = round2(group.reduce((sum, p) => sum + Number(p.size), 0))
+  if (filled > groupTotal + 1e-9) {
     throw new Error(
-      `live position manager: reduction ${filled} exceeds open size ${pos.size} for position "${positionId}" — refuses an over-close`
+      `live position manager: reduction ${filled} exceeds the netted (${primary.symbol} ${primary.side}) open size ${groupTotal} — refuses an over-close`
     )
   }
 
-  if (Math.abs(remaining) < 1e-9) {
-    // reduction-to-zero closes — honest record, same P&L core as recordClose
-    const record = closeRecordFor({ ...pos, size: closedSize }, { average: price }, [], { now })
-    positionsStore = positionsStore.filter((p) => p.id !== positionId)
-    persistPositions()
-    return record
-  }
+  const atIso = new Date(now).toISOString()
+  let primaryOutcome = { ...primary }
+  let toDrain = filled
+  for (const p of group) {
+    if (toDrain < 1e-9) break
+    const sizeN = Number(p.size)
+    const drainHere = Math.min(sizeN, toDrain)
+    const remainingNow = round2(sizeN - drainHere)
 
-  pos.size = remaining
-  pos.lastReductionAvgPrice = price
-  pos.lastReductionAt = new Date(now).toISOString()
+    if (remainingNow < 1e-9) {
+      // this record is fully drained → honest close (final leg on top of any
+      // prior accrued; closeRecordFor adds both, so the round-trip total equals
+      // the verified-fill sum)
+      const record = closeRecordFor({ ...p, size: sizeN, realizedAccruedUsd: p.realizedAccruedUsd }, { average: price, at: atIso }, [], { now })
+      positionsStore = positionsStore.filter((r) => r.id !== p.id)
+      if (p.id === positionId) primaryOutcome = record
+    } else {
+      const accruedLeg = p.side === "long" ? (price - Number(p.entryPrice)) * drainHere : (Number(p.entryPrice) - price) * drainHere
+      p.realizedAccruedUsd = round2(Number(p.realizedAccruedUsd ?? 0) + accruedLeg)
+      p.size = remainingNow
+      p.lastReductionAvgPrice = price
+      p.lastReductionAt = atIso
+      if (p.id === positionId) primaryOutcome = { ...p }
+    }
+    toDrain = round2(toDrain - drainHere)
+  }
   persistPositions()
-  return { ...pos }
+  return primaryOutcome
 }
 
 /**
@@ -286,6 +402,9 @@ export function recordReduction({ positionId, filledSize, avgPrice, now = Date.n
  * The position is removed from the open store, write-through.
  */
 export function recordClose({ positionId, fill, fundingObservations, now = Date.now() } = {}) {
+  if (positionsStoreHealth.ok !== true) {
+    throw new Error(`live position manager: ${positionsStoreHealth.reason} — refusing to mutate the open-position store`)
+  }
   const pos = positionsStore.find((p) => p.id === positionId)
   if (!pos) {
     throw new Error(`live position manager: no open position with id "${positionId}" — nothing to close`)
@@ -317,6 +436,9 @@ export function openPositions() {
  *                                    position (R3.3 — never a guessed P&L).
  */
 export function reconcileWithVenue(positionView, { now = Date.now() } = {}) {
+  if (positionsStoreHealth.ok !== true) {
+    return { ok: false, reason: positionsStoreHealth.reason, reconciled: [], venueObserved: [], closedUnobserved: [] }
+  }
   if (positionView && typeof positionView === "object" && !Array.isArray(positionView) && positionView.ok === false) {
     return {
       ok: false,
@@ -402,25 +524,47 @@ export function reconcileWithVenue(positionView, { now = Date.now() } = {}) {
 }
 
 /**
+ * Reconcile-on-first-boot (plan §3.4), NOT latched on failure (Fix round 1): the
+ * latch is only armed once an array-shaped venue view produced `ok:true`. A
+ * throwing read, an `{ok:false}` venue, or an unhealthy (corrupt/version-≠1)
+ * positions store leaves the latch OPEN so the next successful observation
+ * retries — a transient boot failure can never permanently disarm reconcile.
+ * The failure is surfaced (never swallowed) as `reconcile: { ok:false, reason }`
+ * on the returning observation.
+ */
+async function bootReconcile(adapter, { now }) {
+  if (positionsStoreHealth.ok !== true) {
+    return { ok: false, reason: positionsStoreHealth.reason, reconciled: [], venueObserved: [], closedUnobserved: [] }
+  }
+  if (!adapter || typeof adapter.positionView !== "function") return null
+  try {
+    const result = reconcileWithVenue(await adapter.positionView(), { now })
+    if (result && result.ok === true) {
+      reconciledOnBoot = true
+      return result
+    }
+    return result ?? { ok: false, reason: "positions-unobservable", reconciled: [], venueObserved: [], closedUnobserved: [] }
+  } catch (e) {
+    return { ok: false, reason: e?.message || "positions-unobservable", reconciled: [], venueObserved: [], closedUnobserved: [] }
+  }
+}
+
+/**
  * Equity snapshot + UTC day-baseline maintenance + one-way peak ratchet,
  * persisted to ccxt-perps-risk.json (the WS-3-consumed state; halted stays
  * null). On the FIRST call after a (re)start it also reconciles the persisted
- * positions against the venue's positionView (plan §3.4). A venue/equity read
- * failure is reported `{ ok:false, reason }` — nothing is fabricated, nothing
- * is written.
+ * positions against the venue's positionView (plan §3.4) — a FAILED boot
+ * reconcile is NOT latched and is surfaced as `reconcile` on the return. A
+ * corrupt risk store refuses loudly (`{ ok:false, reason }`) and is never
+ * overwritten with a fresh baseline. A venue/equity read failure is reported
+ * `{ ok:false, reason }` — nothing is fabricated, nothing is written.
  */
 export async function observePerpsWallet(adapter, { now = Date.now() } = {}) {
-  if (!reconciledOnBoot) {
-    reconciledOnBoot = true
-    if (adapter && typeof adapter.positionView === "function") {
-      try {
-        reconcileWithVenue(await adapter.positionView(), { now })
-      } catch {
-        // a throwing positionView must not kill the equity observation; the
-        // persisted labels stay as they were (unverified, honest)
-      }
-    }
+  if (riskStoreHealth.ok !== true) {
+    return { ok: false, reason: riskStoreHealth.reason }
   }
+
+  const reconcileResult = !reconciledOnBoot ? await bootReconcile(adapter, { now }) : null
 
   if (!adapter || typeof adapter.observeEquity !== "function") {
     return { ok: false, reason: "adapter has no observeEquity — perps wallet unobservable" }
@@ -471,5 +615,7 @@ export async function observePerpsWallet(adapter, { now = Date.now() } = {}) {
   }
   persistRisk()
 
-  return { ok: true, ...riskStore }
+  const result = { ok: true, ...riskStore }
+  if (reconcileResult) result.reconcile = reconcileResult
+  return result
 }
