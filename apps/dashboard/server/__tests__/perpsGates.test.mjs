@@ -195,8 +195,8 @@ describe("perps gate 12 — perps-margin-cap", () => {
     process.env.PICC_CCXT_MARGIN_PER_POSITION_CAP_USD = "25"
     const r = evaluatePerpsGate({
       template: template(),
-      proposal: cleanProposal({ leverage: 4 }),
-      observation: cleanObservation({ notionalUsd: 80 })
+      proposal: cleanProposal({ leverage: 4, notionalUsd: 80 }),
+      observation: cleanObservation()
     })
     expect(r.allow).toBe(true)
   })
