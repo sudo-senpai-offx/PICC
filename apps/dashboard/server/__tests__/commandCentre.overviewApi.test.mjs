@@ -75,6 +75,13 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
+  async function rebootHandlers() {
+    vi.resetModules()
+    handleApi = (await import("../handlers.mjs")).handleApi
+    runtime = await import("../services/commandCentre/commandCentreRuntime.mjs")
+    audit = await import("../services/commandCentre/auditTrail.mjs")
+  }
+
   it("GET overview: every catalog site has a row with the real engine verdict + full 10-gate rail", async () => {
     const res = await call(handleApi, "GET", "/api/command-centre/overview")
     expect(res.status).toBe(200)
@@ -82,7 +89,8 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     expect(res.body.killSwitch).toEqual({ global: false, sites: {} })
     expect(res.body.sites.map((s) => s.site)).toEqual([
       "trading:ccxt",
-      "expertoption"
+      "expertoption",
+      "trading:perps"
     ])
     for (const row of res.body.sites) {
       expect(row.gates).toHaveLength(10)
@@ -230,7 +238,7 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
   it("?stream=trading filters rows to the trading stream only", async () => {
     const res = await call(handleApi, "GET", "/api/command-centre/overview?stream=trading")
     expect(res.body.stream).toBe("trading")
-    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "expertoption"])
+    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
     const bad = await call(handleApi, "GET", "/api/command-centre/overview?stream=definitely")
     expect(bad.status).toBe(200)
     expect(bad.body.ok).toBe(false)
@@ -249,5 +257,42 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     const res2 = makeRes()
     await handleApi(remote2, res2, "/api/command-centre/kill-switch")
     expect(res2.status).toBe(401)
+  })
+
+  it("GET overview shows the trading:perps row ONLY when the risk store is seeded — no silent not-wired", async () => {
+    const seed = {
+      version: 1,
+      equityUsd: 100,
+      equityAt: new Date().toISOString(),
+      runningPeakUsd: 100,
+      peakAt: new Date().toISOString(),
+      drawdownFromPeakPct: 0,
+      dayKey: new Date().toISOString().slice(0, 10),
+      dayStartEquityUsd: 100,
+      dayLossPct: 0,
+      halted: null
+    }
+    writeFileSync(join(dir, "ccxt-perps-risk.json"), JSON.stringify(seed))
+    await rebootHandlers()
+    const res = await call(handleApi, "GET", "/api/command-centre/overview")
+    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
+    const perps = res.body.sites.find((r) => r.site === "trading:perps")
+    expect(perps).toMatchObject({ stream: "trading", mode: "COPILOT" })
+    const fresh = perps.gates.find((g) => g.gate === "fresh-data")
+    expect(fresh.status).toBe("pass")
+    expect(fresh.note).toContain("within cadence")
+    expect(perps.gates.filter((g) => g.status === "fail")).toEqual([])
+    expect(perps.executionLeg).toMatchObject({ leg: "proposals", action: "perps:open-order", inFlight: 0 })
+  })
+
+  it("GET overview WITHOUT a seeded risk store: the perps row is still data-grounded — fresh-data is an honest not-wired", async () => {
+    const res = await call(handleApi, "GET", "/api/command-centre/overview")
+    const perps = res.body.sites.find((r) => r.site === "trading:perps")
+    expect(perps).toBeTruthy()
+    expect(perps.mode).toBe("COPILOT")
+    const fresh = perps.gates.find((g) => g.gate === "fresh-data")
+    expect(fresh.status).toBe("not-wired")
+    const envelope = perps.gates.find((g) => g.gate === "envelope-within-ceiling")
+    expect(envelope.status).toBe("pass")
   })
 })

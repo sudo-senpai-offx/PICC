@@ -28,7 +28,8 @@ describe("Command Centre — shipped catalog (L2)", () => {
   test("shipped sites are the two truth-table rows", () => {
     expect(policyGraphSites()).toEqual([
       "trading:ccxt",
-      "expertoption"
+      "expertoption",
+      "trading:perps"
     ])
   })
 
@@ -309,5 +310,109 @@ describe("Command Centre — validator: shape + protocols", () => {
 describe("Command Centre — catalog ↔ spec registry sync", () => {
   test("policyGraphSites() equals the catalog entries (no drift between exports)", () => {
     expect(policyGraphSites()).toEqual(POLICY_GRAPH_CATALOG.map((t) => t.site))
+  })
+})
+
+// T7 M2 — the first live order surface: trading:perps joins the catalog as the
+// second sanctioned trading venue (Hyperliquid perps, testnet-first). The old
+// rows' serialized bytes MUST be untouched, so the fixture here documents the
+// shipped rows' exact shape AND guards the additive, one-row-append nature.
+describe("Command Centre — T7 M2 trading:perps catalog row", () => {
+  const TRADING_CCXT_FIXTURE = {
+    site: "trading:ccxt",
+    stream: "trading",
+    venue: "ccxt-crypto (official protocol)",
+    automationPermission: "sanctioned",
+    demoOnly: false,
+    roster: [
+      "news_sentiment",
+      "technical",
+      "regime",
+      "volatility",
+      "order_flow",
+      "whale_onchain",
+      "consensus",
+      "risk_manager",
+      "model_matrix"
+    ],
+    edges: [
+      { from: "news_sentiment", to: "consensus", topology: "N:1", purpose: "sentiment vote feeds the cross-source consensus vote" },
+      { from: "technical", to: "consensus", topology: "N:1", purpose: "technical read feeds the cross-source consensus vote" },
+      { from: "regime", to: "consensus", topology: "N:1", purpose: "regime label feeds the cross-source consensus vote" },
+      { from: "volatility", to: "consensus", topology: "N:1", purpose: "volatility estimate feeds the cross-source consensus vote" },
+      { from: "order_flow", to: "consensus", topology: "N:1", purpose: "order-flow delta feeds the cross-source consensus vote" },
+      { from: "whale_onchain", to: "consensus", topology: "N:1", purpose: "on-chain read feeds the consensus vote on crypto venues" },
+      { from: "consensus", to: "model_matrix", topology: "1:1", purpose: "verified cross-source agreement gates model-matrix confidence" },
+      { from: "consensus", to: "risk_manager", topology: "1:1", purpose: "verified candles feed the risk manager's exposure math" },
+      { from: "model_matrix", to: "risk_manager", topology: "1:1", purpose: "confidence-floored matrix output feeds position sizing" }
+    ],
+    loops: [
+      { node: "consensus", maxRounds: 3, convergenceDelta: 0.05 },
+      { node: "risk_manager", maxRounds: 2, convergenceDelta: 0.05 }
+    ],
+    envelope: { mode: "autopilot", maxExposureUsd: 10, maxConcurrent: 2, maxDailyLossPct: 5 },
+    protocols: [
+      "P-SPECIFICITY",
+      "P-GROUNDING",
+      "P-ANTI-HALLUCINATION",
+      "P-PURPOSE",
+      "P-BOUNDED-LOOPS",
+      "P-EVOLUTION",
+      "P-SELF-IMPROVEMENT",
+      "P-METALEARNING"
+    ]
+  }
+
+  const EXPERTOPTION_FIXTURE = {
+    site: "expertoption",
+    stream: "trading",
+    venue: "expertoption (unregulated — demo only today)",
+    automationPermission: "forbidden",
+    demoOnly: true,
+    roster: ["news_sentiment", "technical", "volatility", "risk_manager", "model_matrix"],
+    edges: [
+      { from: "news_sentiment", to: "model_matrix", topology: "1:1", purpose: "sentiment refines demo matrix conviction" },
+      { from: "technical", to: "model_matrix", topology: "1:1", purpose: "technical read feeds demo matrix confidence" },
+      { from: "volatility", to: "risk_manager", topology: "1:1", purpose: "volatility feeds demo risk sizing" },
+      { from: "model_matrix", to: "risk_manager", topology: "1:1", purpose: "matrix output feeds demo risk sizing" }
+    ],
+    loops: [{ node: "model_matrix", maxRounds: 2, convergenceDelta: 0.05 }],
+    envelope: { mode: "demo", maxExposureUsd: null, maxConcurrent: 1, maxDailyLossPct: 5 },
+    protocols: [
+      "P-SPECIFICITY",
+      "P-GROUNDING",
+      "P-ANTI-HALLUCINATION",
+      "P-PURPOSE",
+      "P-BOUNDED-LOOPS",
+      "P-EVOLUTION",
+      "P-SELF-IMPROVEMENT",
+      "P-METALEARNING"
+    ]
+  }
+
+  test("existing catalog rows serialize byte-identical — the perps row is an append, not an edit", () => {
+    expect(JSON.stringify(POLICY_GRAPH_CATALOG[0])).toBe(JSON.stringify(TRADING_CCXT_FIXTURE))
+    expect(JSON.stringify(POLICY_GRAPH_CATALOG[1])).toBe(JSON.stringify(EXPERTOPTION_FIXTURE))
+    expect(policyGraphSites()).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
+  })
+
+  test("the perps template is a US-28 catalog row: staffing + topology identical to the sanctioned trading stream", () => {
+    const t = templateForSite("trading:perps")
+    expect(t).toBeTruthy()
+    expect(t).toMatchObject({
+      site: "trading:perps",
+      stream: "trading",
+      venue: "hyperliquid perps (swap, testnet-first)",
+      automationPermission: "sanctioned",
+      demoOnly: false
+    })
+    expect(t.envelope).toMatchObject({ mode: "copilot", maxExposureUsd: 10, maxConcurrent: 1, maxDailyLossPct: 5 })
+    expect(t.roster).toEqual(TRADING_CCXT_FIXTURE.roster)
+    expect(t.edges).toEqual(TRADING_CCXT_FIXTURE.edges)
+    expect(t.loops).toEqual(TRADING_CCXT_FIXTURE.loops)
+    expect(t.protocols).toEqual(TRADING_CCXT_FIXTURE.protocols)
+    const { ok, results } = validateCatalog()
+    expect(ok).toBe(true)
+    expect(results.find((r) => r.site === "trading:perps").errors).toEqual([])
   })
 })

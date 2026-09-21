@@ -153,6 +153,24 @@ import {
   verifyCcxtFill
 } from "./services/ccxtOrdering.mjs"
 import { dayKeyOf } from "./services/u4faRisk.mjs"
+import {
+  PERPS_OPEN_ACTION,
+  PERPS_CLOSE_ACTION,
+  PERPS_SITE,
+  proposePerpsOpen,
+  executePerpsOpen,
+  verifyPerpsOpen,
+  executePerpsClose,
+  perpsProposalsFromAudit
+} from "./services/commandCentre/perpsExecution.mjs"
+import {
+  openPositions,
+  reconcileWithVenue,
+  trackOpen,
+  recordClose,
+  observePerpsWallet
+} from "./services/livePositionManager.mjs"
+import { hyperliquidPerps } from "./services/venues/hyperliquidPerps.mjs"
 
 wireKillSwitchReader(() => anyKillActive())
 wireAuditReader(() => readAudit())
@@ -1509,8 +1527,28 @@ async function _handleApiInner(req, res, url, reqId) {
         { name: "ccxt-equity", ageSec: ccxtEquity.ageSec, maxAgeSec: CCXT_EQUITY_STALE_MS / 1000 }
       ]
     }
+    // Slice 6b — trading:perps: the perps wallet equity observation (persisted
+    // by the position manager as ccxt-perps-risk.json) is the site's mandatory
+    // 5E feed; the same absent-key → not-wired honesty as the ccxt leg applies.
+    const perpsRisk = await readPerpsRiskStore()
+    if (perpsRisk) {
+      const ageMs = perpsRisk.equityAt ? Date.now() - Date.parse(perpsRisk.equityAt) : Number.NaN
+      feeds[PERPS_SITE] = [
+        {
+          name: "perps-equity",
+          ageSec: Number.isFinite(ageMs) ? ageMs / 1000 : Number.POSITIVE_INFINITY,
+          maxAgeSec: perpsFundingStaleMs() / 1000
+        }
+      ]
+    }
     const lastCcxtOrderAt = readAudit()
       .filter((e) => e.kind === "execution:executed" && String(e.data?.action ?? "").startsWith("ccxt:"))
+      .map((e) => e.at ?? null)
+      .filter(Boolean)
+      .sort()
+      .at(-1)
+    const lastPerpsExecAt = readAudit()
+      .filter((e) => e.kind === "execution:executed" && String(e.data?.action ?? "").startsWith("perps:"))
       .map((e) => e.at ?? null)
       .filter(Boolean)
       .sort()
@@ -1522,6 +1560,12 @@ async function _handleApiInner(req, res, url, reqId) {
         power: "proposals",
         inFlight: executionNow[CCXT_SITE]?.inFlight ?? 0,
         lastExecutedAt: lastCcxtOrderAt ?? null
+      },
+      [PERPS_SITE]: {
+        action: PERPS_OPEN_ACTION,
+        power: "proposals",
+        inFlight: executionNow[PERPS_SITE]?.inFlight ?? 0,
+        lastExecutedAt: lastPerpsExecAt ?? null
       }
     }
     writeJson(
@@ -1754,6 +1798,340 @@ async function _handleApiInner(req, res, url, reqId) {
       at: new Date().toISOString()
     })
     return
+  }
+
+  // ── trading:perps rail (slice 6b, T7) — mirror of the ccxt orders rail with
+  //    the perps 11–15 chain on top ────────────────────────────────────────────
+
+  async function readPerpsRiskStore() {
+    const fs = await import("node:fs")
+    const path = await import("node:path")
+    const url = await import("node:url")
+    const dataDir =
+      process.env.PICC_COMMAND_CENTRE_DATA_DIR ||
+      url.fileURLToPath(new URL("./services/data", import.meta.url))
+    const riskFile = path.join(dataDir, "ccxt-perps-risk.json")
+    if (!fs.existsSync(riskFile)) return null
+    try {
+      const data = JSON.parse(fs.readFileSync(riskFile, "utf8"))
+      if (!data || typeof data !== "object" || data.version !== 1) return null
+      return data
+    } catch {
+      return null
+    }
+  }
+
+  function perpsFundingStaleMs() {
+    const raw = process.env.PICC_CCXT_FUNDING_STALE_MS
+    if (raw === undefined || raw === "") return 7_200_000
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : 7_200_000
+  }
+
+  // The 5-fn adapter seam (F2): enforcement, the position manager and the rail
+  // all read the SAME venue adapter (hyperliquidPerps, verified shapes at
+  // :387-509) — one observation source, never a per-route mock of reality.
+  const perpsAdapter = {
+    positionView: () => hyperliquidPerps.positionView(),
+    observeEquity: () => hyperliquidPerps.observeEquity(),
+    observeFunding: ({ symbol }) => hyperliquidPerps.observeFunding({ symbol }),
+    submitOrder: (params) => hyperliquidPerps.submitOrder(params),
+    verifyFill: (params) => hyperliquidPerps.verifyFill(params),
+    openPositions,
+    reconcileWithVenue
+  }
+
+  // Composes the perps rail state + a fresh observation: wallet equity (which
+  // also rides the reconcile-on-first-boot), funding (normalized to numeric
+  // epoch ms — gate 15's contract), open-position count for the position cap,
+  // concurrency from the execution seam. Failures are honest (perps-equity
+  // stale feed, funding-unobservable) — nothing is assumed.
+  async function observePerpsRailState({ symbol }) {
+    const halt = crossSiteHaltState()
+    const haltToday = halt && halt.dayKey === dayKeyOf(Date.now())
+    const wallet = await observePerpsWallet(perpsAdapter)
+    const funding = await perpsAdapter.observeFunding({ symbol })
+    const fundingAt = funding?.ok && funding.at !== undefined && funding.at !== null
+      ? Number.isFinite(funding.at) ? funding.at : Date.parse(funding.at)
+      : null
+    const fundingObserved = funding?.ok && fundingAt !== null && Number.isFinite(fundingAt)
+      ? { ok: true, rate: funding.rate, at: fundingAt, fundingIntervalHrs: funding.fundingIntervalHrs ?? null }
+      : { ok: false, reason: funding?.reason ?? "funding-unobservable" }
+    const positions = openPositions()
+    const position = positions[0] ?? null
+    const staleFeeds = []
+    if (!wallet.ok) {
+      staleFeeds.push({ name: "perps-equity", ageSec: Number.POSITIVE_INFINITY, maxAgeSec: perpsFundingStaleMs() / 1000 })
+    }
+    return {
+      state: {
+        killSwitch: anyKillActive(),
+        optIn: false, // proposals power: fresh per-action consent, never a standing opt-in
+        breakers: {
+          dailyLossHalted: haltToday && halt.breaker === "dailyLoss",
+          regimeHalted: haltToday && (halt.breaker === "regime" || halt.breaker === "regimeHalted"),
+          siteCapped: false
+        },
+        staleFeeds,
+        concurrentUnits: executionStatus()[PERPS_SITE]?.inFlight ?? 0,
+        dayLossPct: wallet.ok ? wallet.dayLossPct : null,
+        equityUsd: wallet.ok ? wallet.equityUsd : null
+      },
+      observation: {
+        leverage: position ? position.leverage : undefined,
+        notionalUsd: position ? position.notional : undefined,
+        marginMode: position ? position.marginMode : "isolated",
+        openNetPositions: positions.length,
+        funding: fundingObserved
+      }
+    }
+  }
+
+  // GET lists the durable perps positions: the persisted records joined with
+  // the venue reconcile (closed-unobserved is honest — pnl: null, never a
+  // made-up number), plus the durable proposals from the audit. An unobservable
+  // venue is returned as positions-unobservable, never a fabricated row.
+  if (path === "/api/command-centre/perps/positions" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    let venueView
+    try {
+      venueView = await perpsAdapter.positionView()
+    } catch (err) {
+      venueView = { ok: false, reason: err?.message || "positions-unobservable" }
+    }
+    const reconcile = reconcileWithVenue(venueView)
+    const proposals = perpsProposalsFromAudit(readAudit())
+    if (!reconcile.ok) {
+      writeJson(res, 200, {
+        ok: false,
+        consentBy,
+        reason: `positions-unobservable: ${reconcile.reason ?? "positions-unobservable"}`,
+        positions: openPositions(),
+        reconcile,
+        proposals,
+        at: new Date().toISOString()
+      })
+      return true
+    }
+    writeJson(res, 200, {
+      ok: true,
+      consentBy,
+      positions: [...openPositions(), ...reconcile.closedUnobserved],
+      reconcile,
+      proposals,
+      at: new Date().toISOString()
+    })
+    return true
+  }
+
+  // POST proposes a perps order. The server generates the idempotency identity
+  // (clientOrderId), sizes the order against the per-position margin cap (the
+  // §8.1(5) semantics: cap applies to MARGIN, not traded notional), renders the
+  // 5F rationale from observed funding/equity and runs the FULL gate chain
+  // (sidecar 10, then perps 11–15). No venue is touched here — the proposal
+  // decides WHAT could be executed; both carriers act on ONE reality.
+  if (path === "/api/command-centre/perps/propose" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const exchange = String(body?.exchange ?? "").trim().toLowerCase()
+    if (exchange !== "hyperliquid") {
+      return writeJson(res, 400, { ok: false, error: "exchange must be hyperliquid for the perps rail" })
+    }
+    const symbol = String(body?.symbol ?? "").trim().toUpperCase()
+    if (!symbol || !symbol.includes("/")) {
+      return writeJson(res, 400, { ok: false, error: "symbol is required (ccxt BASE/QUOTE, e.g. BTC/USDT)" })
+    }
+    const side = String(body?.side ?? "").trim().toLowerCase()
+    if (side !== "buy" && side !== "sell") {
+      return writeJson(res, 400, { ok: false, error: "side must be buy or sell" })
+    }
+    const amount = Number(body?.amount)
+    const price = Number(body?.price)
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(price) || price <= 0) {
+      return writeJson(res, 400, { ok: false, error: "amount and price must be finite positive numbers" })
+    }
+    const leverage = Number(body?.leverage)
+    if (!Number.isFinite(leverage) || leverage <= 0) {
+      return writeJson(res, 400, { ok: false, error: "leverage must be a finite positive number" })
+    }
+    const marginMode = String(body?.marginMode ?? "isolated").trim().toLowerCase()
+    if (marginMode !== "isolated" && marginMode !== "cross") {
+      return writeJson(res, 400, { ok: false, error: "marginMode must be isolated or cross" })
+    }
+    const { state, observation } = await observePerpsRailState({ symbol })
+    const result = await proposePerpsOpen({ exchange, symbol, side, amount, price, leverage, marginMode, consentBy, state, observation })
+    writeJson(res, 200, {
+      ok: result.ok,
+      consentBy,
+      gate: result.ok ? result.gate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate),
+      order: result.order,
+      idempotencyKey: result.idempotencyKey,
+      clientOrderId: result.clientOrderId,
+      at: new Date().toISOString()
+    })
+    return true
+  }
+
+  // POST /execute — carrier A: the acting human's click IS the fresh per-action
+  // consent. The order is REPLAYED from the durable proposal (the body's price
+  // is NEVER re-trusted — the approved proposal decides), the perps 5 re-run at
+  // click time over FRESH observations, then the sidecar 10 via executeProposal;
+  // an idempotent re-click is denied, the venue is reached once.
+  if (path === "/api/command-centre/perps/execute" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const clientOrderId = String(body?.clientOrderId ?? "").trim()
+    if (!clientOrderId) {
+      return writeJson(res, 400, { ok: false, error: "clientOrderId is required — execute the exact proposal the rail recorded" })
+    }
+    const proposal = proposalForClientOrderId(clientOrderId)
+    if (!proposal) {
+      return writeJson(res, 404, { ok: false, error: `unknown proposal ${clientOrderId} — nothing durable to execute` })
+    }
+    const { exchange, symbol, side, amount, price, leverage, marginMode } = proposal.data
+    const { state, observation } = await observePerpsRailState({ symbol })
+    const result = await executePerpsOpen({
+      exchange,
+      symbol,
+      side,
+      amount,
+      price,
+      leverage,
+      marginMode,
+      clientOrderId,
+      consentBy,
+      state,
+      observation,
+      executor: async ({ proposal: p }) =>
+        perpsAdapter.submitOrder({
+          symbol: p.symbol,
+          side: p.side,
+          amount: p.amount,
+          price: p.price,
+          leverage: p.leverage,
+          marginMode: p.marginMode,
+          reduceOnly: false,
+          clientOrderId
+        })
+    })
+    writeJson(res, 200, {
+      ok: result.ok,
+      consentBy,
+      gate: result.ok ? result.gate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate),
+      execution: result.execution,
+      state: killSwitchState()
+    })
+    return true
+  }
+
+  // POST /close — the reduce-only other leg, REPLAYED from the durable position
+  // record (never from the body): symbol/side/size/leverage come from the
+  // position, the exit price is the acting human's fresh input. A reduce-only
+  // order is submitted (deploying NO new margin); the close is recorded ONLY on
+  // the verified fill. Unknown positionId → 404, nothing durable to close.
+  if (path === "/api/command-centre/perps/close" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const positionId = String(body?.positionId ?? "").trim()
+    const price = Number(body?.price)
+    if (!positionId) {
+      return writeJson(res, 400, { ok: false, error: "positionId is required — close the exact position the rail recorded" })
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+      return writeJson(res, 400, { ok: false, error: "close price must be a finite positive number" })
+    }
+    const position = openPositions().find((p) => p.id === positionId)
+    if (!position) {
+      return writeJson(res, 404, { ok: false, error: `unknown position ${positionId} — nothing durable to close` })
+    }
+    const { state, observation } = await observePerpsRailState({ symbol: position.symbol })
+    const result = await executePerpsClose({
+      exchange: "hyperliquid",
+      symbol: position.symbol,
+      positionId,
+      price,
+      consentBy,
+      position,
+      state,
+      observation,
+      submit: async ({ proposal: p }) =>
+        perpsAdapter.submitOrder({
+          symbol: p.symbol,
+          side: p.side === "short" ? "buy" : "sell",
+          amount: p.amount,
+          price: p.price,
+          leverage: p.leverage,
+          marginMode: p.marginMode,
+          reduceOnly: true,
+          position: position
+        })
+    })
+    writeJson(res, 200, {
+      ok: result.ok,
+      consentBy,
+      gate: result.ok ? result.gate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate),
+      execution: result.execution,
+      state: killSwitchState()
+    })
+    return true
+  }
+
+  // POST /verify — carrier B: the human performed the venue step on the
+  // exchange. The fill is verified READ-ONLY against the venue; the verified
+  // fill is the ONLY write into the position manager (trackOpen on an open,
+  // recordClose on a close). An unobservable venue is recorded as unobserved,
+  // never a fabricated fill.
+  if (path === "/api/command-centre/perps/verify" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const consentBy = (await verifyUser(req.headers.authorization)) ?? "default"
+    const clientOrderId = String(body?.clientOrderId ?? "").trim()
+    const venueOrderId = String(body?.orderId ?? "").trim()
+    if (!clientOrderId || !venueOrderId) {
+      return writeJson(res, 400, { ok: false, error: "clientOrderId and orderId (the venue's order id) are required" })
+    }
+    const proposal = proposalForClientOrderId(clientOrderId)
+    if (!proposal) {
+      return writeJson(res, 404, { ok: false, error: `unknown proposal ${clientOrderId} — nothing to verify` })
+    }
+    const { exchange, symbol } = proposal.data
+    const result = await verifyPerpsOpen({
+      exchange,
+      symbol,
+      orderId: venueOrderId,
+      clientOrderId,
+      verify: (v) => perpsAdapter.verifyFill({ orderId: v.orderId })
+    })
+    if (result.filled) {
+      if (proposal.data.kind === "open") {
+        const order = proposal.data
+        trackOpen({
+          position: {
+            id: venueOrderId,
+            symbol: order.symbol,
+            side: order.side === "sell" ? "short" : "long",
+            size: result.filled.filled,
+            entryPrice: result.filled.average,
+            leverage: order.leverage,
+            marginUsd: order.marginUsd,
+            marginMode: order.marginMode,
+            openedAt: result.filled.at,
+            openOrderId: venueOrderId,
+            source: "persisted"
+          }
+        })
+      } else {
+        recordClose({ positionId: proposal.data.positionId, fill: result.filled, fundingObservations: [] })
+      }
+    }
+    writeJson(res, 200, {
+      ok: result.ok,
+      consentBy,
+      kind: result.kind,
+      clientOrderId: result.clientOrderId,
+      at: new Date().toISOString()
+    })
+    return true
   }
 
   if (path === "/api/trading/predict" && req.method === "POST") {

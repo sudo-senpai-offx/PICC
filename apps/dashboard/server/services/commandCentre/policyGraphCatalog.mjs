@@ -38,6 +38,26 @@ export const PROTOCOLS = Object.freeze([
   "P-METALEARNING"
 ])
 
+// Shared across the sanctioned live trading rows: the perps template is
+// staffed and wired identically to ccxt, so both venues reference THE SAME
+// edges + loops (P-SPECIFICITY forbids re-typing one template's topology).
+const TRADING_EDGES = Object.freeze([
+  { from: "news_sentiment", to: "consensus", topology: "N:1", purpose: "sentiment vote feeds the cross-source consensus vote" },
+  { from: "technical", to: "consensus", topology: "N:1", purpose: "technical read feeds the cross-source consensus vote" },
+  { from: "regime", to: "consensus", topology: "N:1", purpose: "regime label feeds the cross-source consensus vote" },
+  { from: "volatility", to: "consensus", topology: "N:1", purpose: "volatility estimate feeds the cross-source consensus vote" },
+  { from: "order_flow", to: "consensus", topology: "N:1", purpose: "order-flow delta feeds the cross-source consensus vote" },
+  { from: "whale_onchain", to: "consensus", topology: "N:1", purpose: "on-chain read feeds the consensus vote on crypto venues" },
+  { from: "consensus", to: "model_matrix", topology: "1:1", purpose: "verified cross-source agreement gates model-matrix confidence" },
+  { from: "consensus", to: "risk_manager", topology: "1:1", purpose: "verified candles feed the risk manager's exposure math" },
+  { from: "model_matrix", to: "risk_manager", topology: "1:1", purpose: "confidence-floored matrix output feeds position sizing" }
+])
+
+const TRADING_LOOPS = Object.freeze([
+  { node: "consensus", maxRounds: 3, convergenceDelta: 0.05 },
+  { node: "risk_manager", maxRounds: 2, convergenceDelta: 0.05 }
+])
+
 export const POLICY_GRAPH_CATALOG = Object.freeze([
   {
     // CCXT crypto venue class. Per-venue rows (binance/bybit/okx…) expand
@@ -48,21 +68,8 @@ export const POLICY_GRAPH_CATALOG = Object.freeze([
     automationPermission: "sanctioned",
     demoOnly: false,
     roster: TRADING_ROSTER,
-    edges: [
-      { from: "news_sentiment", to: "consensus", topology: "N:1", purpose: "sentiment vote feeds the cross-source consensus vote" },
-      { from: "technical", to: "consensus", topology: "N:1", purpose: "technical read feeds the cross-source consensus vote" },
-      { from: "regime", to: "consensus", topology: "N:1", purpose: "regime label feeds the cross-source consensus vote" },
-      { from: "volatility", to: "consensus", topology: "N:1", purpose: "volatility estimate feeds the cross-source consensus vote" },
-      { from: "order_flow", to: "consensus", topology: "N:1", purpose: "order-flow delta feeds the cross-source consensus vote" },
-      { from: "whale_onchain", to: "consensus", topology: "N:1", purpose: "on-chain read feeds the consensus vote on crypto venues" },
-      { from: "consensus", to: "model_matrix", topology: "1:1", purpose: "verified cross-source agreement gates model-matrix confidence" },
-      { from: "consensus", to: "risk_manager", topology: "1:1", purpose: "verified candles feed the risk manager's exposure math" },
-      { from: "model_matrix", to: "risk_manager", topology: "1:1", purpose: "confidence-floored matrix output feeds position sizing" }
-    ],
-    loops: [
-      { node: "consensus", maxRounds: 3, convergenceDelta: 0.05 },
-      { node: "risk_manager", maxRounds: 2, convergenceDelta: 0.05 }
-    ],
+    edges: TRADING_EDGES,
+    loops: TRADING_LOOPS,
     envelope: {
       mode: "autopilot",
       maxExposureUsd: 10, // first-slice authority ceiling ($10)
@@ -96,6 +103,26 @@ export const POLICY_GRAPH_CATALOG = Object.freeze([
       maxExposureUsd: null, // demo credits, not capital
       maxConcurrent: 1,
       maxDailyLossPct: 5
+    },
+    protocols: PROTOCOLS
+  },
+  {
+    // Hyperliquid perps (swap) venue class — the FIRST live order surface
+    // (WS-1 live-order-lifecycle). Testnet-first; each perp instrument
+    // expands one-by-one behind this template like a ccxt venue row.
+    site: "trading:perps",
+    stream: "trading",
+    venue: "hyperliquid perps (swap, testnet-first)",
+    automationPermission: "sanctioned",
+    demoOnly: false,
+    roster: TRADING_ROSTER,
+    edges: TRADING_EDGES,
+    loops: TRADING_LOOPS,
+    envelope: {
+      mode: "copilot", // margin-funded perps stay copilot until the demo path is proven (R4.1-vault)
+      maxExposureUsd: 10, // per-position MARGIN cap, not traded notional (§8.1(5) margin semantics)
+      maxConcurrent: 1, // a single live perps position at a time (R4.4)
+      maxDailyLossPct: 5 // first-slice authority (-5% / day)
     },
     protocols: PROTOCOLS
   }
