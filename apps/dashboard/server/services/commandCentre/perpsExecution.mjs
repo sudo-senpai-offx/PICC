@@ -10,7 +10,11 @@
 //     rationale citing leverage, margin, the funding observation and day-loss.
 //     An allowed proposal is recorded durably as proposal:created.
 //   • carrier A ("PICC executes"): executePerpsOpen RE-RUNS the perps 5 gates
-//     manually with the FRESH click-time observation, then delegates the
+//     at click over the ACTUAL proposal the venue will receive — gate 11
+//     certifies the REQUESTED leverage (the one deployed), not a derived view —
+//     then treats the observed wallet leverage as a SEPARATE wallet-health
+//     assertion: if it diverges from the requested leverage, deny
+//     perps-leverage-mismatch before the venue. On a pass it delegates the
 //     sidecar 10 + venue to executeProposal (commandCentreExecution.mjs). The
 //     executor is the injected venue (adapter.submitOrder in production; a
 //     fixture stub in CI). executionStatus() counts trading:perps in-flight.
@@ -30,11 +34,16 @@
 // runs evaluateGate on the ":exec" proposal itself — doing so would register
 // the key twice and the FIRST execute would self-deny at `idempotent`. The
 // correct composition:
-//   1. evaluatePerpsGate (5) runs MANUALLY with the fresh observation — this
-//      re-check is real (over-band leverage at click denies BEFORE the venue);
+//   1. evaluatePerpsGate (5) runs MANUALLY over the REAL proposal with the
+//      fresh observation — gate 11 certifies the REQUESTED leverage itself, so
+//      an out-of-band request at click denies BEFORE the venue; then, when the
+//      OBSERVED wallet leverage differs from the requested one, a second
+//      wallet-health assertion denies (perps-leverage-mismatch) before the
+//      venue;
 //   2. on a perps pass, executeProposal runs the sidecar 10 (kill → … →
 //      idempotent) with the FRESH click-time state, then the venue.
-//   End-to-end order: perps-5 → sidecar-10 → venue.
+//   End-to-end order: perps-5 (request-certified) → wallet-health drift check →
+//   sidecar-10 → venue.
 //
 // AUDIT-SEQUENCE HONESTY (the rail's contract, test-verified):
 //   • green open propose:  ["safety-gate:allow"(sidecar), "safety-gate:allow"(perps),
@@ -46,9 +55,14 @@
 //     IS audited, NO execution:* and the venue stub never runs.
 //   • venue throw execute: ["safety-gate:allow"(perps), "safety-gate:allow"(sidecar),
 //     "execution:failed"].
+//   • over-band-REQUEST click: ["safety-gate:deny"(perps perps-leverage-band)] — the
+//     requested leverage itself is out of band; only the perps deny is audited.
+//   • wallet-drift click:  ["safety-gate:allow"(perps), "safety-gate:deny"(perps
+//     perps-leverage-mismatch)] — the request IS certified, the drift denies.
 //   • green close:         ["safety-gate:allow"(perps), "safety-gate:allow"(sidecar),
 //     "execution:executed", "proposal:created"(kind:"close")].
-//   • re-click (both):     denied at sidecar `idempotent`; venue reached exactly once.
+//   • re-click (both):     perps-allow re-audited THEN sidecar `idempotent` deny
+//     (["safety-gate:allow","safety-gate:deny"]); venue reached exactly once.
 //
 // The rail is FED, never self-fetching: the venue (submit/verify) and every
 // observation/state object are injected by the caller (T7 composes them from
@@ -96,14 +110,27 @@ export function perpsCloseIdempotencyKey({ exchange, positionId, clientOrderId }
  * replayed from the durable POSITION, so its token derives from the position
  * id (not the clock): a re-click of the same position presents the same key
  * pair and is denied at the sidecar's idempotent gate after the first attempt.
+ * A short FNV-1a hash of the RAW position id is appended so two position ids
+ * that sanitize to the same base — or the "unnamed" default — can never
+ * collide on the close idempotency key. The token stays ≤ 32 chars.
  */
+function shortHash(s, len = 6) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(len, "0").slice(0, len)
+}
+
 export function closeClientOrderIdFor(positionId) {
-  const base = String(positionId ?? "")
+  const raw = String(positionId ?? "")
+  const base = raw
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "")
-    .slice(0, 24)
-  return `picc-close-${base || "unnamed"}`
+    .slice(0, 13)
+  return `picc-close-${base || "unnamed"}-${shortHash(raw)}`
 }
 
 /**
@@ -114,6 +141,10 @@ export function closeClientOrderIdFor(positionId) {
  * decimals so a clamped order can never overshoot at the venue's precision
  * floor. The cap is read from env at CALL time; an invalid numeric env means
  * the clamp cannot size → explicit invalid-environment deny (never silent).
+ * Malformed order params (non-finite amount/price/leverage, non-positive
+ * price/leverage) are a named invalid-order deny BEFORE any sizing math,
+ * mirroring the adapter's wording — so a NaN amount can never surface as a
+ * mislabeled perps-margin-cap deny or a $0 order.
  */
 export function clampPerpsMargin({ amount, price, leverage }) {
   const amountN = Number(amount)
@@ -124,8 +155,18 @@ export function clampPerpsMargin({ amount, price, leverage }) {
   if (rawCap !== undefined && rawCap !== "" && (!Number.isFinite(cap) || cap <= 0)) {
     return {
       ok: false,
+      blockedBy: "invalid-environment",
       reason: `invalid-environment: PICC_CCXT_MARGIN_PER_POSITION_CAP_USD=${rawCap}`
     }
+  }
+  if (!Number.isFinite(amountN) || amountN <= 0) {
+    return { ok: false, blockedBy: "invalid-order", reason: `invalid-order: amount=${String(amount ?? "")}` }
+  }
+  if (!Number.isFinite(priceN) || priceN <= 0) {
+    return { ok: false, blockedBy: "invalid-order", reason: `invalid-order: price=${String(price ?? "")}` }
+  }
+  if (!Number.isFinite(levN) || levN <= 0) {
+    return { ok: false, blockedBy: "invalid-order", reason: `invalid-order: leverage=${String(leverage ?? "")}` }
   }
   const notional = amountN * priceN
   const margin = notional / levN
@@ -186,9 +227,9 @@ export function perpsCloseRationale({ symbol, amount, price, notionalUsd, levera
   )
 }
 
-function gateDeny(reason, action, audit) {
-  audit({ site: PERPS_SITE, kind: "safety-gate:deny", data: { action: action ?? null, blockedBy: "invalid-environment", reason } })
-  return { allow: false, blockedBy: "invalid-environment", reason }
+function gateDeny(reason, action, audit, blockedBy = "invalid-environment") {
+  audit({ site: PERPS_SITE, kind: "safety-gate:deny", data: { action: action ?? null, blockedBy, reason } })
+  return { allow: false, blockedBy, reason }
 }
 
 /**
@@ -218,7 +259,7 @@ export async function proposePerpsOpen({
   const clientOrderId = clientOrderIdFor(now)
   const sized = clampPerpsMargin({ amount, price, leverage })
   if (!sized.ok) {
-    const gate = gateDeny(sized.reason, PERPS_OPEN_ACTION, audit)
+    const gate = gateDeny(sized.reason, PERPS_OPEN_ACTION, audit, sized.blockedBy)
     return { ok: false, gate, perpsGate: null, clientOrderId, idempotencyKey: null, proposal: null, order: null, blockedBy: gate.blockedBy }
   }
   const proposal = {
@@ -307,9 +348,14 @@ export async function proposePerpsOpen({
 
 /**
  * Carrier A: the acting human's click IS the fresh per-action consent. The
- * perps 5 re-run with the FRESH observation, then the sidecar 10 re-run with
- * the FRESH click-time state (both real re-checks), and only a pass reaches
- * the venue. The execution carries its own 5G key (:exec) registered by
+ * perps 5 RE-RUN at click over the ACTUAL proposal the venue receives — gate 11
+ * certifies the REQUESTED leverage end-to-end (an out-of-band request denies
+ * before the venue), gate 12's margin math uses the deployed leverage — then a
+ * separate wallet-health assertion denies (perps-leverage-mismatch) when the
+ * OBSERVED wallet leverage diverges from the deployed request. On a pass the
+ * sidecar 10 re-run happens with the FRESH click-time state via
+ * executeProposal (also a real re-check), and only a pass reaches the venue.
+ * The execution carries its own 5G key (:exec) registered by
  * executeProposal's idempotent gate; re-click is denied, venue reached once.
  */
 export async function executePerpsOpen({
@@ -332,7 +378,7 @@ export async function executePerpsOpen({
   const proposalKey = perpsOpenIdempotencyKey({ exchange, clientOrderId })
   const sized = clampPerpsMargin({ amount, price, leverage })
   if (!sized.ok) {
-    const gate = gateDeny(sized.reason, PERPS_OPEN_ACTION, audit)
+    const gate = gateDeny(sized.reason, PERPS_OPEN_ACTION, audit, sized.blockedBy)
     return { ok: false, gate, perpsGate: null, execution: null }
   }
   const proposal = {
@@ -362,21 +408,35 @@ export async function executePerpsOpen({
     marginMode,
     reduceOnly: false,
     notionalUsd: sized.notionalUsd,
-    marginUsd: sized.marginUsd
+    marginUsd: sized.marginUsd,
+    clamped: sized.clamped
   }
-  // The click-time re-check gates on the FRESH observed leverage, not the
-  // stale requested one — if the wallet's observed leverage is now over-band
-  // (gate 11), the deny is real and BEFORE the venue.
-  const observedLeverage = Number.isFinite(Number(observation?.leverage)) ? Number(observation.leverage) : leverage
-  const perpsGate = evaluatePerpsGate({
-    template,
-    proposal: { ...proposal, leverage: observedLeverage, positionLeverage: observedLeverage },
-    observation,
-    audit
-  })
+  // The click-time re-check runs the perps 5 gates over the ACTUAL proposal the
+  // venue receives — gate 11 certifies the REQUESTED leverage (the one that gets
+  // deployed), so an out-of-band request at click denies BEFORE the venue, and
+  // gate 12's margin math divides by the same leverage the venue deploys.
+  const perpsGate = evaluatePerpsGate({ template, proposal, observation, audit })
   if (!perpsGate.allow) {
     // perps deny stops before the venue; only the perps deny is audited.
     return { ok: false, gate: null, perpsGate, execution: null }
+  }
+  // Wallet-health assertion (separate from the request certification above):
+  // the perps-5 was over the requested proposal; the OBSERVED wallet leverage is
+  // a distinct signal — if it diverges from the leverage the order deploys, the
+  // order no longer describes the observed wallet state → named deny, venue not
+  // reached. When the wallet observation has no leverage there is nothing to
+  // assert divergence against.
+  const observedLeverage = Number.isFinite(Number(observation?.leverage)) ? Number(observation.leverage) : null
+  if (observedLeverage !== null && Math.abs(observedLeverage - proposal.leverage) > 1e-6) {
+    const reason =
+      `perps-leverage-mismatch: wallet observed leverage ${observedLeverage} != requested ${proposal.leverage} — ` +
+      "the order no longer describes the observed wallet state"
+    audit({
+      site: PERPS_SITE,
+      kind: "safety-gate:deny",
+      data: { action: PERPS_OPEN_ACTION, blockedBy: "perps-leverage-mismatch", reason }
+    })
+    return { ok: false, gate: null, perpsGate, execution: null, blockedBy: "perps-leverage-mismatch", reason }
   }
   return executeProposal({
     template,
@@ -542,6 +602,10 @@ export async function executePerpsClose({
  * The perps list surface: proposal:created entries (durable audit) joined with
  * their honest latest state, for BOTH open and close kinds. Newest first. kind
  * comes from the recorded proposal ("open" | "close").
+ *
+ * CLOSE-ROW MARGIN NOTE (T7's list composer): a close deploys NO new margin —
+ * its anchor records marginUsd: 0 / exposureUsd: 0, so a close row's
+ * marginUsd: 0 must be read as "no new margin deployed", never as "free".
  */
 export function perpsProposalsFromAudit(audits = []) {
   const byKind = (kind) =>

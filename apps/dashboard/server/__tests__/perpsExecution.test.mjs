@@ -8,7 +8,7 @@
 // The rail is venue-carrier only: the venue (submit/verify) and the
 // observation/state are injected fixture stubs — no live exchange is touched.
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import {
   PERPS_OPEN_ACTION,
   PERPS_CLOSE_ACTION,
@@ -26,6 +26,7 @@ import {
   clientOrderIdFor,
   executionIdempotencyKey
 } from "../services/commandCentre/perpsExecution.mjs"
+import * as perpsGates from "../services/commandCentre/perpsGates.mjs"
 import { clientOrderIdFor as ccxtClientOrderIdFor } from "../services/commandCentre/ccxtExecution.mjs"
 import { _resetSidecarState, wireAuditReader } from "../services/commandCentre/safetySidecar.mjs"
 import {
@@ -159,6 +160,18 @@ describe("Command Centre — perps rail: identity + shape", () => {
     expect(closeClientOrderIdFor("pos-hl-01")).not.toBe(closeClientOrderIdFor("pos-hl-02"))
     expect(closeClientOrderIdFor("pos-hl-01")).toMatch(/^picc-close-/)
   })
+
+  test("close tokens carry a raw-positionId hash so sanitized-ID collisions and 'unnamed' can't collide on the close key", () => {
+    // "POS-HL-01" and "pos-hl-01" sanitize to the same base — the hash separates them.
+    expect(closeClientOrderIdFor("POS-HL-01")).not.toBe(closeClientOrderIdFor("pos-hl-01"))
+    // The "unnamed" default is hash-distinguished too.
+    expect(closeClientOrderIdFor("###")).not.toBe(closeClientOrderIdFor("^%$"))
+    expect(closeClientOrderIdFor("###")).toMatch(/^picc-close-unnamed-/)
+    // Bounded token: ≤ 32 chars (the venue's order-id ceiling) even for long position ids.
+    const long = "some-really-long-position-identification-2024"
+    expect(closeClientOrderIdFor(long).length).toBeLessThanOrEqual(32)
+    expect(closeClientOrderIdFor(long)).not.toBe(closeClientOrderIdFor(long.toUpperCase()))
+  })
 })
 
 describe("Command Centre — perps rail: the gate-side margin clamp", () => {
@@ -184,6 +197,31 @@ describe("Command Centre — perps rail: the gate-side margin clamp", () => {
     expect(r.ok).toBe(false)
     expect(r.reason).toContain("invalid-environment")
     expect(r.reason).toContain("PICC_CCXT_MARGIN_PER_POSITION_CAP_USD")
+  })
+
+  test("a NaN amount is a named invalid-order deny BEFORE any sizing math", () => {
+    const r = clampPerpsMargin({ amount: "not-a-number", price: 1000, leverage: 4 })
+    expect(r.ok).toBe(false)
+    expect(r.blockedBy).toBe("invalid-order")
+    expect(r.reason).toContain("invalid-order: amount=")
+  })
+
+  test("a zero or negative price is a named invalid-order deny, never a $0 order", () => {
+    const zero = clampPerpsMargin({ amount: 0.01, price: 0, leverage: 4 })
+    expect(zero.ok).toBe(false)
+    expect(zero.blockedBy).toBe("invalid-order")
+    expect(zero.reason).toContain("invalid-order: price=")
+    const negative = clampPerpsMargin({ amount: 0.01, price: -1000, leverage: 4 })
+    expect(negative.ok).toBe(false)
+    expect(negative.blockedBy).toBe("invalid-order")
+    expect(negative.reason).toContain("invalid-order: price=")
+  })
+
+  test("a non-positive leverage is a named invalid-order deny", () => {
+    const r = clampPerpsMargin({ amount: 0.01, price: 1000, leverage: 0 })
+    expect(r.ok).toBe(false)
+    expect(r.blockedBy).toBe("invalid-order")
+    expect(r.reason).toContain("invalid-order: leverage=")
   })
 })
 
@@ -244,18 +282,58 @@ describe("Command Centre — perps rail: proposal leg, propose", () => {
   })
 
   test("absent consentBy denies at per-site-opt-in — ONLY the deny audited, perps gate never runs", async () => {
+    const spy = vi.spyOn(perpsGates, "evaluatePerpsGate")
+    try {
+      const r = await proposePerpsOpen({
+        ...order,
+        consentBy: undefined,
+        state: greenState(),
+        observation: observation(),
+        template: perpsTemplate(),
+        audit: collector()
+      })
+      expect(r.ok).toBe(false)
+      expect(r.gate.blockedBy).toBe("per-site-opt-in")
+      expect(r.perpsGate).toBeNull()
+      // spy-proof: the sidecar deny short-circuits BEFORE the perps gate is consulted
+      expect(spy).not.toHaveBeenCalled()
+      expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:deny"])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  test("on a GREEN propose the perps gate is evaluated exactly once (the spy mechanism + count pin)", async () => {
+    const spy = vi.spyOn(perpsGates, "evaluatePerpsGate")
+    try {
+      const r = await proposePerpsOpen({
+        ...order,
+        state: greenState(),
+        observation: observation(),
+        template: perpsTemplate(),
+        audit: collector()
+      })
+      expect(r.ok).toBe(true)
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  test("a NaN amount at PROPOSE is a named invalid-order gate deny — no proposal:created, no $0 order", async () => {
     const r = await proposePerpsOpen({
       ...order,
-      consentBy: undefined,
+      amount: "NaN",
       state: greenState(),
       observation: observation(),
       template: perpsTemplate(),
       audit: collector()
     })
     expect(r.ok).toBe(false)
-    expect(r.gate.blockedBy).toBe("per-site-opt-in")
+    expect(r.gate.blockedBy).toBe("invalid-order")
     expect(r.perpsGate).toBeNull()
     expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:deny"])
+    expect(auditEvents.every((e) => e.kind !== "proposal:created")).toBe(true)
   })
 
   test("over-band leverage at PROPOSE denies at perps gate 11 — no proposal:created", async () => {
@@ -386,7 +464,7 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     expect(calls).toEqual([])
   })
 
-  test("over-band leverage at CLICK denies at perps gate 11 BEFORE the venue (fresh re-check is real)", async () => {
+  test("an out-of-band REQUESTED leverage at CLICK denies at perps gate 11 even when the wallet observation is in-band — the venue is NOT reached", async () => {
     const calls = []
     const exec = async () => {
       calls.push(1)
@@ -394,9 +472,10 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     }
     const r = await executePerpsOpen({
       ...order,
-      clientOrderId: "picc-band",
+      leverage: 6, // the leverage this order would DEPLOY is out of band [3,5]
+      clientOrderId: "picc-band-req",
       state: greenState(),
-      observation: observation({ leverage: 6, notionalUsd: 60 }),
+      observation: observation({ leverage: 4, notionalUsd: 60 }), // wallet observation is in-band
       executor: exec,
       template: perpsTemplate(),
       audit: collector()
@@ -406,6 +485,83 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     expect(r.perpsGate.blockedBy).toBe("perps-leverage-band")
     expect(calls).toEqual([])
     expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:deny"])
+  })
+
+  test("a divergent observed wallet leverage at CLICK is a named wallet-health deny (perps-leverage-mismatch) — the venue is NOT reached", async () => {
+    const calls = []
+    const exec = async () => {
+      calls.push(1)
+      return { ok: true }
+    }
+    const r = await executePerpsOpen({
+      ...order,
+      leverage: 4,
+      clientOrderId: "picc-drift",
+      state: greenState(),
+      observation: observation({ leverage: 6, notionalUsd: 60 }), // wallet observed at 6x, request deploys 4x
+      executor: exec,
+      template: perpsTemplate(),
+      audit: collector()
+    })
+    expect(r.ok).toBe(false)
+    expect(r.gate).toBeNull()
+    expect(r.perpsGate.allow).toBe(true) // the REQUESTED proposal itself was certified
+    expect(r.perpsGate.blockedBy).toBeNull()
+    expect(r.blockedBy).toBe("perps-leverage-mismatch")
+    expect(r.reason).toContain("perps-leverage-mismatch")
+    expect(calls).toEqual([])
+    // the request-certification allow IS audited, then the wallet-health deny
+    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "safety-gate:deny"])
+  })
+
+  test("an in-band observed wallet leverage matching the request executes green — the venue is reached once", async () => {
+    const calls = []
+    const exec = async () => {
+      calls.push(1)
+      return { ok: true }
+    }
+    const r = await executePerpsOpen({
+      ...order,
+      leverage: 4,
+      clientOrderId: "picc-obs-fine",
+      state: greenState(),
+      observation: observation({ leverage: 4, notionalUsd: 40 }),
+      executor: exec,
+      template: perpsTemplate(),
+      audit: collector()
+    })
+    expect(r.ok).toBe(true)
+    expect(r.execution.status).toBe("executed")
+    expect(calls).toEqual([1])
+  })
+
+  test("an over-cap request at CLICK is clamped — the executor receives the CLAMPED proposal, not the raw", async () => {
+    let captured = null
+    const exec = async (ctx) => {
+      captured = ctx.proposal
+      return { ok: true, workflow: "fixture-clamped" }
+    }
+    const r = await executePerpsOpen({
+      ...order,
+      amount: 0.4, // raw: $400 notional → $100 margin
+      clientOrderId: "picc-clamp-exec",
+      state: greenState(),
+      observation: observation({ notionalUsd: 400 }),
+      executor: exec,
+      template: perpsTemplate(),
+      audit: collector()
+    })
+    expect(r.ok).toBe(true)
+    expect(r.execution.status).toBe("executed")
+    expect(captured).toBeTruthy()
+    // keystone: the venue sees the CLAMPED sizing — notionalUsd ≤ cap × leverage,
+    // marginUsd ≤ cap — NOT the raw request; the clamp flag is visible too.
+    expect(captured.notionalUsd).toBeLessThanOrEqual(10 * order.leverage)
+    expect(captured.marginUsd).toBeLessThanOrEqual(10)
+    expect(captured.notionalUsd).toBe(40)
+    expect(captured.marginUsd).toBe(10)
+    expect(captured.clamped).toBe(true)
+    expect(captured.amount).not.toBe(0.4)
   })
 
   test("a venue throw surfaces as execution:failed — never a partial-success claim", async () => {
@@ -447,6 +603,7 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
       audit: collector()
     })
     expect(first.ok).toBe(true)
+    const preLen = auditEvents.length
     const second = await executePerpsOpen({
       ...order,
       clientOrderId: "picc-rc",
@@ -459,6 +616,13 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     expect(second.ok).toBe(false)
     expect(second.gate.blockedBy).toBe("idempotent")
     expect(calls).toEqual([1])
+    // RE-CLICK RECEIPT (pinned for T7's route regexes): on the second click the
+    // perps allow is re-certified, then the sidecar denies at idempotent — no
+    // execution:* and no second venue call.
+    expect(auditEvents.slice(preLen).map((e) => e.kind)).toEqual([
+      "safety-gate:allow",
+      "safety-gate:deny"
+    ])
   })
 })
 
@@ -607,10 +771,18 @@ describe("Command Centre — perps rail: close (reduce-only replay)", () => {
     }
     const first = await executePerpsClose(args)
     expect(first.ok).toBe(true)
+    const preLen = auditEvents.length
     const second = await executePerpsClose(args)
     expect(second.ok).toBe(false)
     expect(second.gate.blockedBy).toBe("idempotent")
     expect(calls).toEqual([1])
+    // RE-CLICK RECEIPT: the perps allow is re-certified (gate 11 reads
+    // positionLeverage), then the sidecar denies at idempotent; the close anchor
+    // is only recorded when execution proceeded, so NO phantom proposal:created.
+    expect(auditEvents.slice(preLen).map((e) => e.kind)).toEqual([
+      "safety-gate:allow",
+      "safety-gate:deny"
+    ])
   })
 })
 
