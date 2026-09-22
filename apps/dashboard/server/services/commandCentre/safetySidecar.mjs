@@ -58,11 +58,38 @@ export function wireKillSwitchReader(readFn) {
   killSwitchReader = typeof readFn === "function" ? readFn : null
 }
 
+// Halt persistence (WS-2 R4): an additive write-through seam. When wired
+// (riskHaltStore wires itself at module init), the three in-memory mutations
+// below also persist to command-centre-halt.json via onTrip/onTakeover/onClear.
+// A handler that throws propagates — mirroring setKillSwitch's persist (no
+// silent path) — but the in-memory mutation always lands first.
+let haltPersistence = null
+export function wireHaltPersistence(handlers = {}) {
+  const onTrip = typeof handlers?.onTrip === "function" ? handlers.onTrip : null
+  const onTakeover = typeof handlers?.onTakeover === "function" ? handlers.onTakeover : null
+  const onClear = typeof handlers?.onClear === "function" ? handlers.onClear : null
+  haltPersistence = onTrip || onTakeover || onClear ? { onTrip, onTakeover, onClear } : null
+}
+
+/**
+ * Boot re-hydration hook (WS-2 R4/AC-3): seeds the in-memory globalHalt/takeover
+ * from persisted state. Tolerant of partial shapes; malformed trip = no halt
+ * (the store validates the whole file before calling this).
+ */
+export function hydrateHaltState({ globalHalt: gh = null, takeover: tk = null } = {}) {
+  globalHalt =
+    gh && typeof gh === "object" && typeof gh.dayKey === "string" && gh.dayKey.length > 0
+      ? { dayKey: gh.dayKey, site: gh.site ?? "unknown", breaker: gh.breaker ?? "unknown", at: Number.isFinite(gh.at) ? gh.at : null }
+      : null
+  takeover = tk && typeof tk === "object" && Number.isFinite(tk.at) ? { at: tk.at } : null
+}
+
 /** Test seam only. */
 export function _resetSidecarState() {
   globalHalt = null
   takeover = null
   killSwitchReader = null
+  haltPersistence = null
   idempotencyKeys.clear()
 }
 
@@ -80,17 +107,20 @@ export function takeoverState() {
  */
 export function noteBreakerTrip(site, breaker, { now = Date.now() } = {}) {
   globalHalt = { dayKey: dayKeyOf(now), site, breaker, at: now }
+  haltPersistence?.onTrip?.(globalHalt)
   return { ...globalHalt }
 }
 
 /** 5B: immediate human takeover — deny-all until clear/rearm. */
 export function humanTakeover({ now = Date.now() } = {}) {
   takeover = { at: now }
+  haltPersistence?.onTakeover?.(takeover)
   return { ...takeover }
 }
 
 export function clearTakeover() {
   takeover = null
+  haltPersistence?.onClear?.()
 }
 
 function staleNames(staleFeeds) {
