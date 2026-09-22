@@ -338,3 +338,10 @@ Command: `npx vitest run --maxWorkers=1` then `npm run typecheck`.
 
 ### 8.4 Task count
 9 implementation tasks (T1–T9), 91 individually asserted acceptance criteria across the new test files plus the full-floor gate.
+
+## Resolution (2026-09-22)
+
+- **T1–T9 all landed** — commit range `cd942aa..<guard>`: F1 venue-adapter contract, M1 `ccxtInstanceFor` `id:type` cache seam, HL perps adapter (testnet-first), F3 perps live-position manager, F4 perps gates, F5 perps execution rail, catalog row + perps routes + overview feed, sandbox E2E (runbook appendix), and this no-regression guard.
+- **Guard shipped** — `apps/dashboard/server/__tests__/perpsSeamGuard.test.mjs`, source-level: `READ_ONLY_BLOCKED` untouched (`ccxtConnector.mjs:33-66`), spot `createOrder` only inside `placeCcxtOrder` (`ccxtOrdering.mjs:246`), perps `createOrder` only on the seam's swap instance (`hyperliquidPerps.mjs:331`), audit wiring exports intact.
+- **Serial floor green** — `npx vitest run --maxWorkers=1` from apps/dashboard: 254 files / 2,767 tests (2,766 passed, 1 honest skip); `npm run typecheck` green.
+- **Sandbox E2E honest skip** — `hyperliquidPerps.sandboxE2E` exits green with 1 skipped (ADR-0005: creds absent; no fabricated pass).
