@@ -27,7 +27,9 @@ import { randomBytes } from "node:crypto"
 import { evaluateGate } from "./safetySidecar.mjs"
 import { executeProposal } from "./commandCentreExecution.mjs"
 import { templateForSite } from "./policyGraphCatalog.mjs"
-import { appendAudit } from "./auditTrail.mjs"
+import { appendAudit, readAudit } from "./auditTrail.mjs"
+import { refreshAggregateRisk } from "./riskState.mjs"
+import { evaluateRiskGate, portfolioHeatUsd } from "./riskGates.mjs"
 import { CCXT_HARD_NOTIONAL_CAP_USD } from "../ccxtOrdering.mjs"
 
 export const CCXT_ORDER_ACTION = "ccxt:spot-order"
@@ -111,6 +113,20 @@ export function orderRationale({ exchange, symbol, side, amount, price, notional
 }
 
 /**
+ * WS-2 risk observation (gates 16-19). The rails are FED first: an injected
+ * `{ risk, heat }` (the handlers build it in observe*RailState) is used as-is;
+ * when absent the rail resolves it from the committed stores itself —
+ * refreshAggregateRisk (riskState) + portfolioHeatUsd over the durable audit
+ * (riskGates). Deny-before-venue is the rail's contract either way.
+ */
+export async function resolveRiskObservation({ injected = null, now = Date.now() } = {}) {
+  if (injected && typeof injected === "object" && injected.risk !== undefined) {
+    return { risk: injected.risk, heat: injected.heat }
+  }
+  return { risk: refreshAggregateRisk({ now }), heat: portfolioHeatUsd({ audits: readAudit() }) }
+}
+
+/**
  * BOTH carriers start here: propose the order and run the FULL 10-gate chain
  * with the observed state the caller supplies (kill, breakers, equity/feed
  * freshness, day P/L, concurrency). No venue is touched. On allow the proposal
@@ -148,7 +164,32 @@ export async function proposeCcxtOrder({
     idempotencyKey: orderIdempotencyKey({ exchange, clientOrderId })
   }
   const gate = evaluateGate({ template: templateForSite(CCXT_SITE), proposal, state: { ...state, now }, audit })
+  let riskGate = null
   if (gate.allow) {
+    // WS-2 gates 16-19 compose AFTER the sidecar allow — a risk deny returns
+    // before proposal:created, so a denied proposal never exists in the list.
+    const riskObservation = await resolveRiskObservation({ injected: state.riskObservation ?? null, now })
+    riskGate = evaluateRiskGate({ template: templateForSite(CCXT_SITE), proposal, observation: riskObservation, audit, now })
+    if (!riskGate.allow) {
+      return {
+        ok: false,
+        clientOrderId,
+        idempotencyKey: proposal.idempotencyKey,
+        proposal,
+        gate: riskGate,
+        riskGate,
+        blockedBy: riskGate.blockedBy,
+        order: {
+          exchange: String(exchange ?? "").trim().toLowerCase(),
+          symbol,
+          side,
+          amount: sized.amount,
+          price,
+          notionalUsd: sized.notionalUsd,
+          clamped: sized.clamped
+        }
+      }
+    }
     audit({
       site: CCXT_SITE,
       kind: "proposal:created",
@@ -174,6 +215,7 @@ export async function proposeCcxtOrder({
     idempotencyKey: proposal.idempotencyKey,
     proposal,
     gate,
+    riskGate,
     order: {
       exchange: String(exchange ?? "").trim().toLowerCase(),
       symbol,
@@ -224,7 +266,14 @@ export async function executeCcxtOrder({
     }),
     idempotencyKey: executionIdempotencyKey(proposalKey)
   }
-  return executeProposal({
+  // WS-2 gates 16-19 compose at click BEFORE the sidecar-10 re-run (which lives
+  // inside executeProposal) — a risk deny stops so the venue is never reached.
+  const riskObservation = await resolveRiskObservation({ injected: state.riskObservation ?? null, now })
+  const riskGate = evaluateRiskGate({ template: templateForSite(CCXT_SITE), proposal, observation: riskObservation, audit, now })
+  if (!riskGate.allow) {
+    return { ok: false, gate: riskGate, riskGate, blockedBy: riskGate.blockedBy, execution: null }
+  }
+  const result = await executeProposal({
     template: templateForSite(CCXT_SITE),
     proposal,
     state: { ...state, now },
@@ -232,6 +281,7 @@ export async function executeCcxtOrder({
     audit,
     now
   })
+  return { ...result, riskGate }
 }
 
 /**

@@ -43,26 +43,28 @@
 //   2. on a perps pass, executeProposal runs the sidecar 10 (kill → … →
 //      idempotent) with the FRESH click-time state, then the venue.
 //   End-to-end order: perps-5 (request-certified) → wallet-health drift check →
-//   sidecar-10 → venue.
+//   WS-2 risk gates 16-19 → sidecar-10 → venue.
 //
 // AUDIT-SEQUENCE HONESTY (the rail's contract, test-verified):
 //   • green open propose:  ["safety-gate:allow"(sidecar), "safety-gate:allow"(perps),
-//     "proposal:created"] — each of the two gate fns audits its own allow.
-//   • green open execute:  ["safety-gate:allow"(perps), "safety-gate:allow"(sidecar),
-//     "execution:executed"].
-//   • stale-feed execute:  ["safety-gate:allow"(perps), "safety-gate:deny"(sidecar
-//     fresh-data)] — first-deny stops: the perps allow IS audited, the sidecar deny
-//     IS audited, NO execution:* and the venue stub never runs.
-//   • venue throw execute: ["safety-gate:allow"(perps), "safety-gate:allow"(sidecar),
-//     "execution:failed"].
+//     "safety-gate:allow"(risk), "proposal:created"] — every gate fn audits its own allow.
+//   • green open execute:  ["safety-gate:allow"(perps), "safety-gate:allow"(risk),
+//     "safety-gate:allow"(sidecar), "execution:executed"].
+//   • stale-feed execute:  ["safety-gate:allow"(perps), "safety-gate:allow"(risk),
+//     "safety-gate:deny"(sidecar fresh-data)] — risk first-deny stops: the perps
+//     allow IS audited, the risk allow IS audited, the sidecar deny IS audited,
+//     NO execution:* and the venue stub never runs.
+//   • venue throw execute: ["safety-gate:allow"(perps), "safety-gate:allow"(risk),
+//     "safety-gate:allow"(sidecar), "execution:failed"].
 //   • over-band-REQUEST click: ["safety-gate:deny"(perps perps-leverage-band)] — the
 //     requested leverage itself is out of band; only the perps deny is audited.
 //   • wallet-drift click:  ["safety-gate:allow"(perps), "safety-gate:deny"(perps
 //     perps-leverage-mismatch)] — the request IS certified, the drift denies.
-//   • green close:         ["safety-gate:allow"(perps), "safety-gate:allow"(sidecar),
-//     "execution:executed", "proposal:created"(kind:"close")].
-//   • re-click (both):     perps-allow re-audited THEN sidecar `idempotent` deny
-//     (["safety-gate:allow","safety-gate:deny"]); venue reached exactly once.
+//   • green close:         ["safety-gate:allow"(perps), "safety-gate:allow"(risk),
+//     "safety-gate:allow"(sidecar), "execution:executed", "proposal:created"(kind:"close")].
+//   • re-click (both):     perps-allow + risk-allow re-audited THEN sidecar
+//     `idempotent` deny (["safety-gate:allow","safety-gate:allow","safety-gate:deny"]);
+//     venue reached exactly once.
 //
 // The rail is FED, never self-fetching: the venue (submit/verify) and every
 // observation/state object are injected by the caller (T7 composes them from
@@ -78,16 +80,15 @@
 // position id so a re-click of the same position presents the SAME key pair.
 //
 // Template note: the rail accepts the site template injectably, defaulting to
-// templateForSite(PERPS_SITE). The trading:perps catalog row (M2) is T7-owned
-// and not yet in the catalog — tests therefore inject the exact catalog-row
-// shape (spec §3.7).
+// templateForSite(PERPS_SITE) — the trading:perps catalog row (policyGraphCatalog.mjs).
 
 import { evaluateGate } from "./safetySidecar.mjs"
 import { evaluatePerpsGate } from "./perpsGates.mjs"
+import { evaluateRiskGate } from "./riskGates.mjs"
 import { executeProposal } from "./commandCentreExecution.mjs"
 import { templateForSite } from "./policyGraphCatalog.mjs"
 import { appendAudit } from "./auditTrail.mjs"
-import { clientOrderIdFor, executionIdempotencyKey } from "./ccxtExecution.mjs"
+import { clientOrderIdFor, executionIdempotencyKey, resolveRiskObservation } from "./ccxtExecution.mjs"
 
 export { clientOrderIdFor, executionIdempotencyKey }
 
@@ -293,11 +294,17 @@ export async function proposePerpsOpen({
   }
   const gate = evaluateGate({ template, proposal, state: { ...state, now }, audit })
   if (!gate.allow) {
-    return { ok: false, gate, perpsGate: null, clientOrderId, idempotencyKey: proposal.idempotencyKey, proposal, order: null, blockedBy: gate.blockedBy }
+    return { ok: false, gate, perpsGate: null, riskGate: null, clientOrderId, idempotencyKey: proposal.idempotencyKey, proposal, order: null, blockedBy: gate.blockedBy }
   }
   const perpsGate = evaluatePerpsGate({ template, proposal, observation, audit })
   if (!perpsGate.allow) {
-    return { ok: false, gate, perpsGate, clientOrderId, idempotencyKey: proposal.idempotencyKey, proposal, order: null, blockedBy: perpsGate.blockedBy }
+    return { ok: false, gate, perpsGate, riskGate: null, clientOrderId, idempotencyKey: proposal.idempotencyKey, proposal, order: null, blockedBy: perpsGate.blockedBy }
+  }
+  // WS-2 gates 16-19 compose AFTER the perps 5 allow — deny before proposal:created.
+  const riskObservation = await resolveRiskObservation({ injected: observation ? { risk: observation.risk, heat: observation.heat } : null, now })
+  const riskGate = evaluateRiskGate({ template, proposal, observation: riskObservation, audit, now })
+  if (!riskGate.allow) {
+    return { ok: false, gate: riskGate, perpsGate, riskGate, clientOrderId, idempotencyKey: proposal.idempotencyKey, proposal, order: null, blockedBy: riskGate.blockedBy }
   }
   audit({
     site: PERPS_SITE,
@@ -330,6 +337,7 @@ export async function proposePerpsOpen({
     proposal,
     gate,
     perpsGate,
+    riskGate,
     blockedBy: null,
     order: {
       exchange: String(exchange ?? "").trim().toLowerCase(),
@@ -379,7 +387,7 @@ export async function executePerpsOpen({
   const sized = clampPerpsMargin({ amount, price, leverage })
   if (!sized.ok) {
     const gate = gateDeny(sized.reason, PERPS_OPEN_ACTION, audit, sized.blockedBy)
-    return { ok: false, gate, perpsGate: null, execution: null }
+    return { ok: false, gate, perpsGate: null, riskGate: null, execution: null }
   }
   const proposal = {
     action: PERPS_OPEN_ACTION,
@@ -418,7 +426,7 @@ export async function executePerpsOpen({
   const perpsGate = evaluatePerpsGate({ template, proposal, observation, audit })
   if (!perpsGate.allow) {
     // perps deny stops before the venue; only the perps deny is audited.
-    return { ok: false, gate: null, perpsGate, execution: null }
+    return { ok: false, gate: null, perpsGate, riskGate: null, execution: null }
   }
   // Wallet-health assertion (separate from the request certification above):
   // the perps-5 was over the requested proposal; the OBSERVED wallet leverage is
@@ -436,9 +444,16 @@ export async function executePerpsOpen({
       kind: "safety-gate:deny",
       data: { action: PERPS_OPEN_ACTION, blockedBy: "perps-leverage-mismatch", reason }
     })
-    return { ok: false, gate: null, perpsGate, execution: null, blockedBy: "perps-leverage-mismatch", reason }
+    return { ok: false, gate: null, perpsGate, riskGate: null, execution: null, blockedBy: "perps-leverage-mismatch", reason }
   }
-  return executeProposal({
+  // WS-2 gates 16-19 compose after the wallet-health assertion and BEFORE the
+  // sidecar-10 re-run inside executeProposal — a risk deny stops pre-venue.
+  const riskObservation = await resolveRiskObservation({ injected: observation ? { risk: observation.risk, heat: observation.heat } : null, now })
+  const riskGate = evaluateRiskGate({ template, proposal, observation: riskObservation, audit, now })
+  if (!riskGate.allow) {
+    return { ok: false, gate: riskGate, perpsGate, riskGate, execution: null, blockedBy: riskGate.blockedBy }
+  }
+  const result = await executeProposal({
     template,
     proposal,
     state: { ...state, now },
@@ -446,6 +461,7 @@ export async function executePerpsOpen({
     audit,
     now
   })
+  return { ...result, riskGate }
 }
 
 /**
@@ -567,7 +583,15 @@ export async function executePerpsClose({
   }
   const perpsGate = evaluatePerpsGate({ template, proposal, observation, audit })
   if (!perpsGate.allow) {
-    return { ok: false, gate: null, perpsGate, execution: null, clientOrderId, idempotencyKey: proposalKey, proposal }
+    return { ok: false, gate: null, perpsGate, riskGate: null, execution: null, clientOrderId, idempotencyKey: proposalKey, proposal }
+  }
+  // WS-2 gates 16-19 also guard the close click: reduceOnly skips gates 17/18,
+  // but the aggregate day-loss and portfolio-heat gates still apply before the
+  // sidecar-10 re-run inside executeProposal.
+  const riskObservation = await resolveRiskObservation({ injected: observation ? { risk: observation.risk, heat: observation.heat } : null, now })
+  const riskGate = evaluateRiskGate({ template, proposal, observation: riskObservation, audit, now })
+  if (!riskGate.allow) {
+    return { ok: false, gate: riskGate, perpsGate, riskGate, execution: null, clientOrderId, idempotencyKey: proposalKey, proposal, blockedBy: riskGate.blockedBy }
   }
   const result = await executeProposal({
     template,
@@ -605,7 +629,7 @@ export async function executePerpsClose({
       }
     })
   }
-  return { ...result, clientOrderId, idempotencyKey: proposalKey }
+  return { ...result, riskGate, clientOrderId, idempotencyKey: proposalKey }
 }
 
 /**

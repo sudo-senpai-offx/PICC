@@ -45,8 +45,8 @@ const ENV_KEYS = [
 let envSnapshot = {}
 
 // The trading:perps template (catalog row shape, §3.7 of the WS-1 spec). The
-// catalog row itself is T7-owned (M2) and not present yet — the rail accepts
-// the template injectably, so the tests feed it the exact row shape.
+// catalog row is committed (policyGraphCatalog.mjs); the rail accepts the
+// template injectably, so the tests feed it the exact row shape.
 function perpsTemplate() {
   return {
     site: "trading:perps",
@@ -72,6 +72,33 @@ function greenState(overrides = {}) {
 
 // Fresh perps observation: leverage 4 in-band, margin 10 at the cap, isolated,
 // no open positions, funding observed a minute ago (fresh inside the 2h window).
+// The WS-2 risk gates (16-19) compose onto the rail, so every fixture injects a
+// green risk observation + heat — the rail never touches the real risk stores.
+const greenRisk = {
+  ok: true,
+  aggregate: {
+    dayKey: "2026-09-22",
+    dayStartEquityUsd: 100,
+    equityUsd: 100,
+    dayLossPct: 0,
+    runningPeakUsd: 100,
+    peakAt: null,
+    drawdownFromPeakPct: null,
+    halted: null,
+    fresh: true
+  },
+  venues: {},
+  unobservable: []
+}
+
+const greenHeat = {
+  usd: 0,
+  perpsMarginUsd: 0,
+  spotNotionalUsd: 0,
+  sources: ["ccxt-perps-positions.json", "audit:proposalOrdersFromAudit"],
+  reason: null
+}
+
 function observation(overrides = {}) {
   return {
     leverage: 4,
@@ -79,6 +106,8 @@ function observation(overrides = {}) {
     marginMode: "isolated",
     openNetPositions: 0,
     funding: { rate: 0.0001, at: Date.now() - 60_000 },
+    risk: greenRisk,
+    heat: greenHeat,
     ...overrides
   }
 }
@@ -240,8 +269,8 @@ describe("Command Centre — perps rail: proposal leg, propose", () => {
     expect(r.idempotencyKey).toBe(`perps:order:hyperliquid:${r.clientOrderId}`)
     expect(r.order).toMatchObject({ exchange: "hyperliquid", side: "buy", notionalUsd: 10, marginUsd: 2.5 })
     const kinds = auditEvents.map((e) => e.kind)
-    expect(kinds).toEqual(["safety-gate:allow", "safety-gate:allow", "proposal:created"])
-    const created = auditEvents[2].data
+    expect(kinds).toEqual(["safety-gate:allow", "safety-gate:allow", "safety-gate:allow", "proposal:created"])
+    const created = auditEvents[3].data
     expect(created).toMatchObject({
       clientOrderId: r.clientOrderId,
       idempotencyKey: r.idempotencyKey,
@@ -389,11 +418,12 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     expect(auditEvents.map((e) => e.kind)).toEqual([
       "safety-gate:allow",
       "safety-gate:allow",
+      "safety-gate:allow",
       "execution:executed"
     ])
-    expect(auditEvents[1].data.power).toBe("proposals")
-    expect(auditEvents[1].data.consentBy).toBe("usr_owner_01")
-    expect(auditEvents[2].data.result.workflow).toBe("fixture-perps-placed")
+    expect(auditEvents[2].data.power).toBe("proposals")
+    expect(auditEvents[2].data.consentBy).toBe("usr_owner_01")
+    expect(auditEvents[3].data.result.workflow).toBe("fixture-perps-placed")
   })
 
   test("the execution leg counts trading:perps in-flight via executeProposal", async () => {
@@ -439,9 +469,10 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     expect(r.gate.blockedBy).toBe("fresh-data")
     expect(r.gate.reason).toContain("perps-equity")
     expect(calls).toEqual([])
-    // first-deny consequence: the perps allow IS audited, then the sidecar deny;
-    // NO execution:* and the venue stub never ran.
-    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "safety-gate:deny"])
+    // first-deny consequence: the perps allow IS audited, then the WS-2 risk allow
+    // IS audited, then the sidecar deny; NO execution:* and the venue stub never
+    // ran.
+    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "safety-gate:allow", "safety-gate:deny"])
   })
 
   test("a day loss over the envelope ceiling at CLICK denies at envelope-within-ceiling", async () => {
@@ -583,6 +614,7 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     expect(auditEvents.map((e) => e.kind)).toEqual([
       "safety-gate:allow",
       "safety-gate:allow",
+      "safety-gate:allow",
       "execution:failed"
     ])
   })
@@ -617,9 +649,10 @@ describe("Command Centre — perps rail: carrier A (PICC executes), execute", ()
     expect(second.gate.blockedBy).toBe("idempotent")
     expect(calls).toEqual([1])
     // RE-CLICK RECEIPT (pinned for T7's route regexes): on the second click the
-    // perps allow is re-certified, then the sidecar denies at idempotent — no
-    // execution:* and no second venue call.
+    // perps allow + the WS-2 risk allow are re-certified, then the sidecar
+    // denies at idempotent — no execution:* and no second venue call.
     expect(auditEvents.slice(preLen).map((e) => e.kind)).toEqual([
+      "safety-gate:allow",
       "safety-gate:allow",
       "safety-gate:deny"
     ])
@@ -728,14 +761,16 @@ describe("Command Centre — perps rail: close (reduce-only replay)", () => {
     expect(r.execution.idempotencyKey).toBe(
       `perps:close:hyperliquid:${position.id}:${closeClientOrderIdFor(position.id)}:exec`
     )
-    // perps allow + sidecar allow + execution:executed + close proposal:created
+    // perps allow + WS-2 risk allow + sidecar allow + execution:executed +
+    // close proposal:created
     expect(auditEvents.map((e) => e.kind)).toEqual([
+      "safety-gate:allow",
       "safety-gate:allow",
       "safety-gate:allow",
       "execution:executed",
       "proposal:created"
     ])
-    const created = auditEvents[3].data
+    const created = auditEvents[4].data
     expect(created.action).toBe(PERPS_CLOSE_ACTION)
     expect(created.kind).toBe("close")
     expect(created.positionId).toBe(position.id)
@@ -794,10 +829,12 @@ describe("Command Centre — perps rail: close (reduce-only replay)", () => {
     expect(second.ok).toBe(false)
     expect(second.gate.blockedBy).toBe("idempotent")
     expect(calls).toEqual([1])
-    // RE-CLICK RECEIPT: the perps allow is re-certified (gate 11 reads
-    // positionLeverage), then the sidecar denies at idempotent; the close anchor
-    // is only recorded when execution proceeded, so NO phantom proposal:created.
+    // RE-CLICK RECEIPT: the perps allow + the WS-2 risk allow are re-certified
+    // (gate 11 reads positionLeverage), then the sidecar denies at idempotent;
+    // the close anchor is only recorded when execution proceeded, so NO phantom
+    // proposal:created.
     expect(auditEvents.slice(preLen).map((e) => e.kind)).toEqual([
+      "safety-gate:allow",
       "safety-gate:allow",
       "safety-gate:deny"
     ])

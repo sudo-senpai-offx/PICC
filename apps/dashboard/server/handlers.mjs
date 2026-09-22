@@ -144,6 +144,8 @@ import {
   proposalOrdersFromAudit,
   limitPriceSanity
 } from "./services/commandCentre/ccxtExecution.mjs"
+import { refreshAggregateRisk } from "./services/commandCentre/riskState.mjs"
+import { portfolioHeatUsd } from "./services/commandCentre/riskGates.mjs"
 import {
   CCXT_EQUITY_STALE_MS,
   ccxtEquityLastObserved,
@@ -1623,11 +1625,39 @@ async function _handleApiInner(req, res, url, reqId) {
   // the cross-site halt, equity freshness + day P/L from a FRESH balance
   // observation, concurrency from the execution seam, and the reference price
   // from a fresh keyless ticker. Nothing is assumed; failures are honest.
+  function envNum(name, dflt) {
+    const raw = process.env[name]
+    if (raw === undefined || raw === "") return dflt
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : dflt
+  }
+
+  function mddStepView(aggregate) {
+    const step = envNum("PICC_RISK_MDD_STEP_TRIP_PCT", 10)
+    const hard = envNum("PICC_RISK_MDD_HARD_STOP_PCT", 15)
+    const factor = envNum("PICC_RISK_MDD_SIZE_STEP_FACTOR", 0.5)
+    const dd = Number.isFinite(aggregate?.drawdownFromPeakPct) ? aggregate.drawdownFromPeakPct : null
+    if (dd === null || dd < step || dd >= hard) {
+      return { mddAdjusted: false, mddRationale: null }
+    }
+    return {
+      mddAdjusted: true,
+      mddRationale: `drawdown ${dd}% is in the size-step zone [${step}%,${hard}%) — new per-position exposure is capped at ${factor}× the catalogue cap`
+    }
+  }
+
+  function observeRiskFeed() {
+    const risk = refreshAggregateRisk()
+    const heat = portfolioHeatUsd({ audits: readAudit() })
+    return { risk, heat, step: mddStepView(risk.aggregate) }
+  }
+
   async function observeCcxtRailState({ exchange, symbol }) {
     const halt = crossSiteHaltState()
     const haltToday = halt && halt.dayKey === dayKeyOf(Date.now())
     const equity = await observeCcxtEquity({ exchange })
     const reference = await fetchReferencePrice({ exchange, symbol })
+    const riskFeed = observeRiskFeed()
     const staleFeeds = []
     if (!equity.ok) {
       staleFeeds.push({ name: "ccxt-equity", ageSec: Number.POSITIVE_INFINITY, maxAgeSec: CCXT_EQUITY_STALE_MS / 1000 })
@@ -1645,7 +1675,12 @@ async function _handleApiInner(req, res, url, reqId) {
       dayLossPct: equity.ok ? equity.dayLossPct : null,
       equityUsd: equity.ok ? equity.equityUsd : null,
       referencePrice: reference?.price ?? null,
-      equity: equity.ok ? equity : null
+      equity: equity.ok ? equity : null,
+      riskAggregate: riskFeed.risk.aggregate ?? null,
+      portfolioHeatUsd: riskFeed.heat.usd ?? null,
+      mddAdjusted: riskFeed.step.mddAdjusted,
+      mddRationale: riskFeed.step.mddRationale,
+      riskObservation: { risk: riskFeed.risk, heat: riskFeed.heat }
     }
   }
 
@@ -1861,6 +1896,7 @@ async function _handleApiInner(req, res, url, reqId) {
       : { ok: false, reason: funding?.reason ?? "funding-unobservable" }
     const positions = openPositions()
     const position = positions[0] ?? null
+    const riskFeed = observeRiskFeed()
     const staleFeeds = []
     if (!wallet.ok) {
       staleFeeds.push({ name: "perps-equity", ageSec: Number.POSITIVE_INFINITY, maxAgeSec: perpsFundingStaleMs() / 1000 })
@@ -1877,14 +1913,20 @@ async function _handleApiInner(req, res, url, reqId) {
         staleFeeds,
         concurrentUnits: executionStatus()[PERPS_SITE]?.inFlight ?? 0,
         dayLossPct: wallet.ok ? wallet.dayLossPct : null,
-        equityUsd: wallet.ok ? wallet.equityUsd : null
+        equityUsd: wallet.ok ? wallet.equityUsd : null,
+        riskAggregate: riskFeed.risk.aggregate ?? null,
+        portfolioHeatUsd: riskFeed.heat.usd ?? null,
+        mddAdjusted: riskFeed.step.mddAdjusted,
+        mddRationale: riskFeed.step.mddRationale
       },
       observation: {
         leverage: position ? position.leverage : undefined,
         notionalUsd: position ? position.notional : undefined,
         marginMode: position ? position.marginMode : "isolated",
         openNetPositions: positions.length,
-        funding: fundingObserved
+        funding: fundingObserved,
+        risk: riskFeed.risk,
+        heat: riskFeed.heat
       }
     }
   }
@@ -1966,7 +2008,7 @@ async function _handleApiInner(req, res, url, reqId) {
     writeJson(res, 200, {
       ok: result.ok,
       consentBy,
-      gate: result.ok ? result.gate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate),
+      gate: result.ok ? result.gate : (result.riskGate?.allow === false ? result.riskGate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate)),
       order: result.order,
       idempotencyKey: result.idempotencyKey,
       clientOrderId: result.clientOrderId,
@@ -2020,7 +2062,7 @@ async function _handleApiInner(req, res, url, reqId) {
     writeJson(res, 200, {
       ok: result.ok,
       consentBy,
-      gate: result.ok ? result.gate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate),
+      gate: result.ok ? result.gate : (result.riskGate?.allow === false ? result.riskGate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate)),
       execution: result.execution,
       state: killSwitchState()
     })
@@ -2072,7 +2114,7 @@ async function _handleApiInner(req, res, url, reqId) {
     writeJson(res, 200, {
       ok: result.ok,
       consentBy,
-      gate: result.ok ? result.gate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate),
+      gate: result.ok ? result.gate : (result.riskGate?.allow === false ? result.riskGate : (result.perpsGate?.allow === false ? result.perpsGate : result.gate)),
       execution: result.execution,
       state: killSwitchState()
     })

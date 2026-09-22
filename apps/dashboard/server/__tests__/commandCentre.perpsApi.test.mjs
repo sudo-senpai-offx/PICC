@@ -132,6 +132,14 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
     process.env.PICC_AUTOMATOR_DATA_DIR = dir
     process.env.PICC_DATA_DIR = dir
+    // WS-2: the rail's risk gates (16-19) resolve from these venue stores, so a
+    // hermetic data dir must seed them GREEN — the aggregate then reads day loss
+    // 0% / no drawdown and heat 0, letting the routes test their own layer.
+    const dayKey = new Date().toISOString().slice(0, 10)
+    const at = new Date().toISOString()
+    writeFileSync(join(dir, "ccxt-equity.json"), JSON.stringify({ binance: { exchange: "binance", dayKey, at, equityUsd: 100, dayStartEquityUsd: 100 } }))
+    writeFileSync(join(dir, "ccxt-perps-risk.json"), JSON.stringify({ version: 1, exchange: "hyperliquid", dayKey, equityAt: at, equityUsd: 100, dayStartEquityUsd: 100 }))
+    writeFileSync(join(dir, "ccxt-perps-positions.json"), JSON.stringify({ version: 1, positions: [] }))
     await rebootHandlers()
   })
 
@@ -191,9 +199,9 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
       }
     })
     expect(created.data.consentBy).toBe("default")
-    // the two gate fns each audit their own allow, then the proposal anchor
+    // the three gate fns each audit their own allow, then the proposal anchor
     const kinds = trail.map((e) => e.kind)
-    expect(kinds.filter((k) => k === "safety-gate:allow")).toHaveLength(2)
+    expect(kinds.filter((k) => k === "safety-gate:allow")).toHaveLength(3)
     expect(audit.verifyAudit().ok).toBe(true)
   })
 

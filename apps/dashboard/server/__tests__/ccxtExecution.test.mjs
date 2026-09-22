@@ -4,7 +4,9 @@
 // propose (full gate + clamp + proposal:created), execute (carrier A — re-run
 // full gate at click, reach the venue exactly once, audit every outcome),
 // verify (carrier B — read-only fill verify, never a fabricated fill) and the
-// orders list surface.
+// orders list surface. The WS-2 risk gates (16-19) compose onto both carriers,
+// so every fixture injects a green risk observation — the rail never touches
+// the real risk stores under test.
 
 import { beforeEach, describe, expect, test } from "vitest"
 import {
@@ -27,6 +29,37 @@ import { templateForSite } from "../services/commandCentre/policyGraphCatalog.mj
 
 const ccxt = () => templateForSite("trading:ccxt")
 
+const greenAggregate = {
+  dayKey: "2026-09-22",
+  dayStartEquityUsd: 100,
+  equityUsd: 100,
+  dayLossPct: 0,
+  runningPeakUsd: 100,
+  peakAt: null,
+  drawdownFromPeakPct: null,
+  halted: null,
+  fresh: true
+}
+
+function greenRiskObservation(overrides = {}) {
+  return {
+    risk: {
+      ok: true,
+      aggregate: greenAggregate,
+      venues: {},
+      unobservable: []
+    },
+    heat: {
+      usd: 0,
+      perpsMarginUsd: 0,
+      spotNotionalUsd: 0,
+      sources: ["ccxt-perps-positions.json", "audit:proposalOrdersFromAudit"],
+      reason: null
+    },
+    ...overrides
+  }
+}
+
 function greenState(overrides = {}) {
   return {
     killSwitch: false,
@@ -35,6 +68,7 @@ function greenState(overrides = {}) {
     staleFeeds: [],
     concurrentUnits: 0,
     dayLossPct: 0,
+    riskObservation: greenRiskObservation(),
     ...overrides
   }
 }
@@ -128,8 +162,8 @@ describe("Command Centre — ccxt order leg: proposal rail (BOTH carriers), prop
     expect(r.idempotencyKey).toBe(`ccxt:order:binance:${r.clientOrderId}`)
     expect(r.order).toMatchObject({ exchange: "binance", side: "buy", notionalUsd: 10 })
     const kinds = auditEvents.map((e) => e.kind)
-    expect(kinds).toEqual(["safety-gate:allow", "proposal:created"])
-    const created = auditEvents[1].data
+    expect(kinds).toEqual(["safety-gate:allow", "safety-gate:allow", "proposal:created"])
+    const created = auditEvents[2].data
     expect(created).toMatchObject({
       clientOrderId: r.clientOrderId,
       idempotencyKey: r.idempotencyKey,
@@ -189,10 +223,10 @@ describe("Command Centre — ccxt order leg: carrier A (PICC executes), execute"
     expect(r.execution.status).toBe("executed")
     expect(r.execution.idempotencyKey).toBe(`ccxt:order:binance:${order.clientOrderId}:exec`)
     expect(calls).toEqual([CCXT_ORDER_ACTION])
-    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "execution:executed"])
-    expect(auditEvents[0].data.power).toBe("proposals")
-    expect(auditEvents[0].data.consentBy).toBe("usr_owner_01")
-    expect(auditEvents[1].data.result.workflow).toBe("fixture-order-placed")
+    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "safety-gate:allow", "execution:executed"])
+    expect(auditEvents[1].data.power).toBe("proposals")
+    expect(auditEvents[1].data.consentBy).toBe("usr_owner_01")
+    expect(auditEvents[2].data.result.workflow).toBe("fixture-order-placed")
   })
 
   test("a stale ccxt-equity feed at CLICK time denies at fresh-data (5E) — the re-check is real", async () => {
@@ -222,7 +256,7 @@ describe("Command Centre — ccxt order leg: carrier A (PICC executes), execute"
     })
     expect(r.ok).toBe(false)
     expect(r.gate.blockedBy).toBe("envelope-within-ceiling")
-    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:deny"])
+    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "safety-gate:deny"])
   })
 
   test("in-flight concurrent capacity is enforced by the envelope before the venue (5D)", async () => {
@@ -244,7 +278,7 @@ describe("Command Centre — ccxt order leg: carrier A (PICC executes), execute"
     expect(r.ok).toBe(false)
     expect(r.execution.status).toBe("failed")
     expect(r.execution.error).toContain("fixture: exchange rejected the order")
-    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "execution:failed"])
+    expect(auditEvents.map((e) => e.kind)).toEqual(["safety-gate:allow", "safety-gate:allow", "execution:failed"])
   })
 
   test("a re-click is denied at the idempotent gate (5G) — the venue is reached EXACTLY once", async () => {
