@@ -28,22 +28,42 @@ import { describe, expect, it } from "vitest"
 
 const serverRoot = fileURLToPath(new URL("..", import.meta.url))
 
-// The amputated-path pin (ccxtConnector.mjs:33-66): every entry the read-only
-// guard must still list. Asserted as quoted tokens inside the array block.
+// The amputated-path pin (ccxtConnector.mjs:33-66): EVERY entry the read-only
+// guard must still list, mirroring the live export order. Asserted as quoted
+// tokens inside the array block.
 const READ_ONLY_BLOCKED_TOKENS = [
   '"createOrder"',
   '"createOrders"',
+  '"createOrderWs"',
+  '"createOrdersWs"',
+  '"editOrder"',
+  '"editOrders"',
+  '"editOrderWs"',
   '"cancelOrder"',
   '"cancelOrders"',
-  '"editOrder"',
+  '"cancelOrdersWs"',
+  '"cancelAllOrders"',
+  '"cancelAllOrdersWs"',
+  '"cancelWsOrder"',
   '"setLeverage"',
+  '"setLeverageWs"',
   '"setMarginMode"',
   '"setPositionMode"',
+  '"setMargin"',
+  '"addMargin"',
+  '"reduceMargin"',
   '"setSandboxMode"',
   '"transfer"',
+  '"transferWs"',
   '"withdraw"',
+  '"withdrawWs"',
+  '"borrowMargin"',
+  '"repayMargin"',
+  '"borrowCrossMargin"',
+  '"repayCrossMargin"',
+  '"createDepositAddress"',
   '"closePosition"',
-  '"createDepositAddress"'
+  '"closePositions"'
 ]
 
 /** Deterministic top-down walk of server `*.mjs` files, skipping __tests__. */
@@ -93,11 +113,11 @@ describe("WS-1 perps live-order seam guard (T9 no-regression)", () => {
     }
   })
 
-  it("whole server tree has exactly two .createOrder( call sites — placeCcxtOrder (spot) and the perps seam instance", () => {
+  it("whole server tree has exactly two createOrder-family call sites — placeCcxtOrder (spot) and the perps seam instance", () => {
     const hits = {}
     for (const abs of serverSources()) {
       const label = relative(serverRoot, abs).split("\\").join("/")
-      hits[label] = (readFileSync(abs, "utf8").match(/\.createOrder\s*\(/g) ?? []).length
+      hits[label] = (readFileSync(abs, "utf8").match(/\.createOrder(?:s|Ws)?\s*\(/g) ?? []).length
     }
     const sites = Object.entries(hits).filter(([, n]) => n > 0)
     expect(sites).toEqual([

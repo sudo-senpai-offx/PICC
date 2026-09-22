@@ -469,8 +469,8 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 | PICC_TRADING_SITES_CATALOG_v1 | ACTIVE | venue/source source-of-truth; §6 C1–C4 + §4 unshipped |
 | PICC_TRADING_SUITE_REBUILD_v1 | SUPERSEDED | Phase B landed; decision core → v3.2 rebuild |
 | PICC_TRADING_SUITE_UPGRADE | SUPERSEDED | P1 delivered; P2/P3 → reskin + v3.2 |
-| PICC_UNIVERSAL_4FA_ENGINE | ACTIVE (trading logic — untouched) | decision path retires under ADR-0004; legs re-homed |
 | PICC_TRADING_SUITE_WS1_LIVE_ORDER_LIFECYCLE_v1 | ACTIVE | WS-1 perps live order lifecycle: T1–T9 landed; HL adapter testnet-first + real-testnet sandbox E2E (plan §5) |
+| PICC_UNIVERSAL_4FA_ENGINE | ACTIVE (trading logic — untouched) | decision path retires under ADR-0004; legs re-homed |
 | notes/B-IND-0-current-engine-coverage-2026-09-19 | ACTIVE (inventory) | authoritative engine inventory for the v3.2 rebuild |
 
 > **Delete-zone** (see ADR-0002): `PICC_BANDWIDTH_SUITE_design_v1` is struck — recreate only via a
