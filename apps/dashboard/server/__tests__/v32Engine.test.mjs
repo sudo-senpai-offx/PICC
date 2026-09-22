@@ -66,6 +66,15 @@ function riskFixture(overrides = {}) {
   }
 }
 
+const TRADES_UP = [
+  { timeMs: 0, price: 100, side: "buy", amount: 10 },
+  { timeMs: 10, price: 101, side: "buy", amount: 10 },
+  { timeMs: 20, price: 102, side: "buy", amount: 10 },
+  { timeMs: 30, price: 103, side: "sell", amount: 2 },
+  { timeMs: 40, price: 104, side: "buy", amount: 10 },
+  { timeMs: 50, price: 105, side: "take", amount: 3 }
+]
+
 const DATA_ON = { winProb: 0.75, payout: 82, spreadPips: 1.5, slippagePips: 0, risk: riskFixture() }
 
 const ROWS_V32_LEGACY = [
@@ -112,11 +121,17 @@ describe("v32ContextForAsset — per-asset context assembly (REQ-P3-12)", () => 
 describe("v32DecisionForAsset — the per-asset v3.2 row (REQ-P3-6/8/12)", () => {
   it("produces a TRADE row tagged engine v3.2 on a clean fixture", () => {
     const ctx = v32ContextForAsset(assetFixture(), ctxFixture(), v32ConfigFixture())
-    const row = v32DecisionForAsset({ ctx, v32Config: v32ConfigFixture(), now: 1000, data: DATA_ON })
+    const row = v32DecisionForAsset({ ctx, v32Config: v32ConfigFixture(), now: 1000, data: { ...DATA_ON, trades: TRADES_UP } })
     expect(row.engine).toBe("v3.2")
     expect(row.verdict).toBe("TRADE")
     expect(row.copilot.ok).toBe(true)
-    expect(row.gates).toEqual({ score: true, costLine: true, copilot: true })
+    expect(row.gates.score).toBe(true)
+    expect(row.gates.costLine).toBe(true)
+    expect(row.gates.copilot).toBe(true)
+    expect(row.gates.pillars5of7).toEqual(expect.objectContaining({ ok: true, agreed: 5, needed: 5 }))
+    expect(row.gates.pillars5of7.rows).toHaveLength(7)
+    expect(row.gates.pillars5of7.rows.filter((r) => r.agrees === true)).toHaveLength(5)
+    expect(row.gates.pillars5of7.rows.find((r) => r.id === "externalclear").available).toBe(false)
     expect(row.copilot.blockedBy).toEqual([])
     expect(row.assetId).toBe("BTC")
     expect(row.ts).toBe(1000)
@@ -206,6 +221,40 @@ describe("v32DecisionForAsset — the per-asset v3.2 row (REQ-P3-6/8/12)", () =>
     const row = v32DecisionForAsset({ ctx, v32Config: v32ConfigFixture(), now: 1000, data: DATA_ON })
     expect(row.honesty.tradesFeed).toBe("absent")
     expect(row.honesty.spreadSource).toBe("fixture")
+  })
+})
+
+describe("5-of-7 pillar gate composed into the verdict (WS-2 decision 9 / R7.4)", () => {
+  it("keeps the honest gap visible without a trades feed — TRADE downgrades to OBSERVE (risk 6)", () => {
+    const ctx = v32ContextForAsset(assetFixture(), ctxFixture(), v32ConfigFixture())
+    const row = v32DecisionForAsset({ ctx, v32Config: v32ConfigFixture(), now: 1000, data: DATA_ON })
+    expect(row.copilot.ok).toBe(true)
+    expect(row.gates.pillars5of7.ok).toBe(false)
+    expect(row.gates.pillars5of7.agreed).toBe(3)
+    expect(row.verdict).toBe("OBSERVE")
+    expect(row.reasons.join(" ")).toMatch(/5-of-7 pillar gate blocked: 3\/5 agreeing/)
+    expect(row.reasons.join(" ")).toMatch(/pillar volumedelta: no trades feed/)
+    expect(row.reasons.join(" ")).toMatch(/pillar externalclear:/)
+  })
+
+  it("v32Config.pillarMin=6 downgrades a fully-green row to OBSERVE — 5 of the 6 remaining pillars", () => {
+    const ctx = v32ContextForAsset(assetFixture(), ctxFixture(), v32ConfigFixture())
+    const row = v32DecisionForAsset({ ctx, v32Config: v32ConfigFixture({ pillarMin: 6 }), now: 1000, data: { ...DATA_ON, trades: TRADES_UP } })
+    expect(row.verdict).toBe("OBSERVE")
+    expect(row.gates.pillars5of7).toEqual(expect.objectContaining({ ok: false, agreed: 5, needed: 6 }))
+    expect(row.reasons.join(" ")).toMatch(/5-of-7 pillar gate blocked: 5\/6 agreeing/)
+    expect(row.reasons.join(" ")).toMatch(/pillar htfbias:/)
+  })
+
+  it("gates.pillars5of7 rows carry per-row reasons on every row of a passing verdict", () => {
+    const ctx = v32ContextForAsset(assetFixture(), ctxFixture(), v32ConfigFixture())
+    const row = v32DecisionForAsset({ ctx, v32Config: v32ConfigFixture(), now: 1000, data: { ...DATA_ON, trades: TRADES_UP } })
+    for (const r of row.gates.pillars5of7.rows) {
+      expect(typeof r.reason).toBe("string")
+      expect(r.reason.length).toBeGreaterThan(0)
+    }
+    expect(row.gates.pillars5of7.rows.find((r) => r.id === "adxregime").agrees).toBe(true)
+    expect(row.gates.pillars5of7.rows.find((r) => r.id === "htfbias").available).toBe(false)
   })
 })
 

@@ -13,6 +13,7 @@ import { costAdjustedEv, EV_RR_MIN } from "./constitution.mjs"
 import { vwapPillar, emaPair, volumeDelta, cumulativeVolumeDelta, relativeVolume, executionScore } from "./v32Execution.mjs"
 import { copilotGate } from "./v32Copilot.mjs"
 import { resolveAssetConfig, deepMergeConfig, U4FA_DEFAULTS } from "./u4faConfig.mjs"
+import { evaluatePillarGate } from "./v32PillarGate.mjs"
 
 // ---------------------------------------------------------------------
 // Chop-latch continuity map (mirrors u4faRegimeStates)
@@ -149,6 +150,75 @@ function confidenceFor(rows) {
   return { available: true, sampleSize, costAdjustedExpectancy: expectancy }
 }
 
+// REQ-P3-13 (WS-2 decision 9): 5-of-7 pillar descriptors from already-computed reads; unmeasurable reads honest-fail.
+function leanOf(key, p) {
+  switch (key) {
+    case "vwap": return p?.side === "above" ? "up" : p?.side === "below" ? "down" : null
+    case "ema": return p?.aligned === "long" ? "up" : p?.aligned === "short" ? "down" : null
+    case "volumeDelta": return Number(p?.delta) > 0 ? "up" : Number(p?.delta) < 0 ? "down" : null
+    case "cvd": return Number(p?.last) > 0 ? "up" : Number(p?.last) < 0 ? "down" : null
+    default: return null
+  }
+}
+
+function describeOf(key, p, fallback) {
+  switch (key) {
+    case "vwap": {
+      if (p?.available !== true) return fallback
+      return p.distancePct != null ? `price ${p.side} cumulative VWAP (${(Number(p.distancePct) * 100).toFixed(2)}%)` : `price ${p.side} cumulative VWAP`
+    }
+    case "ema": {
+      if (p?.available !== true) return fallback
+      return `EMA 9/21 ${p.aligned}`
+    }
+    case "volumeDelta": {
+      if (p?.available !== true) return fallback
+      return `volume delta ${p.delta} (${p.buy} buy / ${p.sell} sell)`
+    }
+    case "cvd": {
+      if (p?.available !== true) return fallback
+      return `CVD ${p.last}`
+    }
+    default: return fallback
+  }
+}
+
+function gateDescriptor(key, p, direction) {
+  if (p?.available !== true) {
+    return { available: false, agrees: false, reason: typeof p?.reason === "string" && p.reason ? p.reason : `${key} unmeasured` }
+  }
+  const lean = leanOf(key, p)
+  return { available: true, agrees: direction != null && lean === direction, reason: describeOf(key, p, `${key} measured`) }
+}
+
+function htfBiasDescriptor(bias, direction) {
+  if (bias?.available !== true) {
+    return { available: false, agrees: false, reason: bias?.reason ?? "no HTF bias register (no TF inputs)" }
+  }
+  let pos = 0
+  let neg = 0
+  for (const tf of Object.values(bias.register ?? {})) {
+    for (const v of Object.values(tf ?? {})) {
+      if (v?.observed && v.value != null && v.value !== 0) (v.value > 0 ? pos++ : neg++)
+    }
+  }
+  if (pos + neg === 0) return { available: true, agrees: false, reason: "HTF bias register has no directional votes" }
+  if (pos === neg) return { available: true, agrees: false, reason: `HTF bias conflicted (${pos} pos / ${neg} neg)` }
+  const lean = pos > neg ? "up" : "down"
+  return { available: true, agrees: direction != null && direction === lean, reason: `HTF bias ${pos} pos / ${neg} neg (${lean})` }
+}
+
+function adxDescriptor(adx, direction) {
+  if (adx?.available !== true) {
+    return { available: false, agrees: false, reason: adx?.reason ?? "no ADX regime register" }
+  }
+  if (adx.chop === true) {
+    return { available: true, agrees: false, reason: `adx ${adx.adx} tier ${adx.tier} — chop regime, no trend to align` }
+  }
+  const lean = adx.trend === "up" || adx.trend === "down" ? adx.trend : null
+  return { available: true, agrees: direction != null && lean === direction, reason: `adx ${adx.adx} tier ${adx.tier} trend ${adx.trend}` }
+}
+
 // ---------------------------------------------------------------------
 // REQ-P3-6 — the cost line (constitution.costAdjustedEv().line + verdict)
 // ---------------------------------------------------------------------
@@ -212,9 +282,20 @@ export function v32DecisionForAsset({ ctx, v32Config = {}, now = Date.now(), dat
   const copilotOk = copilot.ok === true
   const direction = scoreOk ? score.direction : null
 
+  const gatePillars = {
+    htfbias: htfBiasDescriptor(ctx.regime?.registers?.bias, direction),
+    vwap: gateDescriptor("vwap", pillars.vwap, direction),
+    ema921: gateDescriptor("ema", pillars.ema, direction),
+    volumedelta: gateDescriptor("volumeDelta", pillars.volumeDelta, direction),
+    cvd: gateDescriptor("cvd", pillars.cvd, direction),
+    adxregime: adxDescriptor(ctx.regime?.registers?.adx, direction)
+  }
+  const pillarGate = evaluatePillarGate({ pillars: gatePillars, v32Config })
+
   let verdict
   if (!scoreOk || !costOk) verdict = "OBSERVE"
   else if (!copilotOk) verdict = "NEUTRAL"
+  else if (!pillarGate.ok) verdict = "OBSERVE"
   else verdict = "TRADE"
 
   const reasons = []
@@ -228,6 +309,12 @@ export function v32DecisionForAsset({ ctx, v32Config = {}, now = Date.now(), dat
     reasons.push(`copilot wires blocked: ${copilot.blockedBy.join(", ")}`)
     for (const w of copilot.wires) {
       if (w.tripped && !reasons.some((r) => r.includes(`wire ${w.id}`))) reasons.push(`wire ${w.id}: ${w.reason}`)
+    }
+  }
+  if (!pillarGate.ok) {
+    reasons.push(`5-of-7 pillar gate blocked: ${pillarGate.agreed}/${pillarGate.needed} agreeing`)
+    for (const r of pillarGate.rows) {
+      if (!(r.agrees === true)) reasons.push(`pillar ${r.id}: ${r.reason}`)
     }
   }
 
@@ -250,7 +337,7 @@ export function v32DecisionForAsset({ ctx, v32Config = {}, now = Date.now(), dat
     regime: ctx.regime,
     copilot,
     verdict,
-    gates: { score: scoreOk, costLine: costOk, copilot: copilotOk },
+    gates: { score: scoreOk, costLine: costOk, copilot: copilotOk, pillars5of7: pillarGate },
     reasons,
     honesty: {
       sampleSource: data.rows ? "correctlyAnsweredByEngine (caller-supplied)" : "none supplied",
