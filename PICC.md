@@ -427,7 +427,7 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 
 ---
 
-## §10 Specs Registry (34 spec/note files in `docs/specs/`)
+## §10 Specs Registry (33 spec/note files in `docs/specs/`)
 
 > Statuses are as stamped in each spec header, cross-checked **2026-09-19** (older-spec resolution
 > pass: every non-trading-logic spec received a `Resolution:` disposition). Checkboxes inside specs
@@ -470,6 +470,7 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 | PICC_TRADING_SUITE_REBUILD_v1 | SUPERSEDED | Phase B landed; decision core → v3.2 rebuild |
 | PICC_TRADING_SUITE_UPGRADE | SUPERSEDED | P1 delivered; P2/P3 → reskin + v3.2 |
 | PICC_TRADING_SUITE_WS1_LIVE_ORDER_LIFECYCLE_v1 | ACTIVE | WS-1 perps live order lifecycle: T1–T9 landed; HL adapter testnet-first + real-testnet sandbox E2E (plan §5) |
+| PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1 | ACTIVE | WS-2 risk & drawdown enforcement: T1–T8 landed (risk gates 16–19, aggregate day-loss, MDD size-step/hard-stop, portfolio heat, halt persistence, consent payload-lock, spread seam fail-closed, 5-of-7 pillar gate) |
 | PICC_UNIVERSAL_4FA_ENGINE | ACTIVE (trading logic — untouched) | decision path retires under ADR-0004; legs re-homed |
 | notes/B-IND-0-current-engine-coverage-2026-09-19 | ACTIVE (inventory) | authoritative engine inventory for the v3.2 rebuild |
 
@@ -934,6 +935,8 @@ view · O replay mode.
    mixed with other changes).
 
 **2026-09-22 — WS-1 (docs/specs/PICC_TRADING_SUITE_WS1_LIVE_ORDER_LIFECYCLE_v1) landed via the SDD loop** (per-task brief → general-subagent implementer → code-reviewer gate → fix round until APPROVED → controller re-verify). Floor at close: 254 files / 2,767 tests (2,766 passed, 1 honest skip) — `npx vitest run --maxWorkers=1` from apps/dashboard, `npm run typecheck` green.
+
+**2026-09-22 — WS-2 (docs/specs/PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1) landed** — risk gates 16–19, aggregate day-loss, MDD size-step/hard-stop, portfolio heat, halt persistence, consent payload-lock, spread seam fail-closed, 5-of-7 pillar gate. Source-level seam guard: `apps/dashboard/server/__tests__/ws2RiskSeamGuard.test.mjs`; full floor + typecheck pending controller run.
 
 ---
 
