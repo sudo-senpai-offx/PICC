@@ -2102,28 +2102,41 @@ async function _handleApiInner(req, res, url, reqId) {
       symbol,
       orderId: venueOrderId,
       clientOrderId,
+      positionId: proposal.data.kind === "close" ? proposal.data.positionId : undefined,
       verify: (v) => perpsAdapter.verifyFill({ symbol: v.symbol, orderId: v.orderId })
     })
-    if (result.filled) {
-      if (proposal.data.kind === "open") {
-        const order = proposal.data
-        trackOpen({
-          position: {
-            id: venueOrderId,
-            symbol: order.symbol,
-            side: order.side === "sell" ? "short" : "long",
-            size: result.filled.filled,
-            entryPrice: result.filled.average,
-            leverage: order.leverage,
-            marginUsd: order.marginUsd,
-            marginMode: order.marginMode,
-            openedAt: result.filled.at,
-            openOrderId: venueOrderId,
-            source: "persisted"
-          }
-        })
-      } else {
-        recordClose({ positionId: proposal.data.positionId, fill: result.filled, fundingObservations: [] })
+    // Only a POSITIVE verified filled quantity may book a position change. A
+    // zero-fill read (order resting/unfilled) or an unobserved read both leave
+    // the stores untouched — P&L is never claimed from an unfilled exit.
+    if (result.filled && Number(result.filled?.filled ?? 0) > 0) {
+      try {
+        if (proposal.data.kind === "open") {
+          const order = proposal.data
+          trackOpen({
+            position: {
+              id: venueOrderId,
+              symbol: order.symbol,
+              side: order.side === "sell" ? "short" : "long",
+              size: result.filled.filled,
+              entryPrice: result.filled.average,
+              leverage: order.leverage,
+              marginUsd: order.marginUsd,
+              marginMode: order.marginMode,
+              openedAt: result.filled.at,
+              openOrderId: venueOrderId,
+              source: "persisted"
+            }
+          })
+        } else {
+          recordClose({ positionId: proposal.data.positionId, fill: result.filled, fundingObservations: [] })
+        }
+      } catch (err) {
+        // A second verify of the same already-tracked venue order id is a
+        // duplicate confirmation — answer 409 in place of the global 500.
+        if (openPositions().some((p) => p.id === String(venueOrderId))) {
+          return writeJson(res, 409, { ok: false, error: "position already tracked", reason: err?.message ?? String(err) })
+        }
+        throw err
       }
     }
     writeJson(res, 200, {

@@ -208,6 +208,12 @@ function missingFundingBoundaries(openMs, closeMs, inHold) {
  *  Fix round 1) is added so the round-trip total always equals the verified-fill
  *  sum. */
 function closeRecordFor(position, fill, fundingObservations, { now = Date.now() } = {}) {
+  const filledQty = Number(fill?.filled ?? NaN)
+  if (!Number.isFinite(filledQty) || !(filledQty > 0)) {
+    throw new Error(
+      `live position manager: close of position "${position.id}" requires a verified amount of filled contracts — P&L never claimed from an unfilled exit`
+    )
+  }
   const exit = Number(fill?.average ?? NaN)
   if (!Number.isFinite(exit) || exit <= 0) {
     throw new Error(
@@ -377,7 +383,7 @@ export function recordReduction({ positionId, filledSize, avgPrice, now = Date.n
       // this record is fully drained → honest close (final leg on top of any
       // prior accrued; closeRecordFor adds both, so the round-trip total equals
       // the verified-fill sum)
-      const record = closeRecordFor({ ...p, size: sizeN, realizedAccruedUsd: p.realizedAccruedUsd }, { average: price, at: atIso }, [], { now })
+      const record = closeRecordFor({ ...p, size: sizeN, realizedAccruedUsd: p.realizedAccruedUsd }, { average: price, filled: drainHere, at: atIso }, [], { now })
       positionsStore = positionsStore.filter((r) => r.id !== p.id)
       if (p.id === positionId) primaryOutcome = record
     } else {

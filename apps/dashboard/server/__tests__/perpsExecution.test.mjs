@@ -675,6 +675,24 @@ describe("Command Centre — perps rail: carrier B (the human executes), verify"
     expect(r.ok).toBe(false)
     expect(r.kind).toBe("perps-verify:unobserved")
   })
+
+  test("a zero-fill read is perps-verify:unobserved — the venue answered but NOTHING filled (no fabricated close); a given positionId keys it under the CLOSE idempotency key", async () => {
+    const verify = async () => ({ status: "open", filled: 0, average: null, at: 1700000000000 })
+    const r = await verifyPerpsOpen({
+      exchange: "hyperliquid",
+      symbol: "BTC/USDT",
+      orderId: "venue-45",
+      clientOrderId: closeClientOrderIdFor(position.id),
+      positionId: position.id,
+      verify,
+      audit: collector()
+    })
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe("perps-verify:unobserved")
+    expect(r.idempotencyKey).toBe(`perps:close:hyperliquid:${position.id}:${closeClientOrderIdFor(position.id)}`)
+    expect(auditEvents[0].data.reason).toContain("zero fills")
+    expect(auditEvents[0].data.idempotencyKey).toBe(r.idempotencyKey)
+  })
 })
 
 describe("Command Centre — perps rail: close (reduce-only replay)", () => {
@@ -860,6 +878,27 @@ describe("Command Centre — perps rail: the list surface", () => {
       audit: cap(allAudits)
     })
 
+    // close-verifies key under the CLOSE idempotency family — NEVER the open
+    // `perps:order:` family, so a close's verify cannot fabricate an OPEN row
+    await verifyPerpsOpen({
+      exchange: "hyperliquid",
+      symbol: "BTC/USDT",
+      orderId: "venue-close-v1",
+      clientOrderId: closeClientOrderIdFor(position.id),
+      positionId: position.id,
+      verify: async () => ({ status: "closed", filled: 0.01, average: 1010, at: 1700000000000 }),
+      audit: cap(allAudits)
+    })
+    await verifyPerpsOpen({
+      exchange: "hyperliquid",
+      symbol: "BTC/USDT",
+      orderId: "venue-close-v2",
+      clientOrderId: closeClientOrderIdFor(position.id),
+      positionId: position.id,
+      verify: async () => ({ status: "open", filled: 0, average: null, at: 1700000000000 }),
+      audit: cap(allAudits)
+    })
+
     const list = perpsProposalsFromAudit(allAudits)
     expect(list).toHaveLength(6)
     const byClient = new Map(list.map((p) => [p.clientOrderId, p]))
@@ -881,5 +920,16 @@ describe("Command Centre — perps rail: the list surface", () => {
     expect(closeRow.idempotencyKey).toBe(
       `perps:close:hyperliquid:${position.id}:${closeClientOrderIdFor(position.id)}`
     )
+
+    const closeVerified = allAudits.find((e) => e.kind === "perps-verify:filled" && e.data?.venueOrderId === "venue-close-v1")
+    expect(closeVerified.data.idempotencyKey).toBe(
+      `perps:close:hyperliquid:${position.id}:${closeClientOrderIdFor(position.id)}`
+    )
+    expect(closeVerified.data.idempotencyKey).not.toMatch(/^perps:order:/)
+    const closeUnobserved = allAudits.find((e) => e.kind === "perps-verify:unobserved" && e.data?.venueOrderId === "venue-close-v2")
+    expect(closeUnobserved.data.idempotencyKey).toBe(
+      `perps:close:hyperliquid:${position.id}:${closeClientOrderIdFor(position.id)}`
+    )
+    expect(closeUnobserved.data.reason).toContain("zero fills")
   })
 })

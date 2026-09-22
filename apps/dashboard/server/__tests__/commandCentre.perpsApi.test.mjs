@@ -395,6 +395,62 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     expect(audit.verifyAudit().ok).toBe(true)
   })
 
+  it("close-verify with a ZERO-fill read is perps-verify:unobserved — the venue answered, NOTHING filled ⇒ nothing closes, no fabricated P&L", async () => {
+    writeFileSync(join(dir, "ccxt-perps-positions.json"), JSON.stringify({ version: 1, positions: [POSITION] }))
+    await rebootHandlers()
+    vi.mocked(perps.hyperliquidPerps.positionView).mockResolvedValue(VENUE_VIEW)
+
+    const ian = await call(handleApi, "POST", "/api/command-centre/perps/close", { positionId: "pos-1", price: 2050 })
+    expect(ian.status).toBe(200)
+    const closeAnchor = audit.readAudit().find((e) => e.kind === "proposal:created" && e.data?.kind === "close")
+    expect(closeAnchor).toBeTruthy()
+
+    vi.mocked(perps.hyperliquidPerps.verifyFill).mockResolvedValue({
+      ok: true,
+      fill: { status: "open", filled: 0, average: null, at: new Date().toISOString() }
+    })
+    const verify = await call(handleApi, "POST", "/api/command-centre/perps/verify", {
+      clientOrderId: closeAnchor.data.clientOrderId,
+      orderId: "venue-close-0"
+    })
+    expect(verify.status).toBe(200)
+    expect(verify.body.ok).toBe(false)
+    expect(verify.body.kind).toBe("perps-verify:unobserved")
+    const manager2 = await import("../services/livePositionManager.mjs")
+    expect(manager2.openPositions()).toHaveLength(1) // NOTHING booked — the position stays open
+    expect(audit.verifyAudit().ok).toBe(true)
+  })
+
+  it("duplicate verify of an already-tracked open venue order id is a 409 position already tracked — never a 500", async () => {
+    await rebootHandlers()
+    vi.mocked(perps.hyperliquidPerps.verifyFill).mockResolvedValue({
+      ok: true,
+      fill: { status: "closed", filled: 0.005, average: 2050, at: new Date().toISOString() }
+    })
+
+    const prop = await call(handleApi, "POST", "/api/command-centre/perps/propose", ORDER)
+    expect(prop.status).toBe(200)
+    const openProposal = audit.readAudit().find((e) => e.kind === "proposal:created" && e.data?.kind !== "close")
+    expect(openProposal).toBeTruthy()
+
+    const first = await call(handleApi, "POST", "/api/command-centre/perps/verify", {
+      clientOrderId: openProposal.data.clientOrderId,
+      orderId: "venue-open-dup"
+    })
+    expect(first.status).toBe(200)
+    expect(first.body.kind).toBe("perps-verify:filled")
+    const manager1 = await import("../services/livePositionManager.mjs")
+    expect(manager1.openPositions()).toHaveLength(1)
+
+    const second = await call(handleApi, "POST", "/api/command-centre/perps/verify", {
+      clientOrderId: openProposal.data.clientOrderId,
+      orderId: "venue-open-dup"
+    })
+    expect(second.status).toBe(409)
+    expect(second.body.error).toBe("position already tracked")
+    expect(manager1.openPositions()).toHaveLength(1) // unchanged
+  })
+
   it("POST close 404 on an unknown positionId — nothing durable to close", async () => {
     const res = await call(handleApi, "POST", "/api/command-centre/perps/close", { positionId: "pos-ghost", price: 2050 })
     expect(res.status).toBe(404)

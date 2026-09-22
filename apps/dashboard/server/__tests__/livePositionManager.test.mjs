@@ -174,6 +174,20 @@ test("hold crossing a funding boundary without an observation ⇒ unobserved-por
   expect(res.reason).toContain("unobserved-portion")
 })
 
+test("recordClose refuses an unfilled exit even when an average exists — P&L never claimed from an unfilled exit and the position stays open", async () => {
+  const m = await boot()
+  m.trackOpen({ position: openPosition(), now: Date.parse(T(10)) })
+  expect(() =>
+    m.recordClose({
+      positionId: "0xopen1",
+      fill: { id: "f-unfilled", symbol: "BTC/USDC:USDC", side: "sell", filled: 0, average: 110, status: "open", at: T(10, 30) },
+      fundingObservations: [],
+      now: Date.parse(T(10, 30))
+    })
+  ).toThrow(/unfilled exit/)
+  expect(m.openPositions()).toHaveLength(1) // nothing was booked, nothing was removed
+})
+
 test("recordReduction nets an opposite-side fill: size shrinks, entry/side kept, reduction-to-zero closes, never a second position", async () => {
   const m = await boot()
   m.trackOpen({ position: openPosition({ id: "p-net", symbol: "SOL/USDC:USDC", size: 2, entryPrice: 100 }), now: Date.parse(T(10)) })

@@ -459,12 +459,17 @@ export async function verifyPerpsOpen({
   symbol,
   orderId,
   clientOrderId,
+  positionId = null,
   verify = null,
   audit = appendAudit,
   now = Date.now()
 }) {
-  const proposalKey = perpsOpenIdempotencyKey({ exchange, clientOrderId })
-  const filled = verify ? await verify({ exchange, symbol, orderId }) : null
+  const proposalKey = positionId
+    ? perpsCloseIdempotencyKey({ exchange, positionId, clientOrderId })
+    : perpsOpenIdempotencyKey({ exchange, clientOrderId })
+  const observed = verify ? await verify({ exchange, symbol, orderId }) : null
+  const readAnswered = observed !== null
+  const filled = readAnswered && Number(observed?.filled ?? 0) > 0 ? observed : null
   const kind = filled ? "perps-verify:filled" : "perps-verify:unobserved"
   audit({
     site: PERPS_SITE,
@@ -475,6 +480,7 @@ export async function verifyPerpsOpen({
       exchange: String(exchange ?? "").trim().toLowerCase(),
       symbol,
       venueOrderId: String(orderId ?? "").trim(),
+      ...(positionId ? { positionId } : {}),
       ...(filled
         ? {
             fill: {
@@ -484,7 +490,11 @@ export async function verifyPerpsOpen({
               at: filled.at ?? null
             }
           }
-        : { reason: "verify unobserved — the venue did not answer (read-only, no fabrication)" })
+        : {
+            reason: readAnswered
+              ? "verify observed but zero fills — order open/unfilled (no fabricated close)"
+              : "verify unobserved — the venue did not answer (read-only, no fabrication)"
+          })
     }
   })
   return { ok: Boolean(filled), clientOrderId, idempotencyKey: proposalKey, filled, kind, at: now }

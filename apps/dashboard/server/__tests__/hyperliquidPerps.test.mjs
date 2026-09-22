@@ -550,6 +550,20 @@ describe("hyperliquidPerps — refusal surface + sandbox ordering (fixture ccxt)
     expect(await adapter.verifyFill({ symbol: SWAP_SYMBOL, orderId: "nope-1" })).toBeNull()
   })
 
+  it("verifyFill keeps average null for an unfilled resting limit — a resting limit price is never presented as a fill price", async () => {
+    process.env.PICC_CCXT_SANDBOX = "1"
+    const ex = makeExchange({
+      orders: {
+        "o-hl-open": { id: "o-hl-open", symbol: SWAP_SYMBOL, side: "sell", amount: 0.001, price: 2050, filled: 0, average: null, fee: null, status: "open", timestamp: 1_700_000_000_000 }
+      }
+    })
+    seam._setCcxtLibForTests(libFor(ex))
+    const fill = await adapter.verifyFill({ symbol: SWAP_SYMBOL, orderId: "o-hl-open" })
+    expect(fill).toMatchObject({ ok: true, fill: { id: "o-hl-open", filled: 0, average: null, status: "open" } })
+    expect(fill.fill.average).not.toBe(2050)
+    seam._resetCcxtOrderingState()
+  })
+
   it("the adapter satisfies validateVenueAdapter — the lazy riskModel getter exposes all 7 fields", async () => {
     const contract = await import("../services/venues/venueAdapterContract.mjs")
     expect(contract.validateVenueAdapter(adapter)).toEqual({ ok: true, errors: [] })

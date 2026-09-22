@@ -56,6 +56,11 @@ const RAIL_OFF_EXACT =
 const RAIL_OFF_TESTNET_ONLY =
   "perps-rail-off: WS-1 is testnet-only — sandbox mode was not requested (set PICC_CCXT_SANDBOX_HYPERLIQUID=1 or PICC_CCXT_SANDBOX=1); PICC_CCXT_PERPS_MAINNET_ENABLED alone is insufficient until the WS-3 ceremony"
 
+// KNOWN WIRING SIDE-EFFECT (shared ccxt env namespace): this adapter consumes the
+// SAME `PICC_CCXT_*_HYPERLIQUID` env pair as the spot leg, so once the pair exists
+// ccxtKeyedExchangeIds()/refreshAllCcxtEquity() (ccxtOrdering.mjs:463-471, scheduler.mjs)
+// will also record this perps F3 wallet's equity under ccxt-equity.json["hyperliquid"] —
+// the spot-owned key per WS-1 spec §8.1 (F3 keeps its own ccxt-perps-risk.json baseline).
 const ENV_KEYS = [
   "PICC_CCXT_LEVERAGE_MIN",
   "PICC_CCXT_LEVERAGE_MAX",
@@ -369,10 +374,13 @@ async function verifyFill({ symbol, orderId } = {}) {
         id,
         symbol: raw?.symbol ?? null,
         side: raw?.side ?? null,
-        filled: Number.isFinite(Number(raw?.filled ?? raw?.amount ?? 0)) ? Number(raw?.filled ?? raw?.amount ?? 0) : 0,
+        filled: Number.isFinite(Number(raw?.filled ?? 0)) ? Number(raw?.filled ?? 0) : 0,
+        // ONLY the venue's reported average fill price is a fill price. A
+        // resting limit's `price` (or the order `amount`) is NEVER an exit
+        // price — P&L cannot be claimed from an unfilled exit.
         average:
-          Number.isFinite(Number(raw?.average ?? raw?.price ?? NaN)) && Number(raw?.average ?? raw?.price ?? NaN) > 0
-            ? Number(raw?.average ?? raw?.price ?? NaN)
+          Number.isFinite(Number(raw?.average ?? NaN)) && Number(raw?.average ?? NaN) > 0
+            ? Number(raw?.average ?? NaN)
             : null,
         fee: raw?.fee != null ? (Number.isFinite(Number(raw?.fee?.cost)) ? Number(raw?.fee.cost) : null) : null,
         status: raw?.status ?? null,
