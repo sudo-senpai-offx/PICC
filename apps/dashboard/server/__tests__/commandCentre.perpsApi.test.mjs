@@ -104,6 +104,31 @@ const VENUE_VIEW = [
   }
 ]
 
+// WS-2 consent payload-lock fixtures: the exact D5 sets the reconfirm modal
+// ships (open here, close = the position-derived reduce-only shape).
+const PERPS_OPEN_PAYLOAD_FOR = (propose) => ({
+  action: "open",
+  exchange: "hyperliquid",
+  symbol: "ETH/USDT",
+  side: "buy",
+  amount: 0.005,
+  price: 2000,
+  leverage: 4,
+  marginMode: "isolated",
+  clientOrderId: propose.body.clientOrderId
+})
+
+const PERPS_CLOSE_PAYLOAD_FOR = (position, price) => ({
+  action: "close",
+  exchange: "hyperliquid",
+  symbol: position.symbol,
+  positionId: position.id,
+  price,
+  side: position.side === "short" ? "buy" : "sell",
+  amount: position.size,
+  leverage: position.leverage
+})
+
 describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
   let dir
   let handleApi
@@ -255,7 +280,8 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     expect(propose.body.ok).toBe(true)
     const res = await call(handleApi, "POST", "/api/command-centre/perps/execute", {
       clientOrderId: propose.body.clientOrderId,
-      price: 999999 // must be IGNORED — the durable proposal's price decides
+      price: 999999, // must be IGNORED — the durable proposal's price decides
+      payload: PERPS_OPEN_PAYLOAD_FOR(propose)
     })
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
@@ -364,7 +390,7 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     // the venue still holds the position, so the boot reconcile keeps it as "reconciled"
     vi.mocked(perps.hyperliquidPerps.positionView).mockResolvedValue(VENUE_VIEW)
 
-    const ian = await call(handleApi, "POST", "/api/command-centre/perps/close", { positionId: "pos-1", price: 2050 })
+    const ian = await call(handleApi, "POST", "/api/command-centre/perps/close", { positionId: "pos-1", price: 2050, payload: PERPS_CLOSE_PAYLOAD_FOR(POSITION, 2050) })
     expect(ian.status).toBe(200)
     expect(ian.body.ok).toBe(true)
     expect(ian.body.gate.allow).toBe(true)
@@ -408,7 +434,7 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     await rebootHandlers()
     vi.mocked(perps.hyperliquidPerps.positionView).mockResolvedValue(VENUE_VIEW)
 
-    const ian = await call(handleApi, "POST", "/api/command-centre/perps/close", { positionId: "pos-1", price: 2050 })
+    const ian = await call(handleApi, "POST", "/api/command-centre/perps/close", { positionId: "pos-1", price: 2050, payload: PERPS_CLOSE_PAYLOAD_FOR(POSITION, 2050) })
     expect(ian.status).toBe(200)
     const closeAnchor = audit.readAudit().find((e) => e.kind === "proposal:created" && e.data?.kind === "close")
     expect(closeAnchor).toBeTruthy()

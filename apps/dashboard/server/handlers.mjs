@@ -132,7 +132,7 @@ import {
   wireKillSwitchReader
 } from "./services/commandCentre/safetySidecar.mjs"
 import { anyKillActive, killSwitchState, setKillSwitch } from "./services/commandCentre/commandCentreRuntime.mjs"
-import { readAudit } from "./services/commandCentre/auditTrail.mjs"
+import { appendAudit, readAudit } from "./services/commandCentre/auditTrail.mjs"
 import { composeCommandCentreOverview } from "./services/commandCentre/commandCentreOverview.mjs"
 import { executionStatus } from "./services/commandCentre/commandCentreExecution.mjs"
 import {
@@ -142,7 +142,11 @@ import {
   executeCcxtOrder,
   verifyCcxtOrder,
   proposalOrdersFromAudit,
-  limitPriceSanity
+  limitPriceSanity,
+  consentPayloadHash,
+  spotOpenConsent,
+  perpsOpenConsent,
+  perpsCloseConsent
 } from "./services/commandCentre/ccxtExecution.mjs"
 import { refreshAggregateRisk } from "./services/commandCentre/riskState.mjs"
 import { portfolioHeatUsd } from "./services/commandCentre/riskGates.mjs"
@@ -162,7 +166,8 @@ import {
   executePerpsOpen,
   verifyPerpsOpen,
   executePerpsClose,
-  perpsProposalsFromAudit
+  perpsProposalsFromAudit,
+  closeClientOrderIdFor
 } from "./services/commandCentre/perpsExecution.mjs"
 import {
   openPositions,
@@ -1690,6 +1695,38 @@ async function _handleApiInner(req, res, url, reqId) {
     )
   }
 
+  // WS-2 R5 consent payload-lock: the acting human's EXACT D5 payload must match
+  // the durable replay field-for-field AND hash to the stored consent. `sentD5`
+  // is the client payload projected onto the D5 set; `expectedD5` is the same
+  // projection over the durable replay (proposal data, or the position+exit price
+  // for a close). A stored prior hash (open proposals) must also agree. On a pass
+  // consent:reconfirmed is audited FIRST so it precedes execution:executed; on a
+  // mismatch consent:denied is audited and nothing further runs (no venue touch).
+  function consentDecision({ site, clientOrderId, expectedD5, sentD5, storedHash = null }) {
+    const expectedHash = consentPayloadHash(expectedD5)
+    const sentHash = consentPayloadHash(sentD5)
+    const why = []
+    for (const key of Object.keys(expectedD5)) {
+      if (sentD5[key] !== expectedD5[key]) why.push(`field:${key}`)
+    }
+    if (sentHash !== expectedHash) why.push("hash")
+    if (storedHash !== null && storedHash !== undefined && sentHash !== storedHash) why.push("stored")
+    if (why.length > 0) {
+      appendAudit({
+        site,
+        kind: "consent:denied",
+        data: { clientOrderId: clientOrderId ?? null, reason: `consent-payload-mismatch (${why.join(", ")})` }
+      })
+      return { ok: false }
+    }
+    appendAudit({
+      site,
+      kind: "consent:reconfirmed",
+      data: { clientOrderId: clientOrderId ?? null, consentHash: sentHash }
+    })
+    return { ok: true, consentHash: sentHash }
+  }
+
   // GET lists the durable proposals (proposal:created audit rows) joined with
   // their honest state: open / executed / failed / verified-filled /
   // verify-unobserved, newest first.
@@ -1753,6 +1790,25 @@ async function _handleApiInner(req, res, url, reqId) {
     const proposal = proposalForClientOrderId(clientOrderId)
     if (!proposal) {
       return writeJson(res, 404, { ok: false, error: `unknown proposal ${clientOrderId} — nothing durable to execute` })
+    }
+    const sentPayload = body?.payload
+    if (!sentPayload || typeof sentPayload !== "object") {
+      appendAudit({
+        site: CCXT_SITE,
+        kind: "consent:denied",
+        data: { clientOrderId, reason: "consent-payload-mismatch (payload missing)" }
+      })
+      return writeJson(res, 409, { ok: false, error: "consent-payload-mismatch", blockedBeforeVenue: true })
+    }
+    const consent = consentDecision({
+      site: CCXT_SITE,
+      clientOrderId,
+      expectedD5: spotOpenConsent(proposal.data),
+      sentD5: spotOpenConsent(sentPayload),
+      storedHash: proposal.data?.consentHash
+    })
+    if (!consent.ok) {
+      return writeJson(res, 409, { ok: false, error: "consent-payload-mismatch", blockedBeforeVenue: true })
     }
     const { exchange, symbol, side, amount, price } = proposal.data
 
@@ -2033,6 +2089,25 @@ async function _handleApiInner(req, res, url, reqId) {
     if (!proposal) {
       return writeJson(res, 404, { ok: false, error: `unknown proposal ${clientOrderId} — nothing durable to execute` })
     }
+    const sentPayload = body?.payload
+    if (!sentPayload || typeof sentPayload !== "object") {
+      appendAudit({
+        site: PERPS_SITE,
+        kind: "consent:denied",
+        data: { clientOrderId, reason: "consent-payload-mismatch (payload missing)" }
+      })
+      return writeJson(res, 409, { ok: false, error: "consent-payload-mismatch", blockedBeforeVenue: true })
+    }
+    const consent = consentDecision({
+      site: PERPS_SITE,
+      clientOrderId,
+      expectedD5: perpsOpenConsent({ action: "open", ...proposal.data }),
+      sentD5: perpsOpenConsent(sentPayload),
+      storedHash: proposal.data?.consentHash
+    })
+    if (!consent.ok) {
+      return writeJson(res, 409, { ok: false, error: "consent-payload-mismatch", blockedBeforeVenue: true })
+    }
     const { exchange, symbol, side, amount, price, leverage, marginMode } = proposal.data
     const { state, observation } = await observePerpsRailState({ symbol })
     const result = await executePerpsOpen({
@@ -2088,6 +2163,36 @@ async function _handleApiInner(req, res, url, reqId) {
     const position = openPositions().find((p) => p.id === positionId)
     if (!position) {
       return writeJson(res, 404, { ok: false, error: `unknown position ${positionId} — nothing durable to close` })
+    }
+    const sentPayload = body?.payload
+    if (!sentPayload || typeof sentPayload !== "object") {
+      appendAudit({
+        site: PERPS_SITE,
+        kind: "consent:denied",
+        data: { clientOrderId: closeClientOrderIdFor(position.id), reason: "consent-payload-mismatch (payload missing)" }
+      })
+      return writeJson(res, 409, { ok: false, error: "consent-payload-mismatch", blockedBeforeVenue: true })
+    }
+    // The close's durable replay is the POSITION + the acting human's fresh exit
+    // price (no pre-existing anchor — the close anchor lands only after execution).
+    const consent = consentDecision({
+      site: PERPS_SITE,
+      clientOrderId: closeClientOrderIdFor(position.id),
+      expectedD5: perpsCloseConsent({
+        action: "close",
+        exchange: "hyperliquid",
+        symbol: position.symbol,
+        positionId: position.id,
+        price,
+        side: position.side === "short" ? "buy" : "sell",
+        amount: position.size,
+        leverage: position.leverage
+      }),
+      sentD5: perpsCloseConsent(sentPayload),
+      storedHash: null
+    })
+    if (!consent.ok) {
+      return writeJson(res, 409, { ok: false, error: "consent-payload-mismatch", blockedBeforeVenue: true })
     }
     const { state, observation } = await observePerpsRailState({ symbol: position.symbol })
     const result = await executePerpsClose({

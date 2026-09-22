@@ -88,7 +88,14 @@ import { evaluateRiskGate } from "./riskGates.mjs"
 import { executeProposal } from "./commandCentreExecution.mjs"
 import { templateForSite } from "./policyGraphCatalog.mjs"
 import { appendAudit } from "./auditTrail.mjs"
-import { clientOrderIdFor, executionIdempotencyKey, resolveRiskObservation } from "./ccxtExecution.mjs"
+import {
+  clientOrderIdFor,
+  executionIdempotencyKey,
+  resolveRiskObservation,
+  consentPayloadHash,
+  perpsOpenConsent,
+  perpsCloseConsent
+} from "./ccxtExecution.mjs"
 
 export { clientOrderIdFor, executionIdempotencyKey }
 
@@ -325,6 +332,19 @@ export async function proposePerpsOpen({
       positionLeverage: leverage,
       reduceOnly: false,
       kind: "open",
+      consentHash: consentPayloadHash(
+        perpsOpenConsent({
+          action: "open",
+          exchange: String(exchange ?? "").trim().toLowerCase(),
+          symbol,
+          side,
+          amount: sized.amount,
+          price,
+          leverage,
+          marginMode,
+          clientOrderId
+        })
+      ),
       power: "proposals",
       consentBy,
       rationale: proposal.rationale
@@ -623,6 +643,18 @@ export async function executePerpsClose({
         reduceOnly: true,
         kind: "close",
         positionId,
+        consentHash: consentPayloadHash(
+          perpsCloseConsent({
+            action: "close",
+            exchange: String(exchange ?? "").trim().toLowerCase(),
+            symbol,
+            side: position?.side === "short" ? "buy" : "sell",
+            amount,
+            price,
+            leverage,
+            positionId
+          })
+        ),
         power: "proposals",
         consentBy,
         rationale: proposal.rationale

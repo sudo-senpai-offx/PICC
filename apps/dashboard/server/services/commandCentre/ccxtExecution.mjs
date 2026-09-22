@@ -23,7 +23,7 @@
 // re-click of execute hits gate 10 with the exec key already present → denied;
 // the venue is only ever reached once per proposal.
 
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { evaluateGate } from "./safetySidecar.mjs"
 import { executeProposal } from "./commandCentreExecution.mjs"
 import { templateForSite } from "./policyGraphCatalog.mjs"
@@ -35,7 +35,53 @@ import { CCXT_HARD_NOTIONAL_CAP_USD } from "../ccxtOrdering.mjs"
 export const CCXT_ORDER_ACTION = "ccxt:spot-order"
 export const CCXT_SITE = "trading:ccxt"
 
-/** Fresh short idempotency token for one order (bound to the proposal). */
+// WS-2 consent payload-lock (spec §3.5): the canonical D5 field set per rail
+// action — the EXACT venue-bound fields the durable proposal replays, server
+// derived idempotencyKey/power/consentBy excluded. Spot locks no leverage/margin
+// (its rail has none), and the perps CLOSE locks the position-derived reduce-only
+// side ("sell" for a long — what the venue receives), NOT the stored "long"/"short".
+const CONSENT_FIELD_SETS = {
+  spotOpen: ["exchange", "symbol", "side", "amount", "price", "clientOrderId"],
+  perpsOpen: ["action", "exchange", "symbol", "side", "amount", "price", "leverage", "marginMode", "clientOrderId"],
+  perpsClose: ["action", "exchange", "symbol", "positionId", "price", "side", "amount", "leverage"]
+}
+
+function consentProjection(setName, source) {
+  const set = CONSENT_FIELD_SETS[setName]
+  const out = {}
+  for (const key of set) out[key] = source?.[key]
+  return out
+}
+
+function sortConsentKeys(value) {
+  if (Array.isArray(value)) return value.map(sortConsentKeys)
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = sortConsentKeys(value[key])
+        return acc
+      }, {})
+  }
+  return value
+}
+
+/** R5.1 — sha-256 over the canonicalized D5 field object: the consent lock value. */
+export function consentPayloadHash(fields) {
+  return createHash("sha256").update(JSON.stringify(sortConsentKeys(fields))).digest("hex")
+}
+
+/** D5 projections used by BOTH the durable propose record and the routes — one
+ * source of truth for "what the human's consent covers" per rail action. */
+export function spotOpenConsent(fields) {
+  return consentProjection("spotOpen", fields)
+}
+export function perpsOpenConsent(fields) {
+  return consentProjection("perpsOpen", fields)
+}
+export function perpsCloseConsent(fields) {
+  return consentProjection("perpsClose", fields)
+}
 export function clientOrderIdFor(now = Date.now()) {
   return `picc-${now.toString(36)}-${randomBytes(4).toString("hex")}`
 }
@@ -203,6 +249,16 @@ export async function proposeCcxtOrder({
         price,
         notionalUsd: sized.notionalUsd,
         clamped: sized.clamped,
+        consentHash: consentPayloadHash(
+          spotOpenConsent({
+            exchange: String(exchange ?? "").trim().toLowerCase(),
+            symbol,
+            side,
+            amount: sized.amount,
+            price,
+            clientOrderId
+          })
+        ),
         power: "proposals",
         consentBy,
         rationale: proposal.rationale

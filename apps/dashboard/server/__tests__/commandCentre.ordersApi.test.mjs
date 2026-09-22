@@ -65,6 +65,17 @@ async function call(handleApi, method, path, body, headers) {
 
 const ORDER = { exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 1000 }
 
+// WS-2 consent payload-lock fixture: the EXACT spot D5 set the reconfirm modal
+// ships — execute now requires the full payload, not just the clientOrderId.
+const EXECUTE_PAYLOAD_FOR = (propose) => ({
+  exchange: "binance",
+  symbol: "BTC/USDT",
+  side: "buy",
+  amount: 0.01,
+  price: 1000,
+  clientOrderId: propose.body.clientOrderId
+})
+
 describe("Command Centre slice 6 — orders rail API (ccxt)", () => {
   let dir
   let handleApi
@@ -196,7 +207,8 @@ describe("Command Centre slice 6 — orders rail API (ccxt)", () => {
     const propose = await call(handleApi, "POST", "/api/command-centre/orders", ORDER)
     expect(propose.body.ok).toBe(true)
     const res = await call(handleApi, "POST", "/api/command-centre/orders/execute", {
-      clientOrderId: propose.body.clientOrderId
+      clientOrderId: propose.body.clientOrderId,
+      payload: EXECUTE_PAYLOAD_FOR(propose)
     })
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
@@ -232,7 +244,8 @@ describe("Command Centre slice 6 — orders rail API (ccxt)", () => {
     // the market moved: fresh reference is now 950 — a 1000 BUY limit rests 5.3% above it
     vi.mocked(ordering.fetchReferencePrice).mockResolvedValue({ exchange: "binance", symbol: "BTC/USDT", price: 950 })
     const res = await call(handleApi, "POST", "/api/command-centre/orders/execute", {
-      clientOrderId: propose.body.clientOrderId
+      clientOrderId: propose.body.clientOrderId,
+      payload: EXECUTE_PAYLOAD_FOR(propose)
     })
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(false)
@@ -246,11 +259,13 @@ describe("Command Centre slice 6 — orders rail API (ccxt)", () => {
   it("POST execute is IDEMPOTENT (5G): a re-click is denied before the venue — it is reached exactly once", async () => {
     const propose = await call(handleApi, "POST", "/api/command-centre/orders", ORDER)
     const first = await call(handleApi, "POST", "/api/command-centre/orders/execute", {
-      clientOrderId: propose.body.clientOrderId
+      clientOrderId: propose.body.clientOrderId,
+      payload: EXECUTE_PAYLOAD_FOR(propose)
     })
     expect(first.body.ok).toBe(true)
     const second = await call(handleApi, "POST", "/api/command-centre/orders/execute", {
-      clientOrderId: propose.body.clientOrderId
+      clientOrderId: propose.body.clientOrderId,
+      payload: EXECUTE_PAYLOAD_FOR(propose)
     })
     expect(second.body.ok).toBe(false)
     expect(second.body.gate.blockedBy).toBe("idempotent")

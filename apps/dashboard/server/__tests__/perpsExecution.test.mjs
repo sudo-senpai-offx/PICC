@@ -28,6 +28,11 @@ import {
 } from "../services/commandCentre/perpsExecution.mjs"
 import * as perpsGates from "../services/commandCentre/perpsGates.mjs"
 import { clientOrderIdFor as ccxtClientOrderIdFor } from "../services/commandCentre/ccxtExecution.mjs"
+import {
+  consentPayloadHash,
+  perpsOpenConsent,
+  perpsCloseConsent
+} from "../services/commandCentre/ccxtExecution.mjs"
 import { _resetSidecarState, wireAuditReader } from "../services/commandCentre/safetySidecar.mjs"
 import {
   _resetExecutionState,
@@ -289,6 +294,24 @@ describe("Command Centre — perps rail: proposal leg, propose", () => {
     expect(created.rationale.length).toBeGreaterThanOrEqual(12)
     expect(created.rationale).toMatch(/margin/)
     expect(created.rationale).toMatch(/leverage|4x|lever/)
+    // WS-2 consent lock (R5.1): the anchor carries the D5 hash of the recorded
+    // perps-open field set — the EXACT object the execute route will re-hash.
+    expect(created.consentHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(created.consentHash).toBe(
+      consentPayloadHash(
+        perpsOpenConsent({
+          action: "open",
+          exchange: created.exchange,
+          symbol: created.symbol,
+          side: created.side,
+          amount: created.amount,
+          price: created.price,
+          leverage: created.leverage,
+          marginMode: created.marginMode,
+          clientOrderId: created.clientOrderId
+        })
+      )
+    )
   })
 
   test("an over-cap request is clamped at PROPOSE — clamped visible in the order AND proposal:created", async () => {
@@ -775,6 +798,24 @@ describe("Command Centre — perps rail: close (reduce-only replay)", () => {
     expect(created.kind).toBe("close")
     expect(created.positionId).toBe(position.id)
     expect(created.reduceOnly).toBe(true)
+    // WS-2 consent lock: the close anchor locks the D5 close set with the
+    // position-derived REDUCE-ONLY side (what the venue receives), not the
+    // stored "long"—the same object the close route field-compares.
+    expect(created.consentHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(created.consentHash).toBe(
+      consentPayloadHash(
+        perpsCloseConsent({
+          action: "close",
+          exchange: created.exchange,
+          symbol: created.symbol,
+          side: position.side === "short" ? "buy" : "sell",
+          amount: created.amount,
+          price: created.price,
+          leverage: created.leverage,
+          positionId: created.positionId
+        })
+      )
+    )
   })
 
   test("a close is denied at perps-position-cap when another position remains open", async () => {
