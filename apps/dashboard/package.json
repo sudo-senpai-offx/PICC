@@ -10,7 +10,7 @@
         "preview": "vite preview",
         "serve": "node server/index.mjs",
         "start": "vite",
-        "test": "vitest run --maxWorkers=3",
+        "test": "vitest run --maxWorkers=1",
         "smoke:trading": "node ../../scripts/probe-e2e-decisions.mjs",
         "test:ci": "npm audit --audit-level=high && npm test && npm run typecheck"
     },
