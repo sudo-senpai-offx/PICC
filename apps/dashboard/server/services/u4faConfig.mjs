@@ -115,6 +115,10 @@ export const U4FA_DEFAULTS = Object.freeze({
   postLossNotifyCooldownMs: 900000, // REQ-RISK: 15-min anti-revenge proposal throttle
   u4faVeto: true, // REQ blueprint: Regime-3 Chop / F1-F3 NO_TRADE can veto a confluence TRADE
   spreadSource: null, // T6: no bid/ask feed exists anywhere; null = honest "unmeasurable" abort
+  // T6: seeded spread-feed providers, keyed for PICC_SPREAD_FEED_PROVIDER (WS-2
+  // spec §3.6). Default EMPTY = fail-closed; a provider is injected (tests) or
+  // wired by WS-5 — never fabricated here.
+  spreadProviders: Object.freeze({}),
   risk: Object.freeze({
     riskPerTradePct: 0.5, // REQ-RISK 0.5% of balance per trade (T10 Decision A: U4FA-size amount at proposal time)
     dailyLossLimitPct: 5, // REQ-RISK -5% -> halt until 00:00 GMT (T10 Decision B: U4FA-owned UTC day-key)
@@ -165,7 +169,7 @@ const TOP_KEYS = new Set([
   "activeStyle", "presets", "sessionWindows", "calibration", "assetClassMap",
   "pipSizes", "calendarCurrencyMap", "correlations", "newsBlackoutMin",
   "bbHugPct", "regimeConfirmBars", "emaSlopeLookback", "expiries",
-  "timingAtNextBarMs", "postLossNotifyCooldownMs", "u4faVeto", "spreadSource", "risk", "assets"
+  "timingAtNextBarMs", "postLossNotifyCooldownMs", "u4faVeto", "spreadSource", "spreadProviders", "risk", "assets"
 ])
 
 function checkType(v, kind, errors, path) {
@@ -296,6 +300,19 @@ export function validateU4faConfig(raw) {
     }
   }
   if (raw.u4faVeto != null) checkType(raw.u4faVeto, "boolean", errors, "u4faVeto")
+  // spreadProviders (WS-2 T6): a map of provider keys → read(fn)/object-with-read.
+  // A provider is code, not JSON — a wrong shape fails loudly, never silently
+  // defaults the spread to measurable.
+  if (raw.spreadProviders != null) {
+    if (typeof raw.spreadProviders !== "object" || Array.isArray(raw.spreadProviders)) {
+      errors.push("spreadProviders: expected an object keyed by provider name")
+    } else {
+      for (const [k, p] of Object.entries(raw.spreadProviders)) {
+        const okProvider = typeof p === "function" || (p != null && typeof p === "object" && typeof p.read === "function")
+        if (!okProvider) errors.push(`spreadProviders.${k}: provider must expose a read(assetClass) function`)
+      }
+    }
+  }
   if (raw.risk != null && typeof raw.risk === "object") {
     for (const k of Object.keys(raw.risk)) if (!RISK_KEYS.has(k)) errors.push(`risk.${k}: unknown risk key`)
     for (const k of ["riskPerTradePct", "dailyLossLimitPct", "maxDailyTrades"]) {

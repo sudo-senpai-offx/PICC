@@ -31,6 +31,7 @@ import { quickMtfCheck } from "./multiTimeframe.mjs"
 import { evaluateU4FA, MIN_5M_BARS } from "./fourFactor.mjs"
 import { U4FA_DEFAULTS, resolveAssetConfig } from "./u4faConfig.mjs"
 import { v32ContextForAsset, v32DecisionForAsset } from "./v32Engine.mjs"
+import { spreadSnapshotFor, resolveSpreadReading } from "./spreadFeedSeam.mjs"
 
 export const CANDIDATE_EXPIRIES = [60, 120, 300, 900] // seconds (15s excluded: 60s bar resolution can't estimate it honestly)
 /**
@@ -712,7 +713,7 @@ function buildU4faStrategy(a, ctx, now) {
       dailyCandles: null, // Yahoo EOD not in the live cycle — D1 leg honestly unavailable
       calendarEvents: ctx.calendarEvents ?? [],
       calendarSource: ctx.calendarSource ?? "fallback-schedule",
-      spread: ctx.spread ?? null,
+      spread: resolveSpreadReading(ctx.spread, resolved.class),
       losses: ctx.losses ?? [],
       config: ctx.config ?? U4FA_DEFAULTS,
       regimeState: u4faRegimeStates.get(id) ?? { chop: false, streak: 0 },
@@ -737,7 +738,10 @@ function buildV32Strategy(a, ctx, now) {
   const vcfg = ctx?.v32Config
   if (!vcfg || vcfg.enabled !== true) return null
   try {
-    const context = v32ContextForAsset(a, ctx, vcfg)
+    // T6: resolve the per-class spread reading before v32ContextForAsset (the engine reads a single reading/null)
+    const resolved = resolveAssetConfig(String(a?.id ?? ""), ctx.config ?? U4FA_DEFAULTS)
+    const vCtx = resolved?.class ? { ...ctx, spread: resolveSpreadReading(ctx.spread, resolved.class) } : ctx
+    const context = v32ContextForAsset(a, vCtx, vcfg)
     return {
       enabled: true,
       context,
@@ -969,7 +973,7 @@ async function u4faRuntimeContext() {
       config,
       calendarEvents: events,
       calendarSource: events.length ? "feed" : "fallback-schedule",
-      spread: null, // T6: no bid/ask feed in PICC → F1 spread honestly unmeasurable (abort, never fabricate)
+      spread: await spreadSnapshotFor(config), // T6: per-class spread snapshot via the provider seam (empty registry = honest nulls, never fabricated)
       losses,
       candleSource: "liveEO",
       v32Config,
