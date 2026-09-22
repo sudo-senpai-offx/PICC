@@ -155,7 +155,6 @@ import {
 import { dayKeyOf } from "./services/u4faRisk.mjs"
 import {
   PERPS_OPEN_ACTION,
-  PERPS_CLOSE_ACTION,
   PERPS_SITE,
   proposePerpsOpen,
   executePerpsOpen,
@@ -1836,7 +1835,10 @@ async function _handleApiInner(req, res, url, reqId) {
     observeEquity: () => hyperliquidPerps.observeEquity(),
     observeFunding: ({ symbol }) => hyperliquidPerps.observeFunding({ symbol }),
     submitOrder: (params) => hyperliquidPerps.submitOrder(params),
-    verifyFill: (params) => hyperliquidPerps.verifyFill(params),
+    verifyFill: async (params) => {
+      const r = await hyperliquidPerps.verifyFill(params)
+      return r?.fill ?? null
+    },
     openPositions,
     reconcileWithVenue
   }
@@ -2100,7 +2102,7 @@ async function _handleApiInner(req, res, url, reqId) {
       symbol,
       orderId: venueOrderId,
       clientOrderId,
-      verify: (v) => perpsAdapter.verifyFill({ orderId: v.orderId })
+      verify: (v) => perpsAdapter.verifyFill({ symbol: v.symbol, orderId: v.orderId })
     })
     if (result.filled) {
       if (proposal.data.kind === "open") {

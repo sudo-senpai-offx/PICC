@@ -19,7 +19,13 @@ vi.mock("../services/venues/hyperliquidPerps.mjs", () => {
       label: "Hyperliquid perps (testnet)",
       markets: vi.fn(),
       submitOrder: vi.fn(),
-      verifyFill: vi.fn(),
+      // contract-faithful venue mock (hyperliquidPerps.mjs:358-360): null when
+      // symbol or orderId is absent, nested { ok:true, fill } on success — the
+      // unwrap is the adapter seam's job, never the venue's
+      verifyFill: vi.fn(async (p = {}) => {
+        if (!p?.symbol || !p?.orderId) return null
+        return { ok: true, fill: { status: "closed", filled: 0.005, average: 2050, at: new Date().toISOString() } }
+      }),
       observeEquity: vi.fn(),
       observeFunding: vi.fn(),
       positionView: vi.fn()
@@ -114,7 +120,7 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     vi.mocked(a.observeFunding).mockReset().mockResolvedValue({ ok: true, rate: 0.0001, at: Date.now() - 60_000 })
     vi.mocked(a.positionView).mockReset().mockResolvedValue([])
     vi.mocked(a.submitOrder).mockClear().mockResolvedValue({ ok: true, id: "venue-order-1", status: "open", receivedTime: new Date().toISOString() })
-    vi.mocked(a.verifyFill).mockClear().mockResolvedValue(null)
+    vi.mocked(a.verifyFill).mockClear()
     vi.mocked(a.markets).mockClear()
   }
 
@@ -283,10 +289,8 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     const propose = await call(handleApi, "POST", "/api/command-centre/perps/propose", ORDER)
     expect(propose.body.ok).toBe(true)
     vi.mocked(perps.hyperliquidPerps.verifyFill).mockResolvedValue({
-      status: "closed",
-      filled: 0.005,
-      average: 2050,
-      at: new Date().toISOString()
+      ok: true,
+      fill: { status: "closed", filled: 0.005, average: 2050, at: new Date().toISOString() }
     })
     const res = await call(handleApi, "POST", "/api/command-centre/perps/verify", {
       clientOrderId: propose.body.clientOrderId,
@@ -295,6 +299,9 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
     expect(res.body.kind).toBe("perps-verify:filled")
+    // FIX 1 pin: the venue read is keyed by symbol AND orderId — with only the
+    // order id the real adapter returns null (hyperliquidPerps.mjs:358-360)
+    expect(perps.hyperliquidPerps.verifyFill).toHaveBeenCalledWith({ symbol: "ETH/USDT", orderId: "venue-9" })
     // the venue was NOT asked to submit again — only the read-only fill verify
     expect(perps.hyperliquidPerps.submitOrder).not.toHaveBeenCalled()
     const positions = (await import("../services/livePositionManager.mjs")).openPositions()
@@ -375,10 +382,8 @@ describe("Command Centre slice 6b — perps rail API (trading:perps)", () => {
 
     // close-verify filled ⇒ recordClose runs (the ONLY place the close is recorded)
     vi.mocked(perps.hyperliquidPerps.verifyFill).mockResolvedValue({
-      status: "closed",
-      filled: 0.005,
-      average: 2050,
-      at: new Date().toISOString()
+      ok: true,
+      fill: { status: "closed", filled: 0.005, average: 2050, at: new Date().toISOString() }
     })
     const verify = await call(handleApi, "POST", "/api/command-centre/perps/verify", {
       clientOrderId: closeAnchor.data.clientOrderId,
