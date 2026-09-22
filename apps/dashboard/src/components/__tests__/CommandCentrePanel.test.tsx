@@ -32,6 +32,15 @@ function stubFetch(payload: unknown) {
   } as unknown as Response)))
 }
 
+// Drains the microtask chain an async handler queues (fetch is stubbed to a
+// resolved promise) and yields a macrotask so React's passive-effect queue
+// settles deterministically (reliable under BOTH fake and real timers).
+async function flushMicrotasks(times = 5) {
+  for (let i = 0; i < times; i++) await Promise.resolve()
+  await new Promise((r) => setTimeout(r, 0))
+  flushSync(() => {})
+}
+
 const gate = (name: string, status: "pass" | "block" | "restricted" | "mechanism-on" | "not-wired" | "not-decided" = "pass", note = "") => ({ gate: name, status, note })
 
 const overview = {
@@ -86,6 +95,7 @@ const blocked = {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   document.body.innerHTML = ""
 })
@@ -264,7 +274,11 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     m.unmount()
   })
 
-  it("Execute via PICC is a fresh approval: the venue refusal state renders honestly on the card", async () => {
+  it("Execute via PICC opens the reconfirm modal; confirm re-submits { clientOrderId, payload } with the EXACT replayed fields", async () => {
+    // The human review window defaults to 5s in production; the panel takes an
+    // optional reviewSeconds so the countdown is testable without wall-clock
+    // waits. 0.3s here — the assertions still land INSIDE/after the window by
+    // the real-time settle below.
     const posts: { path: string; body: Record<string, unknown> }[] = []
     const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
       if (init?.method === "POST" && String(path).includes("/command-centre/orders/execute")) {
@@ -276,7 +290,7 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
             ok: false,
             consentBy: "default",
             blockedBeforeVenue: true,
-            gate: { allow: false, blockedBy: "fresh-data", reason: "BUY limit 1000 is 5.3% ABOVE the fresh reference 950 — it would pay more than the market just showed (5E)" },
+            gate: { allow: false, blockedBy: "fresh-data", reason: "BUY limit 1000 is 5.3% ABOVE the fresh reference 950 (5E)" },
             execution: null,
             state: { global: false, sites: {} }
           })
@@ -293,19 +307,115 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     })
     vi.stubGlobal("fetch", fetchMock)
 
-    const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
-    flushSync(() => {})
+    const m = mount(<CommandCentrePanel reviewSeconds={0.3} />)
+    await flushMicrotasks()
     const execute = m.host.querySelector('button[aria-label="execute via picc picc-ord-1"]') as HTMLButtonElement
     expect(execute).toBeTruthy()
     execute.click()
-    await new Promise((r) => setTimeout(r, 10))
     flushSync(() => {})
 
-    expect(posts).toEqual([{ path: "/api/command-centre/orders/execute", body: { clientOrderId: "picc-ord-1" } }])
+    // the reconfirm modal renders the EXACT payload fields it will submit,
+    // plus the approval rationale and the recorded consentBy — nothing has been
+    // posted yet, the click alone is NOT consent.
+    const modal = m.host.querySelector('div[role="dialog"]') as HTMLElement
+    expect(modal).toBeTruthy()
+    const modalText = modal.textContent ?? ""
+    expect(modalText).toContain("exchange")
+    expect(modalText).toContain("binance")
+    expect(modalText).toContain("BTC/USDT")
+    expect(modalText).toContain("buy")
+    expect(modalText).toContain("0.01")
+    expect(modalText).toContain("1000")
+    expect(modalText).toContain("picc-ord-1")
+    expect(modalText).toContain(openOrder.rationale)
+    expect(modalText).toContain("consentBy: default")
+    expect(posts).toHaveLength(0)
+
+    // the confirm is gated by the countdown + checkbox: elapse the review
+    // window (real clock, 0.3s review), acknowledge, then confirm POSTs
+    // { clientOrderId, payload }.
+    await new Promise((r) => setTimeout(r, 650))
+    flushSync(() => {})
+    const ack = m.host.querySelector('input[aria-label="acknowledge exact payload"]') as HTMLInputElement
+    expect(ack).toBeTruthy()
+    ack.click()
+    flushSync(() => {})
+    const confirm = m.host.querySelector('button[aria-label="Confirm execution"]') as HTMLButtonElement
+    expect(confirm.disabled).toBe(false)
+    confirm.click()
+    await flushMicrotasks()
+
+    expect(posts).toEqual([
+      {
+        path: "/api/command-centre/orders/execute",
+        body: {
+          clientOrderId: "picc-ord-1",
+          payload: { exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 1000, clientOrderId: "picc-ord-1" }
+        }
+      }
+    ])
     const after = m.host.textContent ?? ""
     expect(after).toContain("refused before the venue: BUY limit 1000 is 5.3% ABOVE the fresh reference")
     expect(after).toContain("open") // the proposal is untouched — the card never fabricates success
+    m.unmount()
+  })
+
+  it("the reconfirm modal gates the confirm behind the countdown AND the checkbox", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      if (String(path).includes("/command-centre/orders")) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, at: "2026-09-05T00:00:02.000Z", orders: [openOrder] }) } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => ({ ...overview, sites: [tradingSite] }) } as unknown as Response
+    }))
+
+    const m = mount(<CommandCentrePanel reviewSeconds={2} />)
+    await flushMicrotasks()
+    ;(m.host.querySelector('button[aria-label="execute via picc picc-ord-1"]') as HTMLButtonElement).click()
+    flushSync(() => {})
+
+    const confirm = m.host.querySelector('button[aria-label="Confirm execution"]') as HTMLButtonElement
+    const ack = m.host.querySelector('input[aria-label="acknowledge exact payload"]') as HTMLInputElement
+    // the window is running: the box AND the confirm are locked
+    expect(confirm.disabled).toBe(true)
+    expect(ack.disabled).toBe(true)
+    // mid-window (2s review → at ~1.2s we are inside it) still locked
+    await new Promise((r) => setTimeout(r, 1200))
+    flushSync(() => {})
+    expect(confirm.disabled).toBe(true)
+    expect(ack.disabled).toBe(true)
+    // past the window the box unlocks, but the unchecked box keeps the confirm
+    // disabled — one gate is "review elapsed", the other is "acknowledged this EXACT payload"
+    await new Promise((r) => setTimeout(r, 1200))
+    flushSync(() => {})
+    expect(ack.disabled).toBe(false)
+    expect(confirm.disabled).toBe(true)
+    ack.click()
+    flushSync(() => {})
+    expect(confirm.disabled).toBe(false)
+    m.unmount()
+  })
+
+  it("cancel closes the reconfirm modal without posting anything", async () => {
+    const posts: { path: string; body: Record<string, unknown> }[] = []
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST") posts.push({ path: String(path), body: JSON.parse(String(init.body)) as Record<string, unknown> })
+      if (String(path).includes("/command-centre/orders")) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, at: "2026-09-05T00:00:02.000Z", orders: [openOrder] }) } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => ({ ...overview, sites: [tradingSite] }) } as unknown as Response
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const m = mount(<CommandCentrePanel reviewSeconds={0.3} />)
+    await flushMicrotasks()
+    ;(m.host.querySelector('button[aria-label="execute via picc picc-ord-1"]') as HTMLButtonElement).click()
+    flushSync(() => {})
+    expect(m.host.querySelector('div[role="dialog"]')).toBeTruthy()
+
+    ;(m.host.querySelector('button[aria-label="cancel execution"]') as HTMLButtonElement).click()
+    flushSync(() => {})
+    expect(m.host.querySelector('div[role="dialog"]')).toBeNull()
+    expect(posts).toHaveLength(0)
     m.unmount()
   })
 

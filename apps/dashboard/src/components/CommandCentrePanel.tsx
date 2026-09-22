@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Badge, Button, Card, Skeleton, Toggle } from "@/components/ui"
 import {
-  executeCommandCentreOrder,
   getCommandCentreOrders,
   getCommandCentreOverview,
+  post,
   proposeCommandCentreOrder,
   setCommandCentreKillSwitch,
   verifyCommandCentreOrder,
@@ -12,6 +12,33 @@ import {
   type CommandCentreOrder,
   type CommandCentreOverview
 } from "@/lib/api"
+
+/**
+ * T5b — the payload-locked re-consent handshake. When the human clicks
+ * "Execute via PICC" the panel does NOT post yet: it opens a reconfirm modal
+ * that shows the EXACT payload the server must re-hash and field-compare
+ * against the durable proposal (D5 spot set — no server-derived fields), with
+ * a human review window + a checkbox that is mechanically disabled until the
+ * window elapses. Only confirming POSTs { clientOrderId, payload }; the click
+ * alone is never consent.
+ */
+type SpotExecutePayload = {
+  exchange: string
+  symbol: string
+  side: "buy" | "sell"
+  amount: number
+  price: number
+  clientOrderId: string
+}
+
+type CommandCentreExecuteResponse = {
+  ok: boolean
+  consentBy: string
+  blockedBeforeVenue?: boolean
+  gate: { allow: boolean; blockedBy: string | null; reason?: string | null }
+  execution: { status: "executed" | "failed"; idempotencyKey?: string; error?: string } | null
+  state: { global: boolean; sites: Record<string, boolean> }
+}
 
 /**
  * Command Centre (spec slices 4 + 6) — the surface for the enforcement layer.
@@ -30,7 +57,7 @@ import {
  *     then the venue) or "I placed it — verify" (carrier B: the human performs
  *     the venue step, the panel verifies the fill read-only)
  */
-export function CommandCentrePanel() {
+export function CommandCentrePanel({ reviewSeconds = 5 }: { reviewSeconds?: number } = {}) {
   const [overview, setOverview] = useState<CommandCentreOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -41,6 +68,7 @@ export function CommandCentrePanel() {
   const [actingClientOrderId, setActingClientOrderId] = useState<string | null>(null)
   const [venueOrderIds, setVenueOrderIds] = useState<Record<string, string>>({})
   const [verifyingClientOrderId, setVerifyingClientOrderId] = useState<string | null>(null)
+  const [pendingExecute, setPendingExecute] = useState<{ order: CommandCentreOrder; payload: SpotExecutePayload } | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -106,33 +134,51 @@ export function CommandCentrePanel() {
     }
   }, [orderDraft, refreshOrders])
 
-  // Carrier A — "Execute via PICC": this click IS the fresh per-action consent.
-  // The server re-runs the FULL gate over FRESH observations and only a pass
-  // reaches the venue (limit-only, hard-capped, env keys).
-  const executeOrder = useCallback(
-    async (clientOrderId: string) => {
-      setActingClientOrderId(clientOrderId)
-      setOrderResult(null)
-      try {
-        const res = await executeCommandCentreOrder({ clientOrderId })
-        if (res.ok) {
-          setOrderResult({ clientOrderId, ok: true, text: "approved — order executed (audit: execution:executed)" })
-        } else if (res.execution?.status === "failed") {
-          setOrderResult({ clientOrderId, ok: false, text: `gate passed but the venue refused: ${res.execution.error ?? "unknown"}` })
-        } else if (res.blockedBeforeVenue) {
-          setOrderResult({ clientOrderId, ok: false, text: `refused before the venue: ${res.gate.reason ?? res.gate.blockedBy ?? "unknown"}` })
-        } else {
-          setOrderResult({ clientOrderId, ok: false, text: `blocked before the venue: ${res.gate.blockedBy ?? "unknown gate"}` })
-        }
-        await refreshOrders()
-        await refresh()
-      } catch (e) {
-        setOrderResult({ clientOrderId, ok: false, text: e instanceof Error ? e.message : "execute failed" })
+  // Carrier A — "Execute via PICC". Opening the modal does NOTHING to the
+  // venue: the panel hands the human the exact payload to consent to. Only the
+  // modal's confirm POSTs { clientOrderId, payload }; the server re-runs the
+  // full gate over fresh observations and compares the hashed payload field by
+  // field against the durable proposal before a pass reaches the venue.
+  const requestExecute = useCallback((order: CommandCentreOrder) => {
+    setOrderResult(null)
+    setPendingExecute({
+      order,
+      payload: {
+        exchange: order.exchange,
+        symbol: order.symbol,
+        side: order.side,
+        amount: order.amount,
+        price: order.price,
+        clientOrderId: order.clientOrderId
       }
-      setActingClientOrderId(null)
-    },
-    [refresh, refreshOrders]
-  )
+    })
+  }, [])
+
+  const confirmExecute = useCallback(async () => {
+    if (!pendingExecute) return
+    const { order, payload } = pendingExecute
+    const clientOrderId = order.clientOrderId
+    setActingClientOrderId(clientOrderId)
+    setOrderResult(null)
+    setPendingExecute(null)
+    try {
+      const res = await post<CommandCentreExecuteResponse>("/command-centre/orders/execute", { clientOrderId, payload })
+      if (res.ok) {
+        setOrderResult({ clientOrderId, ok: true, text: "approved — order executed (audit: execution:executed)" })
+      } else if (res.execution?.status === "failed") {
+        setOrderResult({ clientOrderId, ok: false, text: `gate passed but the venue refused: ${res.execution.error ?? "unknown"}` })
+      } else if (res.blockedBeforeVenue) {
+        setOrderResult({ clientOrderId, ok: false, text: `refused before the venue: ${res.gate.reason ?? res.gate.blockedBy ?? "unknown"}` })
+      } else {
+        setOrderResult({ clientOrderId, ok: false, text: `blocked before the venue: ${res.gate.blockedBy ?? "unknown gate"}` })
+      }
+      await refreshOrders()
+      await refresh()
+    } catch (e) {
+      setOrderResult({ clientOrderId, ok: false, text: e instanceof Error ? e.message : "execute failed" })
+    }
+    setActingClientOrderId(null)
+  }, [pendingExecute, refresh, refreshOrders])
 
   // Carrier B — "I placed it — verify": the human performed the venue step on
   // the exchange; the fill is verified READ-ONLY and recorded honestly.
@@ -225,11 +271,32 @@ export function CommandCentrePanel() {
               setVenueOrderIds((prev) => ({ ...prev, [clientOrderId]: id }))
             }
             onPropose={proposeOrder}
-            onExecute={executeOrder}
+            onExecute={requestExecute}
             onVerify={verifyOrder}
           />
         </>
       )}
+
+      <ReconfirmModal
+        open={pendingExecute !== null}
+        title="Confirm this EXACT execution payload"
+        subtitle="Nothing has touched the venue yet. The server will re-hash this payload and compare every field against the durable proposal consent before any venue touch."
+        fields={pendingExecute
+          ? [
+              { label: "exchange", value: pendingExecute.payload.exchange },
+              { label: "symbol", value: pendingExecute.payload.symbol },
+              { label: "side", value: pendingExecute.payload.side },
+              { label: "amount", value: String(pendingExecute.payload.amount) },
+              { label: "price", value: String(pendingExecute.payload.price) },
+              { label: "clientOrderId", value: pendingExecute.payload.clientOrderId }
+            ]
+          : []}
+        rationale={pendingExecute?.order.rationale}
+        consentBy={pendingExecute?.order.proposedBy}
+        reviewSeconds={reviewSeconds}
+        onCancel={() => setPendingExecute(null)}
+        onConfirm={() => void confirmExecute()}
+      />
     </Card>
   )
 }
@@ -353,7 +420,7 @@ function OrdersBlock({
   venueOrderIds: Record<string, string>
   onVenueOrderIdChange: (clientOrderId: string, id: string) => void
   onPropose: () => void
-  onExecute: (clientOrderId: string) => void
+  onExecute: (order: CommandCentreOrder) => void
   onVerify: (clientOrderId: string) => void
 }) {
   const open = orders?.filter((o) => o.status === "open") ?? []
@@ -437,7 +504,7 @@ function OrdersBlock({
               <Button
                 variant="primary"
                 disabled={actingClientOrderId === o.clientOrderId}
-                onClick={() => onExecute(o.clientOrderId)}
+                onClick={() => onExecute(o)}
                 aria-label={`execute via picc ${o.clientOrderId}`}
                 style={{ fontSize: 10, padding: "3px 10px" }}
               >
@@ -491,6 +558,106 @@ function OrdersBlock({
         Executing is fresh per-action consent (recorded as consentBy) — it is NOT an automation opt-in. Either carrier runs the full
         gate rail server-side over fresh observations (wallet + reference price) before anything is placed; orders are LIMIT-only,
         capped to the $10 envelope, and every outcome lands on the audit trail.
+      </div>
+    </div>
+  )
+}
+
+/**
+ * T5b — the payload re-consent modal shared by the order rail and the perps
+ * panel. Mirrors the HumanReviewGate's human-window discipline: the confirm is
+ * mechanically impossible while a review window runs AND while the exact-payload
+ * checkbox is unchecked. The `extra` slot lets a caller (perps close) lock one
+ * editable field — the fresh exit price — into the payload being displayed.
+ */
+export function ReconfirmModal({
+  open,
+  title,
+  subtitle,
+  fields,
+  rationale,
+  consentBy,
+  confirmLabel = "Confirm execution",
+  reviewSeconds = 5,
+  extra,
+  onCancel,
+  onConfirm
+}: {
+  open: boolean
+  title: string
+  subtitle?: string
+  fields: { label: string; value: string }[]
+  rationale?: string
+  consentBy?: string | null
+  confirmLabel?: string
+  reviewSeconds?: number
+  extra?: React.ReactNode
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const [secondsLeft, setSecondsLeft] = useState(reviewSeconds)
+  const [acknowledged, setAcknowledged] = useState(false)
+  const timerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setSecondsLeft(Math.max(0, reviewSeconds))
+    setAcknowledged(false)
+    const deadline = Date.now() + Math.max(0, reviewSeconds) * 1000
+    timerRef.current = window.setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      if (remaining === 0 && timerRef.current) window.clearInterval(timerRef.current)
+      setSecondsLeft(remaining)
+    }, 250)
+    return () => {
+      if (timerRef.current) window.clearInterval(timerRef.current)
+    }
+  }, [open, reviewSeconds])
+
+  if (!open) return null
+  const ready = secondsLeft <= 0
+
+  return (
+    <div className="palette-overlay">
+      <div className="palette" role="dialog" aria-modal="true" aria-label={title} style={{ padding: 18 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{title}</div>
+        {subtitle && <div className="muted small" style={{ marginBottom: 10 }}>{subtitle}</div>}
+        <div style={{ display: "grid", gap: 4, marginBottom: 6 }}>
+          {fields.map((f) => (
+            <div key={f.label} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 11 }}>
+              <span className="muted small">{f.label}</span>
+              <code style={{ fontSize: 11, wordBreak: "break-all", textAlign: "right" }}>{f.value}</code>
+            </div>
+          ))}
+        </div>
+        {extra}
+        {rationale && (
+          <div className="muted small" style={{ marginTop: 8, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 6 }}>
+            {rationale}
+          </div>
+        )}
+        <div className="muted small" style={{ marginTop: 8 }}>consentBy: {consentBy ?? "unknown"}</div>
+        <label className="human-gate-check" style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12 }}>
+          <input
+            type="checkbox"
+            aria-label="acknowledge exact payload"
+            disabled={!ready}
+            checked={acknowledged}
+            onChange={(e) => setAcknowledged(e.target.checked)}
+          />
+          <span>I have reviewed this EXACT payload — this is my per-action consent.</span>
+        </label>
+        <div aria-live="polite" className="muted small" style={{ marginTop: 6, minHeight: 16 }}>
+          {!ready ? <>Review available in {secondsLeft}s — stay in control.</> : "Review complete — you are in control."}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <Button variant="ghost" onClick={onCancel} aria-label="cancel execution">
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={onConfirm} disabled={!ready || !acknowledged} aria-label={confirmLabel}>
+            {confirmLabel}
+          </Button>
+        </div>
       </div>
     </div>
   )
