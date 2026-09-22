@@ -408,3 +408,16 @@ npx vitest run __tests__/hyperliquidPerps.sandboxE2E.test.mjs
 **Mainnet requires the WS-3 ceremony** — `PICC_CCXT_PERPS_MAINNET_ENABLED=1` ALONE is still refused
 by this codebase (WS-1 is testnet-only until the WS-3 ceremony enables live perps); the E2E keeps
 that refusal and never targets mainnet.
+
+**Known wiring side-effect (shared ccxt env namespace)** — the perps rail reuses the SAME env
+naming scheme as the spot leg (`PICC_CCXT_WALLETADDRESS_HYPERLIQUID` /
+`PICC_CCXT_PRIVATEKEY_HYPERLIQUID`, per §9). Once the pair exists, the spot-leg scheduler sees
+`hyperliquid` as a keyed exchange: `ccxtKeyedExchangeIds()` (`ccxtOrdering.mjs:463-471`) scans
+`PICC_CCXT_*` env keys and `refreshAllCcxtEquity()` (`scheduler.mjs`, 4-min cadence) records the
+PERPS F3 wallet's equity under `ccxt-equity.json["hyperliquid"]`. Per WS-1 spec §8.1
+(`docs/specs/PICC_TRADING_SUITE_WS1_LIVE_ORDER_LIFECYCLE_v1.md`), the `hyperliquid` id in
+`ccxt-equity.json` is the SPOT leg's key (`observeCcxtEquity`), where a second writer would
+double-account equity. The perps rail itself is unaffected — F3 keeps its OWN
+`ccxt-perps-risk.json` day baseline (R3.5) — but the spot-leg overview will ALSO carry a
+`hyperliquid` equity baseline for the perps F3 wallet: honest data for that wallet, and a known
+shared-namespace consequence when reading overview equity.
