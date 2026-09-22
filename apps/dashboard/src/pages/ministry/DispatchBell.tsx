@@ -19,7 +19,7 @@ export function DispatchBell() {
   return (
     <NavLink to="dispatch" className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}>
       <span className="nav-label">Dispatch</span>
-      {unread > 0 ? <span className="nav-badge" aria-label={`${unread} unread`}>{unread}</span> : null}
+      {unread > 0 ? <span className="badge badge-accent" aria-label={`${unread} unread`}>{unread}</span> : null}
     </NavLink>
   )
 }
