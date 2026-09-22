@@ -358,3 +358,53 @@ Proposed ladder (amounts are a starting point, not a promise; the owner approves
 
 Venue breadth (slice 7 ExpertOption demo logic, then further streams) is a **separate ladder** with
 its own per-stream gates; it does not inherit envelope rungs.
+
+---
+
+## WS-1 perps rail — sandbox E2E
+
+WS-1 appendix (additive): about the perps rail's live-testnet E2E only. It changes nothing stated
+in §3/§5/§8/§9 about the spot `trading:ccxt` connect.
+
+**What this is:** `apps/dashboard/server/__tests__/hyperliquidPerps.sandboxE2E.test.mjs` — a live
+E2E that calls the REAL Hyperliquid testnet API (`api.hyperliquid-testnet.xyz`) through the perps
+venue adapter `server/services/venues/hyperliquidPerps.mjs`. No mocks; orders are real testnet
+orders. It is skipped on any machine without the credential pair, so the normal vitest floor stays
+green.
+
+**Credentials** — the SAME pair this runbook already documents (§3 API-wallet topology, §9 "`.env`
+credential pair set"): `PICC_CCXT_WALLETADDRESS_HYPERLIQUID` = main account,
+`PICC_CCXT_PRIVATEKEY_HYPERLIQUID` = API-wallet/agent key (view+trade, withdrawals OFF, ~14-day
+TTL — refresh per §9). The perps rail introduces no new credential.
+
+**Sandbox** — `PICC_CCXT_SANDBOX=1` (or `PICC_CCXT_SANDBOX_HYPERLIQUID=1`). The adapter is
+testnet-first: without a sandbox flag every perps method returns
+`{ok:false, reason:"perps-rail-off: …"}`. The only escape hatch is refusing loudly — never point
+the E2E at mainnet values.
+
+**Command**
+
+```bash
+cd apps/dashboard
+npx vitest run __tests__/hyperliquidPerps.sandboxE2E.test.mjs
+```
+
+- With the credential pair + a sandbox flag set: the five steps run live (markets → equity →
+  funding → submit+cancel → fill/close) and print `[ok]` / `[skipped: …]` / `[failed: …]` per
+  step against `api.hyperliquid-testnet.xyz`.
+- Without creds (or creds but no sandbox flag): the whole file skips on one visible reason line
+  naming the credential + sandbox vars, and the run still exits green (ADR-0005 honest skip, no
+  fabricated pass).
+
+**Skip semantics**
+
+- Full-file skip: creds+sandbox absent ⇒ `describe.skip` naming
+  `PICC_CCXT_WALLETADDRESS_HYPERLIQUID` / `PICC_CCXT_PRIVATEKEY_HYPERLIQUID` /
+  `PICC_CCXT_SANDBOX(=1)` (ADR-0005).
+- Balance 0: the fill/close step reports a step-level `skipped` with the deposit-free string
+  (`testnet balance 0 — deposit-free — fill/close not attempted`) and the suite still passes. No
+  assertion fabricates a fill — a null `verifyFill` is reported as unobserved, never as filled.
+
+**Mainnet requires the WS-3 ceremony** — `PICC_CCXT_PERPS_MAINNET_ENABLED=1` ALONE is still refused
+by this codebase (WS-1 is testnet-only until the WS-3 ceremony enables live perps); the E2E keeps
+that refusal and never targets mainnet.
