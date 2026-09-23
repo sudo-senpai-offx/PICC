@@ -1643,3 +1643,115 @@ export function verifyCommandCentreOrder(
 ): Promise<{ ok: boolean; consentBy: string; kind: string; clientOrderId: string; at: string }> {
   return post(`/command-centre/orders/verify`, body, token)
 }
+
+// ---- Slice 8 (WS-4): the leader-ideas sourcing readout. Idea-sourcing ONLY —
+// the live route emits, per leader, a flattened `deny` that names the reason
+// ideas are suppressed (hip stub / platform-adversarial / 7d-stop), an
+// UNHEALTHY store surfaces as storeUnhealthy + a named store deny, and the
+// panel renders every cell honest: deny verbatim, unverified as a muted badge.
+export type LeaderPlatformTrustValue = "UNVERIFIED" | "VERIFIED" | "ADVERSARIAL"
+
+export interface LeaderPlatformTrust {
+  value: LeaderPlatformTrustValue
+  at: string | null
+  by: string | null
+  evidence: string | null
+}
+
+export interface LeaderQualification {
+  verdict: "qualified" | "denied"
+  deny: string | null
+}
+
+export interface LeaderGuardCell {
+  active: boolean
+  reason: string | null
+}
+
+export interface LeaderIdeasGuard {
+  autoUnfollow: LeaderGuardCell
+  sevenDay: LeaderGuardCell
+}
+
+export type LeaderStatus = "followed" | "auto-unfollowed"
+
+export interface LeaderIdeaRow {
+  id: string
+  at: string
+  asset: string
+  direction: "long" | "short" | "spread"
+  sizeUsd: number
+  entryPrice: number
+  exitPrice: number | string | null
+  closedAt: number | string | null
+  pnlAfterCosts: number | string | null
+  feesUsd: number
+  ts: number
+}
+
+export interface LeaderIdea {
+  id: string
+  label: string
+  source: "csv" | "manual" | "hip"
+  followedAt: string | null
+  lastPositionAt: string | null
+  status: LeaderStatus
+  platformTrust: LeaderPlatformTrust
+  qualification: LeaderQualification
+  guard: LeaderIdeasGuard
+  deny: string | null
+  ideas: LeaderIdeaRow[]
+}
+
+export interface LeaderIdeasOverview {
+  ok: boolean
+  at: string
+  storeUnhealthy: boolean
+  deny: string | null
+  leaders: LeaderIdea[]
+}
+
+export function getLeaderIdeas(token?: string): Promise<LeaderIdeasOverview> {
+  return request<LeaderIdeasOverview>("/command-centre/leader-ideas", {}, token)
+}
+
+export interface ImportLeaderFeedInput {
+  label: string
+  source: "csv" | "manual"
+  payloadBase64: string
+}
+
+export function importLeaderFeed(
+  input: ImportLeaderFeedInput,
+  token?: string
+): Promise<{ ok: boolean; leaderId: string; qualification: LeaderQualification }> {
+  return post<{ ok: boolean; leaderId: string; qualification: LeaderQualification }>(
+    "/command-centre/leader-ideas/import",
+    input,
+    token
+  )
+}
+
+export function followLeader(
+  leaderId: string,
+  token?: string
+): Promise<{ ok: boolean; leaderId: string; followedAt: string | null }> {
+  return post<{ ok: boolean; leaderId: string; followedAt: string | null }>(
+    "/command-centre/leader-ideas/follow",
+    { leaderId },
+    token
+  )
+}
+
+export function setLeaderTrust(
+  leaderId: string,
+  value: LeaderPlatformTrustValue,
+  evidence: string,
+  token?: string
+): Promise<{ ok: boolean; leaderId: string; platformTrust: LeaderPlatformTrust }> {
+  return post<{ ok: boolean; leaderId: string; platformTrust: LeaderPlatformTrust }>(
+    "/command-centre/leader-ideas/trust",
+    { leaderId, value, evidence },
+    token
+  )
+}

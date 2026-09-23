@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { SignalsCard } from "@/components/TradingSuite"
 import { CommandCentrePanel } from "@/components/CommandCentrePanel"
 import { UnlockCeremony } from "@/components/UnlockCeremony"
+import { LeaderIdeasPanel } from "@/components/LeaderIdeasPanel"
 import { PerpsCommandCentre } from "@/components/PerpsCommandCentre"
 import { PatternPanel } from "@/components/PatternPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
@@ -31,6 +32,7 @@ export function CommandCentreRoom() {
       </header>
       <CommandCentrePanel />
       <UnlockCeremony />
+      <LeaderIdeasPanel />
       <PerpsCommandCentre />
       <PatternPanel />
       <AdvancedIndicatorsPanel assetId="EURUSD" timeframe="daily" />
