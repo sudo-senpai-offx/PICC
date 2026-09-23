@@ -47,6 +47,7 @@
 //   Each refusal names its rule and happens BEFORE any network call.
 import { createHash } from "node:crypto"
 import { QUOTE_EQUIVALENTS, ccxtInstanceFor } from "../ccxtOrdering.mjs"
+import { enablementFor as ceremonyEnablementFor } from "../commandCentre/ceremonyState.mjs"
 
 const EXCHANGE_ID = "hyperliquid"
 const DEFAULT_TYPE = "swap"
@@ -84,12 +85,28 @@ const MARGIN_CAP_EPSILON = 1e-8
 
 // ── mode / env resolution ──────────────────────────────────────────────────
 
+const VENUE_CLASS_HYPERLIQUID_PERPS = "hyperliquid-perps"
+
+// WS-3 R8.1: mainnet also needs the ceremony store unlock — unhealthy/absent reads LOCKED, never unlocks.
+function ceremonyUnlockForPerps() {
+  let rec
+  try {
+    rec = ceremonyEnablementFor(VENUE_CLASS_HYPERLIQUID_PERPS)
+  } catch {
+    return false
+  }
+  return rec != null && rec.unlocked === true
+}
+
 function modeOf() {
   const sandbox =
     process.env.PICC_CCXT_SANDBOX_HYPERLIQUID === "1" || process.env.PICC_CCXT_SANDBOX === "1"
   const mainnetAllowed = process.env.PICC_CCXT_PERPS_MAINNET_ENABLED === "1"
   if (!sandbox && !mainnetAllowed) return { ok: false, reason: RAIL_OFF_EXACT }
-  if (!sandbox) return { ok: false, reason: RAIL_OFF_TESTNET_ONLY }
+  if (!sandbox) {
+    if (!ceremonyUnlockForPerps()) return { ok: false, reason: RAIL_OFF_TESTNET_ONLY }
+    return { ok: true, sandbox: false }
+  }
   return { ok: true, sandbox: true }
 }
 
