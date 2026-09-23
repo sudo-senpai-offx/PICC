@@ -7,7 +7,7 @@
 - WS-2 spec: `docs/specs/PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1.md` — resolution `:280-286`; WS-2 owns the MDD day-loss/break rails; WS-4's 5% stop is display-only and must not touch them (Non-goals).
 - Scope compendium: `.superpowers/sdd/PICC_TRADING_SUITE_WS345_PIPELINE/plan.md` (WS-4 block; WS-4/5 not started — WS-3 landed `bb7bee0..bebd628`).
 
-**Status: ACTIVE** — D1–D8 ratified by owner; T0–T7 executing. Final status string set at ship (T7).
+**Status: LANDED** — D1–D8 ratified; T0–T7 landed; floor green; see §9.
 
 ---
 
@@ -249,6 +249,8 @@ Ordering edges (task → must-precede): T3←{T0,T1,T2}; T4←{T0,T2,T3}; T5←T
 
 ## §9 Resolution (owner sign-off)
 
-**Approved by owner on 2026-09-23** — D1–D8 ratified as written. Spec status flips from DRAFT to ACTIVE; T0–T7 execute in order; floor = {n} files / {n} passed, typecheck green, `verifyAudit()` green, PICC.md §10 + §23 updated. No hard conflicts in the §6 matrix — single pass, subagent-driven.
+**Approved by owner on 2026-09-23** — D1–D8 ratified as written. Spec status flips from DRAFT to ACTIVE; T0–T7 execute in order; floor = 278 files / 3102 passed + 1 honest skip (3103 total), typecheck green, `verifyAudit()` green ({ok:true, brokenAt:null, reason:null}), PICC.md §10 + §23 updated. No hard conflicts in the §6 matrix — single pass, subagent-driven.
 
-**Status (final, set at ship):** ACTIVE — (T0–T7 landed …) or per-file resolution notes appended below as tasks land.
+**Ship gate (2026-09-23, after review fix round):** security review CLEAN; code review APPROVED-WITH-FIXES → 6 fixes landed (equity-unavailable ADR-0005 deny, seam-guard env isolation, persist() health gate, updatedAt, comment collapse, spec R6.1 harmonized) + committed T6 seam guard. Serial floor re-run green (278 / 3102+1), typecheck green, `verifyAudit()` green.
+
+**Status (final, set at ship):** LANDED — T0–T7 all landed (commits 48f20e6→cf70acf) + review fix round (dbd4780, decc5a2).
