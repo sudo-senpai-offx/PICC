@@ -26,6 +26,7 @@ let entries = [] // oldest first; newest appended at the end
 let seq = 0
 let timer = null
 let started = false
+let resolveConsumer = () => {} // ceremony R3.1: per-resolved-row consumer, default no-op
 
 export function recordDecision(d) {
   if (!d || d.verdict !== "TRADE" || d.expiry == null) return null
@@ -49,6 +50,8 @@ export function recordDecision(d) {
     evRR: d.evRR ?? null,
     gates: d.gates ?? null,
     engine: d.engine ?? "legacy", // REQ-STG-1/2: which engine produced the decision (ADR-0004)
+    venueClass: d.venueClass ?? null,
+    provenance: d.provenance ?? "real", // "sim" must opt in — real is the spendable default (ceremony R2.1)
     status: "pending",
     result: null,
     entryPrice: null,
@@ -123,6 +126,11 @@ export function exitPriceFor(assetId, assetName, at) {
   return Number((covering ?? candles[candles.length - 1]).close)
 }
 
+/** Register the resolve consumer — invoked once per decided (hit/miss/push) row after each flush batch. */
+export function registerResolveConsumer(fn) {
+  resolveConsumer = fn
+}
+
 /** Flush expired pending entries. Callable directly for tests with injected io. */
 export function flushLedger({ now = Date.now(), resolve = null } = {}) {
   const resolved = []
@@ -146,6 +154,13 @@ export function flushLedger({ now = Date.now(), resolve = null } = {}) {
     e.exitPrice = price
     e.resolvedAt = now
     if (r.outcome !== "unresolved") resolved.push(e)
+  }
+  for (const e of resolved) {
+    try {
+      resolveConsumer({ entry: e, verdict: e.result })
+    } catch {
+      /* a resolve-consumer failure must never break the ledger flush */
+    }
   }
   return resolved
 }
