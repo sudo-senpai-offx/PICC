@@ -151,6 +151,12 @@ import {
 import { refreshAggregateRisk } from "./services/commandCentre/riskState.mjs"
 import { portfolioHeatUsd } from "./services/commandCentre/riskGates.mjs"
 import {
+  KNOWN_VENUE_CLASSES,
+  storeHealth as ceremonyStoreHealth,
+  platformVerification as ceremonyPlatformVerification
+} from "./services/commandCentre/ceremonyState.mjs"
+import { evaluateCeremony } from "./services/commandCentre/ceremonyGates.mjs"
+import {
   CCXT_EQUITY_STALE_MS,
   ccxtEquityLastObserved,
   observeCcxtEquity,
@@ -1590,6 +1596,53 @@ async function _handleApiInner(req, res, url, reqId) {
         now: Date.now()
       })
     )
+    return
+  }
+
+  // Command Centre (WS-3 T3) — ceremony readout. Per venue class: gate state,
+  // spendable/scale markers, enablement, platform verification, last credit,
+  // and the ledger resolver health. Honesty contract: every cell is store state
+  // or a named ceremony:deny:* reason; an UNHEALTHY store still renders per-class
+  // honest denies (ok true = the readout executed, never a silent pass).
+  if (path === "/api/command-centre/ceremony" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const healthy = ceremonyStoreHealth().ok === true
+    const platformMap = healthy ? ceremonyPlatformVerification() : {}
+    const binaryClasses =
+      platformMap && typeof platformMap === "object" && !Array.isArray(platformMap) && platformMap.locked !== true
+        ? Object.keys(platformMap)
+        : []
+    const ledgerRunning = ledgerEngineStats().running === true
+    const classes = KNOWN_VENUE_CLASSES.map((venueClass) => {
+      const e = evaluateCeremony(venueClass)
+      const enablement =
+        e.enablement && typeof e.enablement === "object" && e.enablement.unlocked === true
+          ? { unlocked: true, at: e.enablement.at ?? null, by: e.enablement.by ?? null }
+          : null
+      const platformVerification =
+        e.platformVerification && typeof e.platformVerification === "object" && e.platformVerification.verified === true
+          ? {
+              verified: true,
+              at: e.platformVerification.at ?? null,
+              by: e.platformVerification.by ?? null,
+              regulator: e.platformVerification.regulator ?? null,
+              payoutFloorPct: e.platformVerification.payoutFloorPct ?? null,
+              withdrawalTested: e.platformVerification.withdrawalTested === true
+            }
+          : null
+      return {
+        venueClass,
+        spendableResolved: e.spendableResolved,
+        scaleResolved: e.scaleResolved,
+        gates: e.gates.map((g) => ({ id: g.id, pass: g.pass === true, reason: g.reason ?? null })),
+        enablement,
+        binaryOptions: binaryClasses.includes(venueClass),
+        platformVerification,
+        lastCreditAt: e.lastCreditAt,
+        ledgerRunning
+      }
+    })
+    writeJson(res, 200, { ok: true, at: new Date().toISOString(), classes })
     return
   }
 

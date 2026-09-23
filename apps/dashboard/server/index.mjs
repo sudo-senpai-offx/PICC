@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import { isApiRequest, handleApi, writeJson, SECURITY_HEADERS } from "./handlers.mjs"
 import { startScheduler, startLivenessMonitor } from "./services/scheduler.mjs"
 import { startLedger } from "./services/accuracyLedger.mjs"
+import "./services/commandCentre/ceremonyState.mjs" // WS-3 R3.1: ceremony store self-wires the resolve consumer at boot (credit path live in prod)
 import { log } from "./logger.mjs"
 import { initErrorLog } from "./errorLog.mjs"
 import { startSignalEngine, stopSignalEngine } from "./services/signalEngine.mjs"
