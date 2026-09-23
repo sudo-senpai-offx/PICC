@@ -1534,6 +1534,46 @@ export function setCommandCentreKillSwitch(
   return post(`/command-centre/kill-switch`, { scope, kill }, token)
 }
 
+// ---- Slice 7 (WS-3): the unlock-ceremony readout. Every class cell renders
+// what the server reports — a deny gate carries its `ceremony:deny:*` reason
+// verbatim, and absent/errored data renders "not-wired", never a silent pass.
+export interface CeremonyGate {
+  id: string
+  pass: boolean
+  reason: string | null
+}
+
+export interface CeremonyPlatformVerification {
+  verified: boolean
+  at: string
+  by: string
+  regulator: string
+  payoutFloorPct: number
+  withdrawalTested: boolean
+}
+
+export interface CeremonyClassState {
+  venueClass: string
+  spendableResolved: number | null
+  scaleResolved: number | null
+  gates: CeremonyGate[]
+  enablement: { unlocked: boolean; at: string | null; by: string | null } | null
+  binaryOptions: boolean
+  platformVerification: CeremonyPlatformVerification | null
+  lastCreditAt: string | null
+  ledgerRunning: boolean
+}
+
+export interface CeremonyOverview {
+  ok: boolean
+  at: string
+  classes: CeremonyClassState[]
+}
+
+export function getCeremonyOverview(token?: string): Promise<CeremonyOverview> {
+  return request<CeremonyOverview>("/command-centre/ceremony", {}, token)
+}
+
 // ---- Slice 6: the CCXT order rail (trading:ccxt). One proposal rail, TWO
 // carriers: carrier A ("Execute via PICC") runs the full gate at click time and
 // only then reaches the venue; carrier B ("I placed it — verify") verifies the

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { SignalsCard } from "@/components/TradingSuite"
 import { CommandCentrePanel } from "@/components/CommandCentrePanel"
+import { UnlockCeremony } from "@/components/UnlockCeremony"
 import { PerpsCommandCentre } from "@/components/PerpsCommandCentre"
 import { PatternPanel } from "@/components/PatternPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
@@ -29,6 +30,7 @@ export function CommandCentreRoom() {
         <p className="muted small">Execution command — signals, chart patterns and advanced indicators.</p>
       </header>
       <CommandCentrePanel />
+      <UnlockCeremony />
       <PerpsCommandCentre />
       <PatternPanel />
       <AdvancedIndicatorsPanel assetId="EURUSD" timeframe="daily" />
