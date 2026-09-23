@@ -1585,6 +1585,7 @@ async function _handleApiInner(req, res, url, reqId) {
         killState: killSwitchState(),
         feeds,
         execution,
+        riskFeed: observeRiskFeed(),
         stream: stream || undefined,
         now: Date.now()
       })

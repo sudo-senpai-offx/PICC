@@ -256,6 +256,7 @@ export function CommandCentrePanel({ reviewSeconds = 5 }: { reviewSeconds?: numb
               GLOBAL KILL ACTIVE — every site below is BLOCKED until the human rearms
             </div>
           )}
+          {overview.risk && <AggregateRiskStrip risk={overview.risk} />}
           {overview.sites.map((site) => (
             <SiteCard key={site.site} site={site} globalKill={globalKill} onToggleKill={toggleKill} />
           ))}
@@ -374,6 +375,32 @@ function SiteCard({
           </span>
         ))}
       </div>
+    </div>
+  )
+}
+
+function AggregateRiskStrip({ risk }: { risk: NonNullable<CommandCentreOverview["risk"]> }) {
+  const cells = [
+    risk.dayLossPct === null ? "day loss n/a" : `day loss ${risk.dayLossPct}%`,
+    risk.drawdownFromPeakPct === null ? "drawdown n/a" : `drawdown ${risk.drawdownFromPeakPct}%`,
+    risk.portfolioHeatUsd === null ? "heat n/a" : `heat $${risk.portfolioHeatUsd}`,
+    risk.halted ? `halted: ${risk.halted.trip}` : "not halted"
+  ]
+  const note =
+    risk.reason ??
+    (risk.unobservable.length > 0
+      ? `unobservable: ${risk.unobservable.map((u) => `${u.venue} (${u.reason})`).join(", ")}`
+      : null)
+  return (
+    <div
+      style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11, padding: "6px 0", borderTop: "1px solid var(--border)", alignItems: "center" }}
+      aria-label="aggregate risk strip"
+    >
+      <span style={{ fontWeight: 600 }}>Aggregate risk</span>
+      {cells.map((c) => (
+        <span key={c} className="muted small" title={note ?? undefined}>{c}</span>
+      ))}
+      {note && <span className="muted small" title={note}>{note}</span>}
     </div>
   )
 }

@@ -183,14 +183,34 @@ describe("N config — env, config, then default 5 (R7.1/§3.8)", () => {
     expect(gate.ok).toBe(false)
   })
 
-  it("an invalid env N fails loudly, never silently falls back", () => {
+  it("an invalid env N is an honest-fail gate naming it, never a throw and never a silent fallback", () => {
     process.env.PICC_V32_PILLAR_MIN = "six"
-    expect(() => evaluatePillarGate({ pillars: FIVE })).toThrow(/PICC_V32_PILLAR_MIN/)
-    expect(resolvePillarMin).toThrow(/PICC_V32_PILLAR_MIN/)
+    const gate = evaluatePillarGate({ pillars: FIVE })
+    expect(gate.ok).toBe(false)
+    expect(gate.agreed).toBe(0)
+    expect(gate.needed).toBe(0)
+    expect(gate.rows).toEqual([expect.objectContaining({ id: "config", label: "Pillar minimum", available: false, agrees: false })])
+    expect(gate.rows[0].reason).toContain("invalid-environment")
+    expect(gate.rows[0].reason).toContain("PICC_V32_PILLAR_MIN")
+    const resolved = resolvePillarMin({ env: process.env })
+    expect(resolved.ok).toBe(false)
+    expect(resolved.reason).toContain("PICC_V32_PILLAR_MIN")
   })
 
-  it("an invalid config N fails loudly", () => {
-    expect(() => evaluatePillarGate({ pillars: FIVE, v32Config: { pillarMin: 0 } })).toThrow(/pillarMin/)
+  it("an invalid config N is an honest-fail gate naming v32Config.pillarMin", () => {
+    const gate = evaluatePillarGate({ pillars: FIVE, v32Config: { pillarMin: 0 } })
+    expect(gate.ok).toBe(false)
+    expect(gate.agreed).toBe(0)
+    expect(gate.needed).toBe(0)
+    expect(gate.rows[0].reason).toContain("invalid-environment")
+    expect(gate.rows[0].reason).toContain("v32Config.pillarMin")
+  })
+
+  it("an invalid explicit min is an honest-fail gate naming the min argument", () => {
+    const gate = evaluatePillarGate({ pillars: FIVE, min: 1.5 })
+    expect(gate.ok).toBe(false)
+    expect(gate.rows[0].reason).toContain("invalid-environment")
+    expect(gate.rows[0].reason).toContain("min")
   })
 })
 

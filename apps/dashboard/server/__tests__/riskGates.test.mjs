@@ -264,7 +264,7 @@ describe("gate 16's trip reaches the T4 seam (AC-3 / R1.5)", () => {
       expect(sidecar.crossSiteHaltState()).toEqual(persisted.globalHalt)
       expect(haltStore.haltSnapshot().globalHalt).toEqual(persisted.globalHalt)
 
-      const gate2 = sidecar.evaluateGate({ template: templateForSite("trading:ccxt"), proposal: greenSidecarProposal(), state: greenSidecarState() })
+      const gate2 = sidecar.evaluateGate({ template: templateForSite("trading:ccxt"), proposal: greenSidecarProposal(), state: greenSidecarState({ now: NOW }) })
       expect(gate2.allow).toBe(false)
       expect(gate2.blockedBy).toBe("cross-site-day-halt")
 
@@ -516,6 +516,47 @@ describe("gate 19 risk-portfolio-heat + portfolioHeatUsd (AC-6 / R3)", () => {
     expect(r.blockedBy).toBe("risk-portfolio-heat")
     expect(r.reason).toContain("invalid-environment")
     expect(r.reason).toContain("PICC_RISK_PORTFOLIO_HEAT_CAP_USD")
+  })
+})
+
+describe("gate 19 reduce-only close carve-out (owner decision: a close may pass when the POST-CLOSE heat is within reason)", () => {
+  test("over-cap heat + a reduce-only close whose projected heat (current minus closing margin) is at/below the cap → allow", () => {
+    const { events, audit } = collectAudit()
+    const r = evaluateRiskGate({
+      template,
+      proposal: greenProposal({ action: "perps:close-order", reduceOnly: true }),
+      observation: observationFor(synthAggregate(), heatOf(32)),
+      closing: { perpsMarginUsd: 5, spotNotionalUsd: null },
+      audit
+    })
+    expect(r.allow).toBe(true)
+    expect(r.blockedBy).toBeNull()
+    expect(r.reason).toContain("projected")
+    expect(r.reason).toContain("27")
+    expect(events.find((e) => e.kind === "safety-gate:allow").data.blockedBy).toBeNull()
+  })
+
+  test("over-cap heat + an OPEN proposal still denies naming sources (no carve-out for new exposure)", () => {
+    const r = evaluateRiskGate({ template, proposal: greenProposal(), observation: observationFor(synthAggregate(), heatOf(32)) })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("risk-portfolio-heat")
+    expect(r.reason).toContain("32")
+    expect(r.reason).toContain("ccxt-perps-positions.json")
+    expect(r.reason).toContain("audit:proposalOrdersFromAudit")
+  })
+
+  test("over-cap heat + a reduce-only close that does NOT bring heat under the cap → still denies (the close is not reducing heat)", () => {
+    const r = evaluateRiskGate({
+      template,
+      proposal: greenProposal({ action: "perps:close-order", reduceOnly: true }),
+      observation: observationFor(synthAggregate(), heatOf(35)),
+      closing: { perpsMarginUsd: 2, spotNotionalUsd: null }
+    })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("risk-portfolio-heat")
+    expect(r.reason).toContain("projected")
+    expect(r.reason).toContain("33")
+    expect(r.reason).toContain("not reducing")
   })
 })
 

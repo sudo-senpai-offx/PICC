@@ -12,6 +12,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { composeCommandCentreOverview } from "../services/commandCentre/commandCentreOverview.mjs"
+
 function makeReq(method, url, body, headers = {}) {
   const raw = body !== undefined ? JSON.stringify(body) : null
   return {
@@ -294,5 +296,106 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     expect(fresh.status).toBe("not-wired")
     const envelope = perps.gates.find((g) => g.gate === "envelope-within-ceiling")
     expect(envelope.status).toBe("pass")
+  })
+
+  it("M4: the overview passes the risk block through (empty tmp dir → unobservable honest-fail)", async () => {
+    const res = await call(handleApi, "GET", "/api/command-centre/overview")
+    expect(res.body.risk).not.toBeNull()
+    expect(res.body.risk.dayLossPct).toBeNull()
+    expect(res.body.risk.drawdownFromPeakPct).toBeNull()
+    expect(res.body.risk.portfolioHeatUsd).toBeNull()
+    expect(res.body.risk.unobservable.length).toBeGreaterThan(0)
+    expect(typeof res.body.risk.reason).toBe("string")
+    expect(typeof res.body.risk.at).toBe("string")
+  })
+
+  it("M4: seeded spot + perps stores → an OBSERVED risk block (finite loss, no unobservable, honest reason null)", async () => {
+    const today = new Date().toISOString()
+    const day = today.slice(0, 10)
+    writeFileSync(
+      join(dir, "ccxt-equity.json"),
+      JSON.stringify({ hyperliquid: { exchange: "hyperliquid", dayKey: day, at: today, equityUsd: 94, dayStartEquityUsd: 100 } })
+    )
+    writeFileSync(
+      join(dir, "ccxt-perps-risk.json"),
+      JSON.stringify({
+        version: 1,
+        equityUsd: 100,
+        equityAt: today,
+        runningPeakUsd: 100,
+        peakAt: today,
+        drawdownFromPeakPct: 0,
+        dayKey: day,
+        dayStartEquityUsd: 100,
+        dayLossPct: 0,
+        halted: null
+      })
+    )
+    await rebootHandlers()
+    const res = await call(handleApi, "GET", "/api/command-centre/overview")
+    expect(res.body.risk).not.toBeNull()
+    expect(Number.isFinite(res.body.risk.dayLossPct)).toBe(true)
+    expect(res.body.risk.dayLossPct).toBeGreaterThan(0)
+    expect(Number.isFinite(res.body.risk.drawdownFromPeakPct)).toBe(true)
+    expect(res.body.risk.unobservable).toEqual([])
+    expect(res.body.risk.reason).toBeNull()
+    expect(res.body.risk.at).toBeDefined()
+  })
+})
+
+// M4 — the additive aggregate-risk cell: the composer emits an honest risk
+// block from observeRiskFeed-shaped input (route-level pass-through lives in
+// the slice-4 suite above, sharing its hermetic handleApi/dir fixtures).
+describe("M4 aggregate-risk composer (additive)", () => {
+  const now = Date.UTC(2026, 8, 22, 12, 0, 0)
+  const observedFeed = {
+    risk: {
+      ok: true,
+      aggregate: { dayKey: "2026-09-22", dayLossPct: 6.03, drawdownFromPeakPct: 12, halted: null, unobservable: [] },
+      venues: {},
+      unobservable: []
+    },
+    heat: { usd: 30, sources: ["ccxt-perps-positions.json"] }
+  }
+
+  it("no riskFeed → risk null (the cell is not-wired, never invented)", () => {
+    const out = composeCommandCentreOverview({ now })
+    expect(out.ok).toBe(true)
+    expect(out.risk).toBeNull()
+  })
+
+  it("an observed feed emits day loss / drawdown / heat / halt untouched", () => {
+    const out = composeCommandCentreOverview({ riskFeed: observedFeed, now })
+    expect(out.risk).toMatchObject({
+      dayLossPct: 6.03,
+      drawdownFromPeakPct: 12,
+      portfolioHeatUsd: 30,
+      halted: null,
+      unobservable: [],
+      reason: null,
+      at: "2026-09-22T12:00:00.000Z"
+    })
+  })
+
+  it("an unobservable portfolio is reported unobservable — nulls, never zeros", () => {
+    const out = composeCommandCentreOverview({
+      riskFeed: {
+        risk: {
+          ok: false,
+          aggregate: null,
+          venues: {},
+          unobservable: [{ venue: "hyperliquid:perps", reason: "ccxt-perps-risk-store-unreadable: missing" }],
+          reason: "ccxt-perps-risk-store-unreadable: missing"
+        },
+        heat: { usd: null, reason: "ccxt-perps-positions.json unreadable" }
+      },
+      now
+    })
+    expect(out.risk.dayLossPct).toBeNull()
+    expect(out.risk.drawdownFromPeakPct).toBeNull()
+    expect(out.risk.portfolioHeatUsd).toBeNull()
+    expect(out.risk.halted).toBeNull()
+    expect(out.risk.unobservable.map((u) => u.venue)).toEqual(["hyperliquid:perps"])
+    expect(out.risk.reason).toContain("ccxt-perps-risk-store-unreadable")
   })
 })

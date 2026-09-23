@@ -43,6 +43,9 @@ const VALID_STREAMS = ["trading"]
  *               envelope (5D) + rationale (5F) cells + opt-in note composed
  *               from OBSERVED execution state; sites without one stay
  *               "not-wired" (never a silent OK).
+ * riskFeed:     { risk, heat } from observeRiskFeed() — the aggregate risk +
+ *               portfolio heat observed by the enforcement rail; null means
+ *               the cell is not-wired (never invented).
  * stream:       optional "trading" — filters the rows
  */
 export function composeCommandCentreOverview({
@@ -54,6 +57,7 @@ export function composeCommandCentreOverview({
   killState = { global: false, sites: {} },
   feeds = {},
   execution = {},
+  riskFeed = null,
   stream,
   now = Date.now()
 } = {}) {
@@ -63,6 +67,29 @@ export function composeCommandCentreOverview({
   const kill = { global: killState?.global === true, sites: killState?.sites ?? {} }
   const siteKilled = (site) => kill.global || kill.sites[site] === true
   const haltToday = !!haltState && haltState.dayKey === dayKeyOf(now)
+
+  const aggregateRisk = riskFeed != null && typeof riskFeed === "object" && riskFeed.risk != null ? riskFeed.risk : null
+  const risk =
+    riskFeed != null && typeof riskFeed === "object"
+      ? {
+          dayLossPct:
+            aggregateRisk?.ok && Number.isFinite(Number(aggregateRisk.aggregate?.dayLossPct))
+              ? aggregateRisk.aggregate.dayLossPct
+              : null,
+          drawdownFromPeakPct:
+            aggregateRisk?.ok && Number.isFinite(Number(aggregateRisk.aggregate?.drawdownFromPeakPct))
+              ? aggregateRisk.aggregate.drawdownFromPeakPct
+              : null,
+          halted:
+            aggregateRisk?.ok && aggregateRisk.aggregate?.halted
+              ? { trip: aggregateRisk.aggregate.halted.trip, at: aggregateRisk.aggregate.halted.at, note: aggregateRisk.aggregate.halted.note ?? null }
+              : null,
+          portfolioHeatUsd: Number.isFinite(Number(riskFeed.heat?.usd)) ? riskFeed.heat.usd : null,
+          unobservable: Array.isArray(aggregateRisk?.unobservable) ? aggregateRisk.unobservable : [],
+          reason: aggregateRisk?.ok ? null : (aggregateRisk?.reason ?? "aggregate risk unobservable"),
+          at: new Date(now).toISOString()
+        }
+      : null
 
   const rows = sites
     .map((site) => templateForSite(site))
@@ -295,6 +322,7 @@ export function composeCommandCentreOverview({
     at: new Date(now).toISOString(),
     stream: stream ?? "all",
     killSwitch: kill,
+    risk,
     sites: rows
   }
 }

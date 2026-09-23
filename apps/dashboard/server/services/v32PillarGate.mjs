@@ -18,9 +18,9 @@ const NOT_SUPPLIED_REASON = "pillar input not supplied"
 
 function validMin(v, name) {
   if (!Number.isInteger(v) || v < 1) {
-    throw new TypeError(`${name}: expected a positive integer, got ${JSON.stringify(v)}`)
+    return { ok: false, varName: name, raw: String(v), reason: `invalid-environment: ${name}: expected a positive integer, got ${JSON.stringify(v)}` }
   }
-  return v
+  return { ok: true, value: v }
 }
 
 export function resolvePillarMin({ min = null, v32Config = {}, env = process.env } = {}) {
@@ -30,7 +30,7 @@ export function resolvePillarMin({ min = null, v32Config = {}, env = process.env
     return validMin(Number(envRaw), `PICC_V32_PILLAR_MIN "${String(envRaw)}"`)
   }
   if (v32Config?.pillarMin != null) return validMin(v32Config.pillarMin, "v32Config.pillarMin")
-  return PILLAR_MIN_DEFAULT
+  return { ok: true, value: PILLAR_MIN_DEFAULT }
 }
 
 function rowFor(id, label, desc) {
@@ -74,7 +74,16 @@ function oscillatorRow(group) {
 }
 
 export function evaluatePillarGate({ pillars = null, min = null, v32Config = {}, env = process.env } = {}) {
-  const needed = resolvePillarMin({ min, v32Config, env })
+  const resolved = resolvePillarMin({ min, v32Config, env })
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      agreed: 0,
+      needed: 0,
+      rows: [{ id: "config", label: "Pillar minimum", available: false, agrees: false, reason: resolved.reason }]
+    }
+  }
+  const needed = resolved.value
   const src = pillars != null && typeof pillars === "object" && !Array.isArray(pillars) ? pillars : {}
   const rows = []
   for (const { id, label } of PILLAR_META) {

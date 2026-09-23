@@ -427,7 +427,7 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 
 ---
 
-## §10 Specs Registry (33 spec/note files in `docs/specs/`)
+## §10 Specs Registry (33 files in `docs/specs/`; 37 registry rows)
 
 > Statuses are as stamped in each spec header, cross-checked **2026-09-19** (older-spec resolution
 > pass: every non-trading-logic spec received a `Resolution:` disposition). Checkboxes inside specs

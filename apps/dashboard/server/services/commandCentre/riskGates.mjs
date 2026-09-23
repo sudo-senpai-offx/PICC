@@ -116,7 +116,7 @@ export function portfolioHeatUsd({ audits = null, dataDir: dirOverride = null } 
  * observation.risk = refreshAggregateRisk result (fresh aggregate contract);
  * observation.heat = portfolioHeatUsd result or a plain usd number.
  */
-export function evaluateRiskGate({ template, proposal, observation = {}, audit = null, now = Date.now() } = {}) {
+export function evaluateRiskGate({ template, proposal, observation = {}, closing = null, audit = null, now = Date.now() } = {}) {
   const site = template?.site ?? "unknown"
   const risk = observation?.risk ?? {}
   const aggregate = risk.aggregate ?? observation?.aggregate ?? null
@@ -225,21 +225,40 @@ export function evaluateRiskGate({ template, proposal, observation = {}, audit =
     )
   }
   const portHeat = Number(heatUsd)
-  if (portHeat > heatEnv.value) {
+  const closeCredit =
+    reduceOnly && closing && typeof closing === "object"
+      ? {
+          perps: Number.isFinite(Number(closing.perpsMarginUsd)) ? Number(closing.perpsMarginUsd) : null,
+          spot: Number.isFinite(Number(closing.spotNotionalUsd)) ? Number(closing.spotNotionalUsd) : null
+        }
+      : null
+  const heatProjected =
+    closeCredit && (closeCredit.perps !== null || closeCredit.spot !== null)
+      ? round2(Math.max(0, portHeat - (closeCredit.perps ?? 0) - (closeCredit.spot ?? 0)))
+      : portHeat
+  if (heatProjected > heatEnv.value) {
     const perpsPart = heatIn != null && typeof heatIn === "object" ? heatIn.perpsMarginUsd : null
     const spotPart = heatIn != null && typeof heatIn === "object" ? heatIn.spotNotionalUsd : null
     const parts = perpsPart != null || spotPart != null ? ` (perps margin $${perpsPart}, spot open notional $${spotPart})` : ""
+    const closeNote =
+      closeCredit && heatProjected !== portHeat
+        ? ` — the reduce-only close removes $${round2(portHeat - heatProjected)} of heat but is projected at $${heatProjected}: not reducing below the cap`
+        : ""
     return block(
       "risk-portfolio-heat",
-      `portfolio heat $${portHeat} > cap $${heatEnv.value} (${heatEnv.varName}) — sources: ${heatSources.join(", ")}${parts}`
+      `portfolio heat $${portHeat} > cap $${heatEnv.value} (${heatEnv.varName}) — sources: ${heatSources.join(", ")}${parts}${closeNote}`
     )
   }
 
   const adjustLine = adjustment
     ? ` — mddAdjusted: exposure within step ceiling (drawdown ${adjustment.drawdownFromPeakPct}%, sizeStepFactor ${adjustment.sizeStepFactor}, cap $${adjustment.capUsd})`
     : ""
+  const closeLine =
+    closeCredit && heatProjected !== portHeat
+      ? ` — reduce-only close: portfolio heat projected $${heatProjected} post-close (from current $${portHeat})`
+      : ""
   const extra = adjustment
     ? { mddAdjusted: true, sizeStepFactor: adjustment.sizeStepFactor, ceilingUsd: adjustment.ceilingUsd, capUsd: adjustment.capUsd }
     : {}
-  return allow("risk-portfolio-heat", `risk gates 16-19 passed for ${action} on ${site}${adjustLine}`, extra)
+  return allow("risk-portfolio-heat", `risk gates 16-19 passed for ${action} on ${site}${adjustLine}${closeLine}`, extra)
 }

@@ -607,9 +607,17 @@ export async function executePerpsClose({
   }
   // WS-2 gates 16-19 also guard the close click: reduceOnly skips gates 17/18,
   // but the aggregate day-loss and portfolio-heat gates still apply before the
-  // sidecar-10 re-run inside executeProposal.
+  // sidecar-10 re-run inside executeProposal. The durable position being closed
+  // is passed as the closing credit so gate 19 can evaluate the POST-CLOSE heat.
   const riskObservation = await resolveRiskObservation({ injected: observation ? { risk: observation.risk, heat: observation.heat } : null, now })
-  const riskGate = evaluateRiskGate({ template, proposal, observation: riskObservation, audit, now })
+  const riskGate = evaluateRiskGate({
+    template,
+    proposal,
+    observation: riskObservation,
+    closing: { perpsMarginUsd: position?.marginUsd, spotNotionalUsd: null },
+    audit,
+    now
+  })
   if (!riskGate.allow) {
     return { ok: false, gate: riskGate, perpsGate, riskGate, execution: null, clientOrderId, idempotencyKey: proposalKey, proposal, blockedBy: riskGate.blockedBy }
   }

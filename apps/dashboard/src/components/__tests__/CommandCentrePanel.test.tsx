@@ -48,6 +48,15 @@ const overview = {
   at: "2026-09-05T00:00:00.000Z",
   stream: "trading",
   killSwitch: { global: false, sites: {} },
+  risk: {
+    dayLossPct: 6.03,
+    drawdownFromPeakPct: 12,
+    halted: null,
+    portfolioHeatUsd: 30,
+    unobservable: [],
+    reason: null,
+    at: "2026-09-05T00:00:00.000Z"
+  },
   sites: [
     {
       site: "trading:ccxt",
@@ -119,6 +128,23 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
     expect(text).toContain("not-decided")
     expect(text).toContain("not-yet-available")
     expect(text).toContain("not-wired")
+    // the aggregate-risk strip renders what the server observed (M4 cell)
+    expect(text).toContain("Aggregate risk")
+    expect(text).toContain("day loss 6.03%")
+    expect(text).toContain("drawdown 12%")
+    expect(text).toContain("heat $30")
+    expect(text).toContain("not halted")
+    m.unmount()
+  })
+
+  it("renders no aggregate-risk strip when the server reports risk not-wired (null)", async () => {
+    stubFetch({ ...overview, risk: null })
+    const m = mount(<CommandCentrePanel />)
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+    const text = m.host.textContent ?? ""
+    expect(text).not.toContain("Aggregate risk")
+    expect(text).not.toContain("day loss 6.03%")
     m.unmount()
   })
 

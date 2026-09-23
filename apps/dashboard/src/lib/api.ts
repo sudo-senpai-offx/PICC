@@ -1498,11 +1498,22 @@ export interface CommandCentreSite {
   gates: CommandCentreGate[]
 }
 
+export interface CommandCentreAggregateRisk {
+  dayLossPct: number | null
+  drawdownFromPeakPct: number | null
+  halted: { trip: string; at: string; note: string | null } | null
+  portfolioHeatUsd: number | null
+  unobservable: { venue: string; reason: string }[]
+  reason: string | null
+  at: string
+}
+
 export interface CommandCentreOverview {
   ok: boolean
   at: string
   stream: string
   killSwitch: { global: boolean; sites: Record<string, boolean> }
+  risk: CommandCentreAggregateRisk | null
   sites: CommandCentreSite[]
 }
 
