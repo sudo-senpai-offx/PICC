@@ -1567,6 +1567,8 @@ export interface CeremonyClassState {
 export interface CeremonyOverview {
   ok: boolean
   at: string
+  scaleMinResolves?: number | null
+  scaleEnvError?: string | null
   classes: CeremonyClassState[]
 }
 

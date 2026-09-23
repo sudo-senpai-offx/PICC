@@ -13,9 +13,9 @@
 //       ONLY way the branch proceeds.
 //   (c) the gate floors resolve from ceremonyGates ENV_DEFAULTS with env UNSET:
 //       gate1 300, gate3 streak 50 + ratio band [0.7, 1.3], gate4 30 trading
-//       days, binary payout floor 85. PICC_CEREMONY_SCALE_MIN_RESOLVES is NOT
-//       read by any server gate (scaleResolved is a pure readout) — the 500
-//       floor lives in UnlockCeremony.tsx (`scale >= 500`) and is source-pinned.
+//       days, binary payout floor 85. PICC_CEREMONY_SCALE_MIN_RESOLVES is a
+//       server-read READOUT-ONLY knob: emitted as scaleMinResolves on the route
+//       payload and consumed by UnlockCeremony.tsx — never an unlock gate.
 //   (d) MS-3 floor sanity — on a fully-passing binary class the four core gate
 //       ids + the platform id appear EXACTLY once each, in order; a non-binary
 //       class carries exactly the four core ids and never a platform entry.
@@ -31,6 +31,7 @@ const RAIL_OFF_TESTNET_ONLY =
 
 const CEREMONY_ENV = [
   "PICC_CEREMONY_GATE1_MIN_RESOLVES",
+  "PICC_CEREMONY_SCALE_MIN_RESOLVES",
   "PICC_CEREMONY_GATE3_STREAK",
   "PICC_CEREMONY_GATE3_RATIO_LO",
   "PICC_CEREMONY_GATE3_RATIO_HI",
@@ -249,10 +250,9 @@ describe("WS-3 validation & unlock ceremony seam guard (T8 no-regression)", () =
     expect(ex.calls.loadMarkets).toBe(1)
   })
 
-  it("(b) source pin — hyperliquidPerps.mjs:57 (RAIL_OFF_TESTNET_ONLY) unchanged and still reachable via the ceremony seam", () => {
+  it("(b) source pin — hyperliquidPerps.mjs RAIL_OFF_TESTNET_ONLY unchanged and still reachable via the ceremony seam", () => {
     const src = source("../services/venues/hyperliquidPerps.mjs")
-    const lines = src.split("\n")
-    expect(lines[56]).toBe("const RAIL_OFF_TESTNET_ONLY =")
+    expect(src.split("\n").find((l) => /^const RAIL_OFF_TESTNET_ONLY =$/.test(l))).toBe("const RAIL_OFF_TESTNET_ONLY =")
     expect(src).toContain(RAIL_OFF_TESTNET_ONLY)
     expect(src).toContain("enablementFor as ceremonyEnablementFor")
   })
@@ -285,10 +285,16 @@ describe("WS-3 validation & unlock ceremony seam guard (T8 no-regression)", () =
     expect(gates.ceremonyGate4({ tradingDays: Array.from({ length: 30 }, (_, i) => `d${i}`) }).pass).toBe(true)
   })
 
-  it("(c) PICC_CEREMONY_SCALE_MIN_RESOLVES has no server-side gate — the 500 floor is a client readout pinned at UnlockCeremony.tsx", () => {
+  it("(c) PICC_CEREMONY_SCALE_MIN_RESOLVES is a server-read READOUT-ONLY knob — emitted as scaleMinResolves, consumed by the UI, never an unlock gate", async () => {
+    const gatesSrc = source("../services/commandCentre/ceremonyGates.mjs")
+    expect(gatesSrc).toContain("PICC_CEREMONY_SCALE_MIN_RESOLVES")
+    const gates = await import("../services/commandCentre/ceremonyGates.mjs")
+    expect(gates.ceremonyScaleReadout()).toEqual({ ok: true, value: 500 })
     const ui = source("../../src/components/UnlockCeremony.tsx")
-    expect(ui).toContain("scale >= 500")
-    expect(ui).toContain("(< 500)")
+    expect(ui).toContain("scaleMinResolves")
+    expect(ui).toContain("scale not-wired")
+    const res = gates.evaluateCeremony("ccxt-crypto")
+    expect(res.gates.some((g) => g.id.includes("scale"))).toBe(false)
   })
 
   it("(d) MS-3 floor sanity — a passing binary class yields the four core ids + the platform id EXACTLY once each, in order", async () => {

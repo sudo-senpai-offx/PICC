@@ -125,7 +125,7 @@ describe("WS-3 ceremony venue unlock — hyperliquidPerps.mjs:modeOf additive ma
     expect(res).toEqual({ ok: false, reason: RAIL_OFF_EXACT })
   })
 
-  it("env REQUEST + fixture store unlocked ⇒ mainnet proceeds (fixture ccxt reached only after the gate passes)", async () => {
+  it("env REQUEST + fixture store unlocked ⇒ mainnet proceeds AND the constructed instance honors the resolved mode (sandbox OFF)", async () => {
     writeFileSync(join(dir, "ceremony-state.json"), fixtureStore(UNLOCKED_PERPS))
     process.env.PICC_CCXT_PERPS_MAINNET_ENABLED = "1"
     const { adapter, ex } = await freshAdapter(true)
@@ -134,6 +134,9 @@ describe("WS-3 ceremony venue unlock — hyperliquidPerps.mjs:modeOf additive ma
     expect(rows.length).toBeGreaterThan(0)
     expect(rows[0].type).toBe("swap")
     expect(ex.calls.loadMarkets).toBe(1)
+    // the swap instance targets mainnet: sandbox resolution off — no setSandboxMode(true)
+    expect(ex.calls.setSandboxMode).toBe(0)
+    expect(ex.sandbox).toBe(false)
   })
 
   it("sandbox flag present wins over BOTH env REQUEST and the store unlock (sandbox instance resolved)", async () => {

@@ -52,10 +52,13 @@ const classState = (overrides: Partial<CeremonyClassState>): CeremonyClassState 
   ...overrides
 })
 
-const overview = (classes: CeremonyClassState[]): CeremonyOverview => ({
+const overview = (classes: CeremonyClassState[], overrides: Partial<CeremonyOverview> = {}): CeremonyOverview => ({
   ok: true,
   at: "2026-09-23T00:00:00.000Z",
-  classes
+  scaleMinResolves: 500,
+  scaleEnvError: null,
+  classes,
+  ...overrides
 })
 
 afterEach(() => {
@@ -94,7 +97,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
     m.unmount()
   })
 
-  it("shows the spendable count and the scale 500+ marker once scaleResolved reaches 500", async () => {
+  it("shows the spendable count and the scale 500+ marker once scaleResolved reaches the default 500 floor", async () => {
     stubFetch(overview([
       classState({ venueClass: "hyperliquid-perps", spendableResolved: 318, scaleResolved: 512 })
     ]))
@@ -104,6 +107,56 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
     expect(text).toContain("hyperliquid-perps")
     expect(text).toContain("spendable 318")
     expect(text).toContain("scale 500+ reached")
+    m.unmount()
+  })
+
+  it("renders the scale marker off the server-emitted scaleMinResolves floor, not a hardcoded 500", async () => {
+    stubFetch(overview([classState({ venueClass: "ccxt-crypto", scaleResolved: 512 })], { scaleMinResolves: 600 }))
+    const m = mount(<UnlockCeremony />)
+    await settle()
+    const below = m.host.textContent ?? ""
+    expect(below).toContain("scale 512 (< 600)")
+    expect(below).not.toContain("scale 500+ reached")
+    m.unmount()
+
+    stubFetch(overview([classState({ venueClass: "ccxt-crypto", scaleResolved: 650 })], { scaleMinResolves: 600 }))
+    const m2 = mount(<UnlockCeremony />)
+    await settle()
+    expect(m2.host.textContent).toContain("scale 600+ reached")
+    m2.unmount()
+  })
+
+  it("an invalid scale knob renders the named invalid-environment honesty cell (scale not-wired), never a fabricated floor", async () => {
+    stubFetch(
+      overview([classState({ venueClass: "ccxt-crypto", scaleResolved: 512 })], {
+        scaleMinResolves: null,
+        scaleEnvError: "invalid-environment: PICC_CEREMONY_SCALE_MIN_RESOLVES=abc"
+      })
+    )
+    const m = mount(<UnlockCeremony />)
+    await settle()
+    const text = m.host.textContent ?? ""
+    expect(text).toContain("scale not-wired — invalid-environment: PICC_CEREMONY_SCALE_MIN_RESOLVES=abc")
+    expect(text).not.toContain("scale 500+ reached")
+    m.unmount()
+  })
+
+  it("renders the derived ledger-stale deny (gate-ledger-health) with its verbatim reason when the resolve loop is stopped", async () => {
+    stubFetch(overview([
+      classState({
+        venueClass: "ccxt-crypto",
+        ledgerRunning: false,
+        gates: [gate("gate-ledger-health", false, "ceremony:deny:ledger-stale")]
+      })
+    ]))
+    const m = mount(<UnlockCeremony />)
+    await settle()
+    const text = m.host.textContent ?? ""
+    expect(text).toContain("gate-ledger-health")
+    expect(text).toContain("ceremony:deny:ledger-stale")
+    expect(text).not.toContain("pass")
+    const dangerBadge = m.host.querySelector("span.badge-danger")
+    expect(dangerBadge?.textContent).toContain("gate-ledger-health")
     m.unmount()
   })
 

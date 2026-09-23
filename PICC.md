@@ -939,7 +939,7 @@ view · O replay mode.
 
 **2026-09-22 — WS-2 (docs/specs/PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1) landed** — risk gates 16–19, aggregate day-loss, MDD size-step/hard-stop, portfolio heat, halt persistence, consent payload-lock, spread seam fail-closed, 5-of-7 pillar gate. Source-level seam guard: `apps/dashboard/server/__tests__/ws2RiskSeamGuard.test.mjs`; full floor + typecheck pending controller run.
 
-**2026-09-24 — WS-3 (docs/specs/PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1) landed** — persistent ceremony store (unlock state, binary-class, ceremony gate-1 stake wallet), ledger provenance seam, trading-day primitives, gate evaluators, readout route, perps mainnet branch gated on the store. Source-level seam guard: `apps/dashboard/server/__tests__/ws3CeremonySeamGuard.test.mjs`; full floor + typecheck green. Perps mainnet unlock is NOT claimed venue-live — it requires the owner ceremony flip.
+**2026-09-23 — WS-3 (docs/specs/PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1) landed** — persistent ceremony store (unlock state, binary-class, ceremony gate-1 stake wallet), ledger provenance seam, trading-day primitives, gate evaluators, readout route, perps mainnet branch gated on the store. Source-level seam guard: `apps/dashboard/server/__tests__/ws3CeremonySeamGuard.test.mjs`; full floor + typecheck green. Perps mainnet unlock is NOT claimed venue-live — it requires the owner ceremony flip.
 
 ---
 

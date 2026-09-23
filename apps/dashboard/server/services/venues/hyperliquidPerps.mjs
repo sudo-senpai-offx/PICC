@@ -3,16 +3,18 @@
 //
 // NON-NEGOTIABLE SEAM RULE: createOrder is reached ONLY through the ordering
 // seam's SWAP instance — `ccxtInstanceFor("hyperliquid", { requireKeys: true,
-// defaultType: "swap", sandbox: true })`. Never `new ccxt...`, never
+// defaultType: "swap", sandbox: <mode-resolved> })`. Never `new ccxt...`, never
 // `placeCcxtOrder` (that is the spot leg). The T9 guard test asserts this at
 // source level.
 //
-// MODE (testnet-first, R2.1/R6.2): resolved once per call from env. A method
-// proceeds ONLY when sandbox is on; mainnet enablement alone is still refused
-// (WS-1 is testnet-only until the WS-3 ceremony). Because every proceeding
-// call therefore has sandbox resolved, the seam ALWAYS gets `{ sandbox: true }`
-// and applies `setSandboxMode(true)` at instance construction — before any
-// order can exist (echoing ccxtOrdering.mjs:176-188).
+// MODE (testnet-first → WS-3 R8.1): resolved once per call from env. A method
+// proceeds when sandbox is on, or — mainnet — ONLY when BOTH the env REQUEST
+// (PICC_CCXT_PERPS_MAINNET_ENABLED=1) AND the ceremony store unlock agree
+// (sandbox off otherwise refuses with RAIL_OFF_TESTNET_ONLY). swapInstance
+// builds the seam instance from the resolved mode's sandbox flag, so a genuinely
+// unlocked mainnet branch targets LIVE endpoints (setSandboxMode is applied only
+// when sandbox is true, and only before any order can exist — echoing
+// ccxtOrdering.mjs:177-187).
 //
 // riskModel SHAPE DECISION: `riskModel` is a lazy GETTER on the adapter object.
 // Each property access re-reads the env and rebuilds the 7-field object, so
@@ -153,7 +155,12 @@ function riskModelFrom(p) {
 // ── instance + markets (the ONLY path to the venue) ────────────────────────
 
 async function swapInstance() {
-  return ccxtInstanceFor(EXCHANGE_ID, { requireKeys: true, defaultType: DEFAULT_TYPE, sandbox: true })
+  // WS-3 R8.1: the seam honors the resolved mode — mainnet (sandbox off) only
+  // when env REQUEST + store unlock agree AND no sandbox flag is on; a refused
+  // mode still builds sandbox (fail-safe, never a silent mainnet call).
+  const mode = modeOf()
+  const sandbox = mode.ok ? mode.sandbox !== false : true
+  return ccxtInstanceFor(EXCHANGE_ID, { requireKeys: true, defaultType: DEFAULT_TYPE, sandbox })
 }
 
 let marketsPromise = null

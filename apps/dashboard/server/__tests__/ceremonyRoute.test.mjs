@@ -116,10 +116,14 @@ describe("Command Centre ceremony route (WS-3 T3)", () => {
 
   it("returns the T7 contract per class: gates + spendable + scale marker + enablement + platformVerification + ledgerRunning", async () => {
     await seed()
+    const ledger = await import("../services/accuracyLedger.mjs")
+    ledger.startLedger() // healthy-running loop → the four core gate ids, no ledger-stale
     const res = await call(handleApi, "GET", "/api/command-centre/ceremony")
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
     expect(typeof res.body.at).toBe("string")
+    expect(res.body.scaleMinResolves).toBe(500) // PICC_CEREMONY_SCALE_MIN_RESOLVES default read at call time
+    expect(res.body.scaleEnvError).toBeNull()
     expect(res.body.classes.map((c) => c.venueClass)).toEqual(["ccxt-crypto", "hyperliquid-perps", "expertoption"])
 
     const ccxt = res.body.classes.find((c) => c.venueClass === "ccxt-crypto")
@@ -152,6 +156,8 @@ describe("Command Centre ceremony route (WS-3 T3)", () => {
 
   it("binaryOptions is true for the fixture binary class and its platform gate / record render honestly", async () => {
     await seed()
+    const ledger = await import("../services/accuracyLedger.mjs")
+    ledger.startLedger() // healthy-running loop → gate-1 shortfall is the honest deny, not ledger-stale
     const res = await call(handleApi, "GET", "/api/command-centre/ceremony")
     const expert = res.body.classes.find((c) => c.venueClass === "expertoption")
     const ccxt = res.body.classes.find((c) => c.venueClass === "ccxt-crypto")
@@ -165,15 +171,54 @@ describe("Command Centre ceremony route (WS-3 T3)", () => {
     expect(expert.gates[0].reason).toBe("ceremony:deny:gate1-short (have 0, require 300)")
   })
 
-  it("ledgerRunning false is surfaced (ceremony:deny:ledger-stale signal) and true once the resolve loop starts", async () => {
+  it("ledgerRunning false surfaces ceremony:deny:ledger-stale (gate-ledger-health) — R9.1, never a silent all-pass; true once the loop starts", async () => {
     await seed()
     let res = await call(handleApi, "GET", "/api/command-centre/ceremony")
-    for (const c of res.body.classes) expect(c.ledgerRunning).toBe(false)
+    for (const c of res.body.classes) {
+      expect(c.ledgerRunning).toBe(false)
+      expect(c.gates).toHaveLength(1)
+      expect(c.gates[0].id).toBe("gate-ledger-health")
+      expect(c.gates[0].pass).toBe(false)
+      expect(c.gates[0].reason).toBe("ceremony:deny:ledger-stale")
+    }
 
     const ledger = await import("../services/accuracyLedger.mjs")
     ledger.startLedger()
     res = await call(handleApi, "GET", "/api/command-centre/ceremony")
-    for (const c of res.body.classes) expect(c.ledgerRunning).toBe(true)
+    for (const c of res.body.classes) {
+      expect(c.ledgerRunning).toBe(true)
+      // healthy-running loop → the stale gate disappears; the seeded class passes all four
+      expect(c.gates.some((g) => g.id === "gate-ledger-health")).toBe(false)
+    }
+    const ccxt = res.body.classes.find((c) => c.venueClass === "ccxt-crypto")
+    expect(ccxt.gates.map((g) => g.id)).toEqual([
+      "gate1-constitution-300",
+      "gate2-flip-gate-100",
+      "gate3-streak-50-ratio",
+      "gate4-trading-days-30"
+    ])
+    expect(ccxt.gates.every((g) => g.pass === true)).toBe(true)
+  })
+
+  it("scale knob is read at call time — a custom PICC_CEREMONY_SCALE_MIN_RESOLVES is emitted as scaleMinResolves", async () => {
+    await seed()
+    process.env.PICC_CEREMONY_SCALE_MIN_RESOLVES = "600"
+    const res = await call(handleApi, "GET", "/api/command-centre/ceremony")
+    expect(res.status).toBe(200)
+    expect(res.body.scaleMinResolves).toBe(600)
+    expect(res.body.scaleEnvError).toBeNull()
+    delete process.env.PICC_CEREMONY_SCALE_MIN_RESOLVES
+  })
+
+  it("invalid scale knob is a named invalid-environment readout, not a gate and not a silent floor — still 200", async () => {
+    await seed()
+    process.env.PICC_CEREMONY_SCALE_MIN_RESOLVES = "abc"
+    const res = await call(handleApi, "GET", "/api/command-centre/ceremony")
+    expect(res.status).toBe(200)
+    expect(res.body.scaleMinResolves).toBeNull()
+    expect(res.body.scaleEnvError).toBe("invalid-environment: PICC_CEREMONY_SCALE_MIN_RESOLVES=abc")
+    expect(res.body.classes[0].gates.some((g) => g.id.includes("scale"))).toBe(false)
+    delete process.env.PICC_CEREMONY_SCALE_MIN_RESOLVES
   })
 
   it("overview route payload stays byte-identical across the ceremony readout", async () => {

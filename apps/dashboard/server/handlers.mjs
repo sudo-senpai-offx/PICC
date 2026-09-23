@@ -155,7 +155,7 @@ import {
   storeHealth as ceremonyStoreHealth,
   platformVerification as ceremonyPlatformVerification
 } from "./services/commandCentre/ceremonyState.mjs"
-import { evaluateCeremony } from "./services/commandCentre/ceremonyGates.mjs"
+import { ceremonyScaleReadout, evaluateCeremony } from "./services/commandCentre/ceremonyGates.mjs"
 import {
   CCXT_EQUITY_STALE_MS,
   ccxtEquityLastObserved,
@@ -1613,8 +1613,11 @@ async function _handleApiInner(req, res, url, reqId) {
         ? Object.keys(platformMap)
         : []
     const ledgerRunning = ledgerEngineStats().running === true
+    const scale = ceremonyScaleReadout()
+    const scaleMinResolves = scale.ok ? scale.value : null
+    const scaleEnvError = scale.ok ? null : `invalid-environment: ${scale.varName}=${scale.raw}`
     const classes = KNOWN_VENUE_CLASSES.map((venueClass) => {
-      const e = evaluateCeremony(venueClass)
+      const e = evaluateCeremony(venueClass, { ledgerRunning })
       const enablement =
         e.enablement && typeof e.enablement === "object" && e.enablement.unlocked === true
           ? { unlocked: true, at: e.enablement.at ?? null, by: e.enablement.by ?? null }
@@ -1642,7 +1645,7 @@ async function _handleApiInner(req, res, url, reqId) {
         ledgerRunning
       }
     })
-    writeJson(res, 200, { ok: true, at: new Date().toISOString(), classes })
+    writeJson(res, 200, { ok: true, at: new Date().toISOString(), scaleMinResolves, scaleEnvError, classes })
     return
   }
 

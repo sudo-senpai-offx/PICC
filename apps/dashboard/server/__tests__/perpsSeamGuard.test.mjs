@@ -10,7 +10,9 @@
 //   - services/ccxtOrdering.mjs:246 — `placeCcxtOrder`'s spot leg (sanctioned).
 //   - services/venues/hyperliquidPerps.mjs:331 — `submitOrder` on the swap
 //     instance produced by swapInstance() = ccxtInstanceFor("hyperliquid",
-//     { requireKeys: true, defaultType: "swap", sandbox: true }) (:133-135).
+//     { requireKeys: true, defaultType: "swap", sandbox }) where sandbox is
+//     mode-resolved (WS-3 R8.1; sandbox:true under testnet, false only under
+//     env-REQUEST + ceremony-unlocked mainnet) (:133-135).
 // READ_ONLY_BLOCKED (ccxtConnector.mjs:33-66) is asserted untouched so every
 // non-seam module stays read-only; the audit-trail export pins keep the
 // floor's rail suites meaningful without duplicating their integrity checks.
@@ -140,10 +142,12 @@ describe("WS-1 perps live-order seam guard (T9 no-regression)", () => {
     expect(src.match(/new ccxt/g) ?? []).toHaveLength(1)
     expect(src.match(/placeCcxtOrder/g) ?? []).toHaveLength(1)
     // Swap-type pin (T2's id:type cache-key rule): the instance call passes
-    // defaultType + sandbox, beating the spot defaults in ccxtOrdering.mjs.
+    // defaultType + mode-resolved sandbox, beating the spot defaults in
+    // ccxtOrdering.mjs (see `sandbox})` shorthand at the seam call).
     expect(src).toContain('DEFAULT_TYPE = "swap"')
     expect(src).toContain("defaultType: DEFAULT_TYPE")
-    expect(src).toMatch(/sandbox:\s*true/)
+    expect(src).toContain("defaultType: DEFAULT_TYPE, sandbox })")
+    expect(src).toMatch(/\bsandbox = mode\.ok \? mode\.sandbox !== false : true/)
   })
 
   it("audit trail module still exports the rail wiring (appendAudit + verifyAudit)", () => {

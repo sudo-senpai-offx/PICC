@@ -5,6 +5,7 @@ import { flipGate } from "../constitution.mjs"
 
 const ENV_DEFAULTS = Object.freeze({
   PICC_CEREMONY_GATE1_MIN_RESOLVES: 300,
+  PICC_CEREMONY_SCALE_MIN_RESOLVES: 500,
   PICC_CEREMONY_GATE3_STREAK: 50,
   PICC_CEREMONY_GATE3_RATIO_LO: 0.7,
   PICC_CEREMONY_GATE3_RATIO_HI: 1.3,
@@ -24,6 +25,14 @@ function envNumber(name) {
 const asCount = (v) => {
   const n = Number(v)
   return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+// R9.3/D7 — the scale tier is a READOUT-ONLY marker, never a gate. Honesty: an
+// invalid value is surfaced as invalid-environment on the payload (scaleMinResolves
+// null + the named reason), never a silent fallback to a wrong floor.
+export function ceremonyScaleReadout() {
+  const env = envNumber("PICC_CEREMONY_SCALE_MIN_RESOLVES")
+  return env.ok ? { ok: true, value: env.value } : { ok: false, varName: env.varName, raw: env.raw }
 }
 
 export function ceremonyGate1(storeClass = {}) {
@@ -130,7 +139,7 @@ const EMPTY_CLASS = Object.freeze({
   tradingDays: []
 })
 
-export function evaluateCeremony(venueClass) {
+export function evaluateCeremony(venueClass, { ledgerRunning = true } = {}) {
   if (ceremonyState.storeHealth().ok !== true) {
     const reason = "ceremony:deny:store-unhealthy"
     const gates = GATE_IDS.map((id) => ({ id, pass: false, reason }))
@@ -147,6 +156,21 @@ export function evaluateCeremony(venueClass) {
   }
   const cls = ceremonyState.classState(venueClass) ?? { ...EMPTY_CLASS }
   const platformMap = ceremonyState.platformVerification()
+  // R9.1 — a dead resolve loop must surface, never a silent all-pass. The route
+  // observes loop health (`ledgerEngineStats().running`); when it reports not
+  // running, a synthesized gate-ledger-health deny stops the readout immediately.
+  if (ledgerRunning === false) {
+    return {
+      venueClass,
+      gates: [{ id: "gate-ledger-health", pass: false, reason: "ceremony:deny:ledger-stale" }],
+      spendableResolved: cls.spendableResolved,
+      scaleResolved: cls.spendableResolved,
+      enablement: ceremonyState.enablementFor(venueClass),
+      platformVerification: platformMap[venueClass] ?? null,
+      lastCreditAt: cls.lastCreditAt,
+      ok: false
+    }
+  }
   const gates = []
   const finish = (ok) => ({
     venueClass,

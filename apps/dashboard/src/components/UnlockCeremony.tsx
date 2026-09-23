@@ -30,6 +30,8 @@ export function UnlockCeremony() {
 
   let body: React.ReactNode
   const classes = data?.classes
+  const scaleFloor = data?.scaleMinResolves ?? 500
+  const scaleError = data?.scaleEnvError ?? null
   if (error) {
     body = (
       <div className="muted small" aria-label="ceremony honesty">
@@ -37,7 +39,9 @@ export function UnlockCeremony() {
       </div>
     )
   } else if (classes && classes.length > 0) {
-    body = classes.map((cls) => <ClassCard key={cls.venueClass} cls={cls} />)
+    body = classes.map((cls) => (
+      <ClassCard key={cls.venueClass} cls={cls} scaleFloor={scaleFloor} scaleError={scaleError} />
+    ))
   } else if (data) {
     body = (
       <div className="muted small" aria-label="ceremony honesty">
@@ -56,7 +60,15 @@ export function UnlockCeremony() {
   )
 }
 
-function ClassCard({ cls }: { cls: CeremonyClassState }) {
+function ClassCard({
+  cls,
+  scaleFloor,
+  scaleError
+}: {
+  cls: CeremonyClassState
+  scaleFloor: number
+  scaleError: string | null
+}) {
   const unlocked = cls.enablement?.unlocked === true
   const hasGates = Array.isArray(cls.gates) && cls.gates.length > 0
   return (
@@ -78,7 +90,7 @@ function ClassCard({ cls }: { cls: CeremonyClassState }) {
         <span className="muted small">
           {cls.spendableResolved == null ? "spendable not-wired" : `spendable ${cls.spendableResolved}`}
         </span>
-        <span className="muted small">{scaleCell(cls.scaleResolved)}</span>
+        <span className="muted small">{scaleCell(cls.scaleResolved, scaleFloor, scaleError)}</span>
         {unlocked && (
           <span className="muted small">· by {cls.enablement?.by ?? "unknown"}</span>
         )}
@@ -102,10 +114,11 @@ function ClassCard({ cls }: { cls: CeremonyClassState }) {
   )
 }
 
-function scaleCell(scale: number | null): string {
+function scaleCell(scale: number | null, floor: number, scaleError: string | null): string {
+  if (scaleError) return `scale not-wired — ${scaleError}`
   if (scale == null) return "scale not-wired"
-  if (scale >= 500) return "scale 500+ reached"
-  return `scale ${scale} (< 500)`
+  if (scale >= floor) return `scale ${floor}+ reached`
+  return `scale ${scale} (< ${floor})`
 }
 
 function GateRow({ gate }: { gate: CeremonyGate }) {
