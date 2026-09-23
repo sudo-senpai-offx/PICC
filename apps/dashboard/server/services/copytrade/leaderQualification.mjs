@@ -1,9 +1,4 @@
-// WS-4 F3 — leader qualification (WS-4 R4.1 / R4.2). Pure qualifier over
-// analytics.metricsFrom — one call, no re-implementation of MDD or expectancy.
-// Verdict qualified iff trades >= 300 AND maxDrawdown < 15 AND expectancy > 0 on
-// net-of-costs rows; every shortfall is a verbatim-stable named deny, first-deny
-// wins (order: trades, mdd, expectancy). The qualifier trusts the importer's R2.1
-// row contract (costs already accounted for); it never writes anything.
+// WS-4 F3 — pure qualifier over analytics.metricsFrom; verifies 300 trades / <15% MDD / +ve expectancy after costs.
 
 import { metricsFrom } from "../analytics.mjs"
 

@@ -1,10 +1,4 @@
-// WS-4 F4 — CSV/JSON importer (WS-4 R3.2 / R3.3). Parse → validate rows against
-// the R2.1 shape → reject feeds that do not account costs (they can never
-// qualify) → run qualification → write the store + audit leader:import:{id}.
-// An import NEVER sets platformTrust and NEVER marks anything followed; unknown
-// asset ids and malformed rows are named denies, never silent skips. The 64 MB
-// payload cap is enforced at the route (readBodyMax), not here.
-
+// WS-4 F4 — CSV/JSON importer: cost-accounting is enforced here — never sets trust/followedAt (R3.3).
 import { validateFeedRows } from "./leaderFeedContract.mjs"
 import { qualifyLeader } from "./leaderQualification.mjs"
 import { importLeaderRecord } from "../commandCentre/leaderIdeasState.mjs"

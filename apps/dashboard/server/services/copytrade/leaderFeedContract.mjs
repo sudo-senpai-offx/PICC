@@ -1,11 +1,4 @@
-// WS-4 F2 — leader-feed contract + registry (WS-4 R2.1/R2.2). Mirrors
-// venueAdapterContract.mjs:1-25: a frozen CONTRACT_MEMBERS shape, validate
-// helper, and a shared Map registry. provenance (hip|csv|manual) is a
-// first-class lane discriminator. HIP is a contract-verified STUB (D8): its
-// fetches always resolve to the exact leader:deny:hip-not-wired — endpoint
-// contract unverified reason — the feed lane is registered but not wired to
-// any live client.
-
+// WS-4 F2 — leader-feed contract + registry (provenance lanes; HIP stub denies by contract).
 export const CONTRACT_MEMBERS = Object.freeze([
   ["id", "string"],
   ["label", "string"],

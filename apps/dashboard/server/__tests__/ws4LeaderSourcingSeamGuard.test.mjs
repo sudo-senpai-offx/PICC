@@ -79,7 +79,11 @@ let dir
 beforeEach(() => {
   for (const v of NO_ENV) delete process.env[v]
   dir = mkdtempSync(join(tmpdir(), "picc-ws4-seam-"))
+  process.env.PICC_AUTH_DATA_DIR = dir
+  process.env.PICC_ACCOUNT_METRICS_DATA_DIR = dir
+  process.env.PICC_CAPTURE_CONFIG_DATA_DIR = dir
   process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
+  process.env.PICC_DATA_DIR = dir
   vi.resetModules()
 })
 

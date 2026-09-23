@@ -100,6 +100,23 @@ describe("Command Centre leader-ideas routes (WS-4 T4)", () => {
     process.env.PICC_CAPTURE_CONFIG_DATA_DIR = dir
     process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
     process.env.PICC_DATA_DIR = dir
+    writeFileSync(
+      join(dir, "ccxt-risk-aggregate.json"),
+      JSON.stringify({
+        version: 1,
+        dayKey: "2026-09-23",
+        dayStartEquityUsd: 1000,
+        equityUsd: 1000,
+        dayLossPct: 0,
+        runningPeakUsd: 1000,
+        peakAt: null,
+        drawdownFromPeakPct: 0,
+        halted: null,
+        venues: {},
+        unobservable: []
+      }),
+      "utf8"
+    )
     vi.resetModules()
     store = await import("../services/commandCentre/leaderIdeasState.mjs")
     seed()
@@ -162,11 +179,27 @@ describe("Command Centre leader-ideas routes (WS-4 T4)", () => {
     expect(fresh.platformTrust.value).toBe("VERIFIED")
     expect(fresh.qualification).toEqual({ verdict: "qualified", deny: null })
     expect(fresh.guard.autoUnfollow).toEqual({ active: false, reason: null })
+    expect(fresh.guard.sevenDay).toEqual({ active: false, reason: null })
     expect(fresh.deny).toBeNull()
     expect(fresh.ideas).toHaveLength(2)
     const stale = res.body.leaders.find((l) => l.id === "leader-stalled")
     expect(stale.status).toBe("auto-unfollowed")
     expect(stale.guard.autoUnfollow).toEqual({ active: true, reason: "leader:auto-unfollow:no-positions-21d" })
+  })
+
+  it("absent aggregate equity is an honest leader:deny:equity-unavailable on the readout — never a silent no-stop", async () => {
+    rmSync(join(dir, "ccxt-risk-aggregate.json"), { force: true })
+    vi.resetModules()
+    store = await import("../services/commandCentre/leaderIdeasState.mjs")
+    handleApi = (await import("../handlers.mjs")).handleApi
+    store = await import("../services/commandCentre/leaderIdeasState.mjs")
+    const res = await call(handleApi, "GET", "/api/command-centre/leader-ideas")
+    const fresh = res.body.leaders.find((l) => l.id === "leader-qualified")
+    expect(fresh.guard.sevenDay).toEqual({
+      active: true,
+      reason: "leader:deny:equity-unavailable"
+    })
+    expect(fresh.ideas).toEqual([])
   })
 
   it("ADVERSARIAL platform trust suppresses ideas with leader:deny:platform-adversarial (no GO)", async () => {

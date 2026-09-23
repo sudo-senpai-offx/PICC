@@ -72,14 +72,12 @@ test("sevenDayStop: trailing-7d pnl breaching 5% of equity → suppressed rows +
   expect(r.reason).toBe("leader:idea-suppressed:7d-stop")
   expect(r.lossPct).toBe(6)
   expect(r.windowDays).toBe(7)
-  expect(r.suppressed).toHaveLength(2)
 })
 
 test("sevenDayStop: pnl exactly at the 5% floor is a breach (≥ floor)", () => {
   const r = sevenDayStop([idea(-50, isoOf(1))], 1000, { now: NOW })
   expect(r.active).toBe(true)
   expect(r.lossPct).toBe(5)
-  expect(r.suppressed).toHaveLength(1)
 })
 
 test("sevenDayStop: a recovered window surfaces the rows again (no suppression, no reason)", () => {
@@ -87,7 +85,6 @@ test("sevenDayStop: a recovered window surfaces the rows again (no suppression, 
   const r = sevenDayStop(ideas, 1000, { now: NOW })
   expect(r.active).toBe(false)
   expect(r.reason).toBeNull()
-  expect(r.suppressed).toEqual([])
   // the 8-day-old loss is not in the trailing window (window start = 6 days ago)
   expect(r.lossPct).toBe(2)
 })
@@ -98,9 +95,17 @@ test("sevenDayStop: rows older than the 7-UTC-day window never count", () => {
   expect(r.active).toBe(false)
 })
 
-test("sevenDayStop: unknown/zero equity cannot breach → not active, no silent pass", () => {
-  expect(sevenDayStop([idea(-60, isoOf(1))], null, { now: NOW }).active).toBe(false)
-  expect(sevenDayStop([idea(-60, isoOf(1))], 0, { now: NOW }).active).toBe(false)
+test("sevenDayStop: unknown/zero equity is a named leader:deny:equity-unavailable — never a silent no-stop", () => {
+  for (const equity of [null, undefined, 0, -5, NaN, "abc"]) {
+    const r = sevenDayStop([idea(-60, isoOf(1))], equity, { now: NOW })
+    expect(r).toEqual({
+      active: true,
+      reason: "leader:deny:equity-unavailable",
+      pnlSum: null,
+      lossPct: null,
+      windowDays: 7
+    })
+  }
   expect(sevenDayStop(null, 1000, { now: NOW }).active).toBe(false)
 })
 

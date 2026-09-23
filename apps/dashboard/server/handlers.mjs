@@ -1707,12 +1707,7 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
-  // Command Centre (WS-4 T4) — leader-ideas readout. Per leader: status, trust,
-  // qualification, on-read guards (auto-unfollow + 7-day stop) and the surfaced
-  // idea rows. Honesty contract: every cell is store state or a named
-  // leader:deny:* reason; an UNHEALTHY store still renders a named
-  // store-unhealthy deny — never a silent all-pass (ok true = the readout
-  // executed). GET is read-only: it never writes the store file.
+  // Command Centre (WS-4) — leader-ideas readout: cell = state or named deny; GET never writes.
   if (path === "/api/command-centre/leader-ideas" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
     const healthy = leaderIdeasStoreHealth().ok === true
@@ -1753,8 +1748,7 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
-  // Command Centre (WS-4 T4) — follow. Only after a qualified import; sets
-  // followedAt = now (human-flips-last-switch). Auth + audited by the store.
+  // Command Centre (WS-4) — follow: only after a qualified import; human-flips-last-switch.
   if (path === "/api/command-centre/leader-ideas/follow" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return true
     const leaderId = typeof body?.leaderId === "string" ? body.leaderId.trim() : ""
@@ -1771,9 +1765,7 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
-  // Command Centre (WS-4 T4) — platform trust. An operator store-write only
-  // (VERIFIED | ADVERSARIAL) with an evidence index; UNVERIFIED is a silent
-  // no-op. Auth + audited by the store.
+  // Command Centre (WS-4) — platform trust: operator store-write only; evidence-gated.
   if (path === "/api/command-centre/leader-ideas/trust" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return true
     const userId = (await verifyUser(req.headers.authorization)) ?? "operator"

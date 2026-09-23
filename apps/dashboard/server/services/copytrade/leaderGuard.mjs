@@ -1,13 +1,4 @@
-// WS-4 F5 — leader on-read guards (WS-4 R5.1 / R6.1 / AC-5). Pure display/feed
-// guards evaluated at readout compose — no sweeper loop (D4). autoUnfollow:
-// a leader with no position since > PICC_LEADER_AUTO_UNFOLLOW_DAYS (default 21)
-// UTC days reads as status auto-unfollowed (reason leader:auto-unfollow:
-// no-positions-21d). sevenDayStop: trailing-7-UTC-day sum of pnlAfterCosts on
-// closed ideas vs equity breaches/floors PICC_LEADER_7D_STOP_PCT (default 5) →
-// suppressed rows + leader:idea-suppressed:7d-stop until the window recovers.
-// A bad env value is a named leader:deny:invalid-environment — never a silent
-// pass. This is a display guard only: WS-4 has no execution path.
-
+// WS-4 F5 — pure on-read guards (R5/R6); display-only — WS-4 has no execution path.
 import { dayKeyOf } from "../u4faRisk.mjs"
 
 const DAY_MS = 86400000
@@ -47,8 +38,16 @@ export function sevenDayStop(ideas, equityUsd, { now = Date.now() } = {}) {
       reason: `leader:deny:invalid-environment (PICC_LEADER_7D_STOP_PCT=${env.raw})`,
       pnlSum: null,
       lossPct: null,
-      windowDays: 7,
-      suppressed: []
+      windowDays: 7
+    }
+  }
+  if (typeof equityUsd !== "number" || !Number.isFinite(equityUsd) || equityUsd <= 0) {
+    return {
+      active: true,
+      reason: "leader:deny:equity-unavailable",
+      pnlSum: null,
+      lossPct: null,
+      windowDays: 7
     }
   }
   const today = utcDayStart(dayKeyOf(now))
@@ -59,14 +58,13 @@ export function sevenDayStop(ideas, equityUsd, { now = Date.now() } = {}) {
     return t >= windowStart && t <= today
   })
   const pnlSum = round2(inWindow.reduce((a, r) => a + Number(r.pnlAfterCosts ?? 0), 0))
-  const lossPct = typeof equityUsd === "number" && equityUsd > 0 && pnlSum < 0 ? round2((-pnlSum / equityUsd) * 100) : 0
+  const lossPct = pnlSum < 0 ? round2((-pnlSum / equityUsd) * 100) : 0
   const active = lossPct >= env.value
   return {
     active,
     reason: active ? "leader:idea-suppressed:7d-stop" : null,
     pnlSum,
     lossPct,
-    windowDays: 7,
-    suppressed: active ? inWindow.map((r) => ({ ...r })) : []
+    windowDays: 7
   }
 }

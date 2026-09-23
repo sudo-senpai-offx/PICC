@@ -74,7 +74,7 @@ Each requirement names its task(s). "Testable" = has an acceptance criterion in 
 - R5.2 The transition persists on the next store mutation (import/follow/trust), not silently on read.
 
 ### R6 — 5% rolling-7-day account stop (idea-sourcing display guard) — T6
-- R6.1 Pure `sevenDayStop(ideas, equityUsd, now)`: trailing 7 UTC days (`dayKeyOf` windows), sum of `pnlAfterCosts` on closed idea rows vs account equity; breach or would-breach the `PICC_LEADER_7D_STOP_PCT` (default 5) floor → the readout surfaces the stop AND suppresses new idea rows for that leader with reason `leader:idea-suppressed:7d-stop` until the window recovers.
+- R6.1 Pure `sevenDayStop(ideas, equityUsd, now)`: trailing 7 UTC days (`dayKeyOf` windows), sum of `pnlAfterCosts` on closed idea rows vs account equity; breach or would-breach the `PICC_LEADER_7D_STOP_PCT` (default 5) floor → the readout surfaces the stop AND zeroes the surfaced idea rows for that leader (`ideas: []`) with reason `leader:idea-suppressed:7d-stop` until the window recovers. Unavailable equity (no finite positive `equityUsd`) → named `leader:deny:equity-unavailable` (ADR-0005 — un-evaluable cell never reads as a silent no-stop).
 - R6.2 This is a DISPLAY/feed-suppression guard on the research surface only. **It is not a WS-2 risk rail**: gates 16–19, sidecar 1–10, perps 11–15, and the aggregate day-loss barrier are untouched (pinned by T6 seam guard). WS-4 has no execution path, so the stop has no trade teeth by construction.
 
 ### R7 — Platform trust flag (v3.4 Part-A platform-verification gate, operationalized per leader-source) — T0/T5

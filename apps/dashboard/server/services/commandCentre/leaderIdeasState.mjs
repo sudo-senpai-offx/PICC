@@ -1,10 +1,4 @@
-// WS-4 F1 — leader follower store (WS-4 R1.1 / R1.2). Persistent command-centre
-// truth for the copy-trading follower set: same boot/persist/VITEST convention as
-// ceremonyState/riskState (PICC_COMMAND_CENTRE_DATA_DIR, version 1, boot health,
-// canTouchDisk). Mutations are write-through and audited (leader:*). Honesty
-// contract: an unreadable or version-≠1 store is UNHEALTHY and refuses every
-// mutation — a broken store never looks like "no leaders / all clear".
-
+// WS-4 F1 — follower store: honest persisted truth (broken store never reads as all-clear).
 import { appendAudit } from "./auditTrail.mjs"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -88,7 +82,7 @@ function loadFromDisk() {
 }
 
 function persist() {
-  if (!canTouchDisk()) return
+  if (!canTouchDisk() || health.ok !== true) return
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(LEADER_FILE, JSON.stringify(store, null, 2), "utf8")
 }
@@ -157,6 +151,7 @@ export function followLeader(id, { now = Date.now(), audit = appendAudit } = {})
   if (rec.qualification.verdict !== "qualified") return deny(DENY.notQualified)
   if (typeof rec.followedAt === "string") return { ok: true, record: clone(rec) }
   rec.followedAt = iso(now)
+  rec.updatedAt = iso(now)
   persist()
   audit({ kind: `leader:follow:${id}`, data: { leaderId: id, at: rec.followedAt } })
   return { ok: true, record: clone(rec) }
@@ -177,6 +172,7 @@ export function setPlatformTrust(
   if (typeof evidence !== "string" || evidence.length === 0) return deny(DENY.trustEvidenceRequired)
   const at = iso(now)
   rec.platformTrust = { value, at, by, evidence }
+  rec.updatedAt = iso(now)
   persist()
   audit({ kind: `leader:trust:${id}`, data: { leaderId: id, value, by, evidence, at } })
   return { ok: true, platformTrust: { ...rec.platformTrust } }
