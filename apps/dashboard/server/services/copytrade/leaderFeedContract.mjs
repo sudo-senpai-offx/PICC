@@ -2,8 +2,9 @@
 // venueAdapterContract.mjs:1-25: a frozen CONTRACT_MEMBERS shape, validate
 // helper, and a shared Map registry. provenance (hip|csv|manual) is a
 // first-class lane discriminator. HIP is a contract-verified STUB (D8): its
-// fetches always resolve to the exact leader:deny:hip-not-wired reason — the
-// feed lane is registered but not wired to any live client.
+// fetches always resolve to the exact leader:deny:hip-not-wired — endpoint
+// contract unverified reason — the feed lane is registered but not wired to
+// any live client.
 
 export const CONTRACT_MEMBERS = Object.freeze([
   ["id", "string"],
@@ -29,7 +30,7 @@ export const FEED_ROW_REQUIRED = Object.freeze([
 const FEED_ROW_NULLABLE = Object.freeze(["exitPrice", "closedAt", "pnlAfterCosts"])
 const DIRECTIONS = Object.freeze(["long", "short", "spread"])
 
-export const HIP_NOT_WIRED = "leader:deny:hip-not-wired"
+export const HIP_NOT_WIRED = "leader:deny:hip-not-wired — endpoint contract unverified"
 
 export const registry = new Map()
 

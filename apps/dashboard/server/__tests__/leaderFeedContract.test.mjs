@@ -110,9 +110,9 @@ describe("leader feed contract (F2)", () => {
     expect(leaderFeedFor("hip")).toBe(hipStub)
     const ideas = await hipStub.fetchIdeas("leader-x")
     expect(ideas).toEqual({ feed: [], deny: HIP_NOT_WIRED })
-    expect(ideas.deny).toBe("leader:deny:hip-not-wired")
+    expect(ideas.deny).toBe("leader:deny:hip-not-wired — endpoint contract unverified")
     const positions = await hipStub.fetchPositions("leader-x")
-    expect(positions.deny).toBe("leader:deny:hip-not-wired")
+    expect(positions.deny).toBe("leader:deny:hip-not-wired — endpoint contract unverified")
   })
 
   test("validateFeedRows accepts a well-formed R2.1 row (nullable closedAt/exitPrice/pnlAfterCosts tolerated)", () => {
