@@ -237,8 +237,8 @@ function expectancyOf(rows, engine, payout = 82) {
  * expectancy ≥ the legacy path's in the same window. Equality counts as a flip
  * (new cost-adjusted expectancy ≥ old, per REQ-STG-3/ADR-0004); underperformance
  * or insufficient counting on EITHER side holds legacy. `reason` is stable and
- * greppable. The ~2–4-week soak elapse is an external time condition (checked by
- * the operator), not a numeric gate here.
+ * greppable. The ~2–4-week soak elapse is enforced by the WS-3 ceremony (gate 4,
+ * trading-day window), not a numeric gate here.
  */
 export function flipGate({ rows = [], legacy = "legacy", candidate = "v3.2", minTrades = 100, payout = 82 } = {}) {
   const legacyExpectancy = expectancyOf(rows, legacy, payout)
