@@ -9,6 +9,7 @@ import { isApiRequest, handleApi, writeJson, SECURITY_HEADERS } from "./handlers
 import { startScheduler, startLivenessMonitor } from "./services/scheduler.mjs"
 import { startLedger } from "./services/accuracyLedger.mjs"
 import "./services/commandCentre/ceremonyState.mjs" // WS-3 R3.1: ceremony store self-wires the resolve consumer at boot (credit path live in prod)
+import "./services/commandCentre/leaderIdeasState.mjs" // WS-4 R1.1: leader-ideas store boots beside the ceremony store (same data dir)
 import { log } from "./logger.mjs"
 import { initErrorLog } from "./errorLog.mjs"
 import { startSignalEngine, stopSignalEngine } from "./services/signalEngine.mjs"

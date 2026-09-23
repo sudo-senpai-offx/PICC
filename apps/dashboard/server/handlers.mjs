@@ -148,7 +148,7 @@ import {
   perpsOpenConsent,
   perpsCloseConsent
 } from "./services/commandCentre/ccxtExecution.mjs"
-import { refreshAggregateRisk } from "./services/commandCentre/riskState.mjs"
+import { aggregateRiskState, refreshAggregateRisk } from "./services/commandCentre/riskState.mjs"
 import { portfolioHeatUsd } from "./services/commandCentre/riskGates.mjs"
 import {
   KNOWN_VENUE_CLASSES,
@@ -156,6 +156,18 @@ import {
   platformVerification as ceremonyPlatformVerification
 } from "./services/commandCentre/ceremonyState.mjs"
 import { ceremonyScaleReadout, evaluateCeremony } from "./services/commandCentre/ceremonyGates.mjs"
+import {
+  storeHealth as leaderIdeasStoreHealth,
+  listLeaders as leaderListLeaders,
+  followLeader as leaderFollow,
+  setPlatformTrust as leaderSetPlatformTrust
+} from "./services/commandCentre/leaderIdeasState.mjs"
+import { importLeaderFeed } from "./services/copytrade/csvFeedImport.mjs"
+import {
+  autoUnfollow as leaderAutoUnfollow,
+  sevenDayStop as leaderSevenDayStop
+} from "./services/copytrade/leaderGuard.mjs"
+import { HIP_NOT_WIRED } from "./services/copytrade/leaderFeedContract.mjs"
 import {
   CCXT_EQUITY_STALE_MS,
   ccxtEquityLastObserved,
@@ -1013,6 +1025,52 @@ async function _handleApiInner(req, res, url, reqId) {
     }
   }
 
+  // Command Centre (WS-4 T4) — leader-ideas import. The payload cap is 64 MB,
+  // so the body is read ROUTE-LOCALLY (readBodyMax) BEFORE the shared body read
+  // below (readBody's default 2 MB cap would otherwise reject it); over-cap is a
+  // 413. Body { label, source: "csv"|"manual", payloadBase64 } decodes to feed
+  // rows + optional leaderId; the importer chain writes the store and audits
+  // (leader:import:{id}). 200 { ok, leaderId, qualification } or a 400 named deny.
+  if (path === "/api/command-centre/leader-ideas/import" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    let body = null
+    try {
+      body = await readBodyMax(req, 64e6)
+    } catch {
+      writeJson(res, 413, { ok: false, deny: "leader:deny:payload-too-large" })
+      return true
+    }
+    const envelope = body && typeof body === "object" ? body : null
+    if (!envelope || typeof envelope.payloadBase64 !== "string" || envelope.payloadBase64.length === 0) {
+      writeJson(res, 400, { ok: false, deny: "leader:deny:empty-payload" })
+      return
+    }
+    let payload = null
+    try {
+      payload = JSON.parse(Buffer.from(envelope.payloadBase64, "base64").toString("utf8"))
+    } catch {
+      writeJson(res, 400, { ok: false, deny: "leader:deny:unparsable-feed" })
+      return
+    }
+    const label = typeof envelope.label === "string" && envelope.label.length > 0 ? envelope.label : null
+    const source = envelope.source === "csv" || envelope.source === "manual" ? envelope.source : null
+    const wrapper = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null
+    const rows = Array.isArray(payload) ? payload : Array.isArray(wrapper?.rows) ? wrapper.rows : null
+    const leaderId =
+      typeof wrapper?.leaderId === "string" && wrapper.leaderId.length > 0 ? wrapper.leaderId : undefined
+    if (label === null || source === null || rows === null) {
+      writeJson(res, 400, { ok: false, deny: "leader:deny:unsupported-payload" })
+      return
+    }
+    const result = importLeaderFeed({ label, source, leaderId, rows })
+    if (!result.ok) {
+      writeJson(res, 400, { ok: false, deny: result.deny })
+      return
+    }
+    writeJson(res, 200, { ok: true, leaderId: result.leaderId, qualification: result.qualification })
+    return
+  }
+
   const body = path === "/api/browser/upload" ? await readBodyMax(req, 64e6) : await readBody(req)
 
   // Reject invalid JSON bodies on POST/PUT/PATCH
@@ -1646,6 +1704,100 @@ async function _handleApiInner(req, res, url, reqId) {
       }
     })
     writeJson(res, 200, { ok: true, at: new Date().toISOString(), scaleMinResolves, scaleEnvError, classes })
+    return
+  }
+
+  // Command Centre (WS-4 T4) — leader-ideas readout. Per leader: status, trust,
+  // qualification, on-read guards (auto-unfollow + 7-day stop) and the surfaced
+  // idea rows. Honesty contract: every cell is store state or a named
+  // leader:deny:* reason; an UNHEALTHY store still renders a named
+  // store-unhealthy deny — never a silent all-pass (ok true = the readout
+  // executed). GET is read-only: it never writes the store file.
+  if (path === "/api/command-centre/leader-ideas" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const healthy = leaderIdeasStoreHealth().ok === true
+    const equityUsd = aggregateRiskState()?.equityUsd ?? null
+    const now = Date.now()
+    const leaders = healthy
+      ? leaderListLeaders().map((rec) => {
+          const auto = leaderAutoUnfollow(rec, { now })
+          const stop = leaderSevenDayStop(rec.ideas, equityUsd, { now })
+          const feedDeny = rec.source === "hip" ? HIP_NOT_WIRED : null
+          const trustDeny = rec.platformTrust.value === "ADVERSARIAL" ? "leader:deny:platform-adversarial" : null
+          const suppressReason = feedDeny ?? trustDeny ?? (stop.active ? stop.reason : null)
+          return {
+            id: rec.id,
+            label: rec.label,
+            source: rec.source,
+            followedAt: rec.followedAt,
+            lastPositionAt: rec.lastPositionAt,
+            status: auto.active ? "auto-unfollowed" : "followed",
+            platformTrust: rec.platformTrust,
+            qualification: rec.qualification,
+            guard: {
+              autoUnfollow: { active: auto.active, reason: auto.reason },
+              sevenDay: { active: stop.active, reason: stop.reason }
+            },
+            deny: suppressReason,
+            ideas: suppressReason ? [] : rec.ideas
+          }
+        })
+      : []
+    writeJson(res, 200, {
+      ok: true,
+      at: new Date().toISOString(),
+      storeUnhealthy: !healthy,
+      deny: healthy ? null : "leader:deny:store-unhealthy",
+      leaders
+    })
+    return
+  }
+
+  // Command Centre (WS-4 T4) — follow. Only after a qualified import; sets
+  // followedAt = now (human-flips-last-switch). Auth + audited by the store.
+  if (path === "/api/command-centre/leader-ideas/follow" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const leaderId = typeof body?.leaderId === "string" ? body.leaderId.trim() : ""
+    if (leaderId === "") {
+      writeJson(res, 400, { ok: false, deny: "leader:deny:missing-leader-id" })
+      return
+    }
+    const result = leaderFollow(leaderId)
+    if (!result.ok) {
+      writeJson(res, 400, { ok: false, deny: result.deny })
+      return
+    }
+    writeJson(res, 200, { ok: true, leaderId, followedAt: result.record.followedAt })
+    return
+  }
+
+  // Command Centre (WS-4 T4) — platform trust. An operator store-write only
+  // (VERIFIED | ADVERSARIAL) with an evidence index; UNVERIFIED is a silent
+  // no-op. Auth + audited by the store.
+  if (path === "/api/command-centre/leader-ideas/trust" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "operator"
+    const leaderId = typeof body?.leaderId === "string" ? body.leaderId.trim() : ""
+    const value = body?.value
+    const evidence = typeof body?.evidence === "string" ? body.evidence : ""
+    if (leaderId === "") {
+      writeJson(res, 400, { ok: false, deny: "leader:deny:missing-leader-id" })
+      return
+    }
+    if (value !== "VERIFIED" && value !== "ADVERSARIAL" && value !== "UNVERIFIED") {
+      writeJson(res, 400, { ok: false, deny: "leader:deny:invalid-trust-value" })
+      return
+    }
+    if (value !== "UNVERIFIED" && (typeof evidence !== "string" || evidence.trim() === "")) {
+      writeJson(res, 400, { ok: false, deny: "leader:deny:trust-evidence-required" })
+      return
+    }
+    const result = leaderSetPlatformTrust(leaderId, { value, by: userId, evidence })
+    if (!result.ok) {
+      writeJson(res, 400, { ok: false, deny: result.deny })
+      return
+    }
+    writeJson(res, 200, { ok: true, leaderId, platformTrust: result.platformTrust })
     return
   }
 
