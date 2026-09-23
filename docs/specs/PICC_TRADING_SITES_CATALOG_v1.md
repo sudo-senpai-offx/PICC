@@ -127,3 +127,7 @@ This catalog is the trading ministry's resource ledger, consistent with the mini
 - **§7** — the four open questions (format-ok, expansion priority, multiplex rule, SITE_INDEX trim-to-EO) still have no recorded answer in the repo.
 
 Because its *data content* is current and actively referenced while its *implementation slices* and *open questions* are outstanding, this spec is carried forward rather than archived, superseded, or closed.
+
+## Resolution note (2026-09-23 · WS-4)
+
+The §2 `verified:false` default for social/leaderboard candidates (C6/7, §4 `verified:false`) is operationalized by the WS-4 follower store: per-leader `platformTrust` (`UNVERIFIED|VERIFIED|ADVERSARIAL`, operator-recorded, audit-backed) lives in `apps/dashboard/server/services/commandCentre/leaderIdeasState.mjs` (spec `docs/specs/PICC_TRADING_SUITE_WS4_COPYTRADING_IDEA_SOURCING_v1.md` §3.2). This note records the linkage only — the catalog schema remains untouched (WS-4 D5).

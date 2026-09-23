@@ -472,6 +472,7 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 | PICC_TRADING_SUITE_WS1_LIVE_ORDER_LIFECYCLE_v1 | ACTIVE | WS-1 perps live order lifecycle: T1–T9 landed; HL adapter testnet-first + real-testnet sandbox E2E (plan §5) |
 | PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1 | ACTIVE | WS-2 risk & drawdown enforcement: T1–T8 landed (risk gates 16–19, aggregate day-loss, MDD size-step/hard-stop, portfolio heat, halt persistence, consent payload-lock, spread seam fail-closed, 5-of-7 pillar gate) |
 | PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1 | ACTIVE | WS-3 validation & unlock ceremony: T1–T8 landed (persistent ceremony store + ledger provenance seam, trading-day primitives, gate evaluators, readout route, perps mainnet branch unlocked only via the store, unlock-ceremony UI, seam guard) |
+| PICC_TRADING_SUITE_WS4_COPYTRADING_IDEA_SOURCING_v1 | ACTIVE | WS-4 copytrading idea sourcing: T0–T7 landed (follower store, feed contract + registry, qualification 300/15/positive-expectancy, CSV import + manual lanes, on-read auto-unfollow + 7d stop, platform-trust flag, readout route + read-only panel, seam guard) |
 | PICC_UNIVERSAL_4FA_ENGINE | ACTIVE (trading logic — untouched) | decision path retires under ADR-0004; legs re-homed |
 | notes/B-IND-0-current-engine-coverage-2026-09-19 | ACTIVE (inventory) | authoritative engine inventory for the v3.2 rebuild |
 
@@ -940,6 +941,8 @@ view · O replay mode.
 **2026-09-22 — WS-2 (docs/specs/PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1) landed** — risk gates 16–19, aggregate day-loss, MDD size-step/hard-stop, portfolio heat, halt persistence, consent payload-lock, spread seam fail-closed, 5-of-7 pillar gate. Source-level seam guard: `apps/dashboard/server/__tests__/ws2RiskSeamGuard.test.mjs`; full floor + typecheck pending controller run.
 
 **2026-09-23 — WS-3 (docs/specs/PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1) landed** — persistent ceremony store (unlock state, binary-class, ceremony gate-1 stake wallet), ledger provenance seam, trading-day primitives, gate evaluators, readout route, perps mainnet branch gated on the store. Source-level seam guard: `apps/dashboard/server/__tests__/ws3CeremonySeamGuard.test.mjs`; full floor + typecheck green. Perps mainnet unlock is NOT claimed venue-live — it requires the owner ceremony flip.
+
+**2026-09-23 — WS-4 (docs/specs/PICC_TRADING_SUITE_WS4_COPYTRADING_IDEA_SOURCING_v1) landed** — persistent leader-follower store, leader-feed contract + registry (HIP stub, CSV/manual real lanes), qualification reusing analytics (300 trades / <15% MDD / positive expectancy after costs), CSV import with cost-accounting denies, on-read auto-unfollow (21d) + rolling-7-day stop (display suppression only), operator-recorded platform-trust flag, readout route + read-only panel in the Command Centre. Source-level seam guard: `apps/dashboard/server/__tests__/ws4LeaderSourcingSeamGuard.test.mjs`; full floor + typecheck green. Idea-sourcing ONLY — WS-4 adds no execution path and touches no WS-2 rail by construction (seam-pinned).
 
 ---
 
