@@ -360,53 +360,51 @@ describe("kelly sizing correctness", () => {
 })
 
 describe("order flow delta validation", () => {
-  it("derives delta sign from actual candle open/close data", () => {
+  // Replaced three tests that asserted the removed candle-derived approximation
+  // was correct. Bars carry no aggressor-side information, so the engine must
+  // report order flow as unavailable rather than infer delta from body shape.
+  it("refuses to derive delta from candle open/close data", () => {
     const up = { time: 1, open: 100, close: 110, high: 112, low: 98, volume: 1000 }
     const down = { time: 2, open: 110, close: 100, high: 112, low: 98, volume: 1000 }
-    const res = orderFlow.analyzeOrderFlow([up, down], 2)
-    expect(res.delta).toHaveLength(2)
-    expect(res.delta[0].delta).toBeGreaterThan(0)
-    expect(res.delta[0].buyPct).toBeGreaterThan(50)
-    expect(res.delta[1].delta).toBeLessThan(0)
-    expect(res.delta[1].buyPct).toBeLessThan(50)
-
-    const smallBody = { time: 1, open: 100, close: 101, high: 102, low: 99, volume: 1000 }
-    const bigBody = { time: 2, open: 100, close: 103, high: 104, low: 99, volume: 1000 }
-    const bodies = orderFlow.analyzeOrderFlow([smallBody, bigBody], 2)
-    expect(Math.abs(bodies.delta[1].delta)).toBeGreaterThan(Math.abs(bodies.delta[0].delta))
+    const res = orderFlow.analyzeOrderFlow({ bars: [up, down], lookback: 2 })
+    expect(res.available).toBe(false)
+    expect(res.delta).toEqual([])
+    expect(res.cumulative).toBeNull()
+    expect(res.imbalance).toBe("unavailable")
   })
 
-  it("uses the open/close approximation for volumeless EO candles instead of fabricating delta", () => {
+  it("does not scale a fabricated delta by candle body size", () => {
+    const smallBody = { time: 1, open: 100, close: 101, high: 102, low: 99, volume: 1000 }
+    const bigBody = { time: 2, open: 100, close: 103, high: 104, low: 99, volume: 1000 }
+    const bodies = orderFlow.analyzeOrderFlow({ bars: [smallBody, bigBody], lookback: 2 })
+    // Previously asserted |bigBody.delta| > |smallBody.delta|; both were invented.
+    expect(bodies.delta).toEqual([])
+    expect(bodies).not.toHaveProperty("buyPct")
+    expect(bodies).not.toHaveProperty("sellPct")
+  })
+
+  it("reports volumeless EO candles as unavailable rather than zero delta", () => {
     const eoCandles = Array.from({ length: 25 }, (_, i) => ({ time: i * 60, open: 100, close: 101, high: 101.5, low: 99.5 }))
-    const res = orderFlow.analyzeOrderFlow(eoCandles, 20)
-    expect(res.delta).toHaveLength(20)
-    for (const d of res.delta) {
-      expect(d.volume).toBe(0)
-      expect(d.delta).toBe(0)
-      expect(d.buyPct).toBe(65)
-      expect(d.sellPct).toBe(35)
-    }
-    expect(res.cumulative).toBe(0)
-    expect(res.imbalance).toBe("neutral")
+    const res = orderFlow.analyzeOrderFlow({ bars: eoCandles, lookback: 20 })
+    expect(res.available).toBe(false)
+    expect(res.dataFidelity).toBe("ohlcv-bar-only")
+    expect(res.cumulative).toBeNull()
+    expect(res.imbalance).toBe("unavailable")
     expect(res.signals).toEqual([])
   })
 
-  it("sums the whole lookback window, not just the last candle", () => {
+  it("emits no imbalance verdict for bar-only windows of any size", () => {
     const bull = (i) => ({ time: i * 60, open: 100, close: 101, high: 101.5, low: 99.5, volume: 400 })
     const crash = { time: 0, open: 200, close: 100, high: 205, low: 95, volume: 10000 }
     const candles = [crash, ...Array.from({ length: 24 }, (_, i) => bull(i + 1))]
 
-    const windowed = orderFlow.analyzeOrderFlow(candles, 20)
-    expect(windowed.delta).toHaveLength(20)
-    expect(windowed.delta.every((d) => d.delta === 120)).toBe(true)
-    expect(windowed.cumulative).toBe(2400)
-    expect(windowed.cumulative).not.toBe(120)
-    expect(windowed.imbalance).toBe("buy-heavy")
-
-    const full = orderFlow.analyzeOrderFlow(candles, 25)
-    expect(full.delta).toHaveLength(25)
-    expect(full.cumulative).toBe(-2575)
-    expect(full.imbalance).toBe("sell-heavy")
+    for (const lookback of [20, 25]) {
+      const res = orderFlow.analyzeOrderFlow({ bars: candles, lookback })
+      expect(res.available).toBe(false)
+      expect(res.imbalance).toBe("unavailable")
+      expect(res.cumulative).toBeNull()
+      expect(res.signals).toEqual([])
+    }
   })
 })
 

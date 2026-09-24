@@ -347,7 +347,10 @@ describe("WS-3 validation & unlock ceremony seam guard (T8 no-regression)", () =
   it("PICC.md records the WS-3 land (registry row + methodology note), and the spec file itself exists", () => {
     const doc = source("../../../../PICC.md")
     expect(doc).toContain("PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1")
-    expect(doc).toContain("38 registry rows")
+    // Registry row count is a tracked fact that advances as specs land. 39
+    // spec-designated rows (the table also carries one `notes/` path row, which
+    // is not counted as a registry spec row).
+    expect(doc).toContain("39 registry rows")
     expect(doc).toContain("WS-3")
     expect(doc).toContain("unlock ceremony")
   })

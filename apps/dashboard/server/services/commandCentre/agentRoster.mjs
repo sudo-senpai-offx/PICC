@@ -39,7 +39,7 @@ export const AGENT_REGISTRY = Object.freeze({
     status: "ready"
   },
   order_flow: {
-    task: "read order-flow/delta for the asset",
+    task: "read order-flow/delta for the asset — requires a signed-trades feed; reports unavailable for bar-only input (never candle-approximated)",
     modules: ["orderFlow.mjs"],
     status: "ready"
   },

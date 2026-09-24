@@ -189,13 +189,19 @@ describe("Expiry Optimizer", () => {
 
 // ── Order Flow ───────────────────────────────────────────────────
 describe("Order Flow", () => {
-  it("analyzes order flow from candles", () => {
+  it("reports order flow as unavailable for candle-only input", () => {
+    // Previously asserted a numeric `cumulative` and a directional
+    // `imbalance` derived from candle structure. Bars cannot supply delta.
     const candles = syntheticCandles(100, 0.002, 100)
-    const result = analyzeOrderFlow(candles, 20)
-    expect(typeof result.cumulative).toBe("number")
-    expect(typeof result.imbalance).toBe("string")
+    const result = analyzeOrderFlow({ bars: candles, lookback: 20 })
+    expect(result.available).toBe(false)
+    expect(result.cumulative).toBeNull()
+    expect(result.imbalance).toBe("unavailable")
     expect(Array.isArray(result.delta)).toBe(true)
+    expect(result.delta).toEqual([])
     expect(Array.isArray(result.signals)).toBe(true)
+    expect(result.signals).toEqual([])
+    expect(result.reason).toMatch(/no signed-trades feed/i)
   })
 })
 

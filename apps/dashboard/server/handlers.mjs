@@ -4042,8 +4042,12 @@ const creds = await getVenueCredentials()
     if (!(await requireAuth(req, res))) return true
     if (req.method !== "POST") return false
     const { analyzeOrderFlow } = await import("./services/orderFlow.mjs")
-    const candles = body?.candles || []
-    writeJson(res, 200, { ok: true, ...analyzeOrderFlow(candles, body?.lookback) })
+    // `trades` is deliberately NOT accepted from the request body: a
+    // client-supplied signed-trade series would let any authenticated caller
+    // manufacture an `available:true` order-flow readout. Only a server-side
+    // feed may satisfy the contract. See orderFlow.mjs honesty contract.
+    const bars = Array.isArray(body?.candles) ? body.candles : null
+    writeJson(res, 200, { ok: true, ...analyzeOrderFlow({ bars, lookback: body?.lookback }) })
     return true
   }
 
