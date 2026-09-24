@@ -19,6 +19,7 @@ import type {
   TradingVenuesResult
 } from "@/lib/trading"
 import { normalizeAutopilotAssets, parseCcxtPairsJson } from "@/lib/trading"
+import { withActionLock } from "@/lib/dangerousActionLock"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { Badge, Button, Card, Field, Input, Select, Spinner, Textarea } from "@/components/ui"
 
@@ -152,7 +153,9 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
     try {
       const assets = normalizeAutopilotAssets(cfg.assets)
       const primary = assets.find((a) => a.enabled)?.assetId ?? cfg.assetId
-      const r = await saveAutopilotConfig({ ...cfg, assets, assetId: primary } as Partial<AutopilotConfig>)
+      const r = await withActionLock("autopilot-config", () =>
+        saveAutopilotConfig({ ...cfg, assets, assetId: primary } as Partial<AutopilotConfig>)
+      )
       if (r.ok) { setCfg(r.config); setScopeAsset(primary); setMsg({ ok: true, text: "Autopilot settings saved." }) }
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message })

@@ -12,6 +12,7 @@ import {
   type CommandCentreOrder,
   type CommandCentreOverview
 } from "@/lib/api"
+import { withActionLock } from "@/lib/dangerousActionLock"
 
 /**
  * T5b — the payload-locked re-consent handshake. When the human clicks
@@ -162,7 +163,9 @@ export function CommandCentrePanel({ reviewSeconds = 5 }: { reviewSeconds?: numb
     setOrderResult(null)
     setPendingExecute(null)
     try {
-      const res = await post<CommandCentreExecuteResponse>("/command-centre/orders/execute", { clientOrderId, payload })
+      const res = await withActionLock("command-centre-execute", () =>
+        post<CommandCentreExecuteResponse>("/command-centre/orders/execute", { clientOrderId, payload })
+      )
       if (res.ok) {
         setOrderResult({ clientOrderId, ok: true, text: "approved — order executed (audit: execution:executed)" })
       } else if (res.execution?.status === "failed") {
@@ -210,7 +213,7 @@ export function CommandCentrePanel({ reviewSeconds = 5 }: { reviewSeconds?: numb
     async (scope: string, kill: boolean) => {
       setError(null)
       try {
-        await setCommandCentreKillSwitch(scope, kill)
+        await withActionLock("kill-switch", () => setCommandCentreKillSwitch(scope, kill))
         await refresh()
       } catch (e) {
         setError(e instanceof Error ? e.message : "kill-switch update failed")

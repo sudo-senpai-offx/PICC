@@ -9,6 +9,38 @@ import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { CommandCentrePanel } from "@/components/CommandCentrePanel"
 
+type LockCallback = (lock: unknown) => Promise<unknown>
+type LockRequest = (name: string, options: { timeout: number }, callback: LockCallback) => Promise<unknown>
+
+const lockEvents: string[] = []
+const availableLockRequest = vi.fn(async (name: string, _options: { timeout: number }, callback: LockCallback) => {
+  lockEvents.push(`acquire:${name}`)
+  try {
+    return await callback({})
+  } finally {
+    lockEvents.push(`release:${name}`)
+  }
+})
+
+function installLockRequest(request: LockRequest = availableLockRequest) {
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: { request }
+  })
+}
+
+function installTimeoutLocks() {
+  installLockRequest(async () => {
+    throw new DOMException("timed out", "TimeoutError")
+  })
+}
+
+function installUnavailableLocks() {
+  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined })
+}
+
+installLockRequest()
+
 function mount(node: React.ReactNode) {
   const host = document.createElement("div")
   document.body.appendChild(host)
@@ -106,6 +138,9 @@ const blocked = {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  installLockRequest()
+  availableLockRequest.mockClear()
+  lockEvents.length = 0
   document.body.innerHTML = ""
 })
 
@@ -191,6 +226,43 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
 
     expect(calls).toEqual([{ path: "/api/command-centre/kill-switch", body: { scope: "trading:ccxt", kill: true } }])
     expect(m.host.textContent).toContain("BLOCKED")
+    m.unmount()
+  })
+
+  it.each([
+    {
+      mode: "timeout",
+      install: installTimeoutLocks,
+      deny: "suite:deny:lock-held (another tab holds the kill-switch lock — wait or close the other tab)"
+    },
+    {
+      mode: "unavailable",
+      install: installUnavailableLocks,
+      deny: "suite:deny:lock-unavailable"
+    }
+  ])("surfaces the verbatim $mode deny and does not POST for a kill toggle", async ({ install, deny }) => {
+    install()
+    const posts: { path: string; body: unknown }[] = []
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posts.push({ path, body: JSON.parse(String(init.body)) })
+        return { ok: true, status: 200, json: async () => ({ ok: true, state: { global: false, sites: { "trading:ccxt": true } } }) } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => overview } as unknown as Response
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const m = mount(<CommandCentrePanel />)
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+    const toggle = m.host.querySelector('button[aria-label="kill switch trading:ccxt"]') as HTMLButtonElement
+    expect(toggle).toBeTruthy()
+    toggle.click()
+    await new Promise((r) => setTimeout(r, 10))
+    flushSync(() => {})
+
+    expect(posts).toHaveLength(0)
+    expect(m.host.textContent).toContain(deny)
     m.unmount()
   })
 
