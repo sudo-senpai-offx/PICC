@@ -1,7 +1,9 @@
+/// <reference types="vitest/config" />
 import { fileURLToPath, URL } from "node:url"
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { defineConfig, loadEnv } from "vite"
+import { configDefaults } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import { handleApi, isApiRequest, writeJson } from "./server/handlers.mjs"
 import { startTradingHud } from "./server/services/tradingHud.mjs"
@@ -108,6 +110,12 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url))
       }
+    },
+    // Vitest reads this file (it carries the `@` alias, so there is deliberately no separate
+    // vitest.config.ts). The e2e/ specs are Playwright's, not Vitest's — without this exclusion
+    // `npx vitest run` collects them too and the serial floor fails on a harness mismatch.
+    test: {
+      exclude: [...configDefaults.exclude, "**/e2e/**"]
     },
     server: {
       port: 5173,
