@@ -1,13 +1,13 @@
 # PICC Trading Suite — WS-5 · Breadth & Operability Hardening — spec v1
 
-**Date:** 2026-09-23 · **Workstream:** WS-5 of `docs/specs/PICC_TRADING_SUITE_SEAL_ALL_GAPS_v1.md` (APPROVED) · **Kind:** implementation-ready plan · **Approved by:** pending owner, subagent-driven implementation.
+**Date:** 2026-09-23 · **Ratified:** 2026-09-24 (owner lock: "proceed with ws5") · **Workstream:** WS-5 of `docs/specs/PICC_TRADING_SUITE_SEAL_ALL_GAPS_v1.md` (APPROVED) · **Kind:** implementation-ready plan · **Approved by:** owner, subagent-driven implementation.
 
 - Master design: `docs/specs/PICC_TRADING_SUITE_SEAL_ALL_GAPS_v1.md` — WS-5 scope block `:64-67` + `:69-74` (startup credential validation instead of fail-at-propose; de-risk the 13-screen breadth; cross-tab live-lock surface; Playwright e2e harness; runbook/credential rotation); locked decision 11 (venue earns live via ADR, `:37`); sequence/soak decisions `:27-34`; limitations 6–7 `:83-84`; working set `:9-21`.
 - WS-4 spec (format precedent + landed substrate): `docs/specs/PICC_TRADING_SUITE_WS4_COPYTRADING_IDEA_SOURCING_v1.md` — store `:29-31`, readout route template `:1607-1650`-family, bisect matrix §6, resolution §9; status LANDED (PICC.md registry).
 - WS-3 spec: `docs/specs/PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1.md` — persistent-store/gate/readout conventions, ceremony LANDED. WS-2 spec: `docs/specs/PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1.md` — WS-5 must not touch risk rails 16–19 / sidecar 1–10 / perps 11–15.
 - Scope compendium: `.superpowers/sdd/PICC_TRADING_SUITE_WS345_PIPELINE/plan.md` — WS-5 block `:60-104`; "13 screens" claim at plan.md `:66` (see §0.1 for the honest reading); WS-5 = NEXT, spec not started.
 
-**Status: DRAFT** — decisions D1–D8 await owner lock (§2). No implementation before ratification. Nothing in this spec is live until §9 executes.
+**Status: ACTIVE** — decisions D1–D8 are owner-ratified as written (§2, §9). T0–T6 execute per the §6 matrix. Nothing in this spec is live until the §9 ship gate passes.
 
 ---
 
@@ -39,9 +39,9 @@
 
 ---
 
-## §2 DRAFT decisions (awaiting owner lock — D1..D8)
+## §2 Ratified decisions (owner-locked 2026-09-24 — D1..D8)
 
-Each entry: Context → Decision → Why → Consequence. Owner may ratify as-is, amend, or reject before §9.
+Each entry: Context → Decision → Why → Consequence. **Ratified as written by the owner on 2026-09-24** ("proceed with ws5", no amendments); an amendment requires a fresh explicit owner instruction.
 
 ### D1 — Breadth reduction = AutopilotSuite extraction only; the other 12 panels stay.
 **Context:** plan.md `:66` says "de-risk the 13-screen breadth"; §0.1 shows there is no 13-screen navigation — 13 renderable panels stack inside one route, and only AutopilotSuite (~585 lines, `TradingSuite.tsx:292-876`) is a large, isolated renderable unit with a single importer.
@@ -287,9 +287,9 @@ Cut `TradingSuite.tsx:292-876` + private helpers into `src/components/AutopilotS
 
 ## §9 Resolution (owner sign-off)
 
-**Pending.** Owner to ratify D1–D8 (§2) as written or with amendments. On ratification: **Status → ACTIVE**, T0–T6 execute per the §6 matrix (owners A/B/C, ordering edges enforced, parallel wave after T0/T3/T4 land), then T6 runs the final serial floor + typecheck + `verifyAudit()` + `test:e2e`.
+**Ratified 2026-09-24.** Owner ratified D1–D8 (§2) as written, with no amendments. **Status → ACTIVE**; T0–T6 execute per the §6 bisect matrix (owners A/B/C; ordering edges T4→T2, T0→T1, T3→T5, T0→T5, T6 after all of F1–F10 + M1–M8). The mutually independent first moves are A-T3, B-T4, and C-T0. T6 records the final verification results in the block below.
 
-**Ship gate (recorded here by T6):**
+**Ship gate (T6 records observed results here):**
 - Serial vitest in `apps/dashboard` green (≥ 278 files / ≥ 3102 passed baseline + new test files).
 - Root `npm run typecheck` green.
 - `verifyAudit()` → `{ok:true, brokenAt:null, reason:null}`.
@@ -297,4 +297,4 @@ Cut `TradingSuite.tsx:292-876` + private helpers into `src/components/AutopilotS
 - Seam guard green (AC-8a/b/c).
 - D1–D8 ratified; PICC.md registry updated; runbook reflects reality.
 
-**Status (final, set at ship):** (owner to set) — DRAFT until then, no code merges.
+**Status (final, set at ship):** (owner to set after the ship gate is observed green) — until then this workstream is ACTIVE but unshipped.
