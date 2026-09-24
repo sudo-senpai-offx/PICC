@@ -42,6 +42,7 @@ apps/dashboard/server/services/data/
 infra/btcpayserver/btcpayserver-docker/
 
 # Scratch / session tooling (never source-controlled)
+.playwright-tmp/
 .freebuff/
 .firecrawl/
 dev_pack_code.py

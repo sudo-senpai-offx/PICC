@@ -12,6 +12,7 @@
         "start": "vite",
         "test": "vitest run --maxWorkers=1",
         "smoke:trading": "node ../../scripts/probe-e2e-decisions.mjs",
+        "test:e2e": "playwright test",
         "test:ci": "npm audit --audit-level=high && npm test && npm run typecheck"
     },
     "dependencies": {
@@ -26,6 +27,7 @@
         "web-push": "^3.6.7"
     },
     "devDependencies": {
+        "@playwright/test": "^1.49.1",
         "@types/react": "^19.1.2",
         "@types/react-dom": "^19.1.2",
         "@vitejs/plugin-react": "^4.5.0",
