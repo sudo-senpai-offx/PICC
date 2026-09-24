@@ -33,6 +33,7 @@ this live path. The full 10-gate preposition chain runs before any order; execut
 | Env template (both credential modes documented) | `apps/dashboard/.env.example` |
 | CCXT wallet-mode fixture tests | `apps/dashboard/server/__tests__/ccxtOrdering.test.mjs` |
 | Wizard (the interactive walkthrough) | `scripts/hyperliquid-connect.wizard.sh` |
+| Cross-venue startup health, action locks, E2E isolation, and venue status | `docs/runbooks/PICC_OPERABILITY_RUNBOOK.md` |
 
 ## 3. Wallet topology (decided)
 
