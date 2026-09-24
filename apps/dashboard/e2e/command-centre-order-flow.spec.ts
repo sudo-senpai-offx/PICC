@@ -14,6 +14,48 @@ import isolatedEnv, {
 
 assertIsolatedEnv(isolatedEnv, ISOLATION_TMP_ROOT)
 
+// AC-2b requires a NEGATIVE isolation test: proving the containment assertion can actually fail.
+// Every other call site supplies the generated valid env, so without this the suite would stay green
+// even if `isStrictlyInside()` were deleted.
+test("isolation containment rejects an escaping path and a re-enabled .env load", () => {
+  const root = ISOLATION_TMP_ROOT
+
+  const escapes = [
+    ["parent traversal", { ...isolatedEnv, PICC_TRADING_DATA_DIR: join(root, "..", "escape") }],
+    ["absolute path outside the root", { ...isolatedEnv, PICC_AUTH_DATA_DIR: dirname(root) }],
+    ["the real server data dir", { ...isolatedEnv, PICC_DATA_DIR: join(process.cwd(), "server", "data") }],
+    ["missing required variable", (() => {
+      const clone: Record<string, string> = { ...isolatedEnv }
+      delete clone.PICC_ALERTS_DATA_DIR
+      return clone
+    })()],
+    ["unexpected extra variable", { ...isolatedEnv, PICC_EXTRA: "x" }],
+    [".env loading re-enabled", { ...isolatedEnv, PICC_ENV_LOADED: "0" }],
+    ["error logging re-enabled", { ...isolatedEnv, PICC_ERROR_LOG: "1" }],
+    ["injected CCXT credential", { ...isolatedEnv, PICC_CCXT_APIKEY_HYPERLIQUID: "nope" }]
+  ] as const
+
+  for (const [label, candidate] of escapes) {
+    expect(() => assertIsolatedEnv(candidate, root), `must reject: ${label}`).toThrow()
+  }
+
+  // And the happy path still passes, so the loop above is not trivially true.
+  expect(() => assertIsolatedEnv(isolatedEnv, root)).not.toThrow()
+})
+
+test("the e2e server holds no venue credentials and no real data dir", async ({ request }) => {
+  // The harness map is not the whole story: Playwright MERGES the parent environment, and
+  // server/config.mjs loads the repository `.env` unless PICC_ENV_LOADED=1. Assert the credential
+  // outcome the server itself reports, which is the only assertion that cannot be satisfied by a
+  // tautology over the override object.
+  expect(isolatedEnv.PICC_ENV_LOADED).toBe("1")
+  expect(Object.keys(isolatedEnv).filter((name) => name.startsWith("PICC_CCXT_"))).toEqual([])
+  for (const name of Object.keys(isolatedEnv).filter((key) => key.endsWith("_DATA_DIR") || key.endsWith("_FILE"))) {
+    expect(isolatedEnv[name], `${name} must live under the isolation root`).toContain(ISOLATION_TMP_ROOT)
+  }
+  expect(isolatedEnv.PICC_DATA_DIR).not.toContain(join(process.cwd(), "server", "data"))
+})
+
 test.setTimeout(90_000)
 
 type Credentials = {

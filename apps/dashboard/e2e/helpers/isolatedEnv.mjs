@@ -44,7 +44,8 @@ export const ISOLATION_PATH_VARIABLES = Object.freeze([
 export const REQUIRED_ISOLATION_VARIABLES = Object.freeze([
   ...ISOLATION_PATH_VARIABLES,
   "PICC_VAULT_KEY",
-  "PICC_ERROR_LOG"
+  "PICC_ERROR_LOG",
+  "PICC_ENV_LOADED"
 ])
 
 function mintTmpRoot() {
@@ -115,6 +116,27 @@ export function assertIsolatedEnv(env, tmpRoot) {
   if (env.PICC_ERROR_LOG !== "0") {
     throw new Error("PICC_ERROR_LOG must be exactly 0 for Playwright isolation")
   }
+  if (env.PICC_ENV_LOADED !== "1") {
+    throw new Error(
+      "PICC_ENV_LOADED must be exactly 1 so server/config.mjs cannot load the repository .env " +
+        "(which holds real provider + CCXT credentials) into the test server"
+    )
+  }
+  // No credential-bearing venue variable may ever enter the harness map. The child also inherits
+  // the parent environment, so assert the parent is clean too — a contaminated parent would defeat
+  // the data-dir redirection even with .env loading blocked.
+  const credentialVars = Object.keys(env).filter((name) => name.startsWith("PICC_CCXT_"))
+  if (credentialVars.length > 0) {
+    throw new Error(`Playwright isolation env must not set CCXT credential variables: ${credentialVars.join(", ")}`)
+  }
+  const inheritedCredentialVars = Object.keys(process.env).filter((name) => name.startsWith("PICC_CCXT_"))
+  if (inheritedCredentialVars.length > 0) {
+    throw new Error(
+      "Refusing to run Playwright isolation: the parent process already exports CCXT credential " +
+        `variables (${inheritedCredentialVars.join(", ")}), which the web server would inherit. ` +
+        "Unset them before running the e2e suite."
+    )
+  }
   if (typeof env.PICC_VAULT_KEY !== "string" || !/^[0-9a-f]{64}$/.test(env.PICC_VAULT_KEY)) {
     throw new Error("PICC_VAULT_KEY must be a fresh 32-byte lowercase hex value")
   }
@@ -149,6 +171,12 @@ function buildIsolatedEnv(tmpRoot) {
 
   env.PICC_VAULT_KEY = randomBytes(32).toString("hex")
   env.PICC_ERROR_LOG = "0"
+  // Block the repository `.env` from being loaded into the test server. `server/config.mjs:11-21`
+  // calls `process.loadEnvFile()` unless PICC_ENV_LOADED is already set, and `apps/dashboard/.env`
+  // holds real provider + CCXT credentials. Playwright MERGES the parent environment with
+  // `webServer.env` rather than replacing it, so redirecting the data dirs alone does not make the
+  // run credential-free — this flag is what actually does.
+  env.PICC_ENV_LOADED = "1"
   return Object.freeze(env)
 }
 
