@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
-import { AutopilotSuite, ProAnalysisCard, PredictionCard } from "@/components/TradingSuite"
+import { AutopilotSuite } from "@/components/AutopilotSuite"
+import { ProAnalysisCard, PredictionCard, SignalNotificationsCard } from "@/components/TradingSuite"
 import { ModelMatrixPanel } from "@/components/ModelMatrixPanel"
 import { WalkForwardCard } from "@/components/WalkForwardCard"
 import { Badge, Button, Card, Spinner } from "@/components/ui"
@@ -190,7 +191,7 @@ export function AutopilotRoom() {
         <p className="muted small">Automated demo-trading engine — configure scope and risk, monitor the engine, and inspect prediction and model confidence.</p>
       </header>
       <AutopilotDecisionsCard />
-      <AutopilotSuite />
+      <AutopilotSuite SignalNotificationsCard={SignalNotificationsCard} />
       <WalkForwardCard />
       <ProAnalysisCard />
       <PredictionCard recordSignal={() => {}} />
