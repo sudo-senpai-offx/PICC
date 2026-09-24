@@ -427,7 +427,7 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 
 ---
 
-## §10 Specs Registry (33 files in `docs/specs/`; 38 registry rows)
+## §10 Specs Registry (34 files in `docs/specs/`; 39 registry rows)
 
 > Statuses are as stamped in each spec header, cross-checked **2026-09-19** (older-spec resolution
 > pass: every non-trading-logic spec received a `Resolution:` disposition). Checkboxes inside specs
@@ -473,7 +473,8 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 | PICC_TRADING_SUITE_WS2_RISK_AND_DRAWDOWN_ENFORCEMENT_v1 | ACTIVE | WS-2 risk & drawdown enforcement: T1–T8 landed (risk gates 16–19, aggregate day-loss, MDD size-step/hard-stop, portfolio heat, halt persistence, consent payload-lock, spread seam fail-closed, 5-of-7 pillar gate) |
 | PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1 | ACTIVE | WS-3 validation & unlock ceremony: T1–T8 landed (persistent ceremony store + ledger provenance seam, trading-day primitives, gate evaluators, readout route, perps mainnet branch unlocked only via the store, unlock-ceremony UI, seam guard) |
 | PICC_TRADING_SUITE_WS4_COPYTRADING_IDEA_SOURCING_v1 | ACTIVE | WS-4 copytrading idea sourcing: T0–T7 landed (follower store, feed contract + registry, qualification 300/15/positive-expectancy, CSV import + manual lanes, on-read auto-unfollow + 7d stop, platform-trust flag, readout route + read-only panel, seam guard) |
-| PICC_TRADING_SUITE_WS5_BREADTH_OPERABILITY_HARDENING_v1 | ACTIVE | WS-5 not yet shipped: T0–T5 landed (`playwright.config.ts`; `e2e/helpers/isolatedEnv.mjs`; `e2e/*.spec.ts`; `startupHealth.mjs` + `handlers.mjs`/`index.mjs`; `dangerousActionLock.ts` + 3 call sites; `AutopilotSuite.tsx` + `TradingSuite.tsx`/`AutopilotRoom.tsx`; tests; package metadata; `.env.example`; operability runbook + Hyperliquid pointer). `ws5SeamGuard.test.mjs`). Final floor + typecheck + `verifyAudit()` + `test:e2e` observed green; owner ship decision pending. |
+| PICC_TRADING_SUITE_WS5_BREADTH_OPERABILITY_HARDENING_v1 | ACTIVE | WS-5 shipped (`5abb151`, 16 commits, pushed to `origin/master`). T0–T5 landed (`playwright.config.ts`; `e2e/helpers/isolatedEnv.mjs`; `e2e/*.spec.ts`; `startupHealth.mjs` + `handlers.mjs`/`index.mjs`; `dangerousActionLock.ts` + 3 call sites; `AutopilotSuite.tsx` + `TradingSuite.tsx`/`AutopilotRoom.tsx`; tests; package metadata; `.env.example`; operability runbook + Hyperliquid pointer). `ws5SeamGuard.test.mjs`. Final floor 281 files/3133 tests + typecheck + `verifyAudit()` + `test:e2e` 4 passed observed green. AC-4c two-real-tab lock matrix remains manual/unverified. Three ratified claims (AC-3a, AC-8b, R1.2) were factually wrong and are recorded as honesty notes 11–13. |
+| PICC_TRADING_SUITE_WS6_TERMINAL_UI_REBUILD_v1 | ACTIVE-DRAFT | WS-6 terminal UI rebuild spec drafted; implementation not started. Strangler migration, paper-only boundary, 1280×800 floor, target-device performance gates, honest unavailable states, separated sample metrics, venue integrity register, Blueprint v4.0 supersession, and Motion-only animation decisions are owner-locked. Blueprint source/device measurements remain UNVERIFIED. |
 | PICC_UNIVERSAL_4FA_ENGINE | ACTIVE (trading logic — untouched) | decision path retires under ADR-0004; legs re-homed |
 | notes/B-IND-0-current-engine-coverage-2026-09-19 | ACTIVE (inventory) | authoritative engine inventory for the v3.2 rebuild |
 
