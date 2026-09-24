@@ -110,8 +110,12 @@ function expertoptionCheck(store, now) {
       "ExpertOption token present as **** but capture date is unobserved"
     )
   }
-  const ageDays = Math.floor((now - capturedAt) / DAY_MS)
-  if (ageDays > ttl.days) {
+  // Compare timestamps, not a floored day count: `Math.floor(ageDays)` reported a token that is
+  // 30 days and 1 hour old as "age 30" and therefore `ok` under a 30-day TTL. D6 defines expiry as
+  // `capturedAt + TTL`, so compare directly and only floor for the human-readable string.
+  const ageMs = now - capturedAt
+  const ageDays = Math.floor(ageMs / DAY_MS)
+  if (now > capturedAt + ttl.days * DAY_MS) {
     return check(
       "expertoption-expiry",
       "error",
@@ -199,11 +203,19 @@ export async function runStartupHealth({ now = Date.now() } = {}) {
     const checks = await buildStartupHealthChecks({ now: timestamp })
     const at = isoOf(timestamp)
     const result = { ok: !checks.some((entry) => entry.severity === "error"), at, checks, generatedAt: isoOf(timestamp) }
-    appendAudit({
-      site: "command-centre",
-      kind: "audit:startup-health",
-      data: { ok: result.ok, at: result.at, checks: result.checks, generatedAt: result.generatedAt }
-    })
+    // This module is read-only and ADVISORY (D5/D6): it must never be able to stop the server from
+    // booting. An unwritable/full/invalid command-centre audit dir would otherwise turn a health
+    // report into a hard boot gate, so a failed audit append is logged and swallowed — the readout
+    // result is still cached and still served.
+    try {
+      appendAudit({
+        site: "command-centre",
+        kind: "audit:startup-health",
+        data: { ok: result.ok, at: result.at, checks: result.checks, generatedAt: result.generatedAt }
+      })
+    } catch (error) {
+      console.warn("[picc] startup-health audit append failed (readout still served):", error?.message ?? error)
+    }
     state = { version: 1, result }
     return cloneResult(result)
   })()

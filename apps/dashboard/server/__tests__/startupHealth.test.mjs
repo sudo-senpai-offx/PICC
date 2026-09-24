@@ -117,6 +117,32 @@ describe("startup health checks", () => {
     })
   })
 
+  it("treats a token one hour past the TTL as expired, not ok", async () => {
+    // Regression: the check floored the age to whole days, so 30d+1h reported "age 30" and stayed
+    // `ok` under a 30-day TTL. D6 defines expiry as capturedAt + TTL.
+    const result = await checks(
+      { expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW - 30 * DAY_MS - 3_600_000).toISOString() },
+      {},
+      { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" }
+    )
+    const expiry = result.find((entry) => entry.id === "expertoption-expiry")
+    expect(expiry?.severity).toBe("error")
+    expect(expiry?.deny).toMatch(/^suite:deny:credential-expired \(expertoption, age \d+ days exceeds 30\)$/)
+    // `checks()` yields the list, so derive the ok verdict the same way the module does.
+    expect(result.some((entry) => entry.severity === "error")).toBe(true)
+  })
+
+  it("keeps a token exactly at the TTL boundary not-yet-expired", async () => {
+    const result = await checks(
+      { expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW - 30 * DAY_MS).toISOString() },
+      {},
+      { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" }
+    )
+    const expiry = result.find((entry) => entry.id === "expertoption-expiry")
+    expect(expiry?.severity).toBe("ok")
+    expect(expiry?.deny).toBeNull()
+  })
+
   it("warns when an ExpertOption token has no capturedAt record", async () => {
     const result = await checks({ expertoptionToken: TOKEN }, {}, { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" })
     expect(
