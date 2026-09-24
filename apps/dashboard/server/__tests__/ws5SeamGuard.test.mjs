@@ -268,6 +268,29 @@ describe("WS-5 seam guard", () => {
     })
   })
 
+  describe("R4.2 dangerous-action lock call sites", () => {
+    it("wraps all three dangerous mutations, and no fewer", () => {
+      // R4.2 names exactly three families. Pin the names so removing any one of them — or adding an
+      // unguarded mutation — fails here rather than silently shipping.
+      const commandCentre = readFileSync(resolve(ROOT, "apps/dashboard/src/components/CommandCentrePanel.tsx"), "utf8")
+      const autopilot = readFileSync(AUTOPILOT_SUITE, "utf8")
+      const lockModule = readFileSync(resolve(ROOT, "apps/dashboard/src/lib/dangerousActionLock.ts"), "utf8")
+
+      // Both modules must actually route through the wrapper, not import it unused.
+      expect(commandCentre).toMatch(/import\s*\{[^}]*withActionLock[^}]*\}\s*from\s*["'][^"']*dangerousActionLock["']/)
+      expect(autopilot).toMatch(/import\s*\{[^}]*withActionLock[^}]*\}\s*from\s*["'][^"']*dangerousActionLock["']/)
+
+      const names = [...commandCentre.matchAll(/withActionLock\(\s*"([^"]+)"/g), ...autopilot.matchAll(/withActionLock\(\s*"([^"]+)"/g)].map((m) => m[1])
+      expect(names.slice().sort()).toEqual(["autopilot-config", "command-centre-execute", "kill-switch"])
+
+      // Fail-closed contract lives in the module itself.
+      expect(lockModule).toContain("suite:deny:lock-unavailable")
+      expect(lockModule).toContain("suite:deny:lock-held")
+      expect(lockModule).toContain("picc:action:")
+      expect(lockModule).toMatch(/timeout:\s*8000|LOCK_TIMEOUT_MS\s*=\s*8000/)
+    })
+  })
+
   describe("AC-7a venue whitelist", () => {
     it("has no committed or working-tree edits to the venue surface", () => {
       const committed = git("diff", "--name-only", `${BASELINE}..HEAD`).split(/\r?\n/).filter(Boolean)

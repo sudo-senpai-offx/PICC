@@ -9,6 +9,7 @@ import { handleApi, isApiRequest, writeJson } from "./server/handlers.mjs"
 import { startTradingHud } from "./server/services/tradingHud.mjs"
 import { startLedger } from "./server/services/accuracyLedger.mjs"
 import { initErrorLog } from "./server/errorLog.mjs"
+import { runStartupHealth } from "./server/services/commandCentre/startupHealth.mjs"
 import { startLivenessMonitor, startScheduler } from "./server/services/scheduler.mjs"
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,12 @@ if (!process.env.VITEST) {
   // after startScheduler() never get an interval.
   startLivenessMonitor()
   startScheduler()
+  // Boot validation is a first-class boot step for dev/e2e too, exactly as it is for the standalone
+  // server in index.mjs. Without this the first GET performed the "boot" work and wrote the
+  // audit:startup-health row lazily. Read-only and advisory — failures are logged, never fatal.
+  runStartupHealth().catch((error) => {
+    console.warn("[picc] startup health failed (advisory, boot continues):", error?.message ?? error)
+  })
 }
 
 export default defineConfig(({ mode }) => {

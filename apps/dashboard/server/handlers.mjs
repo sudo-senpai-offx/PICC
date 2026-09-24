@@ -162,7 +162,7 @@ import {
   followLeader as leaderFollow,
   setPlatformTrust as leaderSetPlatformTrust
 } from "./services/commandCentre/leaderIdeasState.mjs"
-import { runStartupHealth } from "./services/commandCentre/startupHealth.mjs"
+import { getStartupHealth, runStartupHealth } from "./services/commandCentre/startupHealth.mjs"
 import { importLeaderFeed } from "./services/copytrade/csvFeedImport.mjs"
 import {
   autoUnfollow as leaderAutoUnfollow,
@@ -1750,8 +1750,10 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/command-centre/startup-health" && req.method === "GET") {
-    if (!(await requireAuth(req, res))) return true
-    writeJson(res, 200, await runStartupHealth())
+    if (!(await requireAuthStrict(req, res))) return true
+    // Prefer the value computed once at boot (D5); fall back to computing it if this process was
+    // started without the boot import (e.g. a bare vite middleware context).
+    writeJson(res, 200, getStartupHealth() ?? (await runStartupHealth()))
     return true
   }
 
@@ -5430,6 +5432,18 @@ const BROWSER_ROUTES = {
 async function requireAuth(req, res) {
   if (isLocalhostRequest(req)) return true
   if ((await verifyUser(req.headers.authorization)) || !(await hasUsers())) return true
+  writeJson(res, 401, { error: "authentication required" })
+  return false
+}
+
+// Stricter gate for routes that disclose credential/venue configuration state. `requireAuth` treats
+// any loopback peer as trusted, which is correct for the local single-user dev flow but NOT for a
+// readout naming configured exchanges, token age, and rail mode: behind the supported
+// reverse-proxy/tunnel setup the proxy itself is loopback, so that bypass would hand operational
+// credential metadata to an unauthenticated remote caller. This gate accepts ONLY a real session or
+// bearer token — no localhost bypass, no first-user bypass.
+async function requireAuthStrict(req, res) {
+  if (await verifyUser(req.headers.authorization)) return true
   writeJson(res, 401, { error: "authentication required" })
   return false
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -24,10 +24,20 @@ function clearEnv() {
   }
 }
 
-function seedStores(trading = {}, venue = {}) {
+// Seed REAL encrypted vault envelopes via writeSecretJson, not plaintext JSON. Plaintext fixtures
+// would still pass if the module regressed to `readFile` + `JSON.parse`, so they never actually
+// prove D5's "credential stores decrypt" requirement.
+async function seedStores(trading = {}, venue = {}) {
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, TRADING_FILE), JSON.stringify(trading), "utf8")
-  writeFileSync(join(dir, VENUE_FILE), JSON.stringify(venue), "utf8")
+  const { writeSecretJson } = await import("../services/vault.mjs")
+  await writeSecretJson(join(dir, TRADING_FILE), trading)
+  await writeSecretJson(join(dir, VENUE_FILE), venue)
+}
+
+// Write raw bytes, bypassing the vault — used to model a corrupt / tampered store file.
+function seedRawStore(name, contents) {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, name), contents, "utf8")
 }
 
 async function loadHealth() {
@@ -38,7 +48,7 @@ async function loadHealth() {
 }
 
 async function checks(trading = {}, venue = {}, env = {}, now = NOW) {
-  seedStores(trading, venue)
+  await seedStores(trading, venue)
   Object.assign(process.env, env)
   await loadHealth()
   return health.buildStartupHealthChecks({ now })
@@ -95,10 +105,19 @@ afterEach(() => {
 })
 
 describe("startup health checks", () => {
-  it("reports a corrupt credential vault as an error deny", async () => {
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, TRADING_FILE), "not-json", "utf8")
-    writeFileSync(join(dir, VENUE_FILE), JSON.stringify({}), "utf8")
+  it("reports a tampered credential vault as an error deny", async () => {
+    // Write a REAL encrypted envelope, then corrupt its ciphertext in place. This can only be
+    // detected by actually attempting decryption, so it fails if the module ever regresses to
+    // `readFile` + `JSON.parse` (which would happily parse the outer `{pva1}` wrapper).
+    await seedStores({ expertoptionToken: TOKEN }, {})
+    const path = join(dir, TRADING_FILE)
+    const envelope = JSON.parse(readFileSync(path, "utf8"))
+    expect(typeof envelope.pva1).toBe("string")
+    const parts = envelope.pva1.split(":")
+    expect(parts).toHaveLength(3)
+    parts[2] = Buffer.from("tampered-ciphertext-bytes").toString("base64")
+    writeFileSync(path, JSON.stringify({ pva1: parts.join(":") }), "utf8")
+
     Object.assign(process.env, { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" })
     await loadHealth()
     const result = await health.buildStartupHealthChecks({ now: NOW })
@@ -207,7 +226,7 @@ describe("startup health checks", () => {
 
 describe("startup health audit and route", () => {
   beforeEach(async () => {
-    seedStores({ expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW).toISOString() }, {})
+    await seedStores({ expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW).toISOString() }, {})
     Object.assign(process.env, { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" })
     await loadHealth()
   })
@@ -221,22 +240,35 @@ describe("startup health audit and route", () => {
     expect(audit.verifyAudit()).toEqual({ ok: true, brokenAt: null, reason: null })
   })
 
-  it("returns 401 for an unauthenticated remote GET and the cached shape for a local GET", async () => {
+  it("returns 401 for an unauthenticated GET even from loopback, and 200 with a session", async () => {
     await health.runStartupHealth({ now: NOW })
     const auth = await import("../services/auth.mjs")
-    await auth.createAccount({ email: "startup-health@example.com", password: "correct-horse-battery", name: "Startup" })
+    const account = await auth.createAccount({ email: "startup-health@example.com", password: "correct-horse-battery", name: "Startup" })
     handleApi = (await import("../handlers.mjs")).handleApi
+
+    // Unauthenticated remote → 401.
     const remote = makeReq("GET", "/api/command-centre/startup-health")
     remote.socket = { remoteAddress: "203.0.113.9" }
     const remoteRes = makeRes()
     await handleApi(remote, remoteRes, "/api/command-centre/startup-health")
     expect(remoteRes.status).toBe(401)
+
+    // Unauthenticated LOOPBACK → also 401. The readout names configured exchanges, token age and
+    // rail mode, so it must not inherit the app-wide localhost bypass: behind a reverse proxy the
+    // proxy itself is loopback, which would otherwise expose that metadata to a remote caller.
     const localRes = makeRes()
     await handleApi(makeReq("GET", "/api/command-centre/startup-health"), localRes, "/api/command-centre/startup-health")
-    expect(localRes.status).toBe(200)
-    expect(localRes.body.ok).toBe(true)
-    expect(Array.isArray(localRes.body.checks)).toBe(true)
-    expect(typeof localRes.body.generatedAt).toBe("string")
-    expect(JSON.stringify(localRes.body)).not.toContain(TOKEN)
+    expect(localRes.status).toBe(401)
+
+    // Authenticated → 200 with the cached boot result.
+    const authed = makeReq("GET", "/api/command-centre/startup-health")
+    authed.headers = { authorization: `Bearer ${account.token}` }
+    const authedRes = makeRes()
+    await handleApi(authed, authedRes, "/api/command-centre/startup-health")
+    expect(authedRes.status).toBe(200)
+    expect(authedRes.body.ok).toBe(true)
+    expect(Array.isArray(authedRes.body.checks)).toBe(true)
+    expect(typeof authedRes.body.generatedAt).toBe("string")
+    expect(JSON.stringify(authedRes.body)).not.toContain(TOKEN)
   }, 15_000)
 })
