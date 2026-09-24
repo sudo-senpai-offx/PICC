@@ -381,9 +381,11 @@ WS-5 added no route and no screen switcher for the 13-item inventory.
 
 Current mount truth is narrower than the old prose: the 13 names do not all render together in one
 route. `AutopilotSuite`, `SignalNotificationsCard`, and other exported cards are mounted by
-pre-existing ministry rooms; `PaperAnalyticsCard` currently has no JSX mount. The only current
-`data-panel` attribute in the source is `data-panel="chart"`. Treat "13 screens" as a count of
-module-level renderable exports, not 13 simultaneously mounted screens or 13 navigable screens.
+pre-existing ministry rooms; `WatchlistScannerCard` and `PaperAnalyticsCard` are exported but have no
+JSX mount anywhere — that is pre-existing, verified against the pre-WS-5 baseline commit `d400c70`,
+not a WS-5 regression. The only current `data-panel` attribute in the source is
+`data-panel="chart"`. Treat "13 screens" as a count of module-level renderable exports, not 13
+simultaneously mounted screens or 13 navigable screens.
 
 ---
 
