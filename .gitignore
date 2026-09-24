@@ -43,6 +43,8 @@ infra/btcpayserver/btcpayserver-docker/
 
 # Scratch / session tooling (never source-controlled)
 .playwright-tmp/
+test-results/
+playwright-report/
 .freebuff/
 .firecrawl/
 dev_pack_code.py
