@@ -162,6 +162,7 @@ import {
   followLeader as leaderFollow,
   setPlatformTrust as leaderSetPlatformTrust
 } from "./services/commandCentre/leaderIdeasState.mjs"
+import { runStartupHealth } from "./services/commandCentre/startupHealth.mjs"
 import { importLeaderFeed } from "./services/copytrade/csvFeedImport.mjs"
 import {
   autoUnfollow as leaderAutoUnfollow,
@@ -1746,6 +1747,12 @@ async function _handleApiInner(req, res, url, reqId) {
       leaders
     })
     return
+  }
+
+  if (path === "/api/command-centre/startup-health" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    writeJson(res, 200, await runStartupHealth())
+    return true
   }
 
   // Command Centre (WS-4) — follow: only after a qualified import; human-flips-last-switch.
