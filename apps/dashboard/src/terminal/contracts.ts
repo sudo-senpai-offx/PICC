@@ -104,6 +104,8 @@ export type CopilotExplanation = {
   model: string | null
   generatedAt: number | null
   cacheExpiresAt: number | null
+  /** Why the explanation is pending/stale/unavailable. AC-014 requires this be shown. */
+  reason: string | null
   redacted: true
 }
 
