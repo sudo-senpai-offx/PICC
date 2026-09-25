@@ -2,6 +2,8 @@ import { lazy, useEffect } from "react"
 import type { ComponentType, LazyExoticComponent } from "react"
 import { useParams } from "react-router-dom"
 import { rememberRoom } from "@/lib/ministryNav"
+import { RoomFrame } from "@/terminal/components/RoomFrame"
+import { reserved } from "@/terminal/domain/availability"
 
 // T7 — per-suite code-split: every room is its own async chunk, fetched only
 // when a room of that ministry renders. Trading / earnings / intelligence thus
@@ -46,6 +48,15 @@ const MINISTRY_ROOMS: Record<string, Record<string, LazyExoticComponent<Componen
   intelligence: INTELLIGENCE_ROOMS,
 }
 
+/**
+ * Exported so WS-6 can pin parity against `INNER_NAV`. These per-suite maps are
+ * a hand-maintained duplicate of the nav's room keys; before WS-6 nothing
+ * asserted the two agreed, so a valid nav link could silently render nothing.
+ * The parity guard lives in
+ * `src/terminal/components/__tests__/TerminalShell.test.tsx`.
+ */
+export { MINISTRY_ROOMS }
+
 export function MinistryRoom() {
   const { suiteId, "*": roomPath } = useParams<{ suiteId: string; "*": string }>()
   const rooms = MINISTRY_ROOMS[suiteId ?? ""]
@@ -58,6 +69,22 @@ export function MinistryRoom() {
     if (resolved) rememberRoom(suiteId, roomPath)
   }, [suiteId, roomPath, resolved])
 
-  if (!Room) return null
+  // WS-6 T2: an unmapped room used to render `null` — a blank body with no
+  // explanation. Spec 4.7 requires an explicit reserved state instead, naming
+  // what was requested and who owns it. No number, chart point, or score is
+  // shown, because nothing is known about the room yet.
+  if (!Room) {
+    return (
+      <RoomFrame
+        roomKey={roomPath ?? ""}
+        title={`${roomPath ?? "Unknown room"}`}
+        capabilityLabel="Room"
+        reserved={reserved({
+          workstream: "WS-6",
+          reason: `No room is mapped for "${roomPath ?? ""}" in the ${suiteId ?? "unknown"} suite.`
+        })}
+      />
+    )
+  }
   return <Room />
 }
