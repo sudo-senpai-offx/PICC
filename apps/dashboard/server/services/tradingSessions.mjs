@@ -33,9 +33,15 @@ const SESSIONS = {
 
 // Overlap periods (highest liquidity)
 const OVERLAPS = [
-  { name: "London-NY Overlap", start: 13, end: 16, color: "#ec4899", volatility: "highest", description: "Most liquid 3 hours of the trading day" },
+  { name: "London-NY Overlap", start: 13, end: 16, color: "#ec9589", volatility: "highest", description: "Most liquid 3 hours of the trading day" },
   { name: "Asian-London Overlap", start: 7, end: 9, color: "#06b6d4", volatility: "medium", description: "Transition period with building liquidity" }
 ]
+
+// WS-6 T4 (additive): expose the canonical session/overlap tables so the D10
+// policy seam derives its bounds from this single source of truth instead of
+// restating them. Purely additive — no existing behaviour changes, and the
+// pre-existing slice-5d tests continue to pass unchanged.
+export { SESSIONS, OVERLAPS }
 
 function utcHour(date = new Date()) {
   return date.getUTCHours() + date.getUTCMinutes() / 60
