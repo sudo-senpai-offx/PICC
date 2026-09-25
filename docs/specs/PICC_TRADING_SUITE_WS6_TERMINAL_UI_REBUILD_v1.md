@@ -133,6 +133,19 @@ Each entry records **Context → Decision → Why → Consequence**. A consequen
 
 **Consequence:** T10 and T11 are release gates. A missing target measurement produces `UNVERIFIED`, not a fabricated pass.
 
+**AMENDED 2026-09-25 (owner).** Two changes to the context above:
+
+1. **The supported range is broader than the two named processors.** Support is declared for any device **equivalent to or beyond** Snapdragon-400 / Intel Atom **by spec rating**. The two named parts are the *floor*, not the only supported SKUs; a device at or above that rating is in scope without a per-SKU exception.
+2. **Unverifiable dimensions may be emulated.** Where physical target hardware is unavailable, the owner authorises a **CPU-throttled proxy environment** as evidence, provided the result is labelled as a proxy.
+
+**What throttling can and cannot prove (honesty requirement).** A throttled run is real measured data about a *constrained compute envelope* and may be reported — but it must be labelled `throttled-proxy`, never as the device itself.
+
+- **It CAN bound CPU-bound work:** route/chunk parse and execute time, pure-domain latency, table sort/filter over N rows, render-commit time, animation frame budget, re-render counts.
+- **It CANNOT reproduce** memory bandwidth, cache-hierarchy behaviour, thermal/battery throttling, browser JIT tiering differences, or real compositor/rasterisation cost. These remain `UNVERIFIED`.
+- **It CANNOT validate ARM64 at all.** An x86 host throttled to Snapdragon-400-equivalent spec rating still executes **x86**. It yields an x86 performance envelope only. ARM64 correctness — ABI/alignment rules, native-module availability, 64-bit-only issues — remains `UNVERIFIED` and cannot be closed by emulation. Any ARM64 claim requires physical ARM64 hardware.
+
+Every proxy report must state: host CPU model, throttle mechanism and factor, route, sample count, p50/p95, and the label `throttled-proxy (x86, CPU-limited)`. A proxy result may satisfy the **performance-budget** gate; it may **not** satisfy the **architecture-correctness** gate, and it may never be reported as "Snapdragon 400 validated".
+
 ### D3 — Minimum viewport is 1280×800, dense terminal, no horizontal scroll
 **Context:** This is an owner-supplied design constraint; no existing viewport acceptance was read in the repository.
 
@@ -920,6 +933,13 @@ Owners are deliberately non-overlapping within a task. The same owner may own la
 **Files:** target-device measurement manifest, screenshots/trace artifacts, `docs/specs/PICC_TRADING_SUITE_WS6_TERMINAL_UI_REBUILD_v1.md` release note, `PICC.md` only after owner acceptance.
 
 **Acceptance:** AC-018 passes on both available target classes or the owner explicitly records a narrower supported range. Raw evidence includes device class, OS/browser, viewport, route, samples, p95, and memory. If hardware is unavailable, the result remains `UNVERIFIED` and WS-6 is not ship-complete.
+
+**AMENDED 2026-09-25 (owner).** Per the D2 amendment, the **performance-budget** gate (AC-018) may be satisfied by a CPU-throttled proxy environment, because the owner accepts a constrained-compute envelope as evidence. T11 must therefore produce, in order:
+
+1. A **throttled-proxy performance report** — host CPU model, throttle mechanism and factor, route, viewport, sample count, p50/p95, memory, reduced-motion result. Labelled `throttled-proxy (x86, CPU-limited)`. This can close the AC-018 *performance-budget* gate.
+2. An explicit **`architecture-correctness: UNVERIFIED`** line. Throttling an x86 host cannot validate ARM64, so the x86 half of D2's range closes on proxy data and the **ARM64 half remains `UNVERIFIED`** pending physical ARM64 hardware.
+
+Consequence for the ship gate: with the owner's amended D2 range, WS-6 may reach **ship-complete on the performance-budget gate** once item 1 passes. It may **not** be described as ARM64-validated, and T12's registry row must carry the residual `ARM64: UNVERIFIED` note rather than a clean pass. If the owner later supplies physical ARM64 hardware, only the architecture-correctness line changes.
 
 **Bisect:** A device failure reopens only the relevant performance task; it cannot be “fixed” by removing a safety or data contract.
 
