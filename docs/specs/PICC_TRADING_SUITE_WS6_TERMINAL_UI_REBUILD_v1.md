@@ -38,6 +38,63 @@ This specification turns the owner’s WS-6 terminal-UI decisions into a strangl
 | Bundle/library choices are unapproved hypotheses | `apps/dashboard/package.json:18-27` only verifies `lightweight-charts`; external package snapshots are in D16 | Use a small, staged dependency decision; do not add a package merely because a gallery contains it. |
 | Some cards are historical/unreachable candidates | `TradingSuite.tsx:1136` and `:1323` are the current read anchors for `PaperAnalyticsCard` and `WatchlistScannerCard`; WS-5 records the broader historical card inventory at `docs/specs/PICC_TRADING_SUITE_WS5_BREADTH_OPERABILITY_HARDENING_v1.md:16-17` | Archive/remove only through the ownership and test rules in §6. |
 
+### 0.3 T0 baseline freeze (measured at `ddc4c91`, 2026-09-25)
+
+Recorded per T0 acceptance. **Measured** values were observed on the pushed
+tree; **unverified** values are explicitly not claims.
+
+| Gate | Command | Observed result |
+|---|---|---|
+| Test floor | `npx vitest run --maxWorkers=1` (from `apps/dashboard`) | 282 files / 3145 passed, 1 skipped (283 total), exit 0, 228.60s |
+| Typecheck | `npm run typecheck` (root) | exit 0 |
+| Audit chain | `verifyAudit()` | `{"ok":true,"brokenAt":null,"reason":null}` |
+| E2E | `npm run test:e2e --workspace @picc/dashboard` | 4 passed, 45.3s |
+| Seam guards | ws3/ws4/ws5 + orderFlowHonesty | 51 passed |
+
+The WS-5 baseline of 281 files / 3133 tests is superseded: the pre-WS-6
+order-flow P0 hotfix (`ddc4c91`) added `orderFlowHonestySeamGuard.test.mjs` and
+rewrote three test files, for a net +12 tests.
+
+**Legacy deep-link contract (frozen — T2 must preserve, not redesign).**
+`Suites.tsx:26-35`: if the query string has **any** of `asset`, `panel`, or
+`venue`, render `<MarketsSuite />` inside the `stack stack-lg` + `<header>`
+shell. This branch performs **no** redirect and **no** room-history read.
+`Suites.tsx:37-40`: with a `suiteId` and no deep-link params, resume via
+`getLastRoom(suiteId, INNER_NAV[suiteId].map(e => e.to))`, falling through to
+the inner-nav card grid at `:42-55` when no valid history exists.
+`Suites.tsx:58-60`: bare `/suites` redirects to `/suites/trading`, **preserving
+the query string**.
+
+**Room keys (frozen).** `MinistryShell.tsx:5-29` defines three suites and 18
+room keys: `trading` → dashboard, markets, paper, autopilot, command-centre,
+dispatch, simulator, studio, settings (9); `earnings` → dashboard, simulator,
+studio, settings (4); `intelligence` → dashboard, governor, guidance, studio,
+settings (5).
+
+**Realtime subscription count (frozen — already correct).**
+`useRealtimeSuite.ts:140-142` installs exactly one `SuiteStreamManager` on
+`globalThis.__picc_suite_stream`, so the transport is a process-wide singleton.
+`useRealtimeSuite()` (`:167-193`) only adds/removes a listener (`:180-190`) and
+never opens its own transport; `subscribeTicks()` (`:150-152`) delegates to the
+same manager. There are **12 call sites across 11 files**:
+`useCandleData.ts:358`, `TradingSuite.tsx:122`, `TradingChart.tsx:115`,
+`AutopilotSuite.tsx:80`, `DispatchStrip.tsx:13`, `LiveMarketBoard.tsx:115`,
+`MarketIntelPanel.tsx:98` and `:124`, `SoakBay.tsx:12`,
+`ministry/DashboardRoom.tsx:13`, `ministry/DispatchRoom.tsx:8`,
+`ministry/DispatchBell.tsx:7`.
+**Consequence for WS-6: N consumers already yield exactly one connection.**
+T12 must therefore *pin* "one shared manager" and must not be written on the
+false premise that a per-component socket leak needs fixing. This corrects the
+framing in §0.1 item 5, which warned only against *creating* a second socket.
+
+**File-touch whitelist.** WS-6 may create files under
+`apps/dashboard/src/terminal/`, `apps/dashboard/src/terminal/**/__tests__/`,
+`apps/dashboard/scripts/`, `docs/trading-logic/changelog/`, and may edit only
+the paths named in the per-task file lists in §6. Any path outside that union
+requires a dated spec amendment before it is touched. The bisect matrix's
+"Must not touch" column is binding per slice. T0 added **no** runtime
+dependency and changed **no** legacy contract line.
+
 ---
 
 ## §1 Locked decisions re-affirmed (not renegotiable by WS-6)
@@ -736,7 +793,7 @@ Every criterion contains **Scenario, Action, Expected observable result, Prohibi
 Owners are deliberately non-overlapping within a task. The same owner may own later tasks, but no task has two owners for the same file. “New” means a proposed path from §4.2; an implementation agent must verify the path before creating it.
 
 ### T0 — Capture the baseline and freeze the compatibility seam (Owner A: foundation)
-**Files:** `apps/dashboard/src/components/TradingSuite.tsx`, `apps/dashboard/src/pages/Suites.tsx`, `apps/dashboard/src/App.tsx`, `apps/dashboard/src/components/__tests__/TradingSuite.deeplink.test.tsx`, `apps/dashboard/src/hooks/__tests__/useCandleData.render.test.tsx`, `apps/dashboard/src/pages/__tests__/ministryRooms.test.tsx`, `apps/dashboard/server/__tests__/ws5SeamGuard.test.mjs`, `docs/specs/PICC_TRADING_SUITE_WS6_TERMINAL_UI_REBUILD_v1.md`.
+**Files:** `apps/dashboard/src/components/TradingSuite.tsx`, `apps/dashboard/src/pages/Suites.tsx`, `apps/dashboard/src/App.tsx`, `apps/dashboard/src/components/__tests__/TradingSuite.deeplink.test.tsx`, `apps/dashboard/src/hooks/__tests__/useCandleData.render.test.tsx`, `apps/dashboard/src/pages/__tests__/ministryRooms.test.tsx`, `apps/dashboard/src/hooks/__tests__/sseCoalescing.test.ts` (amended 2026-09-25: this is the shared-transport seam's test home, and `freshBus()` there deliberately deletes the global singleton, so the process-wide singleton invariant is otherwise unpinned), `apps/dashboard/server/__tests__/ws5SeamGuard.test.mjs`, `docs/specs/PICC_TRADING_SUITE_WS6_TERMINAL_UI_REBUILD_v1.md`.
 
 **Acceptance:** Record the current test/typecheck/audit results, exact legacy query behavior, room keys, realtime subscription count, and file-touch whitelist. Add no runtime dependency and do not modify the legacy contract.
 

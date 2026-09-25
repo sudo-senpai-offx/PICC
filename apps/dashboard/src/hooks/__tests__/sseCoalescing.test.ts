@@ -7,7 +7,7 @@
 // body and observe: fetch call count, per-subscriber delivery, and the abort
 // signal on the last unsubscribe.
 
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest"
 import type { LiveTick } from "../../lib/liveTrading"
 
 function tickEvent(a: string, price: number, ts = 1_700_000_000): string {
@@ -111,5 +111,64 @@ describe("shared realtime tick bus", () => {
     expect(cb).toHaveBeenCalled()
     expect((cb.mock.calls[0][0] as LiveTick).ts).toBe(1_700_000_000)
     off()
+  })
+})
+
+/**
+ * WS-6 T0 — process-wide singleton invariant (characterisation).
+ *
+ * The tests above all call `freshBus()`, which DELETES
+ * `globalThis.__picc_suite_stream` and re-imports the module. That proves the
+ * bus coalesces in isolation, but it does NOT prove the invariant WS-6 must
+ * preserve: that the module installs exactly one manager per process and that
+ * repeated module evaluation reuses it. T12 pins "single realtime
+ * subscription" against this, so it is frozen here.
+ *
+ * Freeze of current behaviour — expected to pass with no production change.
+ */
+describe("WS-6 T0 — the suite stream manager is a process-wide singleton", () => {
+  afterEach(() => {
+    delete (globalThis as unknown as Record<string, unknown>).__picc_suite_stream
+  })
+
+  it("installs the manager on globalThis under the pinned key", async () => {
+    delete (globalThis as unknown as Record<string, unknown>).__picc_suite_stream
+    vi.resetModules()
+    await import("../useRealtimeSuite")
+    const g = globalThis as unknown as Record<string, unknown>
+    expect(g.__picc_suite_stream).toBeDefined()
+    expect(typeof g.__picc_suite_stream).toBe("object")
+  })
+
+  it("reuses the SAME manager instance across repeated imports", async () => {
+    delete (globalThis as unknown as Record<string, unknown>).__picc_suite_stream
+    vi.resetModules()
+    await import("../useRealtimeSuite")
+    const first = (globalThis as unknown as Record<string, unknown>).__picc_suite_stream
+    vi.resetModules()
+    await import("../useRealtimeSuite")
+    const second = (globalThis as unknown as Record<string, unknown>).__picc_suite_stream
+    expect(second).toBe(first)
+  })
+
+  it("does not open a second transport when a second consumer subscribes", async () => {
+    const { subscribeTicks } = await freshBus()
+    const g = globalThis as unknown as Record<string, unknown>
+    const managerAtFirstSubscribe = g.__picc_suite_stream
+
+    const offA = subscribeTicks("BTCUSD", vi.fn())
+    await flush()
+    const afterFirst = fetchCount
+    expect(afterFirst).toBe(1)
+
+    // A different asset, and a second listener on the SAME asset.
+    const offB = subscribeTicks("EURUSD", vi.fn())
+    const offC = subscribeTicks("BTCUSD", vi.fn())
+    await flush()
+
+    expect(fetchCount, "extra consumers must not open another transport").toBe(afterFirst)
+    expect(g.__picc_suite_stream).toBe(managerAtFirstSubscribe)
+
+    offA(); offB(); offC()
   })
 })
