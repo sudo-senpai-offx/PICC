@@ -620,6 +620,53 @@ A reserved capability renders a stable component with:
 
 `UNVERIFIED` data is visibly different from a legitimate zero. A stale source is visibly different from a live source. A pending remote explanation is visibly different from a deterministic result. These states are the terminal’s first-class data, not loading placeholders.
 
+### 4.8 T1 dependency manifest and install decision (2026-09-25)
+
+Verified current state: `apps/dashboard/package.json:18-38` contains
+`lightweight-charts@^5.2.1` and no `motion`, TanStack, Radix, zustand,
+`@observablehq/plot`, or `cmdk`. `package.json` and `package-lock.json` were
+**not modified** by T1.
+
+| Candidate | Planned owner | Planned route | Verdict | Install at T1? |
+|---|---|---|---|---|
+| `lightweight-charts@5.2.1` | T6 chart surface | markets, paper, command-centre | ACTIVE — already a dependency | already present |
+| `@tanstack/react-virtual@3.14.13` | T5 dense tables | markets, command-centre | ACTIVE, 26,139 B / 7,792 B gzip | **deferred to T5** |
+| `@tanstack/react-table@9.2.4` | T5 dense tables | markets | ACTIVE, 120,827 B / 31,751 B gzip | **deferred to T5** |
+| `motion@13.4.3` | T8 presentation | all rooms | ACTIVE, sole animation primitive | **deferred to T8** |
+| `radix-ui@1.6.7` | T2/T7 primitives | all rooms | SELECTIVE, individual imports only | **deferred to first needing task** |
+| `@observablehq/plot@0.6.17` | analytics | lazy only | OPTIONAL, 384,511 B / 127,958 B gzip | **deferred / may never install** |
+| `zustand@5.0.15` | cross-room state | — | CONDITIONAL on existing hooks being insufficient | **deferred / may never install** |
+| `shadcn` | — | — | ACTIVE REFERENCE: copy source, never a runtime dep | n/a |
+| `cmdk` | — | — | **REJECT** | absent, and T12 pins absence |
+| WebGL / particle / aurora / 3D / scroll choreography | — | — | **REJECT** | absent, and T12 pins absence |
+
+**Install decision: T1 adds zero runtime dependencies.** Rationale:
+
+1. T1's bisect requirement is that the slice "must not mount a room or change
+   server behavior"; the contracts and manifest are fully deliverable without a
+   package, so installing now would add risk for no acceptance value.
+2. The owner-locked hardware floor is Atom-class x86 / Snapdragon-400 ARM64
+   with **no degradation permitted** (D2), and T11 target-device validation is
+   **UNVERIFIABLE in this environment**. Adding ~475 KB of unvalidated,
+   third-party-estimated dependency weight now would be unverifiable against
+   the only budget that matters.
+3. Every §4.5 size figure is a dated third-party estimate (honesty note 5);
+   T10 must replace them with route-chunk measurements. Installing against
+   unverified numbers would invert that ordering.
+4. WS-5 established that lockfile surgery in this repo is non-trivial
+   (`npm ci` runs in CI at `.github/workflows/ci.yml`), so each install should
+   be justified by a task that actually needs the package.
+
+Each deferred package installs at the task that consumes it, with its
+license/ARM64/maintenance re-verified at that moment and T10 recording the
+measured delta. "Unused-test" for every row above: **none installed → none
+unused**. Any package that ends the workstream unused is a T12 finding.
+
+**Version/licence/ARM64 status: UNVERIFIED for every candidate except
+`lightweight-charts@5.2.1`.** The §4.5 figures were research snapshots, not
+measurements taken or confirmed by the implementation agent. Nothing in this
+manifest asserts a package works on the target hardware.
+
 ---
 
 ## §5 Acceptance criteria
