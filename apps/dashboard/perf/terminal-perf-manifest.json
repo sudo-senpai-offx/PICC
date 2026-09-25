@@ -1,0 +1,161 @@
+{
+  "generatedAt": "2026-09-25T05:31:55.042Z",
+  "policy": "ws6-session-policy/1",
+  "evidenceKind": "throttled-proxy",
+  "disclaimer": "CPU-throttled x86 proxy. Satisfies the AC-018 performance-budget gate only. ARM64 architecture correctness remains UNVERIFIED and requires physical ARM64 hardware. These numbers must never be reported as a Snapdragon 400 or Intel Atom measurement.",
+  "viewportFloor": "1280x800 (D3)",
+  "budgets": {
+    "firstInteractiveWarm": 2000,
+    "firstContentfulPaintCold": 3000,
+    "roomTransition": 250,
+    "tickToVisible": 50,
+    "table10kInitialRender": 250,
+    "deterministicDomain": 16
+  },
+  "budgetVerdicts": [
+    {
+      "metric": "firstContentfulPaintCold@6x",
+      "observedMs": 1236,
+      "budgetMs": 3000,
+      "verdict": "pass"
+    },
+    {
+      "metric": "deterministicDomainP95@6x",
+      "observedMs": 6.5,
+      "budgetMs": 16,
+      "verdict": "pass"
+    },
+    {
+      "metric": "roomTransitionP50@6x",
+      "observedMs": 1121,
+      "budgetMs": 250,
+      "verdict": "BREACH",
+      "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
+    },
+    {
+      "metric": "roomTransitionP95@6x",
+      "observedMs": 1562,
+      "budgetMs": 250,
+      "verdict": "BREACH",
+      "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
+    }
+  ],
+  "breaches": [
+    {
+      "metric": "roomTransitionP50@6x",
+      "observedMs": 1121,
+      "budgetMs": 250,
+      "verdict": "BREACH",
+      "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
+    },
+    {
+      "metric": "roomTransitionP95@6x",
+      "observedMs": 1562,
+      "budgetMs": 250,
+      "verdict": "BREACH",
+      "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
+    }
+  ],
+  "hostCpu": "Intel(R) Core(TM) 5 120U",
+  "records": [
+    {
+      "label": "throttled-proxy (x86, CPU-limited)",
+      "architecture": "x86",
+      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
+      "throttle": {
+        "mechanism": "cdp:Emulation.setCPUThrottlingRate",
+        "rate": 1
+      },
+      "hostCpu": "Intel(R) Core(TM) 5 120U",
+      "route": "/suites/trading/markets",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "paintMs": {
+        "fcp": 232,
+        "domContentLoaded": 205.70000000298023,
+        "loadEvent": 206.79999999701977
+      },
+      "deterministicDomainMs": {
+        "p50": 0,
+        "p95": 0.20000000298023224,
+        "samples": 25
+      },
+      "roomTransitionMs": {
+        "p50": 154,
+        "p95": 909,
+        "samples": 5
+      },
+      "reducedMotionHonoured": false,
+      "jsHeapMb": 36,
+      "pageErrors": []
+    },
+    {
+      "label": "throttled-proxy (x86, CPU-limited)",
+      "architecture": "x86",
+      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
+      "throttle": {
+        "mechanism": "cdp:Emulation.setCPUThrottlingRate",
+        "rate": 4
+      },
+      "hostCpu": "Intel(R) Core(TM) 5 120U",
+      "route": "/suites/trading/markets",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "paintMs": {
+        "fcp": 328,
+        "domContentLoaded": 246.20000000298023,
+        "loadEvent": 250.3999999910593
+      },
+      "deterministicDomainMs": {
+        "p50": 0.09999999403953552,
+        "p95": 1,
+        "samples": 25
+      },
+      "roomTransitionMs": {
+        "p50": 385,
+        "p95": 1040,
+        "samples": 5
+      },
+      "reducedMotionHonoured": false,
+      "jsHeapMb": 36,
+      "pageErrors": []
+    },
+    {
+      "label": "throttled-proxy (x86, CPU-limited)",
+      "architecture": "x86",
+      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
+      "throttle": {
+        "mechanism": "cdp:Emulation.setCPUThrottlingRate",
+        "rate": 6
+      },
+      "hostCpu": "Intel(R) Core(TM) 5 120U",
+      "route": "/suites/trading/markets",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "paintMs": {
+        "fcp": 1236,
+        "domContentLoaded": 1087.7000000029802,
+        "loadEvent": 1116.7000000029802
+      },
+      "deterministicDomainMs": {
+        "p50": 0.3999999910593033,
+        "p95": 6.5,
+        "samples": 25
+      },
+      "roomTransitionMs": {
+        "p50": 1121,
+        "p95": 1562,
+        "samples": 5
+      },
+      "reducedMotionHonoured": false,
+      "jsHeapMb": 36,
+      "pageErrors": []
+    }
+  ]
+}
