@@ -141,7 +141,25 @@ async function waitFor(url, timeoutMs) {
   const dashUp = await waitFor("http://localhost:5173/api/health", 20000)
   if (!dashUp || shuttingDown) return
   console.log(`\n[dev] dashboard live at http://localhost:5173`)
-  const agentsUp = await waitFor(`${agentsUrl}/health`, 10000)
-  console.log(`[dev] agents (CrewAI) ${agentsUp ? "online" : "not responding"} at ${agentsUrl}`)
+  // The agents service now lazy-loads its CrewAI imports, so /health answers in
+  // ~1s instead of racing a 7-8s module import. 30s is a generous safety net for
+  // cold AV / slow disks rather than a tuned value; if this still fails, the
+  // service genuinely did not come up and the message below says which.
+  const agentsUp = await waitFor(`${agentsUrl}/health`, 30000)
+  if (agentsUp) {
+    console.log(`[dev] agents (CrewAI) online at ${agentsUrl}`)
+  } else if (shuttingDown) {
+    // process is stopping; nothing to report
+  } else {
+    const exited = agents.exitCode !== null
+    console.error(
+      `[dev] agents (CrewAI) did NOT come up at ${agentsUrl}. ` +
+      (exited
+        ? `It already exited (code ${agents.exitCode}); scroll up for its traceback.`
+        : "It is running but /health never answered. Common causes: a stale process " +
+          "holding the port, or a PICC_AGENTS_URL in apps/dashboard/.env pointing " +
+          "somewhere other than this script is starting.")
+    )
+  }
   if (!shuttingDown) console.log(`[dev] Ctrl+C stops both.`)
 })()

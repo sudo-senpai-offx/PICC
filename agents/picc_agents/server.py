@@ -19,17 +19,51 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from crew import (
-    PiccBountyCrew,
-    PiccCashClawCrew,
-    PiccContentCrew,
-    PiccDepinCrew,
-    PiccInvestmentCrew,
-    PiccListingCrew,
-    PiccResearchCrew,
-    PiccStrategistCrew,
-    PiccTradingCrew,
-)
+# NOTE: the CrewAI crews are imported LAZILY, not at module scope.
+#
+# Importing `crew` costs ~6-8s on a cold Windows venv (measured 8.27s for the
+# crew module alone, 6.88s for the full server import once warm). Loading all
+# eleven crews at import time made every cold start slow enough to race the
+# dev script's 10s readiness probe, which is why `npm run dev` intermittently
+# reported "agents not responding" even though uvicorn was starting perfectly.
+#
+# A readiness probe must not pay for the heavy dependency graph, so the import
+# now happens on first actual crew use. /health answers in well under a second
+# and reports crew loadability as an OBSERVED state rather than implying the
+# crews are ready when they have not been touched yet.
+
+_CREWS: dict = {}
+
+
+def _crew(name: str):
+    """Import and cache the crew classes on first use."""
+    if not _CREWS:
+        from crew import (
+            PiccBountyCrew,
+            PiccCashClawCrew,
+            PiccContentCrew,
+            PiccDepinCrew,
+            PiccInvestmentCrew,
+            PiccListingCrew,
+            PiccResearchCrew,
+            PiccStrategistCrew,
+            PiccTradingCrew,
+        )
+
+        _CREWS.update(
+            bounty=PiccBountyCrew,
+            cashclaw=PiccCashClawCrew,
+            content=PiccContentCrew,
+            depin=PiccDepinCrew,
+            investment=PiccInvestmentCrew,
+            listing=PiccListingCrew,
+            research=PiccResearchCrew,
+            strategist=PiccStrategistCrew,
+            trading=PiccTradingCrew,
+        )
+    if name not in _CREWS:
+        raise KeyError(f"unknown crew: {name}")
+    return _CREWS[name]
 
 load_dotenv()
 
@@ -136,8 +170,13 @@ def save_settings(req: AgentSettings) -> dict:
 
 @app.get("/health")
 def health() -> dict:
+    # `crews.loaded` is an OBSERVED state, not an assumption: False means the
+    # heavy import has not been triggered yet, which is the healthy fast-path
+    # after the lazy-import change. It is deliberately NOT reported as True just
+    # because the process is up.
     return {
         "status": "ok",
+        "crews": {"loaded": bool(_CREWS)},
         "agents": ["researcher", "analyst", "content_creator", "listing_analyst", "trading_strategist", "defi_analyst", "nft_royalty_analyst", "bounty_hunter", "cashclaw_hunter", "depin_optimizer", "content_strategist"],
         "llm": _effective_settings(),
     }
@@ -152,7 +191,7 @@ def run_research(req: ResearchRequest) -> dict:
     """Runs the Researcher -> Analyst crew live and returns the full report."""
     if not _crew_enabled():
         return {"source": "local", "report": "Live crew disabled or no API key. Enable it in the PICC Settings page."}
-    crew = PiccResearchCrew()
+    crew = _crew("research")()
     result = crew.crew().kickoff(inputs={"topic": req.topic})
     return {"source": "crewai", "report": str(result)}
 
@@ -161,7 +200,7 @@ def run_research(req: ResearchRequest) -> dict:
 def simulate(req: SimulateRequest) -> dict:
     if not _crew_enabled():
         return {"source": "local", "notes": "Live crew disabled or no API key."}
-    crew = PiccResearchCrew()
+    crew = _crew("research")()
     result = crew.crew().kickoff(
         inputs={
             "topic": (
@@ -188,7 +227,7 @@ def analyze_listing(req: ListingRequest) -> dict:
                 }
             ],
         }
-    crew = PiccListingCrew()
+    crew = _crew("listing")()
     result = crew.crew().kickoff(
         inputs={
             "title": req.title,
@@ -211,7 +250,7 @@ def generate_content(req: ContentRequest) -> dict:
                 "cta": "Subscribe for more.",
             },
         }
-    crew = PiccContentCrew()
+    crew = _crew("content")()
     result = crew.crew().kickoff(
         inputs={"topic": req.topic, "platform": "youtube" if req.kind == "youtube_script" else req.kind, "format": req.kind}
     )
@@ -223,7 +262,7 @@ def run_trading(req: TradingRequest) -> dict:
     """Runs the Trading Strategist crew on a Trading Suite signal context."""
     if not _crew_enabled():
         return {"source": "local", "commentary": "Live trading crew disabled or no API key. Enable it in the PICC Settings page."}
-    crew = PiccTradingCrew()
+    crew = _crew("trading")()
     result = crew.crew().kickoff(
         inputs={
             "asset": req.asset,
@@ -242,7 +281,7 @@ def run_investment(req: InvestmentRequest) -> dict:
     """Runs the DeFi/Staking/NFT strategist crew on a passive-income question."""
     if not _crew_enabled():
         return {"source": "local", "report": "Live investment crew disabled or no API key. Enable it in the PICC Settings page."}
-    crew = PiccInvestmentCrew()
+    crew = _crew("investment")()
     result = crew.crew().kickoff(
         inputs={
             "topic": req.topic,
@@ -262,7 +301,7 @@ def run_bounty(req: BountyRequest) -> dict:
     """Runs the AIGEN Bounty Hunter crew and returns the ranked shortlist."""
     if not _crew_enabled():
         return {"source": "local", "report": "Live bounty crew disabled or no API key. Enable it in the PICC Settings page."}
-    crew = PiccBountyCrew()
+    crew = _crew("bounty")()
     result = crew.crew().kickoff(inputs={"topic": req.topic})
     return {"source": "crewai", "report": str(result)}
 
@@ -277,7 +316,7 @@ def run_cashclaw(req: CashClawRequest) -> dict:
     """Runs the CashClaw crew — crypto rewards recovery audit (claims, expiry, clawbacks)."""
     if not _crew_enabled():
         return {"source": "local", "report": "Live CashClaw crew disabled or no API key. Enable it in the PICC Settings page."}
-    crew = PiccCashClawCrew()
+    crew = _crew("cashclaw")()
     result = crew.crew().kickoff(inputs={"wallet": req.wallet, "context": req.context or "No recent activity provided."})
     return {"source": "crewai", "report": str(result)}
 
@@ -292,7 +331,7 @@ def run_depin(req: DepinRequest) -> dict:
     """Runs the DePIN optimizer crew on the user's node/device setup."""
     if not _crew_enabled():
         return {"source": "local", "report": "Live DePIN crew disabled or no API key. Enable it in the PICC Settings page."}
-    crew = PiccDepinCrew()
+    crew = _crew("depin")()
     result = crew.crew().kickoff(inputs={"devices": req.devices, "context": req.context or "No health context provided."})
     return {"source": "crewai", "report": str(result)}
 
@@ -307,6 +346,6 @@ def run_strategist(req: StrategistRequest) -> dict:
     """Runs the Content Strategist crew on the user's income streams."""
     if not _crew_enabled():
         return {"source": "local", "report": "Live strategist crew disabled or no API key. Enable it in the PICC Settings page."}
-    crew = PiccStrategistCrew()
+    crew = _crew("strategist")()
     result = crew.crew().kickoff(inputs={"streams": req.streams, "audience": req.audience})
     return {"source": "crewai", "report": str(result)}
