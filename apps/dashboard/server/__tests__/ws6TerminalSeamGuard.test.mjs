@@ -80,6 +80,25 @@ describe("AC-020 — locked decisions are still encoded in code", () => {
   it("keeps the D3 1280x800 viewport floor in the perf harness", () => {
     expect(read("../../e2e/terminal-perf.spec.ts")).toMatch(/1280,\s*height:\s*800/)
   })
+
+  it("keeps the AC-002 horizontal-scroll assertion in the harness", () => {
+    const spec = read("../../e2e/terminal-perf.spec.ts")
+    expect(spec, "AC-002 requires a real-browser no-horizontal-scroll assertion").toMatch(/scrollWidth/)
+    expect(spec).toMatch(/1280x800 \(D3\)|1280,\s*height:\s*800/)
+  })
+
+  it("bundles the terminal stylesheet so terminal-* classes are actually styled", () => {
+    expect(existsSync(at("../../src/terminal/styles/terminal.css"))).toBe(true)
+    expect(read("../../src/terminal/index.ts"), "an unimported stylesheet is dead code").toMatch(
+      /import\s+["']\.\/styles\/terminal\.css["']/
+    )
+  })
+
+  it("keeps the reduced-motion CSS contract", () => {
+    const css = read("../../src/terminal/styles/terminal.css")
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/)
+    expect(css, "reduced motion must actually neutralise transitions").toMatch(/transition-duration:\s*0/)
+  })
 })
 
 describe("AC-018 — performance evidence exists and is honestly labelled", () => {

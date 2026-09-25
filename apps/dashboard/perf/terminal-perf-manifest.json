@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-25T05:53:19.971Z",
+  "generatedAt": "2026-09-25T06:22:15.214Z",
   "policy": "ws6-session-policy/1",
   "evidenceKind": "throttled-proxy",
   "disclaimer": "CPU-throttled x86 proxy. Satisfies the AC-018 performance-budget gate only. ARM64 architecture correctness remains UNVERIFIED and requires physical ARM64 hardware. These numbers must never be reported as a Snapdragon 400 or Intel Atom measurement.",
@@ -15,26 +15,26 @@
   "budgetVerdicts": [
     {
       "metric": "firstContentfulPaintCold@6x",
-      "observedMs": 1364,
+      "observedMs": 504,
       "budgetMs": 3000,
       "verdict": "pass"
     },
     {
       "metric": "deterministicDomainP95@6x",
-      "observedMs": 1.4,
+      "observedMs": 1.5,
       "budgetMs": 16,
       "verdict": "pass"
     },
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 985,
+      "observedMs": 1060,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 1829,
+      "observedMs": 1409,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
@@ -75,14 +75,14 @@
   "breaches": [
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 985,
+      "observedMs": 1060,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 1829,
+      "observedMs": 1409,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
@@ -105,22 +105,31 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 112,
-        "domContentLoaded": 87.79999999701977,
-        "loadEvent": 88.5
+        "fcp": 108,
+        "domContentLoaded": 84,
+        "loadEvent": 84.6000000089407
+      },
+      "layout": {
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "scrollWidth": 1280,
+        "clientWidth": 1280,
+        "overflowing": []
       },
       "deterministicDomainMs": {
         "p50": 0,
-        "p95": 0.10000000894069672,
+        "p95": 0.29999999701976776,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 82,
-        "p95": 258,
+        "p50": 204,
+        "p95": 452,
         "samples": 5
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 33,
+      "jsHeapMb": 32,
       "pageErrors": []
     },
     {
@@ -138,9 +147,18 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 364,
-        "domContentLoaded": 259.79999999701977,
-        "loadEvent": 268.20000000298023
+        "fcp": 740,
+        "domContentLoaded": 649.4000000059605,
+        "loadEvent": 653.7999999970198
+      },
+      "layout": {
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "scrollWidth": 1280,
+        "clientWidth": 1280,
+        "overflowing": []
       },
       "deterministicDomainMs": {
         "p50": 0.20000000298023224,
@@ -148,12 +166,12 @@
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 748,
-        "p95": 980,
+        "p50": 808,
+        "p95": 1063,
         "samples": 5
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 33,
+      "jsHeapMb": 32,
       "pageErrors": []
     },
     {
@@ -171,22 +189,31 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 1364,
-        "domContentLoaded": 1225.9000000059605,
-        "loadEvent": 1237.7999999970198
+        "fcp": 504,
+        "domContentLoaded": 354,
+        "loadEvent": 361.90000000596046
+      },
+      "layout": {
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "scrollWidth": 1280,
+        "clientWidth": 1280,
+        "overflowing": []
       },
       "deterministicDomainMs": {
-        "p50": 0.20000000298023224,
-        "p95": 1.3999999910593033,
+        "p50": 0.3999999910593033,
+        "p95": 1.5,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 985,
-        "p95": 1829,
+        "p50": 1060,
+        "p95": 1409,
         "samples": 5
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 33,
+      "jsHeapMb": 32,
       "pageErrors": []
     }
   ]

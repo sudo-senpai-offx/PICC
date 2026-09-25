@@ -1,0 +1,178 @@
+/* WS-6 T8 — terminal stylesheet.
+ *
+ * The terminal ships beside the legacy suite, so these tokens are additive and
+ * deliberately namespaced under `terminal-` to avoid colliding with existing
+ * global styles. The legacy dark theme in `src/index.css` is untouched; this file
+ * only styles the WS-6 surface.
+ *
+ * D3: dense but usable at a 1280x800 floor. Density is achieved with tight
+ * spacing and tabular numerals, NOT by shrinking text below a readable size.
+ *
+ * REDUCED MOTION (AC-005/AC-016): motion is expressed only through transitions
+ * and transforms, and the media query below removes them entirely. No WS-6
+ * motion is load-bearing for comprehension, so disabling it removes decoration
+ * rather than information.
+ */
+
+.terminal-room {
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* lets a flex child shrink instead of forcing page scroll */
+  gap: var(--terminal-gap, 8px);
+}
+
+.terminal-room__header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-room__title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-room__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--terminal-gap, 8px);
+}
+
+/* ---- reserved / unavailable / stale body ------------------------------- */
+/* Unavailable is VISUALLY DISTINCT from a legitimate zero. It is a quiet,
+ * outlined panel with no numeric styling, so it can never be mistaken for data. */
+.terminal-reserved {
+  border: 1px dashed var(--terminal-unavailable-border, #6b7280);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--terminal-unavailable-bg, transparent);
+  min-width: 0;
+}
+
+.terminal-reserved__label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.terminal-reserved__owner,
+.terminal-reserved__source,
+.terminal-reserved__since,
+.terminal-reserved__hint {
+  margin: 0;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.terminal-reserved__reason {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+/* ---- copilot ----------------------------------------------------------- */
+.terminal-copilot {
+  border: 1px solid var(--terminal-border, #2a2f3a);
+  border-radius: 6px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.terminal-copilot__provenance {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.terminal-copilot__state,
+.terminal-copilot__model,
+.terminal-copilot__cache,
+.terminal-copilot__reason {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+/* ---- status / venue integrity ------------------------------------------ */
+.terminal-status__header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.terminal-status__summary { margin: 0; font-size: 12px; }
+.terminal-status__list { list-style: none; margin: 6px 0 0; padding: 0; }
+
+.terminal-status__row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 3px 0;
+  border-top: 1px solid var(--terminal-border, #2a2f3a);
+}
+
+.terminal-status__id { font-size: 12px; font-weight: 600; }
+.terminal-status__state { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.terminal-status__blocker { font-size: 11px; opacity: 0.8; }
+
+/* A conflicted venue must never look calm. */
+.terminal-status__row[data-integrity="conflict"] .terminal-status__state { color: var(--terminal-danger, #f87171); }
+.terminal-status__row[data-integrity="verified"] .terminal-status__state { color: var(--terminal-ok, #4ade80); }
+
+/* ---- dense table ------------------------------------------------------- */
+.terminal-table { min-width: 0; }
+.terminal-table__empty { margin: 0; padding: 8px; font-size: 12px; opacity: 0.7; }
+
+.terminal-table__head,
+.terminal-table__row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.terminal-table__head {
+  position: sticky;
+  top: 0;
+  background: var(--terminal-head-bg, #11151c);
+  border-bottom: 1px solid var(--terminal-border, #2a2f3a);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.terminal-table__head > *,
+.terminal-table__row > * {
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tabular numerals keep price columns aligned at high density. */
+.terminal-table__row { font-variant-numeric: tabular-nums; font-size: 12px; }
+.terminal-table__row:nth-child(even) { background: var(--terminal-row-alt, rgba(255, 255, 255, 0.02)); }
+.terminal-table__row:focus-visible { outline: 2px solid var(--terminal-focus, #60a5fa); outline-offset: -2px; }
+
+.terminal-table__viewport { min-width: 0; contain: strict; }
+
+/* ---- motion ------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .terminal-room *,
+  .terminal-table *,
+  .terminal-status *,
+  .terminal-copilot *,
+  .terminal-reserved * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

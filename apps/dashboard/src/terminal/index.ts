@@ -12,6 +12,7 @@
 
 export { TerminalShell } from "./components/TerminalShell"
 export { RoomFrame } from "./components/RoomFrame"
+export { UnavailableState } from "./components/UnavailableState"
 export { StatusBoundary } from "./components/StatusBoundary"
 export { CopilotPanel } from "./components/CopilotPanel"
 export { DenseTable } from "./components/DenseTable"
@@ -34,3 +35,7 @@ export { copilotState, describeCopilot, isAdmissibleAsSignal } from "./domain/co
 export * from "./domain/availability"
 
 export type * from "./contracts"
+
+// The stylesheet is imported here so it is actually bundled. An unimported CSS
+// file is dead code and would leave every `terminal-*` class unstyled.
+import "./styles/terminal.css"

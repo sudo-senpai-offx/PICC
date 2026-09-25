@@ -131,9 +131,24 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
       }
 
       // --- reduced motion honoured ---
-      const reducedMotion = await page.evaluate(() =>
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      )
+      const reducedMotion = await page.evaluate(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+
+      // --- AC-002: 1280x800 layout floor, no horizontal page scroll ---------
+      // jsdom cannot measure layout, so this MUST be a real-browser assertion.
+      // D3 makes horizontal page scrolling a failure at the 1280x800 floor.
+      const layout = await page.evaluate(() => {
+        const el = document.documentElement
+        const widest = [...document.querySelectorAll<HTMLElement>("body *")]
+      .map((n) => ({ cls: n.className?.toString().slice(0, 40) ?? "", right: n.getBoundingClientRect().right }))
+      .filter((n) => n.right > el.clientWidth + 1)
+      .slice(0, 5)
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      overflowing: widest
+    }
+  })
 
       // --- JS heap, when the browser exposes it ---
       const heapMb = await page
@@ -155,6 +170,7 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
         route: "/suites/trading/markets",
         viewport: page.viewportSize(),
         paintMs: paint,
+        layout,
         deterministicDomainMs: { ...domain, samples: domainSamples.length },
         roomTransitionMs: { ...transition, samples: transitionSamples.length },
         reducedMotionHonoured: reducedMotion,
@@ -261,6 +277,18 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
       domainP95,
       `deterministic domain p95 ${domainP95}ms exceeded ${BUDGETS.deterministicDomain}ms at 6x throttle`
     ).toBeLessThanOrEqual(BUDGETS.deterministicDomain)
+
+    // --- AC-002: layout floor assertions (D3) ----------------------------
+    // Horizontal page scrolling at the 1280x800 floor is a FAILURE (D3), and a
+    // clipped primary control is prohibited. These are measured in a real
+    // browser because jsdom performs no layout.
+    const layout = throttled!.layout
+    expect(layout.viewport.width, "must be measured at the D3 width floor").toBe(1280)
+    expect(layout.viewport.height, "must be measured at the D3 height floor").toBe(800)
+    expect(
+      layout.scrollWidth,
+      `horizontal page scroll at 1280x800 (scrollWidth ${layout.scrollWidth} > clientWidth ${layout.clientWidth}); offenders: ${JSON.stringify(layout.overflowing)}`
+    ).toBeLessThanOrEqual(layout.clientWidth + 1)
 
     // Room transition is RECORDED, not asserted, because the measured surface is
     // the LEGACY suite, not a migrated terminal room. Asserting it here would
