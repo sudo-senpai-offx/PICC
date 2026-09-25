@@ -208,6 +208,23 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
       verdict("roomTransitionP95@6x", throttled!.roomTransitionMs.p95, BUDGETS.roomTransition)
     ]
 
+    // Budgets this harness does NOT yet measure are recorded as UNMEASURED with a
+    // reason. They are never given a synthetic number and never read as a pass.
+    // ws6TerminalSeamGuard asserts every declared budget has either a measured
+    // verdict or one of these markers.
+    const measured = new Set(budgetVerdicts.map((v) => v.metric.split("@")[0]))
+    const unmeasuredBudgets = Object.entries(BUDGETS)
+      .filter(([key]) => !measured.has(key))
+      .map(([key, budget]) => ({
+        budget: key,
+        budgetMs: budget,
+        verdict: "UNMEASURED" as const,
+        reason:
+          "No measurement path exists yet for this budget. It requires a migrated terminal " +
+          "room (a 10k virtual table, a tick-to-visible probe, or a warm-interactive marker); " +
+          "the legacy suite surface does not expose one. Tracked for the T5/T6 surface slices."
+      }))
+
     writeFileSync(
       MANIFEST,
       JSON.stringify(
@@ -222,6 +239,7 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
           viewportFloor: "1280x800 (D3)",
           budgets: BUDGETS,
           budgetVerdicts,
+          unmeasuredBudgets,
           breaches: budgetVerdicts.filter((v) => v.verdict === "BREACH"),
           hostCpu,
           records

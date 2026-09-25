@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-25T05:31:55.042Z",
+  "generatedAt": "2026-09-25T05:53:19.971Z",
   "policy": "ws6-session-policy/1",
   "evidenceKind": "throttled-proxy",
   "disclaimer": "CPU-throttled x86 proxy. Satisfies the AC-018 performance-budget gate only. ARM64 architecture correctness remains UNVERIFIED and requires physical ARM64 hardware. These numbers must never be reported as a Snapdragon 400 or Intel Atom measurement.",
@@ -15,42 +15,74 @@
   "budgetVerdicts": [
     {
       "metric": "firstContentfulPaintCold@6x",
-      "observedMs": 1236,
+      "observedMs": 1364,
       "budgetMs": 3000,
       "verdict": "pass"
     },
     {
       "metric": "deterministicDomainP95@6x",
-      "observedMs": 6.5,
+      "observedMs": 1.4,
       "budgetMs": 16,
       "verdict": "pass"
     },
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 1121,
+      "observedMs": 985,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 1562,
+      "observedMs": 1829,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     }
   ],
+  "unmeasuredBudgets": [
+    {
+      "budget": "firstInteractiveWarm",
+      "budgetMs": 2000,
+      "verdict": "UNMEASURED",
+      "reason": "No measurement path exists yet for this budget. It requires a migrated terminal room (a 10k virtual table, a tick-to-visible probe, or a warm-interactive marker); the legacy suite surface does not expose one. Tracked for the T5/T6 surface slices."
+    },
+    {
+      "budget": "roomTransition",
+      "budgetMs": 250,
+      "verdict": "UNMEASURED",
+      "reason": "No measurement path exists yet for this budget. It requires a migrated terminal room (a 10k virtual table, a tick-to-visible probe, or a warm-interactive marker); the legacy suite surface does not expose one. Tracked for the T5/T6 surface slices."
+    },
+    {
+      "budget": "tickToVisible",
+      "budgetMs": 50,
+      "verdict": "UNMEASURED",
+      "reason": "No measurement path exists yet for this budget. It requires a migrated terminal room (a 10k virtual table, a tick-to-visible probe, or a warm-interactive marker); the legacy suite surface does not expose one. Tracked for the T5/T6 surface slices."
+    },
+    {
+      "budget": "table10kInitialRender",
+      "budgetMs": 250,
+      "verdict": "UNMEASURED",
+      "reason": "No measurement path exists yet for this budget. It requires a migrated terminal room (a 10k virtual table, a tick-to-visible probe, or a warm-interactive marker); the legacy suite surface does not expose one. Tracked for the T5/T6 surface slices."
+    },
+    {
+      "budget": "deterministicDomain",
+      "budgetMs": 16,
+      "verdict": "UNMEASURED",
+      "reason": "No measurement path exists yet for this budget. It requires a migrated terminal room (a 10k virtual table, a tick-to-visible probe, or a warm-interactive marker); the legacy suite surface does not expose one. Tracked for the T5/T6 surface slices."
+    }
+  ],
   "breaches": [
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 1121,
+      "observedMs": 985,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 1562,
+      "observedMs": 1829,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
@@ -73,22 +105,22 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 232,
-        "domContentLoaded": 205.70000000298023,
-        "loadEvent": 206.79999999701977
+        "fcp": 112,
+        "domContentLoaded": 87.79999999701977,
+        "loadEvent": 88.5
       },
       "deterministicDomainMs": {
         "p50": 0,
-        "p95": 0.20000000298023224,
+        "p95": 0.10000000894069672,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 154,
-        "p95": 909,
+        "p50": 82,
+        "p95": 258,
         "samples": 5
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 36,
+      "jsHeapMb": 33,
       "pageErrors": []
     },
     {
@@ -106,22 +138,22 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 328,
-        "domContentLoaded": 246.20000000298023,
-        "loadEvent": 250.3999999910593
+        "fcp": 364,
+        "domContentLoaded": 259.79999999701977,
+        "loadEvent": 268.20000000298023
       },
       "deterministicDomainMs": {
-        "p50": 0.09999999403953552,
-        "p95": 1,
+        "p50": 0.20000000298023224,
+        "p95": 0.5999999940395355,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 385,
-        "p95": 1040,
+        "p50": 748,
+        "p95": 980,
         "samples": 5
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 36,
+      "jsHeapMb": 33,
       "pageErrors": []
     },
     {
@@ -139,22 +171,22 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 1236,
-        "domContentLoaded": 1087.7000000029802,
-        "loadEvent": 1116.7000000029802
+        "fcp": 1364,
+        "domContentLoaded": 1225.9000000059605,
+        "loadEvent": 1237.7999999970198
       },
       "deterministicDomainMs": {
-        "p50": 0.3999999910593033,
-        "p95": 6.5,
+        "p50": 0.20000000298023224,
+        "p95": 1.3999999910593033,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 1121,
-        "p95": 1562,
+        "p50": 985,
+        "p95": 1829,
         "samples": 5
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 36,
+      "jsHeapMb": 33,
       "pageErrors": []
     }
   ]
