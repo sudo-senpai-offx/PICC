@@ -1,4 +1,4 @@
-// WS-7 T2 diagnostic — WHERE does the room-transition time actually go?
+// WS-7 T2 diagnostic Ã¢â‚¬â€ WHERE does the room-transition time actually go?
 //
 // The recorded budget evidence reports a 2747ms p95 for a legacy suite route
 // transition at 6x CPU throttle against a 250ms budget. A single stopwatch
@@ -18,20 +18,13 @@
 // read-only: it observes and asserts nothing about product behaviour, and fails
 // loudly if the room markers disappear so it cannot rot into a green lie.
 import { expect, test } from "@playwright/test"
+import { useSharedSession } from "../e2e/sharedAuth"
 
-function freshCredentials() {
-  const stamp = Date.now().toString(36)
-  return { email: `ws7diag-${stamp}@example.test`, password: "Ws7Diagnostic!234" }
-}
-
+// Read-only spec: shares one authenticated account for the whole run instead of
+// spending the auth rate limiter's budget. See sharedAuth.ts.
 async function signupAndLogin(page, request) {
-  const credentials = freshCredentials()
-  const response = await request.post("/api/auth/signup", { data: credentials })
-  expect(response.status(), "e2e signup must succeed").toBe(200)
-  await page.goto("/login")
-  await page.getByLabel("Email").fill(credentials.email)
-  await page.getByLabel("Password").fill(credentials.password)
-  await page.getByRole("button", { name: "Sign in", exact: true }).click()
+  await useSharedSession(page, request)
+  await page.goto("/markets")
   await expect(page).not.toHaveURL(/\/login(?:$|\?)/)
 }
 

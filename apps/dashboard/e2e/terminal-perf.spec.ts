@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test"
+import { useSharedSession } from "../e2e/sharedAuth"
 import { writeFileSync, mkdirSync } from "node:fs"
 import { cpus } from "node:os"
 import { dirname, resolve } from "node:path"
@@ -7,7 +8,7 @@ import isolatedEnv, { assertIsolatedEnv, ISOLATION_TMP_ROOT } from "./helpers/is
 
 assertIsolatedEnv(isolatedEnv, ISOLATION_TMP_ROOT)
 
-// WS-6 T10 — target-device performance harness (AC-018).
+// WS-6 T10 Ã¢â‚¬â€ target-device performance harness (AC-018).
 //
 // WHAT THIS MEASURES, AND WHAT IT DOES NOT
 // ------------------------------------------
@@ -51,19 +52,11 @@ function stats(values: number[]) {
   return { p50: at(0.5), p95: at(0.95) }
 }
 
-function freshCredentials() {
-  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  return { email: `perf-${nonce}@example.test`, password: "e2e-local-password-9", name: "E2E perf" }
-}
-
+// This spec only READS the terminal, so it shares one authenticated account
+// across the whole e2e run instead of spending the auth rate limiter's budget on
 async function signupAndLogin(page, request) {
-  const credentials = freshCredentials()
-  const response = await request.post("/api/auth/signup", { data: credentials })
-  expect(response.status(), "e2e signup must succeed").toBe(200)
-  await page.goto("/login")
-  await page.getByLabel("Email").fill(credentials.email)
-  await page.getByLabel("Password").fill(credentials.password)
-  await page.getByRole("button", { name: "Sign in", exact: true }).click()
+  await useSharedSession(page, request)
+  await page.goto("/markets")
   await expect(page).not.toHaveURL(/\/login(?:$|\?)/)
 }
 
@@ -176,7 +169,7 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
       records.push({
         label: "throttled-proxy (x86, CPU-limited)",
         architecture: "x86",
-        targetDeviceClaim: "UNVERIFIED — throttling an x86 host does not validate ARM64",
+        targetDeviceClaim: "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
         throttle: { mechanism: "cdp:Emulation.setCPUThrottlingRate", rate },
         hostCpu,
         route: "/suites/trading/markets",

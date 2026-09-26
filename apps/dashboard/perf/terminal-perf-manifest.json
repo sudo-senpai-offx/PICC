@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-26T07:30:05.310Z",
+  "generatedAt": "2026-09-26T09:43:06.318Z",
   "policy": "ws6-session-policy/1",
   "evidenceKind": "throttled-proxy",
   "disclaimer": "CPU-throttled x86 proxy. Satisfies the AC-018 performance-budget gate only. ARM64 architecture correctness remains UNVERIFIED and requires physical ARM64 hardware. These numbers must never be reported as a Snapdragon 400 or Intel Atom measurement.",
@@ -15,26 +15,26 @@
   "budgetVerdicts": [
     {
       "metric": "firstContentfulPaintCold@6x",
-      "observedMs": 592,
+      "observedMs": 496,
       "budgetMs": 3000,
       "verdict": "pass"
     },
     {
       "metric": "deterministicDomainP95@6x",
-      "observedMs": 2.2,
+      "observedMs": 0.4,
       "budgetMs": 16,
       "verdict": "pass"
     },
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 1986,
+      "observedMs": 682,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 3741,
+      "observedMs": 1212,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
@@ -75,14 +75,14 @@
   "breaches": [
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 1986,
+      "observedMs": 682,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 3741,
+      "observedMs": 1212,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
@@ -93,7 +93,7 @@
     {
       "label": "throttled-proxy (x86, CPU-limited)",
       "architecture": "x86",
-      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
+      "targetDeviceClaim": "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
       "throttle": {
         "mechanism": "cdp:Emulation.setCPUThrottlingRate",
         "rate": 1
@@ -105,9 +105,9 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 176,
-        "domContentLoaded": 150.2999999821186,
-        "loadEvent": 151
+        "fcp": 124,
+        "domContentLoaded": 101.09999999403954,
+        "loadEvent": 101.90000000596046
       },
       "layout": {
         "viewport": {
@@ -119,29 +119,29 @@
         "overflowing": [
           {
             "cls": "",
-            "right": 1317.234375
+            "right": 1458.90625
           }
         ]
       },
       "deterministicDomainMs": {
-        "p50": 0,
-        "p95": 0.19999998807907104,
+        "p50": 0.09999999403953552,
+        "p95": 0.20000001788139343,
         "samples": 25
       },
       "roomTransitionMs": {
         "p50": 113,
-        "p95": 173,
+        "p95": 171,
         "samples": 12,
         "warmupDiscarded": 4
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 25,
+      "jsHeapMb": 32,
       "pageErrors": []
     },
     {
       "label": "throttled-proxy (x86, CPU-limited)",
       "architecture": "x86",
-      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
+      "targetDeviceClaim": "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
       "throttle": {
         "mechanism": "cdp:Emulation.setCPUThrottlingRate",
         "rate": 4
@@ -153,9 +153,9 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 304,
-        "domContentLoaded": 239.39999997615814,
-        "loadEvent": 245.69999998807907
+        "fcp": 352,
+        "domContentLoaded": 241.90000000596046,
+        "loadEvent": 247.10000002384186
       },
       "layout": {
         "viewport": {
@@ -167,29 +167,29 @@
         "overflowing": [
           {
             "cls": "",
-            "right": 1317.234375
+            "right": 1458.90625
           }
         ]
       },
       "deterministicDomainMs": {
-        "p50": 0.29999998211860657,
-        "p95": 0.800000011920929,
+        "p50": 0.09999999403953552,
+        "p95": 0.30000001192092896,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 1257,
-        "p95": 2293,
+        "p50": 334,
+        "p95": 752,
         "samples": 12,
         "warmupDiscarded": 4
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 25,
+      "jsHeapMb": 32,
       "pageErrors": []
     },
     {
       "label": "throttled-proxy (x86, CPU-limited)",
       "architecture": "x86",
-      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
+      "targetDeviceClaim": "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
       "throttle": {
         "mechanism": "cdp:Emulation.setCPUThrottlingRate",
         "rate": 6
@@ -201,9 +201,9 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 592,
-        "domContentLoaded": 384.80000001192093,
-        "loadEvent": 390.30000001192093
+        "fcp": 496,
+        "domContentLoaded": 361,
+        "loadEvent": 378.40000000596046
       },
       "layout": {
         "viewport": {
@@ -215,23 +215,23 @@
         "overflowing": [
           {
             "cls": "",
-            "right": 1317.234375
+            "right": 1458.90625
           }
         ]
       },
       "deterministicDomainMs": {
-        "p50": 0.20000001788139343,
-        "p95": 2.2000000178813934,
+        "p50": 0.19999998807907104,
+        "p95": 0.4000000059604645,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 1986,
-        "p95": 3741,
+        "p50": 682,
+        "p95": 1212,
         "samples": 12,
         "warmupDiscarded": 4
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 25,
+      "jsHeapMb": 32,
       "pageErrors": []
     }
   ]
