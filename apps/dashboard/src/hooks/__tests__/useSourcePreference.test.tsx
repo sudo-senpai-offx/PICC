@@ -1,19 +1,20 @@
 // @vitest-environment jsdom
-// T10 (slice 6 reskin) — the source-preference round-trip hook. The server
+// T10 (slice 6 reskin) â€” the source-preference round-trip hook. The server
 // (handlers.mjs:2370) already persists per-user chart source prefs:
-//   GET /api/trading/source-preference → { ok, userId, source }
-//   POST { source }                      → { ok, userId, source } (normalized;
+//   GET /api/trading/source-preference â†’ { ok, userId, source }
+//   POST { source }                      â†’ { ok, userId, source } (normalized;
 //                                          unknown slugs resolve to "auto")
 // The hook must:
-//   • load the saved pref on mount without blocking the chart that rides it
-//   • persist on the user's action and adopt the server-NORMALIZED answer
-//   • keep the last-good pref + a non-blocking notice when a persist fails
-//   • never let a slow/late GET clobber a choice the user made meanwhile
+//   â€¢ load the saved pref on mount without blocking the chart that rides it
+//   â€¢ persist on the user's action and adopt the server-NORMALIZED answer
+//   â€¢ keep the last-good pref + a non-blocking notice when a persist fails
+//   â€¢ never let a slow/late GET clobber a choice the user made meanwhile
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { useEffect, useRef } from "react"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { useSourcePreference } from "@/hooks/useSourcePreference"
+import { waitForSettled } from "../../test-utils/waitForSettled"
 
 type PrefResult = ReturnType<typeof useSourcePreference>
 
@@ -68,13 +69,20 @@ function mountApp() {
       expect(latest, "expected a reported hook value").not.toBeNull()
       return latest as PrefResult
     },
-    async settle() {
-      // Wall-clock soak: React schedules async (promise-sourced) updates via
-      // its MessageChannel scheduler, which a single 0ms hop + empty flushSync
-      // does not reliably drain. A short sleep then flushSync is the same
-      // pattern the suite's other async-state tests rely on (see
-      // useCandleData.render.test.tsx), and makes the read deterministic.
-      await new Promise((r) => setTimeout(r, 10))
+    async settle(isSettled?: () => boolean) {
+      // WS-7: this was a fixed 10ms sleep described as a "wall-clock soak". That
+      // is a guess about machine speed, not a condition: it passed serially and
+      // failed ~1 run in 4 under parallel load, because React schedules
+      // promise-sourced updates on a MessageChannel that 10ms no longer covered,
+      // so the read observed the pre-update 'auto' value. A longer sleep would
+      // only lower the flake rate, not remove the race.
+      if (isSettled) {
+        await waitForSettled(() => true, isSettled, {
+          description: "useSourcePreference to load the saved pref"
+        })
+      } else {
+        await new Promise((r) => setTimeout(r, 10))
+      }
       flushSync(() => {})
     },
     unmount() {
@@ -93,7 +101,7 @@ describe("useSourcePreference (T10 round-trip)", () => {
     expect(h.latest.loaded).toBe(false)
     expect(h.latest.pref).toBe("auto")
     expect(h.latest.notice).toBeNull()
-    await h.settle()
+    await h.settle(() => h.latest.loaded === true)
     expect(h.latest.pref).toBe("expertoption")
     expect(h.latest.loaded).toBe(true)
     expect(h.latest.notice).toBeNull()
@@ -104,7 +112,7 @@ describe("useSourcePreference (T10 round-trip)", () => {
     vi.unstubAllGlobals()
     stubServer({ get: { body: { error: "pref read failed" }, ok: false } })
     const h = mountApp()
-    await h.settle()
+    await h.settle(() => h.latest.loaded === true)
     expect(h.latest.pref).toBe("auto")
     expect(h.latest.loaded).toBe(true)
     expect(h.latest.notice).not.toBeNull()
@@ -171,7 +179,7 @@ describe("useSourcePreference (T10 round-trip)", () => {
     expect(ok).toBe(true)
     await h.settle()
     expect(h.latest.pref).toBe("ccxt")
-    // The stale GET finally settles LONG after the user's choice — it must lose.
+    // The stale GET finally settles LONG after the user's choice â€” it must lose.
     resolveGet({ ok: true, userId: "default", source: "expertoption" })
     await h.settle()
     expect(h.latest.pref).toBe("ccxt")

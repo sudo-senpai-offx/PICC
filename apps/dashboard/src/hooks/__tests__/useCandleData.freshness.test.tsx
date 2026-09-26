@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// T11 (slice 6 reskin) — the client must parse what the server already sends on
+// T11 (slice 6 reskin) â€” the client must parse what the server already sends on
 // every candles response (handlers.mjs:2334-2346): `stale`, `sourceMode`
 // ("auto"|"forced"|"fallback") and the per-candidate `sources[]` report (who was
-// tried, in what rank, and who won). The previous client ignored all three —
+// tried, in what rank, and who won). The previous client ignored all three â€”
 // that silence is exactly why the old badge could claim "EO live" no matter
 // what the server said.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
@@ -10,6 +10,7 @@ import { useEffect, useRef } from "react"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { useCandleData, fetchCandles } from "@/hooks/useCandleData"
+import { waitForSettled } from "../../test-utils/waitForSettled"
 
 vi.mock("@/lib/auth", () => ({ getToken: () => "" }))
 vi.mock("@/hooks/useRealtimeSuite", () => ({
@@ -58,8 +59,23 @@ function mountProbe() {
       expect(latest, "expected a reported hook value").not.toBeNull()
       return latest as ReturnType<typeof useCandleData>
     },
-    async settle() {
-      await new Promise((r) => setTimeout(r, 10))
+    /**
+     * Settle async state.
+     *
+     * WS-7: this was a fixed 10ms sleep - a guess about machine speed, not a
+     * condition. It passed serially and failed ~1 run in 4 once the suite ran in
+     * parallel, because under load 10ms no longer covered the fetch -> parse ->
+     * setState chain, so assertions read the PRE-update value. Callers that care
+     * about a specific outcome pass a predicate and are waited on properly.
+     */
+    async settle(isSettled?: () => boolean) {
+      if (isSettled) {
+        await waitForSettled(() => true, isSettled, {
+          description: "useCandleData to report the expected state"
+        })
+      } else {
+        await new Promise((r) => setTimeout(r, 10))
+      }
       flushSync(() => {})
     },
     unmount() {
@@ -77,21 +93,21 @@ describe("useCandleData freshness passthrough (T11)", () => {
 
   it("parses stale=true from the served series", async () => {
     const p = mountProbe()
-    await p.settle()
+    await p.settle(() => p.latest.stale === true)
     expect(p.latest.stale).toBe(true)
     p.unmount()
   })
 
   it("parses the sourceMode the server reported", async () => {
     const p = mountProbe()
-    await p.settle()
+    await p.settle(() => p.latest.sourceMode === "forced")
     expect(p.latest.sourceMode).toBe("forced")
     p.unmount()
   })
 
   it("parses the per-candidate report with the winner marked", async () => {
     const p = mountProbe()
-    await p.settle()
+    await p.settle(() => p.latest.sources.length === 2)
     expect(p.latest.sources).toHaveLength(2)
     const winner = p.latest.sources.find((s) => s.winner)
     expect(winner?.slug).toBe("expertoption")
@@ -102,13 +118,13 @@ describe("useCandleData freshness passthrough (T11)", () => {
 
   it("defaults stale=false / sourceMode=null-like / [] when the empty-candles path omits stale", async () => {
     // The server's empty-candles branch (handlers.mjs:2328) carries sourceMode
-    // + sources but NO `stale` key — the client must not fabricate staleness.
+    // + sources but NO `stale` key â€” the client must not fabricate staleness.
     vi.stubGlobal("fetch", vi.fn(async () => json({
       ok: true, source: "none", feed: null, requestedTimeframe: 60, timeframe: 60, resolved: false,
       candles: [], sourceMode: "auto", sources: []
     })))
     const p = mountProbe()
-    await p.settle()
+    await p.settle(() => p.latest.source === "none")
     expect(p.latest.stale).toBe(false)
     expect(p.latest.sourceMode).toBe("auto")
     expect(p.latest.sources).toEqual([])
