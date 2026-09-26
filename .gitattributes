@@ -1,0 +1,34 @@
+# Normalise line endings so source-pinning tests behave identically on every
+# platform.
+#
+# Why this file exists: several seam guards read REAL source files from disk and
+# assert on them with regexes. Some of those regexes are $-anchored, and in
+# JavaScript `$` matches end-of-STRING, not end-of-LINE. On a CRLF checkout each
+# line therefore ends with "\r", so a pattern like /^const FOO =$/ can never match
+# even though the source is byte-for-byte correct.
+#
+# That produced a real, deterministic, platform-dependent failure:
+#   apps/dashboard/server/__tests__/ws3CeremonySeamGuard.test.mjs:255
+#     expect(src.split("\n").find(l => /^const RAIL_OFF_TESTNET_ONLY =$/.test(l)))
+#   The line on disk was "const RAIL_OFF_TESTNET_ONLY =\r", so `find` returned
+#   undefined and the assertion failed with:
+#     expected undefined to be 'const RAIL_OFF_TESTNET_ONLY ='
+#
+# The file had been checked out with CRLF because core.autocrlf was true and
+# nothing in the repo normalised anything. The blob in git was always correct LF;
+# only the working tree differed. That is why this is invisible in CI and only
+# reproduces on a Windows checkout with autocrlf enabled.
+#
+# Two rules, deliberately conservative:
+#   - text=auto           normalise text files, leave binaries alone
+#   - *.mjs  text eol=lf  JavaScript is the class these guards read; force LF so
+#                         a Windows checkout cannot reintroduce CRLF
+#
+# Shell and Markdown are left to text=auto rather than being pinned, so this file
+# does not create a large whitespace-only diff in unrelated files.
+* text=auto
+
+*.mjs text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
