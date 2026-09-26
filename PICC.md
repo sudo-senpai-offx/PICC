@@ -24,18 +24,37 @@ suite** with honest, calibrated, advisory-only signals.
 
 **The three guardrails (mission constraints, never weakened):**
 
-1. **No live-money order placement, anywhere, ever — demo/paper only.** The only order path in the
-   tree is `openPaperTrade` (`server/services/trading.mjs`) behind the human-approval interventions
-   gate. "Redirect, don't execute" is the standing ADR.
+1. **Order placement is gated, never ungated — and the claim is corrected to match the code
+   (WS-7 D19, 2026-09-26).** An earlier version of this line read "no live-money order placement,
+   anywhere, ever," which the code contradicted and which `executionAbsence.test.mjs` appeared to
+   pin but did not. **Two venue-capable rails exist and are intentionally retained:**
+
+   | Rail | File | Verified gates in that file |
+   | --- | --- | --- |
+   | CCXT spot | `server/services/ccxtOrdering.mjs` | `CCXT_HARD_NOTIONAL_CAP_USD = 10` (`:52`) · day-loss percentage computed and surfaced (`:432`, `:440`). **Other guards are asserted by `ccxtOrdering.test.mjs` / `commandCentreExecution.test.mjs` at the calling layer and are not yet re-verified here — see the honesty note below.** |
+   | Hyperliquid perps | `server/services/venues/hyperliquidPerps.mjs` | mainnet requires `PICC_CCXT_PERPS_MAINNET_ENABLED=1` **and** a ceremony unlock (`:107-109`); adapter reports `testnetOnly: true` in its risk model |
+
+   Both rails are **consent-locked and hard-capped**; neither fires unattended, and the Copilot may
+   only auto-execute inside the paper → demo → live boundary. Three honest caveats:
+
+   - The perps adapter has **no production `cancel` member**, so an open perps position is not
+     exitable through the production path today. WS-7 T3 adds one.
+   - Guard coverage is now **machine-discovered** rather than hand-listed, because the old
+     hand-list omitted exactly these two modules and `executionAbsence.test.mjs` therefore pinned
+     no guarantee at all. That was the defect this correction exists to close.
+   - **The guard inventory above is partially unverified.** Only the constants cited with line
+     numbers were confirmed in this pass. A separate WS-7 task re-verifies every asserted gate
+     against source before any live boundary is relied upon.
 2. **No behavioral camouflage** against platform bot-detection. No humanized-typing by default
    (`PICC_HUMANIZE=1` is explicit opt-in for slow reads, never for deception).
 3. **Every data source reports its own honest `source`/`status` label — never fabricate a number.**
    `absent → null`, never a fabricated `0`; `unconfigured ≠ zero-filled`.
 
 **Positioning:** decision-support tool, not an automated decision-making system. Every AI output is
-gated behind a mandatory human-review step. Verified current posture: advisory-only trading
-decision support (no execution weld), clean payment-security surface, credential-at-rest vault,
-loopback-only container exposure, shell-injection-free process invocation.
+gated behind a mandatory human-review step. Verified current posture: **gated** trading execution
+(two hard-capped venue rails, one ceremony-gated — see guardrail 1; explicitly **not** "no
+execution"), clean payment-security surface, credential-at-rest vault, loopback-only container
+exposure, shell-injection-free process invocation.
 
 ---
 
