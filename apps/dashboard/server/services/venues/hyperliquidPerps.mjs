@@ -543,6 +543,70 @@ async function observeFunding({ symbol } = {}) {
 
 // ── the adapter (F2 contract member set) ───────────────────────────────────
 
+/**
+ * WS-7 T3: cancel an open order through the PRODUCTION path.
+ *
+ * Until this existed the adapter exposed no cancel member at all, so a position
+ * opened through this rail could not be exited through it. The sandbox E2E
+ * appeared to cover cancellation only because it reached past the adapter and
+ * cancelled on the raw CCXT instance - a different code path from the one
+ * production would use. That gap is closed here, and the seam guard is
+ * corrected ADDITIVELY: "cancelOrder" stays in ccxtConnector's READ_ONLY_BLOCKED
+ * list, which pins the non-seam blocklist against erosion. This is a documented
+ * perps carve-out, not a removal of a read-only guard.
+ *
+ * Gate ordering mirrors submitOrder exactly: resolve the mode first, then the
+ * risk model, and only then touch the venue. A refused mode must never reach
+ * the exchange, and a cancel must not be the operation that slips past a gate
+ * that submitOrder respects.
+ *
+ * Honest failure, never a fabricated success: an unidentifiable order is refused
+ * locally, and a lookup that cannot be resolved reports unobservable rather than
+ * a cancel that may not have happened.
+ */
+async function cancelOrder({ orderId, symbol, clientOrderId } = {}) {
+  const mode = modeOf()
+  if (!mode.ok) return { ok: false, reason: mode.reason }
+
+  const rm = readRiskModel()
+  if (!rm.ok) return { ok: false, reason: rm.reason }
+
+  // Refused LOCALLY, before any instance is built. A cancel that cannot identify
+  // its target must never reach the venue: it would hang, and worse, it could
+  // aim at the wrong order.
+  if (!orderId && !clientOrderId) {
+    return { ok: false, reason: "cancelOrder-unidentifiable: pass orderId or clientOrderId" }
+  }
+
+  const inst = await swapInstance()
+  try {
+    // CCXT's cancelOrder takes the venue's own order id. When only the
+    // clientOrderId is known the lookup goes through the open-orders view
+    // rather than guessing.
+    let targetId = orderId ? String(orderId) : null
+    if (!targetId && clientOrderId) {
+      const open = await inst.fetchOpenOrders(symbol)
+      const match = (open || []).find((o) => String(o?.clientOrderId ?? "") === String(clientOrderId))
+      if (!match?.id) {
+        return { ok: false, reason: "cancelOrder-unobservable: no open order matches that clientOrderId" }
+      }
+      targetId = String(match.id)
+    }
+
+    const raw = await inst.cancelOrder(targetId, symbol)
+    return {
+      ok: true,
+      cancelled: {
+        id: targetId,
+        clientOrderId: raw?.clientOrderId ?? clientOrderId ?? null,
+        symbol: raw?.symbol ?? symbol ?? null
+      }
+    }
+  } catch (err) {
+    return { ok: false, reason: `cancelOrder-failed: ${String(err?.message ?? err)}` }
+  }
+}
+
 export const hyperliquidPerps = {
   id: "hyperliquid",
   label: "Hyperliquid perps (testnet)",
@@ -551,6 +615,7 @@ export const hyperliquidPerps = {
   },
   markets,
   submitOrder,
+  cancelOrder,
   verifyFill,
   observeEquity,
   positionView,

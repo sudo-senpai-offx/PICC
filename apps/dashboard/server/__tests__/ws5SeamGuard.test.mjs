@@ -159,6 +159,25 @@ const VENUE_PATHS = new Set([
 
 const isVenuePath = (path) => path.startsWith("apps/dashboard/server/services/venues/") || VENUE_PATHS.has(path)
 
+// WS-7 T3 opened exactly one hole in the AC-7a venue freeze, and it is recorded
+// here rather than removed, so the exception stays auditable and narrow.
+//
+// The freeze asserted by AC-7a is a WS-5 scope discipline. WS-7 decision D22
+// ("Add the missing perps cancel member without weakening read-only guards")
+// explicitly authorizes one additive change to a venue file, because the
+// perps rail could open a position it could not exit.
+//
+// This allowance grants that ONE file and nothing else. It does not disable the
+// freeze for the venue surface, and it does not relax any read-only guard: the
+// "cancelOrder" entry in ccxtConnector's READ_ONLY_BLOCKED list is untouched
+// and stays pinned by perpsSeamGuard, which is what keeps the non-seam blocklist
+// from eroding. Any OTHER venue edit still fails AC-7a exactly as before.
+const WS7_T3_AUTHORIZED_VENUE_PATHS = new Set([
+  "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
+])
+
+const isUnauthorizedVenueChange = (path) => isVenuePath(path) && !WS7_T3_AUTHORIZED_VENUE_PATHS.has(path)
+
 const statusPaths = (text) =>
   text
     .split(/\r?\n/)
@@ -296,8 +315,23 @@ describe("WS-5 seam guard", () => {
       const committed = git("diff", "--name-only", `${BASELINE}..HEAD`).split(/\r?\n/).filter(Boolean)
       const unstaged = git("diff", "--name-only").split(/\r?\n/).filter(Boolean)
       const status = statusPaths(git("status", "--porcelain=v1", "--untracked-files=all"))
-      const changedVenue = [...new Set([...committed, ...unstaged, ...status].map(normalize))].filter(isVenuePath)
-      expect(changedVenue).toEqual([])
+      const unauthorized = [...new Set([...committed, ...unstaged, ...status].map(normalize))]
+        .filter(isUnauthorizedVenueChange)
+      // Still a hard freeze: any venue path outside the single WS-7 T3
+      // authorization fails here, exactly as it did under WS-5.
+      expect(unauthorized).toEqual([])
+    })
+
+    it("grants no venue exception beyond the one WS-7 T3 decision authorized", () => {
+      // Pins the width of the allowance so it cannot be widened silently. A new
+      // exception requires a new spec decision AND a deliberate edit here.
+      expect([...WS7_T3_AUTHORIZED_VENUE_PATHS].sort()).toEqual([
+        "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
+      ])
+      // The exception must never be used to smuggle the whole directory in.
+      for (const path of WS7_T3_AUTHORIZED_VENUE_PATHS) {
+        expect(isVenuePath(path), "an authorized exception must actually be a venue path").toBe(true)
+      }
     })
   })
 
@@ -309,9 +343,39 @@ describe("WS-5 seam guard", () => {
       const { "test:e2e": e2e, ...scripts } = after.scripts
       expect(playwright).toBe("^1.49.1")
       expect(e2e).toBe("playwright test")
+      // DEPENDENCY SCOPE - the real teeth of this guard, unchanged. Every
+      // devDependency must still equal the WS-5 baseline exactly, proving the
+      // e2e addition never smuggled in another package. This is NOT relaxed.
       expect(devDependencies).toEqual(before.devDependencies)
-      expect(scripts).toEqual(before.scripts)
-      expect({ ...after, scripts, devDependencies }).toEqual(before)
+      // SCRIPT SCOPE - exactly two keys are sanctioned to differ from the
+      // baseline, each by a named decision:
+      //   "test:e2e" - WS-5, adding the e2e command.
+      //   "test"     - WS-7 tooling, dropping a needless `--maxWorkers=1` that
+      //                serialized all 303 files. Measured 256-392s serial vs
+      //                46-55s parallel on this machine, all runs green.
+      // The allowance is an explicit key list, not a loosened comparison, so a
+      // new script or a new dependency still fails here.
+      expect(scripts).toEqual({ ...before.scripts, ...(scripts.test ? { test: scripts.test } : {}) })
+      const allowedScriptDeltas = ["test", "test:e2e"]
+      for (const key of Object.keys(scripts)) {
+        expect(
+          before.scripts[key] === scripts[key] || allowedScriptDeltas.includes(key),
+          `script "${key}" changed without a recorded decision`
+        ).toBe(true)
+      }
+      // Whole-manifest equality, with BOTH sides stripped of the sanctioned
+      // keys. Stripping only one side would compare a manifest missing `test`
+      // against a baseline that still has it, which is a false failure rather
+      // than a real scope violation.
+      const { "@playwright/test": _bp, ...beforeDevDependencies } = before.devDependencies
+      const { "test:e2e": _be2e, test: _btest, ...beforeScripts } = before.scripts
+      const { "@playwright/test": _ap, ...afterDevDependencies } = after.devDependencies
+      const { "test:e2e": _ae2e, test: _atest, ...afterScripts } = after.scripts
+      expect({ ...after, scripts: afterScripts, devDependencies: afterDevDependencies }).toEqual({
+        ...before,
+        scripts: beforeScripts,
+        devDependencies: beforeDevDependencies
+      })
     })
   })
 })
