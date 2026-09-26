@@ -347,10 +347,31 @@ describe("WS-3 validation & unlock ceremony seam guard (T8 no-regression)", () =
   it("PICC.md records the WS-3 land (registry row + methodology note), and the spec file itself exists", () => {
     const doc = source("../../../../PICC.md")
     expect(doc).toContain("PICC_TRADING_SUITE_WS3_VALIDATION_AND_UNLOCK_CEREMONY_v1")
-    // Registry row count is a tracked fact that advances as specs land. 39
-    // spec-designated rows (the table also carries one `notes/` path row, which
-    // is not counted as a registry spec row).
-    expect(doc).toContain("39 registry rows")
+    // Registry row count is DERIVED, not pinned. This assertion used to pin the
+    // literal "39 registry rows", which meant every landing spec left it silently
+    // stale until someone noticed. The header is now checked against the table
+    // itself, so the two can never disagree without this guard failing loudly.
+    //
+    // Counting rule, unchanged from the original comment: the section also carries
+    // one `notes/` path row, which is not a registry spec row and is excluded.
+    const sectionAt = doc.indexOf("## §10 Specs Registry")
+    expect(sectionAt, "PICC.md must still contain the §10 Specs Registry heading").toBeGreaterThan(-1)
+    const section = doc.slice(sectionAt)
+    const sectionEnd = section.indexOf("\n## ", 1)
+    const scoped = sectionEnd === -1 ? section : section.slice(0, sectionEnd)
+    const tableRows = scoped
+      .split("\n")
+      .filter((l) => l.trim().startsWith("|"))
+      .filter((l) => !/^\|\s*:?-+/.test(l.trim()))
+      .slice(1)
+    const specRows = tableRows.filter((l) => !(l.split("|")[1] || "").trim().startsWith("notes/"))
+
+    const stated = scoped.match(/(\d+)\s+registry rows/)
+    expect(stated, "the §10 header must state a registry row count").toBeTruthy()
+    expect(
+      Number(stated[1]),
+      "the §10 header count must match the rows actually present in the table"
+    ).toBe(specRows.length)
     expect(doc).toContain("WS-3")
     expect(doc).toContain("unlock ceremony")
   })
