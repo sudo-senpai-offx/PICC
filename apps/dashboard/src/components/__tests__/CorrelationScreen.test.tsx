@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { CorrelationScreen } from "@/components/CorrelationScreen"
+import { waitForText } from "../../test-utils/waitForText"
 
 function mount(node: React.ReactNode) {
   const host = document.createElement("div")
@@ -54,7 +55,7 @@ describe("CorrelationScreen (R6 portfolio correlation)", () => {
   it("renders measured pairs, high-correlation badges and the diversification score", async () => {
     stubFetch(populated)
     const m = mount(<CorrelationScreen symbols={["BTCUSD", "ETHUSD", "EURUSD"]} />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "high corr")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).toContain("BTCUSD × ETHUSD")
@@ -68,7 +69,7 @@ describe("CorrelationScreen (R6 portfolio correlation)", () => {
   it("renders an honest empty state with an em-dash score when nothing is measured", async () => {
     stubFetch(empty)
     const m = mount(<CorrelationScreen />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "No instruments measured")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).toContain("No instruments measured")
@@ -85,7 +86,7 @@ describe("CorrelationScreen (R6 portfolio correlation)", () => {
       json: async () => ({ error: "correlation exploded" })
     } as unknown as Response)))
     const m = mount(<CorrelationScreen />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "correlation exploded")
     flushSync(() => {})
     expect(m.host.textContent).toContain("correlation exploded")
     m.unmount()
