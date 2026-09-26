@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-26T09:43:06.318Z",
+  "generatedAt": "2026-09-26T10:12:09.508Z",
   "policy": "ws6-session-policy/1",
   "evidenceKind": "throttled-proxy",
   "disclaimer": "CPU-throttled x86 proxy. Satisfies the AC-018 performance-budget gate only. ARM64 architecture correctness remains UNVERIFIED and requires physical ARM64 hardware. These numbers must never be reported as a Snapdragon 400 or Intel Atom measurement.",
@@ -15,7 +15,7 @@
   "budgetVerdicts": [
     {
       "metric": "firstContentfulPaintCold@6x",
-      "observedMs": 496,
+      "observedMs": 416,
       "budgetMs": 3000,
       "verdict": "pass"
     },
@@ -27,14 +27,14 @@
     },
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 682,
+      "observedMs": 535,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 1212,
+      "observedMs": 871,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
@@ -75,14 +75,14 @@
   "breaches": [
     {
       "metric": "roomTransitionP50@6x",
-      "observedMs": 682,
+      "observedMs": 535,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
     },
     {
       "metric": "roomTransitionP95@6x",
-      "observedMs": 1212,
+      "observedMs": 871,
       "budgetMs": 250,
       "verdict": "BREACH",
       "note": "Recorded, not suppressed. See WS-6 spec T10/T11 for the remediation owner."
@@ -105,9 +105,9 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 124,
-        "domContentLoaded": 101.09999999403954,
-        "loadEvent": 101.90000000596046
+        "fcp": 112,
+        "domContentLoaded": 88.69999998807907,
+        "loadEvent": 89.39999997615814
       },
       "layout": {
         "viewport": {
@@ -124,18 +124,18 @@
         ]
       },
       "deterministicDomainMs": {
-        "p50": 0.09999999403953552,
-        "p95": 0.20000001788139343,
+        "p50": 0,
+        "p95": 0.09999999403953552,
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 113,
-        "p95": 171,
+        "p50": 87,
+        "p95": 149,
         "samples": 12,
         "warmupDiscarded": 4
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 32,
+      "jsHeapMb": 30,
       "pageErrors": []
     },
     {
@@ -153,9 +153,9 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 352,
-        "domContentLoaded": 241.90000000596046,
-        "loadEvent": 247.10000002384186
+        "fcp": 284,
+        "domContentLoaded": 201.2999999821186,
+        "loadEvent": 208
       },
       "layout": {
         "viewport": {
@@ -177,13 +177,13 @@
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 334,
-        "p95": 752,
+        "p50": 321,
+        "p95": 379,
         "samples": 12,
         "warmupDiscarded": 4
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 32,
+      "jsHeapMb": 30,
       "pageErrors": []
     },
     {
@@ -201,9 +201,9 @@
         "height": 800
       },
       "paintMs": {
-        "fcp": 496,
-        "domContentLoaded": 361,
-        "loadEvent": 378.40000000596046
+        "fcp": 416,
+        "domContentLoaded": 302.19999998807907,
+        "loadEvent": 306.7999999821186
       },
       "layout": {
         "viewport": {
@@ -225,13 +225,13 @@
         "samples": 25
       },
       "roomTransitionMs": {
-        "p50": 682,
-        "p95": 1212,
+        "p50": 535,
+        "p95": 871,
         "samples": 12,
         "warmupDiscarded": 4
       },
       "reducedMotionHonoured": false,
-      "jsHeapMb": 32,
+      "jsHeapMb": 30,
       "pageErrors": []
     }
   ]

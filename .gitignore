@@ -49,3 +49,6 @@ playwright-report/
 .firecrawl/
 dev_pack_code.py
 project_tree.txt
+
+# WS-7 T4: local agent settings may hold a real LLM api_key. Never tracked.
+agents/picc_agents/settings.json

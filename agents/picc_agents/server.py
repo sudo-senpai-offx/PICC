@@ -102,11 +102,48 @@ _apply_settings(_load_settings())
 
 app = FastAPI(title="PICC Agents", version="0.1.0")
 
+
+def _allowed_origins() -> list[str]:
+    """Explicit browser-origin allowlist for the agents API.
+
+    WS-7 T4: this was `allow_origins=["*"]` with `allow_methods=["*"]` and
+    `allow_headers=["*"]`, which let ANY page the user visited call this API
+    from their browser. That is an unnecessary cross-origin blast radius: the
+    agents service is a local backend for PICC's own UI, not a public API.
+
+    It is now a default-deny allowlist. PICC's dev/preview origins are allowed so
+    the dashboard keeps working, and operators can extend it deliberately via
+    PICC_AGENTS_ALLOWED_ORIGINS rather than by accident via "*".
+
+    A wildcard is rejected rather than honoured, so this cannot silently
+    regress back to the vulnerable configuration through an env typo.
+    """
+    defaults = [
+        "http://localhost:5173",   # vite dev
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",   # vite preview
+        "http://127.0.0.1:4173",
+    ]
+    extra = [
+        origin.strip()
+        for origin in os.environ.get("PICC_AGENTS_ALLOWED_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    allowed = [origin for origin in [*defaults, *extra] if origin != "*"]
+    if "*" in [*defaults, *extra]:
+        # Fail loudly instead of pretending the wildcard was honoured.
+        raise ValueError(
+            "PICC_AGENTS_ALLOWED_ORIGINS may not contain '*': the agents API is "
+            "not a public API. List explicit origins instead."
+        )
+    return allowed
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins(),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 

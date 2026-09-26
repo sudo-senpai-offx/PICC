@@ -16,20 +16,41 @@
 // must keep their own isolated accounts and should NOT use this helper - sharing
 // a user would let one spec's data leak into another's assertions.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
-const CACHE = join(tmpdir(), "picc-e2e-shared-auth.json")
 const AUTH_KEY = "picc.auth"
 const RATE_LIMITED = 429
 
 type SharedSession = { access_token: string }
 
+/**
+ * The cache MUST be scoped to this run, never to the machine.
+ *
+ * e2e runs against an isolated data dir (see playwright.config.ts /
+ * isolatedEnv.mjs), so accounts created by one run do NOT exist in the next
+ * one. A cache kept in a stable machine location would hand every later run a
+ * token for an account that no longer exists - which is exactly the failure
+ * this scoping prevents. Keying the path on the run's data dir means the cache
+ * is shared between specs WITHIN a run and is unreachable across runs.
+ */
+function cachePath(): string {
+  const runScope =
+    process.env.PICC_COMMAND_CENTRE_DATA_DIR ??
+    process.env.PICC_E2E_RUN_ID ??
+    // No run marker available: fall back to a per-process path rather than a
+    // shared one, so an unscoped run can never reuse another run's token.
+    `pid-${process.pid}`
+  const safe = runScope.replace(/[^a-zA-Z0-9._-]/g, "_")
+  return join(tmpdir(), "picc-e2e-shared-auth", `${safe}.json`)
+}
+
 function readCache(): SharedSession | null {
   try {
-    if (!existsSync(CACHE)) return null
-    const parsed = JSON.parse(readFileSync(CACHE, "utf8")) as SharedSession
+    const file = cachePath()
+    if (!existsSync(file)) return null
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as SharedSession
     return parsed?.access_token ? parsed : null
   } catch {
     // A corrupt or unreadable cache is not fatal: fall through and sign up
@@ -40,9 +61,20 @@ function readCache(): SharedSession | null {
 
 function writeCache(session: SharedSession) {
   try {
-    writeFileSync(CACHE, JSON.stringify(session), "utf8")
+    const file = cachePath()
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify(session), "utf8")
   } catch {
     // Caching is an optimisation. If it fails we simply sign up next time.
+  }
+}
+
+function clearCache() {
+  try {
+    const file = cachePath()
+    if (existsSync(file)) writeFileSync(file, "", "utf8")
+  } catch {
+    // Best effort only.
   }
 }
 
@@ -87,7 +119,11 @@ async function signupShared(request): Promise<SharedSession> {
 
 /**
  * Gives `page` an authenticated session, creating the shared account at most
- * once per machine. Costs one signup for the whole run and no logins at all.
+ * once per run. Costs one signup for the whole run and no logins at all.
+ *
+ * If the session turns out to be rejected (a stale token from an earlier state
+ * of the run), the cache is dropped and a fresh account is created once, so a
+ * stale cache degrades into one extra signup rather than a red suite.
  */
 export async function useSharedSession(page, request) {
   let session = readCache()
@@ -96,11 +132,25 @@ export async function useSharedSession(page, request) {
     writeCache(session)
   }
 
+  await seedSession(page, session)
+
+  // One self-heal attempt: if the app bounced us to /login, this token is no
+  // longer valid, so rebuild it rather than failing the run.
+  await page.goto("/markets")
+  if (/\/login(?:$|\?)/.test(page.url())) {
+    clearCache()
+    session = await signupShared(request)
+    writeCache(session)
+    await seedSession(page, session)
+  }
+}
+
+async function seedSession(page, session: SharedSession) {
   // Seed the session before any app code runs, so the app never has to log in.
   await page.addInitScript(
     ([key, value]) => {
       window.localStorage.setItem(key as string, value as string)
     },
-    [AUTH_KEY, JSON.stringify({ access_token: session!.access_token })] as const
+    [AUTH_KEY, JSON.stringify({ access_token: session.access_token })] as const
   )
 }
