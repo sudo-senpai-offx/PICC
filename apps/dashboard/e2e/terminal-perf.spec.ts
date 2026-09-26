@@ -120,15 +120,27 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
       }
 
       // --- room transition, measured between two real routes ---
+      // WS-7 (b): the previous loop took 5 samples and called max-of-5 a "p95".
+      // That is not a percentile, and it silently reported COLD-CACHE cost as
+      // steady-state cost. A WS-7 T2 diagnostic measured a 2.56x warm-up ratio
+      // on this exact transition (first-3 avg 3202ms, last-3 avg 1251ms), so
+      // cold samples are now discarded as WARMUP_SAMPLES and enough samples are
+      // taken for the percentile to mean something.
+      const WARMUP_SAMPLES = 4
+      const STEADY_SAMPLES = 12
       const transitionSamples: number[] = []
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < WARMUP_SAMPLES + STEADY_SAMPLES; i++) {
         const t0 = Date.now()
         await page.click("a[href='/suites/trading/dashboard']").catch(() => {})
         await page.waitForSelector("[data-room='dashboard']", { timeout: 15_000 })
-        transitionSamples.push(Date.now() - t0)
+        const elapsed = Date.now() - t0
+        if (i >= WARMUP_SAMPLES) transitionSamples.push(elapsed)
         await page.click("a[href='/suites/trading/markets']").catch(() => {})
         await page.waitForSelector("[data-room='markets']", { timeout: 15_000 })
       }
+      // stats() below is the single source for the percentiles; with 12
+      // steady-state samples its p95 is a real nearest-rank percentile rather
+      // than the max of 5 warming ones.
 
       // --- reduced motion honoured ---
       const reducedMotion = await page.evaluate(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches)
@@ -172,7 +184,11 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
         paintMs: paint,
         layout,
         deterministicDomainMs: { ...domain, samples: domainSamples.length },
-        roomTransitionMs: { ...transition, samples: transitionSamples.length },
+        roomTransitionMs: {
+          ...transition,
+          samples: transitionSamples.length,
+          warmupDiscarded: WARMUP_SAMPLES
+        },
         reducedMotionHonoured: reducedMotion,
         jsHeapMb: heapMb,
         pageErrors

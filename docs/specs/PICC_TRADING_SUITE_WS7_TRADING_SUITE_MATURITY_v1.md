@@ -274,6 +274,38 @@ Each entry records **Context → Decision → Why → Consequence**. A consequen
 
 **Consequence:** No task may "fix" a doc by deleting the conflicting sentence without a supersession record. AC-006, AC-011, AC-016, AC-017.
 
+### D21-SUPERSESSION (2026-09-26) - the ~1800 ms ARM ratification is WITHDRAWN as unsound
+
+**Supersedes:** the original D21 (re-baseline to ~1800 ms). The original decision is recorded above and is
+**withdrawn, not deleted** - a ratified budget that turns out to rest on an invalid derivation must be
+withdrawn on the record rather than quietly edited away.
+
+**Why the original was unsound, on two independent grounds:**
+
+1. **Wrong kind of ratio.** The ~1800 ms came from scaling by the owner ARM probe's 7.18x **CPU-only**
+   benchmark. The WS-7 T2 diagnostic then proved the transition is **RENDER-bound, not data-bound**:
+   measured route 22 ms average against render 1823 ms average on the same 6x-throttled run. A CPU ratio
+   cannot transfer to a path whose cost is dominated by rendering, so the derivation had no valid basis.
+2. **Derived from a broken input.** The 250 ms it was scaled from was itself `max-of-5-warming-samples`,
+   not a percentile. Scaling a non-percentile produces a non-percentile.
+
+**What the corrected measurement actually shows** (12 steady samples, 4 warm-up discarded, 6x throttle):
+
+| Throttle | p50 | p95 | vs 250 ms |
+| --- | --- | --- | --- |
+| 1x (unthrottled x86) | 113 ms | 173 ms | **PASS** |
+| 4x | 1257 ms | 2293 ms | BREACH |
+| 6x | 1986 ms | 3741 ms | BREACH |
+
+**Correction to an earlier statement in this session:** the 2747 ms previously recorded was described as
+"overstated ~3.3x by a broken percentile". That was **wrong**. The corrected steady-state p95 is 3741 ms -
+*higher*, because five samples could not see the tail that twelve can. The warm-up correction and the
+sample-count correction are independent, and fixing the second made the number worse, not better.
+
+**Decision:** **WITHDRAW with no substitute.** B2 is left explicitly without a defensible figure rather than
+back-filled with another derived number. ARM room-transition cost is genuinely unknown; the direct T19
+on-device sample is the only thing that can close it. B1's 250 ms remains the x86 target and remains a
+**BREACH at 4x and 6x throttle** - though it **passes unthrottled**, which is new and material information.
 ### D21 (owner, 2026-09-26) — The ARM room-transition budget is re-baselined to ~1800 ms; 250 ms is retained explicitly as an x86-only tier
 **Context:** B1 carries `BREACH` at 1230 ms p50 / 2139 ms p95 at 6× throttle on the x86 proxy. The owner's ARM probe measured `bench_ms` 3012.39 on ARM against 419.48 on x86 — a 7.18× ratio — so the 250 ms figure does not transfer to the declared ARM floor. 250 ms × 7.18 ≈ 1795 ms.
 
@@ -682,7 +714,7 @@ Every row carries a **current verdict** that is either a measured number, an exp
 | # | Measurement | Budget | **Current verdict** | Evidence |
 |---|---|---:|---|---|
 | B1 | Room transition, normalized data, **x86 throttled proxy** | ≤ 250 ms p95 (**x86-only tier**, D21) | **BREACH — KNOWN, NOT FIXED.** Measured 1230 ms p50 / 2139 ms p95 at 6× throttle. This breaches the x86 250 ms tier by **8.6× at p95**. It *also* breaches the newly ratified ARM tier of ~1800 ms, because 2139 ms p95 > 1800 ms — so re-baselining ARM does not rescue this measurement. Reported as a breach, never as a pass. | `PICC.md:477`; manifest `:31-32` |
-| B2 | Room transition, **ARM floor class** (A53-honest) | **≤ ~1800 ms p95 — RATIFIED (D21)** | **RATIFIED, NOT YET DIRECTLY MEASURED.** Budget re-baselined from the measured 7.18× ARM/x86 ratio: 250 ms × 7.18 ≈ 1795 ms, rounded to an A53-honest ~1800 ms. The 250 ms figure is **retained as the x86-only tier** (B1), not deleted. **This is a derived budget, not an observed room-transition sample on ARM** — T19 owes the direct on-device measurement, and this row does not read as `pass`. | Owner ARM probe: `bench_ms` 3012.39 vs 419.48 = 7.18× (B12). See honesty note 4. |
+| B2 | Room transition, **ARM floor class** (A53-honest) | **WITHDRAWN - NO DEFENSIBLE FIGURE** | **The ~1800 ms ratification is WITHDRAWN as unsound (D21 supersession, 2026-09-26).** It was derived as `250 ms x 7.18x`, a derivation now known to be invalid on two independent grounds: (1) the 7.18x ratio is a **CPU-only** benchmark, while the T2 diagnostic proved the transition is **RENDER-bound, not data-bound** (route 22 ms vs render 1823 ms avg), so a CPU ratio cannot transfer to a render-dominated path; (2) the 250 ms input it was scaled from was a max-of-5-warming-samples figure, not a percentile. **No replacement figure is substituted.** ARM room-transition cost is genuinely unknown and requires the direct T19 sample. This row does not read as `pass`. | T2 diagnostic `ws7-transition-diagnostic.spec.ts`; ARM probe `bench_ms` 3012.39 vs 419.48 (B12); honesty note 4. |
 | B3 | 10k virtual-table scroll frame | ≤ 16 ms p95 | **BREACH** | manifest `:38-39` |
 | B4 | Terminal first interactive paint (warm) | ≤ 2000 ms p95 | **`UNMEASURED`** | manifest `:46-47` |
 | B5 | Copilot confluence evaluation (pure, deterministic) | ≤ 100 ms p95 excluding model/journal | **`UNMEASURED`** | New in WS-7 (T11) |
