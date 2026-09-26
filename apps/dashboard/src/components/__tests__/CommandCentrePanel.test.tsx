@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { CommandCentrePanel } from "@/components/CommandCentrePanel"
+import { waitForText } from "@/test-utils/waitForText"
 
 type LockCallback = (lock: unknown) => Promise<unknown>
 type LockRequest = (name: string, options: { timeout: number }, callback: LockCallback) => Promise<unknown>
@@ -148,7 +149,7 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
   it("renders the server's verdict, the full 10-gate rail, and honest not-wired cells", async () => {
     stubFetch(overview)
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "trading:ccxt")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).toContain("Command Centre")
@@ -175,7 +176,7 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
   it("renders no aggregate-risk strip when the server reports risk not-wired (null)", async () => {
     stubFetch({ ...overview, risk: null })
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "trading:ccxt")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).not.toContain("Aggregate risk")
@@ -186,7 +187,7 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
   it("renders the global-kill banner and BLOCKED verdicts when the switch is ON", async () => {
     stubFetch(blocked)
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "GLOBAL KILL ACTIVE")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).toContain("GLOBAL KILL ACTIVE")
@@ -214,14 +215,14 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "COPILOT")
     flushSync(() => {})
     expect(m.host.textContent).toContain("COPILOT")
 
     const toggle = m.host.querySelector('button[aria-label="kill switch trading:ccxt"]')
     expect(toggle).toBeTruthy()
     toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "BLOCKED")
     flushSync(() => {})
 
     expect(calls).toEqual([{ path: "/api/command-centre/kill-switch", body: { scope: "trading:ccxt", kill: true } }])
@@ -253,12 +254,12 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "trading:ccxt")
     flushSync(() => {})
     const toggle = m.host.querySelector('button[aria-label="kill switch trading:ccxt"]') as HTMLButtonElement
     expect(toggle).toBeTruthy()
     toggle.click()
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "suite:deny:lock-")
     flushSync(() => {})
 
     expect(posts).toHaveLength(0)
@@ -273,7 +274,7 @@ describe("CommandCentrePanel (slice 4 surface)", () => {
       json: async () => ({ error: "overview exploded" })
     } as unknown as Response)))
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "overview exploded")
     flushSync(() => {})
     expect(m.host.textContent).toContain("overview exploded")
     m.unmount()
@@ -351,14 +352,14 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "CCXT orders (trading)")
     flushSync(() => {})
     expect(m.host.textContent).toContain("CCXT orders (trading)")
 
     const gateBtn = m.host.querySelector('button[aria-label="gate this order"]') as HTMLButtonElement
     expect(gateBtn).toBeTruthy()
     gateBtn.click()
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "proposal recorded as picc-ord-1")
     flushSync(() => {})
 
     expect(posts).toHaveLength(1)
@@ -537,7 +538,7 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const m = mount(<CommandCentrePanel />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "Execute via PICC")
     flushSync(() => {})
     const input = m.host.querySelector('input[aria-label="venue order id for picc-ord-1"]') as HTMLInputElement
     expect(input).toBeTruthy()
@@ -552,7 +553,7 @@ describe("CommandCentrePanel (slice 6 order rail)", () => {
     const verify = m.host.querySelector('button[aria-label="verify fill picc-ord-1"]') as HTMLButtonElement
     expect(verify.disabled).toBe(false)
     verify.click()
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "fill verified read-only against the venue")
     flushSync(() => {})
 
     expect(posts).toEqual([{ path: "/api/command-centre/orders/verify", body: { clientOrderId: "picc-ord-1", orderId: "venue-314" } }])

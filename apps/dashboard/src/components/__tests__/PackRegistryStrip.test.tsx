@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { PackRegistryStrip } from "@/components/PackRegistryStrip"
+import { waitForText } from "@/test-utils/waitForText"
 import type { PackRegistryPayload } from "@/lib/packRegistry"
 
 function mount(node: React.ReactNode) {
@@ -124,7 +125,7 @@ describe("PackRegistryStrip (S5/T5.1)", () => {
       "p1-4-signal-notifications": { status: "idle" }
     }))
     const m = mount(<PackRegistryStrip />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "as of")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).toContain("Pack registry")
@@ -155,7 +156,7 @@ describe("PackRegistryStrip (S5/T5.1)", () => {
       json: async () => ({ error: "registry exploded" })
     } as unknown as Response)))
     const m = mount(<PackRegistryStrip />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "registry unreachable")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).toContain("registry unreachable")
@@ -182,7 +183,7 @@ describe("PackRegistryStrip (S5/T5.1)", () => {
       "p1-2-ccxt-data-poll": { status: "running", detail: "polls ok" }
     }))
     const m = mount(<PackRegistryStrip />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "Manual login required")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     // the structured workflow prompt (owner Q2) is exposed with the ack button
@@ -215,7 +216,7 @@ describe("PackRegistryStrip (S5/T5.1)", () => {
       "p1-2-ccxt-data-poll": { status: "running", detail: "polls ok" }
     }))
     const m = mount(<PackRegistryStrip />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "Session capture is disabled in PICC settings")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     // the settings-kill-switch pathway is surfaced (owner: "prompts you to
@@ -238,7 +239,7 @@ describe("PackRegistryStrip (S5/T5.1)", () => {
       "p1-2-ccxt-data-poll": { status: "running", detail: "polls ok" }
     }))
     const m = mount(<PackRegistryStrip />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "needs human: re-login")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     // the L-class handoff chip is exact and honest
@@ -292,13 +293,13 @@ describe("PackRegistryStrip (S5/T5.1)", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const m = mount(<PackRegistryStrip />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "needs human: re-login")
     flushSync(() => {})
     expect(m.host.querySelector('button[aria-label="ack p1-1-eo-session-capture"]')).toBeTruthy()
 
     const ack = m.host.querySelector('button[aria-label="ack p1-1-eo-session-capture"]') as HTMLButtonElement
     ack.click()
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "human handoff acknowledged")
     flushSync(() => {})
 
     expect(posts).toEqual([{ path: "/api/packs/ack", body: { packId: "pack1-local-trading-core", stepId: "p1-1-eo-session-capture" } }])
@@ -313,7 +314,7 @@ describe("PackRegistryStrip footer (S5/T5.2)", () => {
   it("renders the §8.5 caps as read-only server env truth with the config note; no settings affordance", async () => {
     stubFetch(registry({}))
     const m = mount(<PackRegistryStrip />)
-    await new Promise((r) => setTimeout(r, 10))
+    await waitForText(m, "RAM 4096MB")
     flushSync(() => {})
     const text = m.host.textContent ?? ""
     expect(text).toContain("RAM 4096MB")
