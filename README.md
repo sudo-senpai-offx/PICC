@@ -42,10 +42,13 @@ per-action click, through a hard-capped consent gate — see [`PICC.md`](PICC.md
    with Kelly sizing, multi-timeframe confluence, U4FA confluence, and an optional read-only
    ExpertOption demo bridge (balance/candles only). Every prediction is tagged with the `engine`
    that produced it.
-5. **Income connectors** — bandwidth providers (Honeygain and the CashPilot aggregator) with
-   normalized balance snapshots and honest per-provider source labels. The wider six-provider
-   bandwidth suite, the `automator` service and its LLM health assist were rejected and removed
-   end-to-end (ADR-0002).
+5. **Income connectors** — bandwidth data comes from the **CashPilot aggregator** (self-hosted;
+   it fans out to whatever services you actually run), with normalized balance snapshots and
+   honest per-provider source labels. **Honeygain and the rest of the bandwidth suite — IPRoyal
+   Pawns, Traffmonetizer, Repocket, EarnApp, PacketStream — were part of the rejected suite and
+   do not ship**; so do the `automator` service and its LLM health assist (ADR-0002). Three
+   tests machine-assert the removal (`connectors.test.mjs`, `browserStudio.automation.test.mjs`,
+   `registry.generalization.test.mjs`).
 6. **Finance Tracker & Holdings** — server-backed accounts/transactions CRUD, computed net worth
    (assets − liabilities), and `nft_holdings`/`depin_nodes` holdings editor.
 7. **Studio browser + headless capture** — real Chrome/Edge over CDP with a read-only metrics
@@ -131,7 +134,8 @@ considerations are tracked in `PICC.md` §15 — verify with a qualified lawyer 
 | Income connectors, Stream catalog, classifications | ✅ (bandwidth suite removed — ADR-0002) |
 | Finance tracker + Holdings editor | ✅ |
 | Production deployment (Docker · PM2 · systemd + reverse proxy) | ✅ |
-| **Command Centre Web** — risk-backed autopilot/copilot mode engine (spec committed, `docs/specs/COMMAND_CENTRE_WEB_SPEC.md`) | 🔜 next phase (7 rollout slices) |
-| Perps rail closure (a real gated `cancelOrder`) and removal of the approved-but-unlanded ExpertOption leg | 🔜 owner-confirmed scope, envelope $10 / 2 units / −5% daily |
+| **Command Centre Web** — risk-backed autopilot/copilot mode engine (spec committed, `docs/specs/COMMAND_CENTRE_WEB_SPEC.md`) | 🔜 in progress (slices 1–4 and 6 of 7 landed; 5's claims surface did not, 7 queued) |
+| CCXT sanctioned automation — the consent-gated `trading:ccxt` order rail, envelope $10 / 2 units / −5% daily | ✅ landed (carrier A: fresh per-action human click; carrier B, the human placing, is the default) |
+| Perps rail closure (a real gated `cancelOrder`) + removal of the approved-but-unlanded ExpertOption leg | 🔜 owner-confirmed scope |
 
 Full detail: `PICC.md` §§10–11.

@@ -17,12 +17,14 @@ reason: >-
   `apps/dashboard/server/services/browserBridge.mjs` removes it: the file header
   at `:8-11` says it uses real Chrome "so there is no fingerprint to detect" and
   strips "the automation signals we control (`navigator.webdriver`) to keep the
-  page behaving exactly as it would for a human user"; `:363-365` does it, with
-  the comment "navigator.webdriver is what sites use to fingerprint automation;
-  these two flags remove the signals we are able to remove"; and it is not a
-  dormant path - `@param stealth` at `:323` and the default at `:335` are both
+  page behaving exactly as it would for a human user"; the `if (stealth)` block at `:362-367`
+  does it — it pushes `--enable-automation` off the default arg list (`:365`) and adds
+  `--disable-blink-features=AutomationControlled` (`:366`), and **`:366` is the flag that
+  actually makes `navigator.webdriver` false**; `:363-364` is the code's own comment saying so;
+  and it is not a dormant path - `@param stealth` at `:323` and the default at `:335` are both
   `true`. The file can also import a real logged-in browser profile
-  (`importRealProfile`, `:288`, called at `:353`). Owner decision D22 already
+  (`importRealProfile`, `:288`, called at `:353`; the option is documented at `:329`). Owner
+  decision D22 already
   ruled that this is RETAINED as an explicitly disclosed policy, so v2 discloses
   it with its code citations, its default and its opt-out, and stops calling it
   something it is not.
@@ -30,7 +32,7 @@ source: >-
   WS-7 spec PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1.md, requirement
   R5.1 and acceptance criterion AC-016; owner decision D22, resolved 2026-09-26
   ("KEEP, as an explicitly disclosed policy"). Implementation evidence:
-  apps/dashboard/server/services/browserBridge.mjs:7-11,288,317,323,335,353,362-365.
+  apps/dashboard/server/services/browserBridge.mjs:7-11,288,317,323,329,335,353,362-367.
   Section 5 item 1 of
   .superpowers/sdd/PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1/task-t5b-investigation.md,
   which ruled the claim CONTRADICTS and found the "camouflage and signal-stripping
@@ -54,9 +56,9 @@ repeated the stale pointer now records the correction.
 
 | Location | v1 | v2 |
 |---|---|---|
-| `PICC.md` §0 guardrail 2 | "**No behavioral camouflage** against platform bot-detection. No humanized-typing by default (`PICC_HUMANIZE=1` is explicit opt-in for slow reads, never for deception)." | "**Browser automation-signal stripping is RETAINED, and is disclosed here (WS-7 D22, 2026-09-26).**" - states that an earlier version of the line read "no behavioral camouflage" and that the code contradicted it; cites `browserBridge.mjs` `:323,335` (`stealth = true` by default), `:362-365` (the two signals), `:8` and `:11` (the code's own stated reason), `:288,353` (real-profile import); names `stealth: false` as the opt-out; and then, separately, keeps the `PICC_HUMANIZE` typing rule as v1 had it |
+| `PICC.md` §0 guardrail 2 | "**No behavioral camouflage** against platform bot-detection. No humanized-typing by default (`PICC_HUMANIZE=1` is explicit opt-in for slow reads, never for deception)." | "**Browser automation-signal stripping is RETAINED, and is disclosed here (WS-7 D22, 2026-09-26).**" - states that an earlier version of the line read "no behavioral camouflage" and that the code contradicted it; cites `browserBridge.mjs` `:323,335` (`stealth = true` by default), `:362-367` (the `if (stealth)` block: `:365` drops `--enable-automation`, and `:366` adds `--disable-blink-features=AutomationControlled`, the flag that actually clears `navigator.webdriver`), `:8` and `:11` (the code's own stated reason), `:288,353` (real-profile import); names `stealth: false` as the opt-out; and then, separately, keeps the `PICC_HUMANIZE` typing rule as v1 had it |
 | `PICC.md` §13 | "...no behavioral camouflage, no withdrawals." | "...no withdrawals. (Browser automation-signal stripping is retained and disclosed - see guardrail 2, not a "no camouflage" claim.)" |
-| `PICC.md` §17 | "- **No behavioral camouflage**; `PICC_HUMANIZE=1` explicit opt-in for pacing, not deception." | "- **Browser automation-signal stripping is retained, disclosed, and default-on** (`navigator.webdriver` + `--enable-automation`, `browserBridge.mjs:362-365`; `stealth = true` at `:335`, pass `stealth: false` to disable); **no humanized-typing by default** - `PICC_HUMANIZE=1` is explicit opt-in for pacing, not deception. See guardrail 2 and §16.1." |
+| `PICC.md` §17 | "- **No behavioral camouflage**; `PICC_HUMANIZE=1` explicit opt-in for pacing, not deception." | "- **Browser automation-signal stripping is retained, disclosed, and default-on** (`navigator.webdriver` + `--enable-automation`, `browserBridge.mjs:362-367`; `stealth = true` at `:335`, pass `stealth: false` to disable); **no humanized-typing by default** - `PICC_HUMANIZE=1` is explicit opt-in for pacing, not deception. See guardrail 2 and §16.1." |
 | `PICC.md` §16.1 out-of-scope | "Out of scope: camouflage/ToS-violating automation; withdrawals/transfers anywhere." | "Out of scope: ToS-violating automation **beyond the disclosed automation-signal stripping in guardrail 2**, which D22 retains deliberately; and withdrawals/transfers anywhere." |
 | `PICC.md` §10 WS-7 registry row | D22 sub-clause: "...with `PICC.md:30-31` rewritten to match" | "...with **§0 guardrail 2** rewritten to disclose it in full (`PICC.md:30-31` is the stale pointer this row used to carry - post-D19 those lines are the guardrail-1 rails table)" |
 | `PRIVACY.md` studio-browser section | did not exist (the section described an extension that does not ship) | the default-on stripping, the code's stated reason, and the `stealth: false` opt-out are disclosed in the privacy policy, alongside the read-only and profile-import facts |

@@ -40,10 +40,12 @@ applies in both modes.**
 - The studio browser is a real Chrome/Edge instance PICC drives over CDP, and **you** point it at a
   venue. Reads are read-only: candles and balances land in the local feed paths, and PICC never
   submits a trade message from a browser session.
-- It launches real Chrome/Edge and, **by default**, strips the automation signals it controls
-  (`navigator.webdriver` and the `--enable-automation` default arg, `browserBridge.mjs:362-365`,
-  `stealth = true` at `:335`). The stated reason in the code is that "there is no fingerprint to
-  detect". This is disclosed rather than hidden; pass `stealth: false` to keep the raw signals.
+- It launches real Chrome/Edge and, **by default**, strips the automation signals it controls:
+  it launches with `--disable-blink-features=AutomationControlled` (which is what makes
+  `navigator.webdriver` false) and drops the `--enable-automation` default arg
+  (`browserBridge.mjs:362-367`, `stealth = true` at `:335`). The stated reason in the code is
+  that "there is no fingerprint to detect". This is disclosed rather than hidden; pass
+  `stealth: false` to keep the raw signals.
   PICC can also import a real logged-in browser profile you have used yourself.
 - Venue session tokens are captured from **your own logged-in session** and stored encrypted (see
   above). That is the only session material PICC handles.

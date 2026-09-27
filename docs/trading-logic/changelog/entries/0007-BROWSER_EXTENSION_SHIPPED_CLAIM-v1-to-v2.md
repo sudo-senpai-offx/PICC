@@ -70,10 +70,19 @@ original sentence - that a reader now gets as the current fact.
 - The archived extension was not deleted, and `apps/extension-archived/` was
   not renamed. It is a tracked historical artifact; the correction is about
   what documents *claim*, not about the tree.
-- The T11 verification status earned against the extension era was not
-  deleted. It is real evidence about code that existed. It is re-labelled as
-  history rather than a current guarantee, because a guarantee pinned to a
-  removed component is not a guarantee.
+- The T11 verification status earned against the extension era was
+  **restored in full**, not deleted. `PICC.md` §6 again carries the
+  machine-vs-human split (sections A/B **VERIFIED-MACHINE**; sections C/D
+  **UNVERIFIED-HUMAN**) and the sentence "T11 stays open until a human runs
+  them against a live EO demo session". An earlier draft of this correction
+  summarised that status in a single line and dropped both the split and the
+  open human obligation, which left `git grep "T11 stays open"` returning
+  nothing anywhere in the tree - so the record overstated the diff. The
+  restore is deliberate. The T11 session record is not in this repository, so
+  this slice cannot tell whether the C/D human obligation was correctly
+  retired when the extension was removed or silently dropped, and §6 now says
+  so in terms instead of implying it is discharged. Retiring it is T11's
+  decision to record, not a documentation correction's.
 - No `docs/archive/*` file was edited. Those are disposition records, and the
   `sanitizeUpstreamFrame` / `chromeGuard` prose they carry is accurate as a
   record of the era.
