@@ -1073,4 +1073,124 @@ describe("D20 - every supersession record is schema-complete", () => {
     const missing = D26_RULE_IDS.filter((id) => !corpus.includes(`rule: ${id}`))
     expect(missing, "each D26 claim class must keep its supersession record").toEqual([])
   })
+
+  // A RECORD THAT RENDERS HALF ITSELF IS NOT A RECORD. This block exists because
+  // it should not have to. Record 0009's `README.md feature 5` row was, for one
+  // commit, glued onto the preceding row with `||`, so the table's header declared
+  // three columns and GFM truncated the merged row to three cells - which meant the
+  // cell recording the retraction of a shipped-artifact claim was present in the
+  // source and ABSENT from the rendered document. Every other D20 check passed on
+  // that file, because all seven schema fields were intact: the damage was to
+  // something none of them looked at. A guard that validates a record's FIELDS
+  // while its TABLE silently drops a row reads as coverage and verifies less than
+  // it appears to, which is the same defect class this project treats as a finding
+  // - so the shape is asserted, not assumed.
+  //
+  // THE RULE, precisely: within one table, the header row, the `|---|` separator
+  // and every data row must agree on the count of UNESCAPED pipes. `\|` is literal
+  // cell content, not a delimiter, so it must NOT be counted. Several records
+  // quote a table row out of PICC.md or README.md verbatim and those quotes carry
+  // escaped pipes; counting raw characters is what makes a correct row look wrong
+  // and, worse, makes the "fix" for that a de-quoting of the evidence.
+  //
+  // NO EXEMPTION IS NEEDED, and that is a survey result rather than an assumption:
+  // every table in all nine records is currently uniform, the widest being 0001's
+  // three-column and 0006's two-column. So a varying count means a malformed table,
+  // not a legal one. If a future record genuinely needs ragged rows it must fix
+  // the table or add a reasoned exemption HERE, with a reason - the same rule this
+  // file already applies to the D26 ALLOWLIST and for the same reason: a guard
+  // that fails on honest text gets weakened by whoever next touches it.
+  const unescapedPipes = (line) => {
+    let n = 0
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === "|" && line[i - 1] !== "\\") n++
+    }
+    return n
+  }
+  const TABLE_ROW = /^\s*\|/
+  const TABLE_SEP = /^\s*\|(?:\s*:?-{2,}:?\s*\|)+\s*$/
+
+  function tableShapeProblems(name, text) {
+    const problems = []
+    const lines = text.split("\n")
+    let inFence = false
+    for (let i = 0; i < lines.length; i++) {
+      // A pipe table inside a fenced code block is sample text, not a table.
+      if (/^\s*```/.test(lines[i])) { inFence = !inFence; continue }
+      if (inFence) continue
+      // A table is a header row IMMEDIATELY followed by a separator. Requiring the
+      // separator is what stops a stray pipe-leading line from being read as a
+      // one-row table and failing for the wrong reason - a false positive in a
+      // truth guard is worse than no guard, because the cheapest response to one is
+      // to delete the sentence that provoked it.
+      if (!TABLE_ROW.test(lines[i])) continue
+      if (!TABLE_SEP.test(lines[i + 1] ?? "")) continue
+      const expected = unescapedPipes(lines[i])
+      const sepCount = unescapedPipes(lines[i + 1])
+      if (sepCount !== expected) {
+        problems.push(
+          `${name}:${i + 2} separator has ${sepCount} unescaped pipes, header on line ${i + 1} has ${expected}`
+        )
+      }
+      for (let j = i + 2; j < lines.length && TABLE_ROW.test(lines[j]); j++) {
+        const got = unescapedPipes(lines[j])
+        if (got !== expected) {
+          problems.push(
+            `${name}:${j + 1} has ${got} unescaped pipes, header on line ${i + 1} has ${expected}`
+          )
+        }
+      }
+    }
+    return problems
+  }
+
+  it("counts unescaped pipes only, and sees a glued row", () => {
+    // The counter is pinned before it is trusted, because its failure mode is
+    // silent in the dangerous direction. If it started counting `\|` as a
+    // delimiter, every record that quotes a table row out of PICC.md would fail,
+    // and the cheapest way to make that green is to delete the quoted evidence -
+    // which is precisely backwards. Each expectation below is hand-counted.
+    expect(unescapedPipes("| a | b |"), "two columns -> three unescaped pipes").toBe(3)
+    expect(unescapedPipes("| a \\| b |"), "an escaped pipe is one cell's content, not a delimiter").toBe(2)
+    expect(unescapedPipes("| a | b |"), "identical to the first line; a control").toBe(3)
+    // Two three-column rows glued with `||`: 8 unescaped pipes where a single
+    // three-column row has 4. This is exactly the 0009 defect.
+    expect(unescapedPipes("| a | b | c || d | e | f |"), "two rows glued, eight unescaped pipes").toBe(8)
+    expect(unescapedPipes("| a | b | c |"), "one three-column row for contrast: 4").toBe(4)
+  })
+
+  it("keeps every record's GFM tables the shape their header declares", () => {
+    const problems = []
+    for (const name of entryFiles) {
+      problems.push(...tableShapeProblems(name, readFileSync(join(ENTRIES_DIR, name), "utf8")))
+    }
+    expect(
+      problems,
+      "a row whose unescaped-pipe count differs from its table's header is TRUNCATED by GFM: the extra cells are dropped from the rendered document, so the record silently stops saying what it says in the source. Split the row onto its own line."
+    ).toEqual([])
+
+    // The scan must not be vacuous. A rename, an empty directory or a regex that
+    // stopped matching would all make the assertion above pass while checking
+    // nothing, which is the failure this file's first describe block exists to
+    // rule out. So the tables are proved to be REACHED, not merely absent.
+    //
+    // 9 of the 15 records currently contain a table (0001, 0005-0011, 0015; the
+    // other six - 0002, 0003, 0004, 0012, 0013, 0014 - are prose). The floor is
+    // 8 rather than the exact 9 so that ADDING a table to a record cannot fail
+    // this, while removing tables from two or more records does.
+    const withTables = entryFiles.filter((n) =>
+      /^\s*\|/m.test(readFileSync(join(ENTRIES_DIR, n), "utf8"))
+    )
+    expect(
+      withTables.length,
+      "the table scan must reach the records that actually contain tables"
+    ).toBeGreaterThanOrEqual(8)
+    let rowsChecked = 0
+    for (const name of entryFiles) {
+      rowsChecked += (readFileSync(join(ENTRIES_DIR, name), "utf8").match(/^\s*\|/gm) ?? []).length
+    }
+    // 97 pipe-leading rows today. A floor of 60 catches a regex that stopped
+    // matching without breaking when a record gains a table.
+    expect(rowsChecked, "the scan must be counting real rows, not zero of them").toBeGreaterThan(60)
+  })
 })
