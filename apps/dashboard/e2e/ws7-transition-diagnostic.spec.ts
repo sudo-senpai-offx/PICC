@@ -31,16 +31,28 @@ async function signupAndLogin(page, request) {
 const INSTALL_PROBE = () => {
   const w = window
   if (w.__ws7probe) return
-  w.__ws7probe = { armed: false, clickedAt: null, routeAt: null, roomAt: null, roomName: null }
+  w.__ws7probe = {
+    armed: false,
+    clickedAt: null,
+    fromRoom: null,
+    routeAt: null,
+    roomAt: null,
+    roomName: null
+  }
 
   // Capture-phase so we stamp the click before any framework handler runs.
   w.addEventListener(
     "click",
     () => {
-      w.__ws7probe.clickedAt = performance.now()
-      w.__ws7probe.routeAt = null
-      w.__ws7probe.roomAt = null
-      w.__ws7probe.roomName = null
+      const p = w.__ws7probe
+      // The room being LEFT, read while it is still mounted, and read BEFORE
+      // clickedAt is stamped so the probe's own cost stays outside the window
+      // routeMs is measured over.
+      p.fromRoom = document.querySelector("[data-room]")?.getAttribute("data-room") ?? null
+      p.clickedAt = performance.now()
+      p.routeAt = null
+      p.roomAt = null
+      p.roomName = null
     },
     true
   )
@@ -55,15 +67,20 @@ const INSTALL_PROBE = () => {
     return r
   }
 
-  // The room marker appearing is the render completing.
+  // The room marker CHANGING is the render completing. This observer watches the
+  // whole document, so it also sees unrelated mutations, and the outgoing room
+  // keeps ticking its own timers until React commits the new one. Only a room
+  // that differs from the one we left counts; stamping the first mutation seen
+  // instead recorded the OUTGOING room and, being single-shot, never corrected.
   const target = document.documentElement
   const observer = new MutationObserver(() => {
     const el = document.querySelector("[data-room]")
     const p = w.__ws7probe
-    if (el && p.clickedAt !== null && p.roomAt === null) {
-      p.roomAt = performance.now()
-      p.roomName = el.getAttribute("data-room")
-    }
+    if (!el || p.clickedAt === null || p.roomAt !== null) return
+    const room = el.getAttribute("data-room")
+    if (room === null || room === p.fromRoom) return
+    p.roomAt = performance.now()
+    p.roomName = room
   })
   const start = () => observer.observe(target, { attributes: true, childList: true, subtree: true })
   if (document.documentElement) start()
@@ -90,7 +107,26 @@ test.describe("WS-7 T2 diagnostic", () => {
     const rows = []
     for (let i = 0; i < 8; i++) {
       await page.click("a[href='/suites/trading/markets']").catch(() => {})
-      await page.waitForSelector("[data-room='markets']", { timeout: 15_000 })
+      // Wait on the PROBE, not just the DOM. The read below takes roomName from
+      // the probe, and the observer that writes it has no ordering guarantee
+      // against a selector wait, so the two could disagree. The click handler
+      // nulls roomAt/roomName and sets fromRoom, so a stale stamp cannot
+      // satisfy this; a swallowed click now times out loudly instead of
+      // recording a sample the probe never took.
+      await page.waitForFunction(
+        (expected) => {
+          const q = window.__ws7probe
+          return (
+            q != null &&
+            q.roomAt !== null &&
+            q.fromRoom != null &&
+            q.roomName === expected &&
+            q.roomName !== q.fromRoom
+          )
+        },
+        "markets",
+        { timeout: 15_000 }
+      )
 
       const p = await page.evaluate(() => {
         const q = window.__ws7probe
