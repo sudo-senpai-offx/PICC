@@ -65,17 +65,17 @@ function mountProbe() {
      * WS-7: this was a fixed 10ms sleep - a guess about machine speed, not a
      * condition. It passed serially and failed ~1 run in 4 once the suite ran in
      * parallel, because under load 10ms no longer covered the fetch -> parse ->
-     * setState chain, so assertions read the PRE-update value. Callers that care
-     * about a specific outcome pass a predicate and are waited on properly.
+     * setState chain, so assertions read the PRE-update value.
+     *
+     * The sleep fallback is now GONE rather than merely unused: the predicate is
+     * a REQUIRED parameter, so the type checker - not a reviewer's memory -
+     * rejects any future call site that has no condition to wait on. All four
+     * call sites in this file already passed one.
      */
-    async settle(isSettled?: () => boolean) {
-      if (isSettled) {
-        await waitForSettled(() => true, isSettled, {
-          description: "useCandleData to report the expected state"
-        })
-      } else {
-        await new Promise((r) => setTimeout(r, 10))
-      }
+    async settle(isSettled: () => boolean) {
+      await waitForSettled(() => true, isSettled, {
+        description: "useCandleData to report the expected state"
+      })
       flushSync(() => {})
     },
     unmount() {

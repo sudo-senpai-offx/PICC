@@ -76,6 +76,20 @@ function mountApp() {
       // promise-sourced updates on a MessageChannel that 10ms no longer covered,
       // so the read observed the pre-update 'auto' value. A longer sleep would
       // only lower the flake rate, not remove the race.
+      //
+      // WS-7 sweep-2: eight of the nine former sleep call sites now pass a
+      // predicate. The fallback survives for exactly ONE of them - the settle
+      // after resolveGet() in "a late GET response never clobbers a choice the
+      // user already made". The hook's late-GET guard is a silent early return
+      // (`if (!alive || userChanged.current) return`), so rejecting the stale
+      // response commits no state, and no predicate over pref/loaded/notice can
+      // distinguish "the late GET already lost" from "the late GET has not
+      // arrived yet". Any condition that is true at that point is also true
+      // before resolveGet, so supplying one would turn the wait into a no-op and
+      // the test into a tautology. Making this parameter REQUIRED - which is
+      // what finally makes the defect class unrepresentable - is blocked on
+      // finding a real observable for that rejection. See
+      // .superpowers/sdd/PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1/task-sweep-2-report.md
       if (isSettled) {
         await waitForSettled(() => true, isSettled, {
           description: "useSourcePreference to load the saved pref"
@@ -121,11 +135,11 @@ describe("useSourcePreference (T10 round-trip)", () => {
 
   it("persist POSTs the slug and adopts the server's normalized answer", async () => {
     const h = mountApp()
-    await h.settle()
+    await h.settle(() => h.latest.loaded === true)
     expect(h.latest.pref).toBe("expertoption")
     const ok = await h.latest.persist("ccxt")
     expect(ok).toBe(true)
-    await h.settle()
+    await h.settle(() => h.latest.pref === "ccxt")
     expect(h.latest.pref).toBe("ccxt")
     expect(h.latest.notice).toBeNull()
 
@@ -140,10 +154,10 @@ describe("useSourcePreference (T10 round-trip)", () => {
 
   it("adopts 'auto' when the server normalizes an unknown slug", async () => {
     const h = mountApp()
-    await h.settle()
+    await h.settle(() => h.latest.loaded === true)
     const ok = await h.latest.persist("not-a-real-slug!")
     expect(ok).toBe(true)
-    await h.settle()
+    await h.settle(() => h.latest.pref === "auto")
     expect(h.latest.pref).toBe("auto")
     h.unmount()
   })
@@ -152,11 +166,11 @@ describe("useSourcePreference (T10 round-trip)", () => {
     vi.unstubAllGlobals()
     stubServer({ postOk: false })
     const h = mountApp()
-    await h.settle()
+    await h.settle(() => h.latest.loaded === true)
     expect(h.latest.pref).toBe("expertoption")
     const ok = await h.latest.persist("ccxt")
     expect(ok).toBe(false)
-    await h.settle()
+    await h.settle(() => h.latest.notice !== null)
     expect(h.latest.pref).toBe("expertoption")
     expect(h.latest.notice).not.toBeNull()
     h.unmount()
@@ -174,13 +188,18 @@ describe("useSourcePreference (T10 round-trip)", () => {
       return json({ ok: true, userId: "default", source: normalize(body?.source) })
     }))
     const h = mountApp()
-    await h.settle() // GET still in flight
+    await h.settle(() => h.latest.loaded === false) // GET still in flight
     const ok = await h.latest.persist("ccxt")
     expect(ok).toBe(true)
-    await h.settle()
+    await h.settle(() => h.latest.pref === "ccxt")
     expect(h.latest.pref).toBe("ccxt")
     // The stale GET finally settles LONG after the user's choice â€” it must lose.
     resolveGet({ ok: true, userId: "default", source: "expertoption" })
+    // BLOCKED (WS-7 sweep-2) - no honest predicate exists at this site. The
+    // hook discards the late response via a silent early return, so rejecting
+    // it commits no state and nothing observable changes. Deliberately left on
+    // the fallback rather than given a condition that is already true here and
+    // would make the wait - and this assertion - prove nothing.
     await h.settle()
     expect(h.latest.pref).toBe("ccxt")
     h.unmount()
