@@ -70,8 +70,7 @@ $10 regardless.
 **Platform facts (2026-09-06, evening):**
 
 - **Bybit and MEXC both refuse this user** (region-restriction walls). Offshore exchanges are
-  **not reliably signup-able from Malaysia in 2026** — do not re-recommend offshore
-  exchanges to this user.
+  **not reliably signup-able from Malaysia in 2026** — do not re-recommend them to this user.
 - Region question **resolved**: Luno accepted the signup → the user is a Malaysian resident, no
   VPN. The two blocks are data points about those platforms' MY stances (MEXC's
   "Malaysia-friendly" reviews are stale or wrong), not about the user's location.
@@ -110,7 +109,7 @@ exchange; funds go straight to your wallet, no exchange custody.
 
 ### Route C — MYR exchange on-ramp, no P2P at all (regulatory status unverified; stablecoin availability unverified)
 
-Six Malaysian exchanges take direct MYR deposits via **FPX** — no P2P counterparty (Luno, Hata, MX
+These Malaysian exchanges take direct MYR deposits via **FPX** — no P2P counterparty (Luno, Hata, MX
 Global, SINEGY, Kinetic/KDX, Torum):
 
 - **Hata** — FPX deposit ~RM0.80 (instant); 0% maker / 0.10–0.40% taker; Instant Buy 1%.

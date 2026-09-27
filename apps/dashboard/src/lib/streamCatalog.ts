@@ -39,8 +39,8 @@ export const STREAM_CATEGORY_LABELS: Record<string, string> = {
 }
 
 export const CRYPTO_APPS: CatalogEntry[] = [
-  { id: "luno", name: "Luno", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://www.luno.com/my", note: "Buy & hold BTC/ETH; no local staking product — log gains as manual balance." },
-  { id: "mx-global", name: "MX Global", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://mxglobal.com.my", note: "BTC/ETH/USDT spot pairs." },
+  { id: "luno", name: "Luno", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://www.luno.com/my", note: "Buy & hold BTC/ETH; no local staking product — log gains as manual balance. PICC asserts no regulatory status for this venue." },
+  { id: "mx-global", name: "MX Global", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://mxglobal.com.my", note: "BTC/ETH/USDT spot pairs. PICC asserts no regulatory status for this venue." },
   { id: "hata", name: "HATA Digital", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://www.hata.io", note: "Crypto exchange. PICC asserts no regulatory status for this venue." },
   { id: "sinegy", name: "SINEGY DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://sinegy.com", note: "Crypto exchange based in Penang. PICC asserts no regulatory status for this venue." },
   { id: "kinetic", name: "Kinetic DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://kineticdax.com", note: "Crypto exchange based in Kuala Lumpur. PICC asserts no regulatory status for this venue." },

@@ -26,40 +26,62 @@
 // "SC investor-alert", "SC approval", "Labuan FSA licence" and "RMO-DAX".
 //
 // A CLAIM IS COMPOSED, NOT SPELLED. Every rule below is a REGEX, matched in one
-// of two normalisations, and each carries a `why` so the vocabulary explains
+// of three normalisations, and each carries a `why` so the vocabulary explains
 // itself instead of being a bag of strings:
 //
-//   mode "squeezed" - all whitespace removed and lower-cased. This is what
-//     survives a claim wrapped across a line break or split at a hyphen; the
-//     original per-line scan structurally could not see "SC-\\nregistered".
-//   mode "spaced"   - runs of whitespace collapsed to one space, so word
-//     boundaries survive and a STANDALONE designation token ("SC approval",
-//     "RMO-DAX", "Securities Commission") is visible as a word. Squeezing
-//     cannot do this: it would glue "dual sc + labuan fsa" into "dualsc+" and
-//     destroy the token boundary that makes the proximity rules work.
+//   mode "squeezed" - all whitespace AND hyphens removed, lower-cased. This is
+//     what survives a claim wrapped across a line break or split at a hyphen;
+//     the original per-line scan structurally could not see "SC-\nregistered".
+//     Hyphens go too so that "virtual-asset" collapses onto "virtualasset" and
+//     the entity list needs no hyphenated twin of every entry.
+//   mode "clause"   - the text split into sentence/line/bullet segments, and
+//     each segment scanned separately. A proximity window may then cross spaces
+//     WITHIN a sentence but can never cross a sentence or line break, which is
+//     what a whitespace-inclusive window over collapsed newlines used to do.
+//   mode "spaced"   - whitespace runs collapsed to one space, so word
+//     boundaries survive and a STANDALONE token ("SC approval", "RMO-DAX",
+//     "Securities Commission") is visible as a word. Squeezing cannot do this:
+//     it would glue "dual sc + labuan fsa" into "dualsc+" and destroy the token
+//     boundary that makes the proximity rules work.
 //
-// Three things are DELIBERATELY NOT BANNED, because banning them would flag
+// THE TRIGGERS ARE DERIVED, NEVER HAND-LISTED. Every rule that fires on a
+// licensing term takes that term from the single LICENCE_WORD array. An earlier
+// version hand-listed a four-word subset in one rule while LICENCE_WORD carried
+// thirteen, and paraphrases built on `accredited`, `recognised` or `regulated`
+// walked past a green guard. Where PICC has its own unrelated use of a word -
+// "registered broker" is an in-process registry, "approved venue" is a capture
+// ceremony - the exclusion is made in the ENTITY list or documented as a probe,
+// never by quietly dropping words from the trigger.
+//
+// Five things are DELIBERATELY NOT BANNED, because banning them would flag
 // honest text and a guard that fails on honest text gets weakened by whoever
 // next touches it. Each is pinned by a test below so the boundary cannot drift:
 //
 //   - "DAX" as a financial-licensing designation is banned; "DAX" as the German
 //     DAX-40 equity index is NOT. assetCatalog.mjs, tradingCatalog.mjs,
 //     u4faConfig.mjs and list-watch-assets.mjs use it for the index. The DAX
-//     rules therefore require a licensing word nearby, and the index files are
-//     asserted clean.
+//     rules therefore require an ADJACENT licensing word - a distance window let
+//     "the DAX methodology section for the licensed-venue policy" match - and
+//     the index files are asserted clean.
 //   - "unregulated" on its own is NOT banned. In this codebase it appears only
 //     as PICC's own conservative SAFETY posture - the ExpertOption truth-table
 //     row that forbids live money on an unregulated venue. D26 targets claims
 //     that endorse a venue's status; removing the word that justifies a safety
 //     restriction would weaken the restriction. The jurisdictional-status rule
-//     still catches "unregulated locally" / "not regulated" / "unlicensed
-//     locally", which are the endorsement-shaped phrasings.
+//     still catches "unregulated locally", "not regulated", "unlicensed locally"
+//     and "regulatory status verified".
 //   - "KYC" on its own is NOT banned, and the KYC rule is DIRECTIONAL. It fires
-//     on an assertion that a third party does NOT require KYC, not on the mere
-//     presence of the word. captureProfiles.mjs says "KYC mandatory" - that is
-//     PICC refusing such a venue, the opposite of a claim - and the runbook's
+//     on an assertion about a third party's KYC status, not on the mere presence
+//     of the word. captureProfiles.mjs says "KYC mandatory" - that is PICC
+//     refusing such a venue, the opposite of a claim - and the runbook's
 //     "system-side KYC queue" and "KYC/AML" describe observed provider
-//     behaviour. All stay.
+//     behaviour.
+//   - An honest disclaimer must not be flagged. "PICC has not verified the DAX
+//     status of this venue" is the sentence the project wants; flagging it would
+//     push authors toward deleting the disclaimer.
+//   - fca/mas/asic are NOT regulator tokens here. Adding them made an honest
+//     sentence ("The desk is regulated by the FCA") fire, and a claim that names
+//     a financial entity is caught by the entity rule whatever the regulator.
 import { describe, expect, it } from "vitest"
 import { execFileSync } from "node:child_process"
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs"
@@ -72,20 +94,110 @@ const SELF = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep).join
 const CHANGELOG_DIR = join(REPO_ROOT, "docs/trading-logic/changelog")
 const ENTRIES_DIR = join(CHANGELOG_DIR, "entries")
 
-const squeezed = (s) => s.replace(/\s+/g, "").toLowerCase()
+// "squeezed" removes whitespace AND hyphens. Whitespace removal is what
+// survives a claim wrapped across a line break; hyphen removal means
+// "virtual-asset" collapses onto "virtualasset" so the entity list needs no
+// hyphenated twin of every entry - an author writing "digital-asset" must not
+// evade "digitalasset".
+const squeezed = (s) => s.replace(/[\s-]+/g, "").toLowerCase()
 const spaced = (s) => s.replace(/\s+/g, " ").toLowerCase()
+// "clause" is a sentence/line/bullet segment. The proximity window may cross
+// spaces WITHIN a clause but can never cross a clause boundary. That boundary
+// is the fix for the defect where a whitespace-inclusive `near(40)` over
+// collapsed newlines spanned sentence breaks and flagged ordinary prose.
+const clauses = (s) =>
+  s
+    .split(/(?<=[.;!?])\s+|\n+|\s*[•|]\s*/)
+    .map((c) => c.replace(/\s+/g, " ").toLowerCase())
+    .filter(Boolean)
 
-// Shared vocabularies for the compositional rules.
-const LICENCE_WORD =
-  "licensed|licences|licenses|licensing|registered|registration|approved|approval|authorised|authorized|chartered|accredited|regulated"
+// THE TRIGGER VOCABULARY, DEFINED ONCE.
+//
+// `entity-licensing-claim` DERIVES its trigger from LICENCE_WORD instead of
+// hand-listing a subset. Hand-listing is precisely what produced the last
+// defect: the rule's trigger had drifted to four words while LICENCE_WORD
+// carried thirteen, so paraphrases built on `accredited`, `recognised` or
+// `regulated` walked straight past a green guard. One array, one consumer, and
+// adding a word to LICENCE_WORD now widens every rule that consumes it.
+const LICENCE_WORD = [
+  "licensed",
+  "licences",
+  "licenses",
+  "licensing",
+  "registered",
+  "registration",
+  "approved",
+  "approval",
+  "authorised",
+  "authorized",
+  "chartered",
+  "accredited",
+  "regulated",
+  "recognised",
+  "recognized",
+  "supervised"
+]
+const LICENCE_WORD_RE = LICENCE_WORD.join("|")
+
+// Stems, for the two designation rules ONLY. In squeezed text a designation sits
+// ADJACENT to its adjective ("daxregistered", "scregistereddax"), so those rules
+// scope with a SEPARATOR gap rather than a distance window. A distance window
+// is what let "the DAX methodology section for the licensed-venue policy" match
+// across three ordinary words.
+const LICENCE_STEM_RE =
+  "licen|regist|approv|authoris|authoriz|charter|accredit|regulat|recognis|recogniz|supervis"
+
+// Regulator / designation tokens as STANDALONE WORDS. Deliberately not extended
+// to fca/mas/asic: adding them made an honest sentence ("The desk is regulated
+// by the FCA") fire, and the entity rule already catches a licensing claim that
+// names a financial entity whatever the regulator.
 const REGULATOR_TOKEN = "sc|fsa|rmo|sec|msb|bnm"
+
+// Financial-entity nouns. Deliberately ABSENT: broker, venue, connector,
+// adapter, registry - "registered broker", "registered trading venue" and
+// "approved venue" are PICC's own in-process broker registry and its
+// capture-approval ceremony, not a regulator. Keeping them out of the ENTITY
+// list rather than out of the TRIGGER list is what lets the trigger be derived
+// without reintroducing those false positives.
+const FINANCIAL_ENTITY = [
+  "exchange",
+  "digitalasset",
+  "assetwork",
+  "virtualasset",
+  "securit",
+  "bank",
+  "paymentprovider",
+  "moneyservices",
+  "financial",
+  "custodian",
+  "issuer",
+  "dealer",
+  "marketoperator",
+  "fintech",
+  "insur",
+  "trust",
+  "creditunion",
+  "provider",
+  "onramp",
+  "capitalmarket",
+  "brokerage",
+  "firm",
+  "platform"
+]
+const FINANCIAL_ENTITY_RE = FINANCIAL_ENTITY.join("|")
+
+// Distance window. Used ONLY in clause mode, where crossing a sentence is
+// impossible by construction. Narrow on purpose: every character of slack is a
+// chance to span unrelated prose.
 const near = (n) => `[a-z0-9,.+'"\\s-]{0,${n}}`
+// Separator gap, for the designation rules. Zero distance.
+const gap = (n) => `[/,;]{0,${n}}`
 
 const CLAIM_VOCABULARY = [
   {
     id: "explicit-sc-registration",
     mode: "squeezed",
-    re: /sc(registered|licensed|regulated|approved|authorised|authorized|recognised|recognized|accredited)/,
+    re: new RegExp(`sc${gap(1)}(?:${LICENCE_STEM_RE})`),
     why: "the SC form with any status adjective, not just registered/licensed. 'SC-regulated' survived the first pass precisely because the vocabulary only knew two adjectives"
   },
   {
@@ -97,32 +209,20 @@ const CLAIM_VOCABULARY = [
   {
     id: "rmo-designation",
     mode: "squeezed",
-    re: /rmo(?=[a-z0-9]{0,24}(dax|registered|licen|approv|regulat))/,
-    why: "the RMO recognised-market-operator designation, scoped by a licensing word so it cannot match 'thermostat' (bare rmo hits 71 files)"
+    re: new RegExp(`rmo(?=${gap(1)}(?:dax|${LICENCE_STEM_RE}))`),
+    why: "the RMO recognised-market-operator designation, scoped by an ADJACENT licensing word. A distance window here matched 'triggerregistration' in a broker-loader comment; a separator gap does not"
   },
   {
     id: "dax-designation",
     mode: "squeezed",
-    re: /dax(?=[a-z0-9]{0,30}(registered|licen|approv|regulat|securit))/,
-    why: "DAX as a licensing designation, scoped by a licensing word so the DAX-40 equity index is not flagged"
+    re: new RegExp(`dax(?=${gap(1)}(?:${LICENCE_STEM_RE}|securit))|(?:${LICENCE_STEM_RE})${gap(1)}dax`),
+    why: "DAX as a licensing designation, in either order, scoped by an ADJACENT licensing word. That scoping is what separates it from the DAX-40 equity index, and adjacency is what stops it matching across ordinary prose"
   },
   {
     id: "entity-licensing-claim",
     mode: "squeezed",
-    re: new RegExp(
-      `(licensed|licences|licenses|licensing)(?=[a-z0-9,.+'"-]{0,40}` +
-        `(exchange|provider|bank|platform|venue|broker|custodian|fintech|onramp|securit|regulat|commission|fsa|digitalasset|assetwork|marketoperator|dealer|issuer))`
-    ),
-    why: "a licensing word applied to a financial entity. 'registered broker' and 'approved venue' are deliberately NOT here: those are PICC's own in-process broker registry and its capture-approval ceremony, not a regulator"
-  },
-  {
-    id: "registration-entity-claim",
-    mode: "squeezed",
-    re: new RegExp(
-      `(registered|registration)(?=[a-z0-9,.+'"-]{0,30}` +
-        `(exchange|digitalasset|assetwork|securit|bank|paymentprovider|custodian|issuer|dealer|marketoperator|fintech|insur|trust))`
-    ),
-    why: "'registered' next to a FINANCIAL entity. The entity list deliberately omits broker/venue/connector/adapter/registry, because 'registered broker' and 'registered trading venue' are PICC's own in-process registry and its capture-approval ceremony, not a regulator"
+    re: new RegExp(`(?:${LICENCE_WORD_RE})(?=[a-z0-9,.+'"]${"{0,30}"}(?:${FINANCIAL_ENTITY_RE}))`),
+    why: "ANY licensing word next to ANY financial entity. The trigger is DERIVED from LICENCE_WORD, never hand-listed - the previous hand-listed subset had drifted to four words and let 'accredited', 'recognised' and 'regulated' paraphrases through. PICC's own 'registered broker' / 'approved venue' are handled by leaving broker/venue/connector/adapter/registry out of the ENTITY list, not by narrowing the trigger"
   },
   {
     id: "kyc-exemption-claim",
@@ -138,13 +238,12 @@ const CLAIM_VOCABULARY = [
   },
   {
     id: "regulator-proximity-claim",
-    mode: "spaced",
+    mode: "clause",
     re: new RegExp(
-      `\\b(?:${REGULATOR_TOKEN})\\b${near(40)}(?:${LICENCE_WORD})\\b` +
-        `|(?:${LICENCE_WORD})\\b${near(40)}\\b(?:${REGULATOR_TOKEN})\\b`,
-      "g"
+      `\\b(?:${REGULATOR_TOKEN})\\b${near(20)}(?:${LICENCE_WORD_RE})\\b` +
+        `|(?:${LICENCE_WORD_RE})\\b${near(20)}\\b(?:${REGULATOR_TOKEN})\\b`
     ),
-    why: "a standalone regulator/designation token sitting next to any licensing word, in EITHER order. This is the rule that catches a phrasing nobody enumerated, in either word order"
+    why: "a standalone regulator token next to any licensing word, in EITHER order, within one clause. Clause mode is what stops the window spanning a sentence break; the 20-char budget is what stops it spanning ordinary prose inside a sentence"
   },
   {
     id: "named-regulator-spaced",
@@ -154,9 +253,9 @@ const CLAIM_VOCABULARY = [
   },
   {
     id: "standalone-dax-licensing",
-    mode: "spaced",
-    re: new RegExp(`\\bdax\\b${near(40)}(?:${LICENCE_WORD})\\b|(?:${LICENCE_WORD})\\b${near(40)}\\bdax\\b`, "g"),
-    why: "DAX as a standalone word near a licensing word. Scoped, so asset aliases ('dax' in ger40) and 'dax40' are not flagged"
+    mode: "clause",
+    re: new RegExp(`\\bdax\\b${near(20)}(?:${LICENCE_WORD_RE})\\b|(?:${LICENCE_WORD_RE})\\b${near(20)}\\bdax\\b`),
+    why: "DAX as a standalone word near a licensing word within one clause. Scoped twice over: the licensing word must be nearby, and the window may not cross a sentence - which is precisely what used to fire on 'Dax runs the desk. The desk is regulated by the FCA.'"
   }
 ]
 
@@ -287,6 +386,13 @@ const ALLOWLIST = [
     occurrences: 1,
     reason:
       "The fixture uses \"settlementAuthority: 'licensed-custodian'\" against \"counterpartyAuthority: 'independent-cs'\". That is PICC's OWN terminal trust-boundary vocabulary - the distinction between an independent counterparty and a licensed custodian is one PICC defines about its own architecture - not an assertion about any third party's regulatory status. Banning the word here would flag PICC describing its own safety boundary."
+  },
+  {
+    file: "apps/extension-archived/src/content.tsx",
+    rule: "entity-licensing-claim",
+    occurrences: 1,
+    reason:
+      "The string is 'No connector registered for this platform.' - a runtime UI message in the ARCHIVED extension reporting whether PICC's own browser connector is present for a site. It is PICC's in-process connector registry, not a regulator, and it ships to no user of the current dashboard. It fires only because 'platform' had to stay in the entity list to catch 'a licensed P2P lending platform'. Bounded to exactly 1, so any second claim in this file is caught."
   }
 ]
 
@@ -295,14 +401,52 @@ const ALLOWLIST = [
 // ---------------------------------------------------------------------------
 const VOCAB_BY_ID = new Map(CLAIM_VOCABULARY.map((v) => [v.id, v]))
 
+// Each scanned file is read ONCE. The per-(file, rule) loop below would otherwise
+// re-read the same file for every rule - 815 files x 11 rules is ~9,000 reads and
+// tens of megabytes of pointless I/O on a test that runs on every commit. The
+// three normalisations are cached per file too, since each rule needs a
+// different one.
+const TEXT_CACHE = new Map()
+const HAYSTACK_CACHE = new Map()
+
+function textFor(file) {
+  let t = TEXT_CACHE.get(file)
+  if (t === undefined) {
+    t = readFileSync(join(REPO_ROOT, file), "utf8")
+    TEXT_CACHE.set(file, t)
+  }
+  return t
+}
+
+function haystacksFor(file, mode) {
+  const key = `${mode} ${file}`
+  let h = HAYSTACK_CACHE.get(key)
+  if (h === undefined) {
+    const text = textFor(file)
+    if (mode === "squeezed") h = [squeezed(text)]
+    else if (mode === "spaced") h = [spaced(text)]
+    else if (mode === "clause") h = clauses(text)
+    else throw new Error(`unknown vocabulary mode ${mode}`)
+    HAYSTACK_CACHE.set(key, h)
+  }
+  return h
+}
+
 function countMatches(file, ruleId) {
   const rule = VOCAB_BY_ID.get(ruleId)
   if (!rule) throw new Error(`unknown vocabulary rule ${ruleId}`)
-  const text = readFileSync(join(REPO_ROOT, file), "utf8")
-  const hay = rule.mode === "spaced" ? spaced(text) : squeezed(text)
   const re = new RegExp(rule.re.source, rule.re.flags.includes("g") ? rule.re.flags : rule.re.flags + "g")
+  // A file contributes one hit per haystack it contains matches in, so a clause
+  // rule counts clauses and a whole-file rule counts occurrences.
   let n = 0
-  while (re.exec(hay) !== null) n++
+  for (const hay of haystacksFor(file, rule.mode)) {
+    const local = new RegExp(re.source, re.flags)
+    let m
+    while ((m = local.exec(hay)) !== null) {
+      n++
+      if (!m[0].length) local.lastIndex++
+    }
+  }
   return n
 }
 
@@ -362,15 +506,32 @@ const entryFiles = existsSync(ENTRIES_DIR)
       .sort()
   : []
 
-// The D26 claim classes deleted by T5a and its fix round. Asserted individually
-// so a class cannot be silently emptied while the directory stays non-empty.
+// The corrections made by T5a and its fix rounds. Asserted individually so a
+// record cannot be silently emptied while the directory stays non-empty, and so
+// 0001's superseded note table stays anchored by 0006.
 const D26_RULE_IDS = [
   "VENDOR_REGULATORY_STATUS",
   "VENUE_KYC_TERMS",
   "STAKING_JURISDICTION_STATUS",
   "RUNBOOK_LICENSING_ASSERTION",
-  "RUNBOOK_DESIGNATION_CLAIM"
+  "RUNBOOK_DESIGNATION_CLAIM",
+  "VENUE_STATUS_DISCLAIMER_CONSISTENCY"
 ]
+
+// Which vocabulary rules fire on a bare string. Used by the probe tests below so
+// a phrasing can be asserted without inventing a file for it.
+function probe(text) {
+  return CLAIM_VOCABULARY.filter((rule) =>
+    haystacksForText(text, rule.mode).some((hay) => new RegExp(rule.re.source, rule.re.flags).test(hay))
+  ).map((rule) => rule.id)
+}
+
+function haystacksForText(text, mode) {
+  if (mode === "squeezed") return [squeezed(text)]
+  if (mode === "spaced") return [spaced(text)]
+  if (mode === "clause") return clauses(text)
+  throw new Error(`unknown vocabulary mode ${mode}`)
+}
 
 describe("AC-049 - the claim scan is real, not decorative", () => {
   it("excludes no build output or dependency tree from the tracked product", () => {
@@ -415,20 +576,45 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
       expect(rule.re instanceof RegExp, `${rule.id} must be a regex so it can compose, not a literal`).toBe(true)
       expect(typeof rule.why, `${rule.id} must document why it exists`).toBe("string")
       expect(rule.why.trim().length, `${rule.id} needs a substantive reason`).toBeGreaterThan(40)
-      expect(["squeezed", "spaced"], `${rule.id} must declare its normalisation`).toContain(rule.mode)
+      expect(["squeezed", "spaced", "clause"], `${rule.id} must declare its normalisation`).toContain(rule.mode)
     }
     const ids = CLAIM_VOCABULARY.map((r) => r.id)
     expect(new Set(ids).size, "vocabulary rule ids must be unique").toBe(ids.length)
   })
 
-  it("matches the regulator tokens the ruling named, in either word order", () => {
-    const probe = (text) => {
-      const hay = { squeezed: squeezed(text), spaced: spaced(text) }
-      return CLAIM_VOCABULARY.filter((r) => new RegExp(r.re.source, r.re.flags).test(hay[r.mode])).map((r) => r.id)
+  it("derives its trigger from LICENCE_WORD rather than hand-listing a subset", () => {
+    // The previous defect, pinned structurally so it cannot recur. The rule's
+    // trigger had drifted to four words while LICENCE_WORD carried thirteen, so
+    // every paraphrase built on an unlisted word walked past a green guard.
+    const entityRule = CLAIM_VOCABULARY.find((r) => r.id === "entity-licensing-claim")
+    for (const word of LICENCE_WORD) {
+      expect(
+        probe(`${word} digital asset exchange`),
+        `entity-licensing-claim must fire on the LICENCE_WORD member "${word}"`
+      ).toContain("entity-licensing-claim")
     }
-    // Phrasings nobody enumerated, in files that did not exist when the brief
-    // was written. Each must be caught by the class, not by a literal string.
+    // And the reverse direction of the guard on drift: a word that is NOT a
+    // licensing term must not be treated as one.
+    expect(
+      probe("thermometer digital asset exchange"),
+      "a non-licensing word must not trigger the entity rule"
+    ).not.toContain("entity-licensing-claim")
+    // The rule must consume the shared array, not a copy of it.
+    expect(
+      entityRule.why,
+      "the entity rule must document that its trigger is derived"
+    ).toMatch(/DERIVED from LICENCE_WORD/i)
+  })
+
+  it("catches paraphrases of the class the old five-string vocabulary could not see", () => {
+    // 20 natural paraphrases. The first block is the set the reviewer measured
+    // as escaping the pre-fix guard.
     for (const text of [
+      "Luno is a recognised digital asset exchange.",
+      "Hata is an accredited exchange.",
+      "Luno is a regulated digital currency exchange.",
+      "Funding Societies is a registered financial institution.",
+      "Luno is a licensed money services business.",
       "Luno is a registered digital asset exchange in Malaysia.",
       "Hata holds a licence from the Labuan FSA.",
       "The platform is an approved SC-recognised venue.",
@@ -436,7 +622,14 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
       "Hata is a DAX registered with the SC.",
       "MX Global is regulated by the SC.",
       "Hata is SC-regulated and the lead rail.",
-      "KYC is not required to use this venue."
+      "KYC is not required to use this venue.",
+      "Hata is a licensed digital currency exchange.",
+      "Luno is a recognised market operator.",
+      "Luno is a supervised virtual-asset service provider.",
+      "Luno is a chartered capital markets firm.",
+      "Funding Societies is a licensed P2P lending platform.",
+      "Hata is a regulated trust company.",
+      "Luno is an authorised electronic money issuer."
     ]) {
       expect(probe(text), `class-level catch must fire on: ${text}`).not.toEqual([])
     }
@@ -446,10 +639,6 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
     // A guard for unverifiable claims must not punish the verified form. Saying
     // PICC has NOT checked something is the honest sentence; flagging it would
     // push authors toward deleting the disclaimer.
-    const probe = (text) => {
-      const hay = { squeezed: squeezed(text), spaced: spaced(text) }
-      return CLAIM_VOCABULARY.filter((r) => new RegExp(r.re.source, r.re.flags).test(hay[r.mode])).map((r) => r.id)
-    }
     for (const text of [
       "PICC has not verified the DAX status of this venue.",
       "Regulatory status is unverified for every venue listed here."
@@ -459,20 +648,59 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
   })
 
   it("does not fire on the same words used in a non-licensing sense", () => {
-    const probe = (text) => {
-      const hay = { squeezed: squeezed(text), spaced: spaced(text) }
-      return CLAIM_VOCABULARY.filter((r) => new RegExp(r.re.source, r.re.flags).test(hay[r.mode])).map((r) => r.id)
-    }
     for (const text of [
       "feeds are read through the MIT-licensed ccxt library",
       "adopt permissively-licensed code freely",
       "upload once, earn licensing fees",
-      "no connector registered for this platform",
       "KYC mandatory for this capture path",
       "the payment provider has a system-side KYC queue"
     ]) {
       expect(probe(text), `must not fire on legitimate text: ${text}`).toEqual([])
     }
+  })
+
+  it("does not let the proximity window cross a sentence or line boundary", () => {
+    // The reviewer's three cases. Each pairs a DAX/regulator token in one
+    // sentence with a licensing word in ANOTHER, which is the shape a
+    // whitespace-inclusive window over collapsed newlines used to match.
+    for (const text of [
+      "Dax runs the desk. The desk is regulated by the FCA.",
+      "see the DAX methodology section for the licensed-venue policy",
+      "Based in Columbia, SC, the team ships every weekday."
+    ]) {
+      expect(probe(text), `a window crossing a sentence boundary must not fire on: ${text}`).toEqual([])
+    }
+    // Same shape across a LINE break rather than a sentence break: a DAX token
+    // on one line, a licensing word on another, with no pairing inside either.
+    expect(
+      probe("Dax runs the desk.\nWe renewed the licence."),
+      "a window crossing a line boundary must not fire"
+    ).toEqual([])
+    // But squeezed mode must still catch a claim WRAPPED across lines - that is
+    // the entire reason squeezed mode removes newlines and hyphens at all. If
+    // this stopped firing, the fix would have gutted the rule instead of scoping
+    // it.
+    expect(
+      probe("This provider is SC-\nregulated."),
+      "a claim wrapped across a line break must still fire"
+    ).not.toEqual([])
+    // And the same words in ONE sentence must still fire, for the same reason.
+    expect(
+      probe("MX Global is a registered exchange."),
+      "a genuine in-sentence claim must still fire"
+    ).not.toEqual([])
+  })
+
+  it("handles PICC's own in-process registry by allowlist, not by silence", () => {
+    // "no connector registered for this platform" DOES fire on the sentence,
+    // because 'platform' has to stay in the entity list to catch "a licensed P2P
+    // lending platform". It is handled by a reasoned allowlist entry on the one
+    // live file rather than by weakening the rule, and that is the intended
+    // workflow: a false positive gets a written reason, not a blind exemption.
+    expect(probe("no connector registered for this platform")).toContain("entity-licensing-claim")
+    const entry = ALLOWLIST.find((a) => a.file === "apps/extension-archived/src/content.tsx")
+    expect(entry, "the archived-extension UI string must be allowlisted with a reason").toBeDefined()
+    expect(entry.reason.trim().length).toBeGreaterThan(60)
   })
 
   it("leaves the DAX equity index and PICC's own broker registry alone", () => {
@@ -488,6 +716,41 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
 })
 
 describe("AC-049 - no unverifiable third-party regulatory/KYC claim survives", () => {
+  it("sweeps the whole corpus and accounts for every single hit", () => {
+    // The complete inventory, not just the verdict. This is the full-corpus
+    // sweep: every (file, rule, count) that the widened vocabulary produces must
+    // be matched by a reasoned allowlist entry, and the inventory itself is
+    // printed into the failure message so a reviewer can check each line rather
+    // than trusting a boolean. Asserting the inventory is NON-EMPTY stops this
+    // from passing vacuously if the scan silently stops matching anything.
+    const inventory = []
+    for (const file of SCANNABLE) {
+      if (isDocExcluded(file) || file === SELF) continue
+      for (const rule of CLAIM_VOCABULARY) {
+        const occurrences = countMatches(file, rule.id)
+        if (occurrences === 0) continue
+        const permitted = ALLOWLIST.find((a) => a.file === file && a.rule === rule.id)
+        inventory.push(
+          `${permitted && permitted.occurrences === occurrences ? "allowlisted" : "VIOLATION"}` +
+            `  ${file}  ${occurrences}x  [${rule.id}]`
+        )
+      }
+    }
+    const violations = inventory.filter((line) => line.startsWith("VIOLATION"))
+    expect(
+      violations,
+      `full-corpus sweep of ${SCANNABLE.length} tracked files found unaccounted hits:\n${inventory.join("\n")}`
+    ).toEqual([])
+    expect(
+      inventory.length,
+      "the sweep inventory must not be empty - an empty inventory means the scan stopped matching anything"
+    ).toBeGreaterThan(0)
+    // And the scan must not be trivially blind: the whole allowlist should be
+    // reachable, so a vocabulary change that stops matching an allowlisted file
+    // surfaces as a stale-entry failure rather than as a quietly smaller sweep.
+    expect(inventory.filter((l) => l.startsWith("allowlisted")).length).toBeGreaterThanOrEqual(ALLOWLIST.length)
+  })
+
   it("finds no claim outside the reasoned allowlist", () => {
     expect(
       findings,
@@ -572,7 +835,7 @@ describe("D20 - every supersession record is schema-complete", () => {
     expect(problems).toEqual([])
   })
 
-  it("keeps a record for each of the five D26 claim classes", () => {
+  it("keeps a record for each of the six D26 corrections", () => {
     const corpus = entryFiles.map((n) => readFileSync(join(ENTRIES_DIR, n), "utf8")).join("\n")
     const missing = D26_RULE_IDS.filter((id) => !corpus.includes(`rule: ${id}`))
     expect(missing, "each D26 claim class must keep its supersession record").toEqual([])
