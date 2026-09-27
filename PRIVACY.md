@@ -1,18 +1,20 @@
 # PICC — Privacy Policy
 
-**Last updated:** September 2026 (F-12 dual-mode rewrite)
+**Last updated:** September 2026 (F-12 dual-mode rewrite; extension and hosted-database sections
+corrected 2026-09-27)
 
 ## Overview
 
-PICC (Personal Income Command Centre) is a self-hosted income/trading dashboard with an
-optional browser extension that reads live data from the trading venues you are logged into.
-It runs in one of two clearly distinct modes:
+PICC (Personal Income Command Centre) is a self-hosted income/trading dashboard. **PICC ships no
+browser extension** — the extension era was removed end-to-end, and this policy no longer describes
+any data capture by one. What remains is a local dashboard plus an in-app studio browser (real
+Chrome/Edge over CDP) that you drive yourself. PICC runs in one of two clearly distinct modes:
 
 | | **Local-only mode** (default) | **Hosted mode** (opt-in) |
 |---|---|---|
 | Server address | `127.0.0.1` only | Operator-exposed (reverse proxy / TLS) |
-| Accounts | Single user, no sign-in | Supabase auth, per-user data scoping |
-| Data leaving the machine | Only explicit outbound fetches below | Same + profile/payment rows to your Supabase project |
+| Accounts | Single user, no sign-in | Local `auth.mjs` verifier, per-user data scoping |
+| Data leaving the machine | Only explicit outbound fetches below | Same + profile/payment rows, if a hosted store is configured |
 
 Everything in this policy is stated per mode. **If a statement does not say "hosted mode", it
 applies in both modes.**
@@ -28,20 +30,24 @@ applies in both modes.**
   key is either auto-generated per data directory (`picc-vault.key`, mode 0600) or supplied via
   the `PICC_VAULT_KEY` environment variable (recommended for hosted deployments so the key never
   shares a directory with the ciphertext).
-- The browser extension (`picc-overlay`) keeps its own small state in browser extension storage.
+- **There is no extension state to describe.** PICC ships no browser extension and no
+  `/api/extension/*` endpoint, so there is no browser extension storage, no frame-relay queue and
+  no per-site content script. Its historical sensor role is served by the studio browser, whose
+  sessions and reads are covered by the bullets above and below.
 
-## The browser extension
+## The studio browser (and the removed extension)
 
-- The extension communicates **only with your PICC server over loopback**
-  (`http://localhost:*` / `http://127.0.0.1:*`). It has no other network permissions.
-- It reads the **active tab only on the trading-venue domains you have registered** (e.g. the
-  ExpertOption site), and only what that page renders: prices, candles, and your account
-  balance/positions from the venue page you are logged into. It cannot read other tabs or other
-  sites, and it never transmits browsing history.
-- Captured frames are sent to your PICC server to feed the chart/decision surface. The venue
-  session token is captured from **your own logged-in session** and stored encrypted (see above).
-- No analytics, tracking pixels, telemetry, or advertising identifiers exist anywhere in the
-  extension or the server.
+- The studio browser is a real Chrome/Edge instance PICC drives over CDP, and **you** point it at a
+  venue. Reads are read-only: candles and balances land in the local feed paths, and PICC never
+  submits a trade message from a browser session.
+- It launches real Chrome/Edge and, **by default**, strips the automation signals it controls
+  (`navigator.webdriver` and the `--enable-automation` default arg, `browserBridge.mjs:362-365`,
+  `stealth = true` at `:335`). The stated reason in the code is that "there is no fingerprint to
+  detect". This is disclosed rather than hidden; pass `stealth: false` to keep the raw signals.
+  PICC can also import a real logged-in browser profile you have used yourself.
+- Venue session tokens are captured from **your own logged-in session** and stored encrypted (see
+  above). That is the only session material PICC handles.
+- No analytics, tracking pixels, telemetry, or advertising identifiers exist anywhere in the app.
 
 ## What leaves the machine (and when)
 
@@ -56,9 +62,12 @@ nothing is sent by default in local-only mode:
    Those requests are subject to the provider's own privacy policy.
 3. **Webhooks** — the alert notifier can POST to webhook URLs that **you** configure (e.g. a
    personal notification bridge). You choose the endpoint and the payload.
-4. **Hosted mode only — Supabase**: with `VITE_SUPABASE_URL`/keys configured, sign-in,
-   profile, payment/billing, and income-classification rows are stored in **your** Supabase
-   project under the schema in `infra/supabase/`. The data goes to your project, not to PICC.
+4. **Hosted mode only — a hosted profile store, if you configure one**: the shipped default is
+   fully local, and the previously documented hosted database (its `VITE_SUPABASE_*` variables and
+   the `infra/supabase/` schema) has been removed from the app — there is no client in the tree and
+   no `package.json` dependency. If an operator wires up their own store, sign-in, profile,
+   payment/billing, and income-classification rows go to **that** operator's store under their
+   own terms, not to PICC.
 
 ## Data we do not collect
 
@@ -68,17 +77,18 @@ nothing is sent by default in local-only mode:
 
 ## Data retention and deletion
 
-- **Local mode:** deleting the JSON stores under your PICC data directory (or uninstalling the
-  extension) removes the data. Deleting the vault key file makes the encrypted stores
+- **Local mode:** deleting the JSON stores under your PICC data directory removes the data (there is
+  no extension to uninstall). Deleting the vault key file makes the encrypted stores
   unrecoverable — export anything you need first.
-- **Hosted mode:** profile/payment rows live in your Supabase project; remove them there (the
-  schema in `infra/supabase/` documents the tables). Deleting your local data dir does not
-  delete Supabase rows.
+- **Hosted mode:** any hosted profile/payment rows live in whatever store the operator configured
+  — remove them there. Deleting your local data dir does not delete rows in a store PICC does not
+  own. The `infra/supabase/` SQL files are orphaned schema documentation, not a live store.
 
 ## PDPA note (Singapore Personal Data Protection Act)
 
 Your personal data is limited to what you actively provide: trading balances and venue session
-state for the venues you connect, plus (hosted mode) your profile/payment records. Purpose is
+state for the venues you connect, plus (if an operator configured a hosted store) your
+profile/payment records. Purpose is
 limited to operating the dashboard you run; you remain in control of every external
 integration, and each can be disabled without affecting the rest of the system.
 

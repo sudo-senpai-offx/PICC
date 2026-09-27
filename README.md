@@ -1,15 +1,16 @@
 # Personal Income Command Centre (PICC)
 
 An AI-assisted **planning** platform for exploring and optimizing passive income streams. PICC
-combines a **sandbox emulator** (financial what-if simulations), a **passive browser sensor** (a
-DOM-free MV3 extension that relays the live market feed from broker pages you already have open),
-a **studio browser** with a read-only metrics overlay, an **income connector layer**
+combines a **sandbox emulator** (financial what-if simulations), a **studio browser** (real
+Chrome/Edge over CDP — a read-only metrics overlay plus the passive headless capture leg that
+replaced the old browser extension), an **income connector layer**
 (bandwidth/DePIN/storage/GPU/crypto/DeFi/NFT/P2P/AI-agent channels), and a **trading decision
 suite** with honest, calibrated, advisory-only signals.
 
-**PICC never executes transactions on your behalf.** Every AI suggestion is gated behind a
-mandatory human-review step, and the only order path in the codebase is the paper-trading ledger
-behind a human-approval gate.
+**By default, PICC never executes transactions on your behalf.** Every AI suggestion is gated behind
+a mandatory human-review step, and paper trading is the everyday order path. One venue-capable
+rail is retained for the sanctioned `trading:ccxt` case: it runs only on the acting human's fresh
+per-action click, through a hard-capped consent gate — see [`PICC.md`](PICC.md) §0 guardrail 1.
 
 > **Single source of truth:** [`PICC.md`](PICC.md) is the cumulative, exhaustive master document —
 > architecture, service inventory, audit ledger, specs registry, research corpus, compliance,
@@ -20,11 +21,10 @@ behind a human-approval gate.
 
 | Directory | What it is | Stack |
 | :-- | :-- | :-- |
-| `apps/dashboard` | Web dashboard (auth, simulators, trading suite, finance tracker, income connectors, overlay settings) | React + TypeScript + Vite + Supabase |
-| `apps/dashboard/extensions/picc-overlay` | Browser extension — passive sensor: relays broker feed frames to the local backend (DOM-free, no trading actions) | MV3 vanilla JS (no bundler, load unpacked) |
-| `apps/extension-archived` | **Archived** — Plasmo skeleton, no trading features, superseded by picc-overlay | Plasmo (unused, historical) |
+| `apps/dashboard` | Web dashboard (auth, simulators, trading suite, finance tracker, income connectors, capture settings) | React + TypeScript + Vite (local JSON data store) |
+| `apps/extension-archived` | **Archived** — Plasmo skeleton, no trading features. Nothing superseded it: the extension era was removed end-to-end (D1) | Plasmo (unused, historical) |
 | `agents/picc_agents` | Multi-agent research / content / listing / trading / investment crews | CrewAI (Python) |
-| `infra/supabase` | Database schema with Row Level Security (v1 + v2 income-classification model) | SQL |
+| `infra/supabase` | **Orphaned** Row Level Security schema (v1 + v2 income-classification model), kept as documentation — no client in the tree, persistence is local JSON | SQL |
 | `infra/n8n` | Optional orchestration (docker-compose + workflow templates) | n8n |
 | `infra/pi-node` | One-device bandwidth-provider setup | — |
 
@@ -42,13 +42,15 @@ behind a human-approval gate.
    with Kelly sizing, multi-timeframe confluence, U4FA confluence, and an optional read-only
    ExpertOption demo bridge (balance/candles only). Every prediction is tagged with the `engine`
    that produced it.
-5. **Income connectors & Automator** — bandwidth providers (Honeygain, Pawns, Traffmonetizer,
-   Repocket, EarnApp, PacketStream) with normalized balance snapshots, honest per-provider source
-   labels, and LLM health assist.
+5. **Income connectors** — bandwidth providers (Honeygain and the CashPilot aggregator) with
+   normalized balance snapshots and honest per-provider source labels. The wider six-provider
+   bandwidth suite, the `automator` service and its LLM health assist were rejected and removed
+   end-to-end (ADR-0002).
 6. **Finance Tracker & Holdings** — server-backed accounts/transactions CRUD, computed net worth
    (assets − liabilities), and `nft_holdings`/`depin_nodes` holdings editor.
-7. **Browser extension** — passive, DOM-free sensor relay (broker frames → local backend), with an
-   offline queue and honest `online | offline | standby` status.
+7. **Studio browser + headless capture** — real Chrome/Edge over CDP with a read-only metrics
+   overlay and a per-source headless session engine (login once, then read-only candles/balances).
+   There is no browser extension; that era was removed end-to-end (D1).
 
 ## Quick start
 
@@ -56,13 +58,9 @@ Full instructions: [`PICC.md`](PICC.md) §18 (setup & deployment), §8.7 (tradin
 
 ```bash
 npm install
-cp apps/dashboard/.env.example apps/dashboard/.env   # add Supabase + LLM + Serper + payment keys
+cp apps/dashboard/.env.example apps/dashboard/.env   # add LLM + Serper + payment keys (no database keys)
 npm run dev                                          # dev on http://localhost:5173
 ```
-
-Browser extension (no build step — load unpacked):
-`chrome://extensions` → Developer mode → Load unpacked →
-`apps/dashboard/extensions/picc-overlay/`.
 
 ## Architecture
 
@@ -75,8 +73,9 @@ User → Dashboard (React) ──same-origin /api/*──▶ Node backend (93 se
                                                   │  Payments: Touch 'n Go |
                                                   │    BTCPay | Stripe (owner's wallet, no bank)
                                                   │  (optional) CrewAI microservice :8000
-Browser Extension (MV3) ◀── suggestions + live data ──┘
-External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
+Studio browser (real Chrome/Edge over CDP) ◀── read-only capture + metrics ──┘
+External platforms (brokers, Amazon, YouTube…) — the user places; PICC's only
+  order-capable path is the consent-gated trading:ccxt rail
 ```
 
 The LLM is a **free hybrid**: add a key for any of Gemini, Groq, Mistral, or Cerebras (all have
@@ -88,7 +87,8 @@ present or every provider is down, output is labelled `local engine` — never p
 
 PICC is deliberately a **decision-support tool**, not an automated decision-making system:
 
-- Read-only data connections wherever possible; the only order path is paper trading.
+- Read-only data connections wherever possible; paper trading is the everyday order path, and the
+  one venue-capable rail runs only on fresh per-action human consent.
 - Mandatory **5-second human-review timer + confirmation toggle** before any suggestion is
   applied/copied.
 - Full audit logging of every AI suggestion and user confirmation.
@@ -115,22 +115,23 @@ considerations are tracked in `PICC.md` §15 — verify with a qualified lawyer 
   fallback bottoms out at Yahoo **daily** bars and "no new present candles" is designed behavior.
 - A shared per-IP rate-limit bucket (60 req/60 s) can 429 a legitimately busy multi-panel suite
   session (`PICC.md` §20.1).
-- The archived `apps/extension/` Plasmo skeleton is deprecated — the canonical extension is
-  `apps/dashboard/extensions/picc-overlay/`.
+- No browser extension ships. The archived `apps/extension-archived/` Plasmo skeleton is historical
+  only; the extension era was removed end-to-end (D1) and its passive sensor role moved to the
+  studio browser's headless capture leg.
 
 ## Roadmap status (highlights)
 
 | Task | Status |
 | :-- | :-- |
-| Dashboard, Twin, Listing, Content Studio, CrewAI crews, n8n templates, Supabase v1+v2 | ✅ |
+| Dashboard, Twin, Listing, Content Studio, CrewAI crews, n8n templates, local JSON data store | ✅ |
 | Trading Suite — ensemble, MTF, U4FA, paper ledger, EO demo bridge | ✅ |
-| Extension sensor relay + offline queue + live-probe status | ✅ |
+| Studio browser + headless capture (replaces the removed extension era) | ✅ |
 | Node backend, hybrid LLM failover, Serper | ✅ |
 | Payments — TnG · BTCPay · Stripe | ✅ (live when keys set) |
-| Income connectors, Automator, Stream catalog, classifications | ✅ |
+| Income connectors, Stream catalog, classifications | ✅ (bandwidth suite removed — ADR-0002) |
 | Finance tracker + Holdings editor | ✅ |
 | Production deployment (Docker · PM2 · systemd + reverse proxy) | ✅ |
 | **Command Centre Web** — risk-backed autopilot/copilot mode engine (spec committed, `docs/specs/COMMAND_CENTRE_WEB_SPEC.md`) | 🔜 next phase (7 rollout slices) |
-| First real-money execution (CCXT sanctioned automation + bandwidth auto-claim, within safety floor) | 🔜 owner-confirmed scope, envelope $10 / 2 units / −5% daily |
+| Perps rail closure (a real gated `cancelOrder`) and removal of the approved-but-unlanded ExpertOption leg | 🔜 owner-confirmed scope, envelope $10 / 2 units / −5% daily |
 
 Full detail: `PICC.md` §§10–11.

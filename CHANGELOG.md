@@ -65,6 +65,21 @@ per-action click and is the ONLY path that ever reaches `createOrder`.
 
 ## 2026-09-05 — Command Centre Web slice 5: first live execution leg (bandwidth payout claims)
 
+> **Corrected 2026-09-27 (WS-7 T5b, documentation truth).** This entry is preserved as the
+> historical record of what slice 5 set out to land. Part of it shipped and part of it did not,
+> and the entry as written does not distinguish the two. **Landed:** the L1 execution seam module
+> `commandCentre/commandCentreExecution.mjs`; the power-aware sidecar gating (proposals carrying
+> `power` + `consentBy`, gate 4 / gate 7 semantics — all live in `safetySidecar.mjs`); and the
+> observed `executionLeg` field on the overview row (`commandCentreOverview.mjs:302`). **Did NOT
+> land:** the bandwidth payout-claims surface. `claimPayout`, the `bandwidth:claim:` idempotency
+> key, `claimWorkflowId`, `GET /api/command-centre/claims`, `POST /api/command-centre/execute`,
+> every `payout_ready` scheduler row, and the panel's "Approve & claim" block are all absent from
+> the tree. The live execute path is `POST /api/command-centre/orders/execute` (`handlers.mjs:1993`),
+> which is the CCXT order rail from slice 6. The heading's "first live execution leg (bandwidth
+> payout claims)" is therefore not a description of anything that exists — the first live
+> execution leg is slice 6's CCXT rail. See
+> `docs/trading-logic/changelog/entries/0011-BANDWIDTH_PAYOUT_CLAIMS_LEG-v1-to-v2.md`.
+
 Per `docs/specs/COMMAND_CENTRE_WEB_SPEC.md` (living methodology: completion gate = verified in the
 spec doc, which is ticked for this slice). Bandwidth:browser is `gray` in the approved 5C truth
 table → COPILOT / power `proposals` → the human-approved claims path (AUTOPILOT stays CCXT slice 6).
@@ -353,6 +368,16 @@ spec doc, which is ticked for this slice).
 
 ### Phase 1 — Canonical extension
 - `apps/dashboard/extensions/picc-overlay/` is the canonical extension; `apps/extension/` (Plasmo) marked deprecated with no trading features.
+
+> **Superseded 2026-09-27 (WS-7 T5b, documentation truth).** The entry above is preserved as the historical
+> record of what this phase did, and it is no longer a description of the tree. `picc-overlay` was
+> later removed end-to-end with the whole extension era (owner decision D1) and
+> `apps/extension/` was actually `apps/extension-archived/`. Neither
+> `apps/dashboard/extensions/` nor `/api/extension/*` exists today, and
+> `extensionAbsence.test.mjs` pins that absence. Any document still describing this phase's output
+> as shipped is corrected; see `PICC.md` §6 and
+> `docs/trading-logic/changelog/entries/0007-BROWSER_EXTENSION_SHIPPED_CLAIM-v1-to-v2.md`.
+
 - Removed stale root scripts (`build:extension`, `build:all`, `typecheck:all`) that targeted the abandoned Plasmo skeleton.
 - README/SETUP/ARCHITECTURE updated to the zero-build MV3 "load unpacked" flow.
 

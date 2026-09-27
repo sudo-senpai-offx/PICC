@@ -17,10 +17,11 @@
 ## §0 Mission, Guardrails & Positioning
 
 PICC is an AI-assisted **planning** platform for exploring and optimizing passive income streams:
-a **Financial Twin emulator**, a **passive browser sensor** (DOM-free MV3 extension relaying broker
-frames), a **studio browser** with read-only metrics overlay, an **income connector layer**
+a **Financial Twin emulator**, a **studio browser** (real Chrome/Edge over CDP, read-only metrics
+overlay, and the passive headless capture leg), an **income connector layer**
 (bandwidth/DePIN/storage/GPU/crypto/DeFi/NFT/P2P/AI-agent channels), and a **trading decision
-suite** with honest, calibrated, advisory-only signals.
+suite** with honest, calibrated, advisory-only signals. **There is no browser extension** — the
+extension era was removed end-to-end (D1) and `extensionAbsence.test.mjs` pins its absence (§6).
 
 **The three guardrails (mission constraints, never weakened):**
 
@@ -45,8 +46,17 @@ suite** with honest, calibrated, advisory-only signals.
    - **The guard inventory above is partially unverified.** Only the constants cited with line
      numbers were confirmed in this pass. A separate WS-7 task re-verifies every asserted gate
      against source before any live boundary is relied upon.
-2. **No behavioral camouflage** against platform bot-detection. No humanized-typing by default
-   (`PICC_HUMANIZE=1` is explicit opt-in for slow reads, never for deception).
+2. **Browser automation-signal stripping is RETAINED, and is disclosed here (WS-7 D22,
+   2026-09-26).** An earlier version of this line read "no behavioral camouflage against platform
+   bot-detection", which the code contradicted. `browserBridge.mjs` launches real Chrome/Edge and,
+   **by default** (`stealth = true`, `:323,335`), strips the automation signals it controls —
+   `navigator.webdriver` and the `--enable-automation` default arg (`:362-365`) — for the reason
+   the code itself states: so "there is no fingerprint to detect" (`:8`) and the page keeps
+   "behaving exactly as it would for a human user" (`:11`). It can also import a real logged-in
+   browser profile (`importRealProfile`, `:288,353`). This is signal suppression against
+   bot-detection and is disclosed rather than denied; pass `stealth: false` to keep the raw
+   signals. Separately: no humanized-typing by default — `PICC_HUMANIZE=1` is explicit opt-in for
+   slow reads, never for deception.
 3. **Every data source reports its own honest `source`/`status` label — never fabricate a number.**
    `absent → null`, never a fabricated `0`; `unconfigured ≠ zero-filled`.
 
@@ -101,7 +111,7 @@ Rules that apply to code, docs, tests, and this document alike:
 | Server service modules | 93 (`server/services/` top-level 87 + `brokers/` 6) | 2026-09-05 glob |
 | Frontend | 10 pages, 60 components (recursive), hooks + lib | 2026-09-05 glob |
 | Specs | 16 in `docs/specs/` (statuses §10) | 2026-09-05 glob |
-| Extension | MV3 `picc-overlay`, zero-dep, no build step | 2026-09-05 |
+| Browser extension | **absent** — the extension era was removed end-to-end (D1); `apps/extension-archived/` is the retired Plasmo skeleton | 2026-09-05 |
 | Test floor | **never shrinks below the latest verified count** | rule of record |
 
 Historical suite-size milestones (context): 709/709 (PICC_FULL_SCOPE session) → 900/91 (T11 §E) →
@@ -116,8 +126,9 @@ regression tests, commit `0d88992`)**.
 ### 3.1 Pattern
 
 **Emulation & Overlay.** PICC simulates strategies in a sandbox and suggests actions; the user
-always performs the final action on the external platform. "Neither the dashboard, the extension,
-nor the agents can place orders, publish, or buy anything."
+always performs the final action on the external platform. "Neither the dashboard, the studio
+browser, nor the agents can place orders, publish, or buy anything" — with the single carve-out
+named immediately below.
 
 **Approved carve-out — Command Centre slice 6 (§11.4/§11.5).** `ccxtOrdering` is the ONE
 deliberate exception to that rule, and the ONLY `createOrder` caller in the process
@@ -141,11 +152,13 @@ User → Dashboard (React 10 pages) ──same-origin /api/*──▶ Node backe
                                                          │     BTCPay | Stripe (owner's wallet)
                                                         │   107 service modules · 100+ routes
                                                         │   (optional) CrewAI microservice :8000
-Browser Extension (MV3, DOM-free sensor) ◀── suggestions + live data ──┘
-External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never executes
+Studio browser (real Chrome/Edge over CDP) ◀── read-only capture + metrics ──┘
+External platforms (brokers, Amazon, YouTube…) — the user places; PICC's only order-capable path
+is the consent-gated `ccxtOrdering` rail
 ```
 
-- **Frontend** `apps/dashboard` — React + TypeScript + Vite + Supabase; dark theme; Dashboard |
+- **Frontend** `apps/dashboard` — React + TypeScript + Vite on the local JSON data store
+  (`localstore.mjs`); dark theme; Dashboard |
   Simulator | Trading | Streams | Agents | Opportunities | Income | Profile | Settings | Login.
 - **Backend** `apps/dashboard/server` — Node ESM, no framework; `handlers.mjs` (~100+ routes) +
   96 → 107 services (was 87 top-level + 6 `brokers/`; commandCentre grew 3 → 11 this phase —
@@ -159,35 +172,50 @@ External platforms (brokers, Amazon, YouTube…) — user clicks, PICC never exe
   failover; all-down → local engine), Serper (news/search), payments (4 paths).
 - **Optional CrewAI microservice** `agents/picc_agents` — FastAPI :8000; crews: Research | Content |
   Listing | Trading | Investment (DeFi/Staking/NFT). Decision-support only.
-- **Supabase** — RLS-scoped tables v1 + v2 income-classification schema (`infra/supabase/`).
-- **Browser Extension** — MV3 `picc-overlay`; passive sensor relay of broker WS frames →
-  `/api/extension/ingest`; DOM-free by v2.x contract.
+- **Persistence is fully local** — `server/services/localstore.mjs` writes every collection the app
+  used to write remotely to `server/data/<table>.json`, self-hosted; `auth.mjs:215` is a local
+  verifier that "replaces the Supabase verifier". **The `infra/supabase/*.sql` files survive as an
+  orphaned schema with no client** — no supabase package in either `package.json`, no client in
+  `apps/dashboard/server` or `apps/dashboard/src`. The removal is recorded in `.env.example:8-10`
+  and in several code comments as owner decision "D8", which is a **different decision** from the
+  loopback-only-publishes D8 in §12.4; this paragraph is the record of record.
+- **Browser extension — removed (D1).** `apps/dashboard/extensions/picc-overlay/` does not exist in
+  this tree; the only extension present is the retired `apps/extension-archived/` Plasmo skeleton,
+  and `/api/extension/*` is absent from the server. `extensionAbsence.test.mjs` pins that state.
+  The passive sensor role moved to the studio browser's headless capture leg (§3.4).
 
 ### 3.3 Main server route groups
 
-Twin `/api/twin/run` · Listing `/api/listing/analyze` · Content `/api/content/generate` · Extension
-`/api/extension/ingest|heartbeat|tab-changed|suggest|confirm` · Agents `/api/agents/run` · Trading
+Twin `/api/twin/run` · Listing `/api/listing/analyze` · Content `/api/content/generate` · Agents
+`/api/agents/run` · Trading
 `/api/trading/*` (predict, paper, autopilot, decisions, assist, status, readiness, candles,
 realtime, spread, portfolio, session-policy, capture-session, capture-config, headless-status,
 account-metrics, health, ledger/stats, walk-forward, export, correlation, indicators, brokers,
 feed-mode, paper/overview, models/explain) · Command Centre `/api/command-centre/overview|
-kill-switch|claims|execute|orders` (orders family: GET list · POST propose · POST execute ·
-POST verify) · Billing `/api/stripe/*`,
-`/api/billing/ewallet/*`, `/api/btcpay/*` · Automator `/api/automator/status|health|assist` ·
+kill-switch|orders` (orders family: GET list · POST propose · POST execute · POST verify) ·
+Billing `/api/stripe/*`,
+`/api/billing/ewallet/*`, `/api/btcpay/*` ·
 Connectors `/api/connectors`, `/api/connectors/:slug/collect|history|stream` · Browser
 `/api/browser/capture-session|metrics` · Data `/api/data/financial_accounts|transactions` ·
-Health `/api/health`.
+Health `/api/health`. **Two route families listed in earlier revisions of this document do not
+exist: `/api/extension/*` (gone with the extension) and `/api/automator/*` (gone with the
+bandwidth suite). The command-centre family has no `claims` or bare `execute` path either — the
+live execute endpoint is `POST /api/command-centre/orders/execute`.**
 
 ### 3.4 Data flows (essentials)
 
 - **Financial Twin** — ticker/capital/risk/horizon/simulations → Yahoo 5y history → real drift/vol
   → Monte Carlo projection → optional LLM commentary; unreachable Yahoo → `source: local` fallback
   labelled honestly.
-- **Extension sensor** — `inject.js` (MAIN world, document_start, broker domains only) sniffs WS
-  frames → `postMessage` → ISOLATED `content.js` → shape-validation
-  (`sanitizeUpstreamFrame`: action/asset/name caps, candle cap, size ≤ 4096) → `chromeGuard()`
-  teardown → server discovery (`127.0.0.1` + `localhost`, :5173/:3000, every 15 s) → flush batches
-  (≤120) every 2 s; offline → queue (cap 400), flush on reconnect.
+- **Passive headless capture (what replaced the removed extension sensor)** — `captureProfiles`
+  runs a per-source headless session engine (`ssid` via `captureViaStorageScan`) over
+  `browserBridge` (CDP via playwright-core, `execFileSync` argument arrays only, login-once,
+  read-only), and the read-only candles/balances it produces enter the normal feed paths
+  (`liveEO` WS bridge + SSE relay, `liveCCXT` multi-exchange feed). Everything in the old extension
+  contract — `inject.js`, `content.js`, `sanitizeUpstreamFrame`, `chromeGuard()`, the 120-frame
+  batch, the 400-item offline queue, the 15 s `127.0.0.1`/`localhost` probe and the
+  `/api/extension/ingest` endpoint — belonged to the deleted extension and exists nowhere in this
+  tree.
 - **Billing** — TnG manual
   e-wallet (receipt self-confirm, owner-scoped, `selfApprove` only in single-owner demo mode) ·
   BTCPay (invoice metadata `{userId, tier}` → grant on settle) · Stripe (checkout + webhook →
@@ -199,9 +227,13 @@ Health `/api/health`.
   EO) | `browser` (real Chrome/Edge over CDP via playwright-core, persistent per-source profile,
   login-once, read-only). Snapshots → `server/data/connector_history.json` +
   `connector_latest.json`; SSE live per slug (5 s); selector tuning via `scripts/tune-connectors.mjs`.
-- **Automator** — bandwidth balance collectors (Honeygain, IPRoyal Pawns, Traffmonetizer JWT,
-  Repocket, manual/desktop EarnApp, PacketStream); JWT-expiry alerts (≤3 days); 30-min job; never
-  moves money.
+- **Bandwidth balance collection — reduced to one collector (ADR-0002).** The wider bandwidth
+  suite (Honeygain, IPRoyal Pawns, Traffmonetizer JWT, Repocket, manual/desktop EarnApp,
+  PacketStream), the `automator` and `automatorAdvice` service modules and the
+  `/api/automator/*` route group were **rejected and removed end-to-end**;
+  `collectors.mjs:2-3` records that the removal "left the CashPilot aggregator as the sole
+  collector", and `PICC_BANDWIDTH_SUITE_design_v1` is REJECTED in §10. No JWT-expiry alert job, no
+  30-min automator job and no auto-claim scheduler rows exist; nothing here ever moved money.
 - **Trading suite** — 30–60d candles (Yahoo/CoinGecko) → ensemble → calibrated confidence →
   signals appended to paper ledger (`server/data/`); EO demo session read-only bridge
   (balance/candles only — no trade messages ever sent).
@@ -247,11 +279,15 @@ source window + feed-status) / `serper` / `wsclient` / `indicators` / `patterns`
 `calendarSource:"fallback-schedule"` by design) / `marketIntel`.
 
 **Brokers (registry + 6 adapters in `brokers/`):** `brokers/index.mjs` LiveBroker registry ·
-`loaders` · `yahooAdapter` · `ccxtAdapter` · `expertoption` (demo-gated binary executor; token
+`loader` (`brokers/loader.mjs`) · `yahooAdapter` · `ccxtAdapter` · `expertoption` (demo-gated binary executor; token
 bucket `PICC_EO_GATEWAY_RPM` 120; exp-backoff ≤8; 90s watchdog; auth-failure detection; dual
 wallet) · `paperAdapter` (paper executor; Kelly sizing; risk cap; ATR/ADX stops; TP/SL auto-close;
-Yahoo mark-to-market). **No adapter has an order-placement surface except paper + demo-gated EO
-legacy paths — execution is removed by design (roadmap §0 dead-letter).**
+Yahoo mark-to-market) · plus the out-of-`brokers/` `ccxtOrdering` rail, which **is**
+order-capable. **Execution is NOT removed by design** (an earlier revision of this line said it
+was, and the code contradicted that): two venue-capable rails are retained intentionally — the
+consent-locked, hard-capped CCXT spot rail and the ceremony-gated Hyperliquid perps rail (§0
+guardrail 1, §11.1 L1). The `ccxtConnector` read-only contract still amputates every order method
+on every other module.
 
 **Trading ops (10):** `trading` paper ledger + market-data entry (the only `openPaperTrade` in the
 tree) · `accuracyLedger` resolution-at-correct-expiry + `sampleEntryPrice` (no look-ahead) ·
@@ -273,9 +309,10 @@ the engine of the future bandwidth auto-claim) · `calibration` bucket calibrati
 in-app browser (liveness `checkExpertOptionSessionLive`) · `tradingSessions` (connect throws
 unless `isDemo:true`).
 
-**Income & automator (8):** `connectors` · `collectors` · `automator` · `automatorAdvice` ·
-`assetCatalog` instrument canonicalization (canonicalAssetId/assetsEquivalent/yahooSymbolFor) ·
-`yields` · `opportunities` · `watchlist`.
+**Income (6):** `connectors` · `collectors` (CashPilot is the sole bandwidth collector after
+ADR-0002) · `assetCatalog` instrument canonicalization (canonicalAssetId/assetsEquivalent/yahooSymbolFor) ·
+`yields` · `opportunities` · `watchlist`. **There is no `automator` and no `automatorAdvice`
+module** — the bandwidth suite was removed end-to-end (§3.4, §10).
 
 **Content & research (6):** `amazon` SP-API read-only competitor data · `keywords` · `prompts`
 (versioned templates, see §21 patterns) · `llm` hybrid failover (LLM_PROVIDERS order) ·
@@ -289,12 +326,12 @@ restricted to pro/business).
 `tradingCatalog` · `tradeJournal` (env `PICC_JOURNAL_DATA_DIR`) · `notificationCenter` (env
 `PICC_NOTIFICATION_DATA_DIR`) · `notifier`.
 
-**Persistence & infra (9):** `localstore` JSON tables, one serialized promise chain per store,
+**Persistence & infra (8):** `localstore` JSON tables, one serialized promise chain per store,
 atomic tmp+rename with Windows EPERM retry + direct-write fallback (commit `0d88992`, see §12) ·
-`vault` AES-256-GCM · `supabase` client · `scheduler` staleness/liveness/uptime jobs · `rateLimit`
+`vault` AES-256-GCM · `scheduler` staleness/liveness/uptime jobs · `rateLimit`
 courtesy shared-budget limiter (see §20 known issue) · `browserBridge` CDP via playwright-core,
 `execFileSync` argument arrays only · `analytics` · `autodetect` browser auto-detect · `models`
-model registry.
+model registry. **There is no `supabase` module** — persistence is local JSON (§3.2).
 
 ---
 
@@ -311,7 +348,7 @@ model registry.
 | Income | Finance Tracker (accounts/transactions CRUD), Holdings Editor (`nft_holdings`/`depin_nodes`) |
 | Profile | settings + finance accounts |
 | Settings | LLM/payment/provider config |
-| Login | Supabase auth |
+| Login | local `auth.mjs` verifier (the hosted JWT verifier was replaced) |
 
 Notable components: `CorrelationScreen`, `PortfolioAggregatePanel`, `FinanceTracker`,
 `HoldingsEditor` (server-backed CRUD on the Overview tab), chart fullscreen, skeleton loading,
@@ -322,25 +359,39 @@ compact mobile tier (≤560px), `prefers-reduced-motion`, full ARIA semantics (D
 
 ---
 
-## §6 Browser Extension (MV3 `picc-overlay`)
+## §6 Browser Extension — REMOVED (D1), replaced by the Studio Browser
 
-- Zero-dependency, no-build vanilla JS; load unpacked from
-  `apps/dashboard/extensions/picc-overlay/`. `apps/extension-archived` is the retired Plasmo
-  skeleton (F1) — historical demo only.
-- **Contract:** DOM-free passive sensor; relays broker WS frames to `/api/extension/ingest`;
-  batches ≤120, flushes every 2 s; offline queue cap 400; probes `127.0.0.1` and `localhost` on
-  :5173/:3000 every 15 s (IPv4/IPv6 loopback fix, T11 §E); `chromeGuard()` on context
-  invalidation; popup renders `online :port | offline | standby` (live probe, not cached).
-- **T11 status:** sections A/B (chart correctness at 1m/5m/15m/1h; feed-mode flip) **VERIFIED-
-  MACHINE**; sections C/D (real-Chrome lifecycle; broker-tab drag) **UNVERIFIED-HUMAN** — T11 stays
-  open until a human runs them against a live EO demo session.
-- The overlay on broker pages was removed by design in Phase 1 — the sensor is the product.
+**No browser extension ships in this repository.** This section previously described a canonical
+zero-dependency MV3 extension (`picc-overlay`) with a passive sensor contract. That is no longer
+true, and the correction is recorded here rather than by deleting the history.
+
+- **Absent from the tracked tree:** `apps/dashboard/extensions/picc-overlay/` does not exist, and
+  neither does `apps/dashboard/extensions/`. The only extension present is
+  `apps/extension-archived/` — the retired Plasmo skeleton, historical only. There is no
+  "canonical" extension: `picc-overlay` was superseded by removal, not by a successor.
+- **Absent from the server:** there is no `/api/extension/ingest|heartbeat|tab-changed|suggest|
+  confirm` route group. `tab-changed` appears nowhere in the codebase.
+- **Absent from the source:** `inject.js`, `content.js`, `sanitizeUpstreamFrame` and `chromeGuard()`
+  exist only in prose and in `docs/archive/*`. The 120-frame batch, the 400-item offline queue and
+  the 15 s loopback probe were part of that same deleted contract.
+- **Enforced:** `extensionAbsence.test.mjs` pins 25 modules free of the extension era and fails
+  the suite if `content.js`, `chrome.*`, "the extension", "extension feed" or "extension
+  kill-switch" reappear. This is the D1 clean break, and the guard makes the absence a guarantee
+  rather than a claim.
+- **What replaced it:** the passive sensor role moved to the studio browser —
+  `browserStudio` (in-app browser), `captureProfiles` (per-source headless session engine) and
+  `browserBridge` (CDP over playwright-core), all read-only. See §3.4.
+- **Superseded spec:** `EXTENSION_CONNECTIVITY_ENGINE` is SUPERSEDED (D1) in §10;
+  `PICC_HEADLESS_CAPTURE_ENGINE` is COMPLETE with the extension leg removed (D1).
+- **T11 note:** the T11 sections A/B–D evidence recorded for the sensor chain was earned against
+  the extension era. It is retained as history, not as a current guarantee.
 
 ---
 
 ## §7 Payments & Billing
 
-Three paths, all Supabase-JWT-authed, money to the owner's own wallet (no bank account, no business
+Three paths, all behind the local `auth.mjs` verifier (the hosted Supabase JWT verifier was
+replaced; there is no hosted auth), money to the owner's own wallet (no bank account, no business
 registration):
 
 1. **Touch 'n Go e-wallet (manual)** — order returns amount/instructions/`PICC-XXXX` ref; receipt
@@ -432,7 +483,8 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
   Interest/Dividend/Rental/Content.
 - **Connectors** as in §3.4. Tuner report: OpenSea `tuned: true`; everything else `tuned: false`
   (selector tuning is per-provider, honest).
-- **Automator** bandwidth collectors as in §3.4.
+- **Bandwidth collectors** as in §3.4 — CashPilot only, after ADR-0002 removed the wider suite and
+  the `automator` module.
 - **Q5 wave executed 2026-09-04:** checklist Tasks 1–13, one commit per task, suite green (F-12
   reconciled). Follow-ups from Q5: 25 open tasks (next phase per user plan).
 - **Finance Tracker (Part 2a) ✅:** accounts/transactions CRUD (Profile → Finance tracker); net
@@ -494,7 +546,7 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 | PICC_TRADING_SUITE_WS4_COPYTRADING_IDEA_SOURCING_v1 | ACTIVE | WS-4 copytrading idea sourcing: T0–T7 landed (follower store, feed contract + registry, qualification 300/15/positive-expectancy, CSV import + manual lanes, on-read auto-unfollow + 7d stop, platform-trust flag, readout route + read-only panel, seam guard) |
 | PICC_TRADING_SUITE_WS5_BREADTH_OPERABILITY_HARDENING_v1 | ACTIVE | WS-5 shipped (`5abb151`, 16 commits, pushed to `origin/master`). T0–T5 landed (`playwright.config.ts`; `e2e/helpers/isolatedEnv.mjs`; `e2e/*.spec.ts`; `startupHealth.mjs` + `handlers.mjs`/`index.mjs`; `dangerousActionLock.ts` + 3 call sites; `AutopilotSuite.tsx` + `TradingSuite.tsx`/`AutopilotRoom.tsx`; tests; package metadata; `.env.example`; operability runbook + Hyperliquid pointer). `ws5SeamGuard.test.mjs`. Final floor 281 files/3133 tests + typecheck + `verifyAudit()` + `test:e2e` 4 passed observed green. AC-4c two-real-tab lock matrix remains manual/unverified. Three ratified claims (AC-3a, AC-8b, R1.2) were factually wrong and are recorded as honesty notes 11–13. |
 | PICC_TRADING_SUITE_WS6_TERMINAL_UI_REBUILD_v1 | ACTIVE | WS-6 T0–T12 landed. Strangler migration (legacy suite remains the fallback; no room promoted to full parity yet). T0 baseline + room-key/singleton freeze; T1 typed contracts + dependency manifest (**zero new runtime dependencies**); T2 deep-link adapter + reserved RoomFrame + room-key parity guard; T3 venue-integrity conflict detector, secret redaction, copilot contract, realtime normalization, StatusBoundary, CopilotPanel, useTerminalSnapshot; T4 D10 session routing + separated expectancy/procedureDrillScore + server/client parity fixture; T5 DenseTable (10k rows, bounded DOM); T6 incremental chart planner; T7 palette contract (no `cmdk`, fails closed); T8 reduced-motion + MotionValue; T9 safety seam guard (17 guards) + blueprint provenance + supersession changelog; T10 throttled perf harness; T12 final seam guard (18 guards). Floor 302 files / 3383 tests, typecheck, e2e 5, audit chain all green. **Residual, carried deliberately:** `ARM64: UNVERIFIED` (throttled x86 proxy cannot validate ARM64 — performance gate closed, architecture gate not); `Blueprint v4.0 provenance: UNVERIFIED` (document not in repo); **room-transition budget BREACH** (1230ms p50 / 2139ms p95 vs 250ms at 6× throttle, legacy surface); 4 of 6 budgets `UNMEASURED` pending T5/T6 room promotion. No live venue is wired. |
-| PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1 | ACTIVE-DRAFT | WS-7 spec authored 2026-09-25; **every owner decision resolved 2026-09-26 — zero open items remain**; still not started. **T0 is first and blocking: amend the paper-only claim and make the absence scope machine-discovered.** `executionAbsence.test.mjs:27-38,58-62` pins a fixed 10-module `SUITE_SOURCES` list that omits the real rails — `ccxtOrdering.mjs:246` (`createOrder`, documented at `:217` as the process's only spot `createOrder` caller) and `hyperliquidPerps.mjs:360` (perps `createOrder` behind `submitOrder:301`) — so the test is green and pins **no** guarantee. **D19 RESOLVED as outcome (B):** `PICC.md:25-38` is amended to describe the gated, consent-locked, hard-capped rails, and the guard's coverage becomes machine-discovered; working order-lifecycle code is **not** deleted (a guard that tests what exists beats a documentation claim that is false). **D21 RESOLVED (re-baseline, not a pass):** the ARM floor tier is ratified at **~1800 ms p95** (derived from the measured 7.18× ratio; 250 ms × 7.18 ≈ 1795) and **250 ms is retained explicitly as an x86-only tier**; B1 (1230 ms p50 / 2139 ms p95 at 6× throttle) stays a **KNOWN BREACH** — breaching the x86 tier by 8.6× *and* exceeding the new ~1800 ms ARM figure — and the direct on-device ARM room-transition sample is still owed at T19. **D2 removal APPROVED** (T2 unblocked): ExpertOption removed entirely (12 unofficial WS endpoints `expertoption.mjs:22,36-47`; 4 dead call sites with 0 definitions — `ensureSession`/`getDemoSession` referenced but defined nowhere, callers swallow the throw; note `executionAbsence.test.mjs:35` lists the file, so the entry must be removed in the same change). **D23:** T3 adds a real gated perps `cancelOrder` member (adapter `:546-557` has 0 × `cancel`, so an open position is un-exitable through production today) and corrects the guard **additively** — `"cancelOrder"` stays in `perpsSeamGuard.test.mjs`'s `READ_ONLY_BLOCKED` for non-seam modules, a positive seam assertion is added, and `ccxtConnector.test.mjs:299` keeps throwing; master contract `SEAL_ALL_GAPS_v1.md:42` is amended. **D22/D25:** browser camouflage is **retained as an explicitly disclosed policy** (`browserBridge.mjs:10-11,323,363-365,288,329`) with `PICC.md:30-31` rewritten to match, and the typing invariant is amended to the real boundary — never without per-action human approval (`interventions.mjs:52,277`), never holding broker credentials (the false "never clicks or submits" claim is at `browserStudio.mjs:1752`, **not** in the extension-eradication spec, whose `:147` already says "human-approved only"). T4 security also covers wildcard CORS + plaintext LLM key (`agents/picc_agents/server.py:106-107,70,79-80,164`) and the `profile.mjs:20` token at rest. **D24:** lockfile is **npm only** — `apps/dashboard/pnpm-lock.yaml` (0 × ccxt/playwright/web-push) is deleted, since CI already consumes the root lockfile. **D26:** unverifiable third-party regulatory claims are **deleted** (SC/DAX licensing for 8 entries at `streamCatalog.ts:42-47,63-65`; OANDA "no KYC for demo" at `browserStudio.mjs:505`) — entries stay, claims go. **D27:** all 18 room instances COMPLETE in order, each **flagging** any WS-8 boundary rather than silently trimming. T11–T13 deterministic Copilot (6 experts, 3 tiers, 6 vetoes, C1/C2/C3 as tests) with a digest-pinned, pickle-free model layer; T14–T18 notifications, retention, authority, 4-venue CCXT lifecycle, data sources; T19–T21 2 GB RAM CI gate, cross-room invariant gate, single batch push. **27 decisions · 49 ACs · 22 tasks.** **Residual/UNVERIFIED:** ARM probe numbers (p50 0.84 / p95 4.47 / max 7.71 ms jitter; `bench_ms` 3012.39 vs 419.48 = **7.18× slower**; `bench_checksum=2095.419` identical) are owner-supplied from `scripts/arm-probe.mjs` (committed `c407964`) but **the output artifact is not checked in**; the ratified ~1800 ms ARM budget is therefore **derived from that ratio, not directly measured**; 2 GB peak-RSS has no verdict (gate does not exist); B1 and B3 remain **BREACH**, B4/B5/B6/B7/B8 `UNMEASURED`; Needle 3 vendor claims **UNVERIFIED**; ONNX/llama.cpp ARM64 availability **UNVERIFIED**; Copilot blueprint v4.0 is owner-supplied, not a repo artifact; all owners are the literal `WS-7+` reservation; test floor not re-measured this session (last recorded 302 files / 3383 tests per the WS-6 row). Registry row count corrected 39 → 42 (the table held 41 rows before this change). **The 2026-09-26 round produced no implementation — spec and this row only; no breach became a pass and no `UNMEASURED` became measured.** No live venue is enabled. |
+| PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1 | ACTIVE-DRAFT | WS-7 spec authored 2026-09-25; **every owner decision resolved 2026-09-26 — zero open items remain**; **T0–T4 have landed** (T0 `09125f8`, T1 `1fea406`, T2 `916a782` = room-transition decomposition, T3 `b78f5a2`, T4 `510428c`; T5 in progress) and the 2026-09-26 paper-only amendment is already in guardrail 1. **The T0 mechanism shipped:** `server/scripts/absence-scope.mjs` discovers the absence scope from the filesystem and `executionAbsenceScope.test.mjs` guards it, so a new order-capable module can no longer slip past by simply not being listed. `executionAbsence.test.mjs:27-38` still holds a hand-maintained 10-module `SUITE_SOURCES` list, but that list is now a complement to the discovered scope rather than the only scope — an earlier revision of this note said the test "pins **no** guarantee", which overstated the remaining gap. **Genuinely outstanding: the approved D2 ExpertOption removal, which has NOT landed** — `brokers/expertoption.mjs` and `services/expertoption.mjs` are both still tracked and `executionAbsence.test.mjs:35` still lists `services/expertoption.mjs`, so that entry must be removed in the same change. **D19 RESOLVED as outcome (B):** `PICC.md:25-38` is amended to describe the gated, consent-locked, hard-capped rails, and the guard's coverage becomes machine-discovered; working order-lifecycle code is **not** deleted (a guard that tests what exists beats a documentation claim that is false). **D21 RESOLVED (re-baseline, not a pass):** the ARM floor tier is ratified at **~1800 ms p95** (derived from the measured 7.18× ratio; 250 ms × 7.18 ≈ 1795) and **250 ms is retained explicitly as an x86-only tier**; B1 (1230 ms p50 / 2139 ms p95 at 6× throttle) stays a **KNOWN BREACH** — breaching the x86 tier by 8.6× *and* exceeding the new ~1800 ms ARM figure — and the direct on-device ARM room-transition sample is still owed at T19. **D2 removal APPROVED, NOT YET LANDED:** ExpertOption is to be removed entirely (12 unofficial WS endpoints `expertoption.mjs:22,36-47`; 4 dead call sites with 0 definitions — `ensureSession`/`getDemoSession` referenced but defined nowhere, callers swallow the throw; note `executionAbsence.test.mjs:35` lists the file, so the entry must be removed in the same change). **D23:** T3 adds a real gated perps `cancelOrder` member (adapter `:546-557` has 0 × `cancel`, so an open position is un-exitable through production today) and corrects the guard **additively** — `"cancelOrder"` stays in `perpsSeamGuard.test.mjs`'s `READ_ONLY_BLOCKED` for non-seam modules, a positive seam assertion is added, and `ccxtConnector.test.mjs:299` keeps throwing; master contract `SEAL_ALL_GAPS_v1.md:42` is amended. **D22/D25:** browser automation-signal stripping is **retained as an explicitly disclosed policy** (`browserBridge.mjs:10-11,323,363-365,288,329`) with **§0 guardrail 2** rewritten to disclose it in full (`PICC.md:30-31` is the stale pointer this row used to carry — post-D19 those lines are the guardrail-1 rails table), and the typing invariant is amended to the real boundary — never without per-action human approval (`interventions.mjs:52,277`), never holding broker credentials (the false "never clicks or submits" claim is at `browserStudio.mjs:1752`, **not** in the extension-eradication spec, whose `:147` already says "human-approved only"). T4 security also covers wildcard CORS + plaintext LLM key (`agents/picc_agents/server.py:106-107,70,79-80,164`) and the `profile.mjs:20` token at rest. **D24:** lockfile is **npm only** — `apps/dashboard/pnpm-lock.yaml` (0 × ccxt/playwright/web-push) is deleted, since CI already consumes the root lockfile. **D26:** unverifiable third-party regulatory claims are **deleted** (SC/DAX licensing for 8 entries at `streamCatalog.ts:42-47,63-65`; OANDA "no KYC for demo" at `browserStudio.mjs:505`) — entries stay, claims go. **D27:** all 18 room instances COMPLETE in order, each **flagging** any WS-8 boundary rather than silently trimming. T11–T13 deterministic Copilot (6 experts, 3 tiers, 6 vetoes, C1/C2/C3 as tests) with a digest-pinned, pickle-free model layer; T14–T18 notifications, retention, authority, 4-venue CCXT lifecycle, data sources; T19–T21 2 GB RAM CI gate, cross-room invariant gate, single batch push. **27 decisions · 49 ACs · 22 tasks.** **Residual/UNVERIFIED:** ARM probe numbers (p50 0.84 / p95 4.47 / max 7.71 ms jitter; `bench_ms` 3012.39 vs 419.48 = **7.18× slower**; `bench_checksum=2095.419` identical) are owner-supplied from `scripts/arm-probe.mjs` (committed `c407964`) but **the output artifact is not checked in**; the ratified ~1800 ms ARM budget is therefore **derived from that ratio, not directly measured**; 2 GB peak-RSS has no verdict (gate does not exist); B1 and B3 remain **BREACH**, B4/B5/B6/B7/B8 `UNMEASURED`; Needle 3 vendor claims **UNVERIFIED**; ONNX/llama.cpp ARM64 availability **UNVERIFIED**; Copilot blueprint v4.0 is owner-supplied, not a repo artifact; all owners are the literal `WS-7+` reservation; test floor not re-measured this session (last recorded 302 files / 3383 tests per the WS-6 row). Registry row count corrected 39 → 42 (the table held 41 rows before this change). **The 2026-09-26 round produced no implementation — spec and this row only; no breach became a pass and no `UNMEASURED` became measured.** No live venue is enabled. |
 | PICC_UNIVERSAL_4FA_ENGINE | ACTIVE (trading logic — untouched) | decision path retires under ADR-0004; legs re-homed |
 | notes/B-IND-0-current-engine-coverage-2026-09-19 | ACTIVE (inventory) | authoritative engine inventory for the v3.2 rebuild |
 
@@ -507,13 +559,15 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 ## §11 Command Centre Web — Design of Record (spec committed `018025b`, absorbed here)
 
 **Status: ready-for-agent (living spec — continuously improved through implementation); §11.5
-slices tracked in the spec doc.** Slices 1–5 (catalog + validator + roster registry; mode engine +
+slices tracked in the spec doc.** Slices 1–4 (catalog + validator + roster registry; mode engine +
 safety sidecar + audit trail; deliberation layer + metalearning tuners; Command Centre surface —
 per-stream command cards, 10-gate safety rail, real engine verdicts, kill-switch UI wired to the
-runtime store; slice 5: the FIRST live execution leg — bandwidth payout claims run the full
-10-gate rail and execute on FRESH per-action human consent (consentBy), never a standing
-opt-in) landed as part of this
-repo's current phase — see §21 Open work. The
+runtime store) and **slice 6** — the FIRST live execution leg, the sanctioned `trading:ccxt` order
+rail, running the full 10-gate chain and executing on FRESH per-action human consent (`consentBy`),
+never a standing opt-in — landed as part of this
+repo's current phase — see §21 Open work. **Slice 5, the bandwidth payout-claims leg, did NOT
+land:** `payout_ready`, the "bloodstream" surface and `/api/command-centre/execute` exist nowhere
+in this tree, and no bandwidth auto-claim scheduler runs. The
 approved architecture for the risk-backed autopilot/copilot command surface. Approach C:
 policy-graph + blackboard deliberation + Mode Engine + safety sidecar, with metalearning and
 self-improvement baked in.
@@ -527,17 +581,23 @@ self-improvement baked in.
   and write the SAME runtime store the enforcement layer consults (a throwing reader denies; an
   unreadable store boots fail-safe). Every cell is observed state or an explicit "not-wired —
   arrives with execution (slice 5+)" label; sync-approval is NOT an automation opt-in.
-  Slice 5: the bandwidth card grows the OBSERVED claims leg (`executionLeg`) — fresh-data
-  from the presence heartbeat (10-min cadence), envelope from in-flight execution counts,
-  rationale observed (5F) — and the bloodstream surface is a payout-claims block: scheduler
-  `payout_ready` rows with honest claimed/ready badges, and an "Approve & claim" button whose
-  click is FRESH per-action human consent (consentBy) sent to `/api/command-centre/execute`;
-  the outcome (executed / failed / blocked) renders back on the card exactly as observed.
+  Slice 5 did NOT land as described: the bandwidth card's `executionLeg`
+  (`commandCentreOverview.mjs:302`) is the **CCXT/perps order leg** (`leg.power` / `leg.action` /
+  `inFlight` / `lastExecutedAt`) — there is no bandwidth claims leg. The proposed "bloodstream"
+  payout-claims block — scheduler `payout_ready` rows with claimed/ready badges, an
+  "Approve & claim" button, and a `POST /api/command-centre/execute` endpoint — was **not built**;
+  the live execute path is `POST /api/command-centre/orders/execute` (`handlers.mjs:1993`), whose
+  outcome (executed / failed / blocked) renders back on the card exactly as observed.
 - **L5 Mode Engine** — per-site risk-backed verdict over exactly five modes:
   `BLOCKED` (executionPower `none`) | `HOLD` (`none`) | `COPILOT` (`proposals`) |
   `AUTOPILOT_DEMO` (`liveDemo`) | `AUTOPILOT` (`live`); deterministic 7-step fixed decision
   order (kill switch → opt-in → breakers → freshness/HOLD → 5C truth table → workability →
-  deliberation → advisory), chosen by site risk, never by convenience. Advisory/supervisory
+  deliberation → advisory), chosen by site risk, never by convenience. **Workability is the one step
+with no deterministic scorer wired:** `commandCentreOverview.mjs:291-293` feeds a conservative `0`
+with the note "deterministic workability scorer not-wired — conservative 0 fed to the engine
+(slice 5+)", and `modeEngine.mjs:41,134-135` caps anything below `AUTOPILOT_WORKABILITY_FLOOR`
+(0.5) at COPILOT. On the live surface that floor is currently *supplied* rather than *earned* — the
+engine logic is real, the deterministic scorer behind it is deferred. Advisory/supervisory
   input (5H) is **downgrade-only** — it can lower the mode, and can never raise it; an advisory
   outage leaves the deterministic verdict identical.
 - **L4 Deliberation** — blackboard with bounded loops (maxRounds 3 default, convergenceDelta
@@ -630,8 +690,8 @@ Windows defect found during this doc's verification — §12.)
 
 | ID | Finding | Closure evidence |
 | :-- | :-- | :-- |
-| F1 | Plasmo duplicate tree | archived as `apps/extension-archived`; canonical = picc-overlay |
-| F2 | stale overlay-era background | sensor chain covered by `e2eExtensionFeedChain.test.mjs` |
+| F1 | Plasmo duplicate tree | archived as `apps/extension-archived`; there is no canonical extension — the extension era was removed end-to-end (D1) |
+| F2 | stale overlay-era background | closed by removal: the overlay-era background and its sensor chain are gone with the extension (D1), and `extensionAbsence.test.mjs` pins the absence. **The closure citation previously given here, `e2eExtensionFeedChain.test.mjs`, names a file that is not in the tracked tree and never was in this repository's history of this doc — there is no such test.** |
 | F3 | candle resolution lie | adapters tag real resolution; `resolutionChain.test.mjs` |
 | F4 | Yahoo placeholder (= silently empty) | real intraday + daily; 4h resolves to daily honestly |
 | F5 | indicators timeframe key unchecked | strict 400 on unknown keys |
@@ -718,8 +778,9 @@ capability** (blueprint L).
   correlation-screened portfolio (landed 2026-09-04, ✅).
 
 **Non-negotiable carries:** advisory-only + redirect-not-execute stay; honesty labels stay; every
-feature lands with tests; security-review on sensitive paths; no behavioral camouflage, no
-withdrawals. Open questions from the research session (from the doc) remain open pending owner
+feature lands with tests; security-review on sensitive paths; no withdrawals. (Browser
+automation-signal stripping is retained and disclosed — see guardrail 2, not a "no camouflage"
+claim.) Open questions from the research session (from the doc) remain open pending owner
 priorities — see §21.
 
 ---
@@ -774,7 +835,8 @@ encrypted-at-rest; `sandboxMode` testnet-first — **built as read-only today**,
 owner) · ExpertOption as binary executor (demo live). Wave 2: MetaApi (MT4/5), OANDA v20 practice,
 Alpaca paper, IBKR Client Portal (all planned, none built). Wave 3: Quotex/IQ Option/Olymp/Deriv
 (capture live; execution blocked on tapped protocol) · TradingView HMAC webhook receiver (planned
-route `/api/trading/signals/incoming`). Out of scope: camouflage/ToS-violating automation;
+route `/api/trading/signals/incoming`). Out of scope: ToS-violating automation **beyond the
+disclosed automation-signal stripping in guardrail 2**, which D22 retains deliberately; and
 withdrawals/transfers anywhere. §6 execution checklist remains unchecked by design (dead-letter).
 
 ### 16.2 Full-implementation roadmap (research base)
@@ -797,7 +859,10 @@ labels; LiveBroker read-only contract vs (future) BrokerAdapter execution contra
 ## §17 Decisions & Rules Register (condensed)
 
 - **redirect-not-execute** (ADR) — advisory-only; only `openPaperTrade` behind human gate.
-- **No behavioral camouflage**; `PICC_HUMANIZE=1` explicit opt-in for pacing, not deception.
+- **Browser automation-signal stripping is retained, disclosed, and default-on**
+  (`navigator.webdriver` + `--enable-automation`, `browserBridge.mjs:362-365`; `stealth = true`
+  at `:335`, pass `stealth: false` to disable); **no humanized-typing by default** —
+  `PICC_HUMANIZE=1` is explicit opt-in for pacing, not deception. See guardrail 2 and §16.1.
 - **No ARIMA/Prophet/LSTM/GARCH model names** in docs/code (corrected external plan's claims).
 - **Per-asset honesty:** sub-breakeven instruments leave autopilot scope.
 - **Embargo discipline:** step = h+1 with 1 quiet bar; ≥12 independent windows; ≥20 residuals for
@@ -817,7 +882,10 @@ labels; LiveBroker read-only contract vs (future) BrokerAdapter execution contra
 (loopback only).
 
 **Env classes (names only — values live in `.env`, never committed):**
-- Supabase: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
+- **Persistence: nothing to configure.** The hosted database variables
+  (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) were removed from
+  `.env.example` with the hosted layer; all app data lives in `server/data/*.json` via
+  `localstore.mjs`.
 - LLM: `GEMINI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`,
   `LLM_PROVIDERS` (default `gemini,groq,mistral,cerebras,openai`), `SERPER_API_KEY`.
 - Payments: `EWALLET_TNG_NUMBER`,
@@ -833,8 +901,9 @@ labels; LiveBroker read-only contract vs (future) BrokerAdapter execution contra
 `picc-data` volume, loopback bind) · Option 2 PM2 (`infra/dashboard/ecosystem.config.cjs`) ·
 Option 3 systemd (`infra/dashboard/picc-dashboard.service`). TLS via nginx/Caddy; same-origin
 backend, no CORS needed. Extension: load unpacked (zero-build). EO token: `capture-eo-session.mjs`
-or capture API → vault at rest. CrewAI: venv + `uvicorn server:app --port 8000`. Supabase:
-`schema.sql` + `v2.sql`. n8n optional: workflows in `infra/n8n/workflows/`.
+or capture API → vault at rest. CrewAI: venv + `uvicorn server:app --port 8000`. **No database
+setup step** — the `infra/supabase/*.sql` schema is orphaned documentation, not a deployment step
+(§3.2). n8n optional: workflows in `infra/n8n/workflows/`.
 
 ---
 
@@ -879,7 +948,11 @@ or capture API → vault at rest. CrewAI: venv + `uvicorn server:app --port 8000
    connected; if yes, trace `subscribeLiveEO` → SSE relay. Related fix already landed: EO
    history-candle batch timestamps collapsed into one candle — now each row gets a distinct time
    (verified).
-3. **Extension `apps/extension/` (Plasmo) is archived** — canonical is `picc-overlay` (§6).
+3. **No browser extension ships.** `apps/extension-archived/` (Plasmo) is the retired skeleton —
+   note the exact path: `apps/extension/` never existed at that path. There is no canonical
+   `picc-overlay`: the entire extension era was removed end-to-end (D1) and
+   `extensionAbsence.test.mjs` pins the absence (§6). Its passive sensor role moved to the studio
+   browser's headless capture leg.
 
 ---
 
