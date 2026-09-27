@@ -8,6 +8,7 @@ import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { UnlockCeremony } from "@/components/UnlockCeremony"
 import type { CeremonyClassState, CeremonyGate, CeremonyOverview } from "@/lib/api"
+import { waitForText } from "@/test-utils/waitForText"
 
 function mount(node: React.ReactNode) {
   const host = document.createElement("div")
@@ -32,8 +33,8 @@ function stubFetch(payload: unknown) {
   } as unknown as Response)))
 }
 
-async function settle() {
-  await new Promise((r) => setTimeout(r, 10))
+async function settle(m: { host: HTMLElement }, marker: string) {
+  await waitForText(m, marker)
   flushSync(() => {})
 }
 
@@ -81,7 +82,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       })
     ]))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "ccxt-crypto")
     const text = m.host.textContent ?? ""
     expect(text).toContain("ccxt-crypto")
     expect(text).toContain("gate1-constitution-300")
@@ -102,7 +103,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       classState({ venueClass: "hyperliquid-perps", spendableResolved: 318, scaleResolved: 512 })
     ]))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "hyperliquid-perps")
     const text = m.host.textContent ?? ""
     expect(text).toContain("hyperliquid-perps")
     expect(text).toContain("spendable 318")
@@ -113,7 +114,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
   it("renders the scale marker off the server-emitted scaleMinResolves floor, not a hardcoded 500", async () => {
     stubFetch(overview([classState({ venueClass: "ccxt-crypto", scaleResolved: 512 })], { scaleMinResolves: 600 }))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "scale 512")
     const below = m.host.textContent ?? ""
     expect(below).toContain("scale 512 (< 600)")
     expect(below).not.toContain("scale 500+ reached")
@@ -121,7 +122,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
 
     stubFetch(overview([classState({ venueClass: "ccxt-crypto", scaleResolved: 650 })], { scaleMinResolves: 600 }))
     const m2 = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m2, "scale 600+")
     expect(m2.host.textContent).toContain("scale 600+ reached")
     m2.unmount()
   })
@@ -134,7 +135,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       })
     )
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "scale not-wired")
     const text = m.host.textContent ?? ""
     expect(text).toContain("scale not-wired — invalid-environment: PICC_CEREMONY_SCALE_MIN_RESOLVES=abc")
     expect(text).not.toContain("scale 500+ reached")
@@ -150,7 +151,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       })
     ]))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "gate-ledger-health")
     const text = m.host.textContent ?? ""
     expect(text).toContain("gate-ledger-health")
     expect(text).toContain("ceremony:deny:ledger-stale")
@@ -163,7 +164,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
   it("renders a locked enablement for a class whose store record is null", async () => {
     stubFetch(overview([classState({ venueClass: "ccxt-crypto", enablement: null })]))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "locked")
     const text = m.host.textContent ?? ""
     expect(text).toContain("locked")
     expect(text).not.toContain("unlocked")
@@ -178,7 +179,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       })
     ]))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "unlocked")
     const text = m.host.textContent ?? ""
     expect(text).toContain("unlocked")
     expect(text).toContain("by ceremony-action-41")
@@ -190,7 +191,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       classState({ venueClass: "expertoption", binaryOptions: true, platformVerification: null })
     ]))
     let m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "expertoption")
     expect(m.host.textContent).toContain("expertoption")
     expect(m.host.textContent).toContain("platform unverified")
     m.unmount()
@@ -210,7 +211,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       })
     ]))
     m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "platform verified")
     const text = m.host.textContent ?? ""
     expect(text).toContain("platform verified")
     expect(text).toContain("CySEC")
@@ -236,7 +237,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       ]
     } as unknown as CeremonyOverview)
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "spendable not-wired")
     const text = m.host.textContent ?? ""
     expect(text).toContain("spendable not-wired")
     expect(text).toContain("scale not-wired")
@@ -248,7 +249,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
   it("renders the not-wired honesty state when the class list is absent", async () => {
     stubFetch(overview([]))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "not-wired")
     const text = m.host.textContent ?? ""
     expect(text).toContain("not-wired — no ceremony classes reported")
     expect(text).not.toContain("pass")
@@ -262,7 +263,7 @@ describe("UnlockCeremony (WS-3 ceremony readout)", () => {
       json: async () => ({ error: "ceremony exploded" })
     } as unknown as Response)))
     const m = mount(<UnlockCeremony />)
-    await settle()
+    await settle(m, "ceremony exploded")
     const text = m.host.textContent ?? ""
     expect(text).toContain("not-wired")
     expect(text).toContain("ceremony exploded")

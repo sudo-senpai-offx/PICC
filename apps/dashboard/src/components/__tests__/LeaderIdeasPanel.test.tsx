@@ -9,6 +9,7 @@ import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { LeaderIdeasPanel } from "@/components/LeaderIdeasPanel"
 import type { LeaderIdea, LeaderIdeaRow, LeaderIdeasOverview } from "@/lib/api"
+import { waitForText } from "@/test-utils/waitForText"
 
 function mount(node: React.ReactNode) {
   const host = document.createElement("div")
@@ -33,8 +34,8 @@ function stubFetch(payload: unknown) {
   } as unknown as Response)))
 }
 
-async function settle() {
-  await new Promise((r) => setTimeout(r, 10))
+async function settle(m: { host: HTMLElement }, marker: string) {
+  await waitForText(m, marker)
   flushSync(() => {})
 }
 
@@ -98,7 +99,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       })
     ]))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "alpha-trader")
     const text = m.host.textContent ?? ""
     expect(text).toContain("alpha-trader")
     expect(text).toContain("csv")
@@ -119,7 +120,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       })
     ]))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "leader:deny:trades-short")
     const text = m.host.textContent ?? ""
     expect(text).toContain("leader:deny:trades-short (have 12, require 300)")
     const dangerBadge = m.host.querySelector("span.badge-danger")
@@ -135,7 +136,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       })
     ]))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "unknown-source")
     const text = m.host.textContent ?? ""
     const muted = [...m.host.querySelectorAll("span.badge-muted")]
     const trustBadge = muted.find((el) => el.textContent?.trim() === "unverified")
@@ -157,7 +158,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       })
     ]))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "leader:deny:platform-adversarial")
     const text = m.host.textContent ?? ""
     expect(text).toContain("leader:deny:platform-adversarial")
     expect(text).not.toContain("row-hidden")
@@ -179,7 +180,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       })
     ]))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "leader:idea-suppressed:7d-stop")
     const text = m.host.textContent ?? ""
     expect(text).toContain("leader:idea-suppressed:7d-stop")
     expect(text).not.toContain("row-suppressed")
@@ -200,7 +201,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       })
     ]))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "auto-unfollowed")
     const text = m.host.textContent ?? ""
     expect(text).toContain("auto-unfollowed")
     expect(text).toContain("leader:auto-unfollow:no-positions-21d")
@@ -212,7 +213,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
   it("renders the not-wired honesty state when the leader store is empty", async () => {
     stubFetch(overview([]))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "not-wired")
     const text = m.host.textContent ?? ""
     expect(text).toContain("not-wired — no leaders reported")
     expect(text).not.toContain("pass")
@@ -225,7 +226,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       deny: "leader:deny:store-unhealthy"
     }))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "leader:deny:store-unhealthy")
     const text = m.host.textContent ?? ""
     expect(text).toContain("not-wired")
     expect(text).toContain("leader:deny:store-unhealthy")
@@ -240,7 +241,7 @@ describe("LeaderIdeasPanel (WS-4 R8.2 readout)", () => {
       json: async () => ({ error: "leader readout exploded" })
     } as unknown as Response)))
     const m = mount(<LeaderIdeasPanel />)
-    await settle()
+    await settle(m, "leader readout exploded")
     const text = m.host.textContent ?? ""
     expect(text).toContain("not-wired")
     expect(text).toContain("leader readout exploded")
