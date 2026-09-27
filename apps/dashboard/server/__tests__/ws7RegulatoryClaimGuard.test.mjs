@@ -34,10 +34,13 @@
 //     the original per-line scan structurally could not see "SC-\nregistered".
 //     Hyphens go too so that "virtual-asset" collapses onto "virtualasset" and
 //     the entity list needs no hyphenated twin of every entry.
-//   mode "clause"   - the text split into sentence/line/bullet segments, and
-//     each segment scanned separately. A proximity window may then cross spaces
-//     WITHIN a sentence but can never cross a sentence or line break, which is
-//     what a whitespace-inclusive window over collapsed newlines used to do.
+//   mode "clause"   - the text split into SENTENCE segments, and each segment
+//     scanned separately. A proximity window may then cross spaces WITHIN a
+//     sentence but can never cross a sentence, which is what a
+//     whitespace-inclusive window over collapsed newlines used to do. A newline
+//     is NOT a sentence: soft-wrapped lines are re-joined before the split (see
+//     rejoinSoftWraps), because treating every line break as a sentence end is
+//     itself an evasion hole - the same one the original per-line scan had.
 //   mode "spaced"   - whitespace runs collapsed to one space, so word
 //     boundaries survive and a STANDALONE token ("SC approval", "RMO-DAX",
 //     "Securities Commission") is visible as a word. Squeezing cannot do this:
@@ -101,13 +104,53 @@ const ENTRIES_DIR = join(CHANGELOG_DIR, "entries")
 // evade "digitalasset".
 const squeezed = (s) => s.replace(/[\s-]+/g, "").toLowerCase()
 const spaced = (s) => s.replace(/\s+/g, " ").toLowerCase()
-// "clause" is a sentence/line/bullet segment. The proximity window may cross
-// spaces WITHIN a clause but can never cross a clause boundary. That boundary
-// is the fix for the defect where a whitespace-inclusive `near(40)` over
-// collapsed newlines spanned sentence breaks and flagged ordinary prose.
+// A newline inside a sentence is a SOFT WRAP - a source-formatting artefact -
+// not the end of a thought. `clauses()` exists so a rule can treat one sentence
+// as one haystack, and treating every newline as a sentence end is a line-wrap
+// EVASION HOLE: "MX Global is a registered\ndigital asset exchange." is one
+// claim, and a rule that only ever sees one line cannot match a licence word and
+// an entity noun that sit on different lines. That is the same defect class the
+// runbook round found, reintroduced inside the guard written to prevent it.
+//
+// The discriminator is what the PREVIOUS line ends with. Prose and comments wrap
+// on a bare word; structured data - object literals, config maps, CSV, log
+// lines - ends each record on a delimiter or a bracket. Joining THOSE would
+// manufacture claims out of adjacent KEYS: "licensed: false," followed by
+// 'platform: "binance"' reads as "licensed ... platform" and fires. A guard that
+// flags honest config is a guard the next person weakens, so a line ending on a
+// delimiter stays a boundary. A line ending in a HYPHEN is re-joined with no
+// space, so "digital-\nasset" and "SC-\nregistered" come back whole - the case
+// the file header above cites as the reason squeezed mode exists at all.
+const OPENS_BLOCK = /^\s*(?:[-*+#>|\u2022]|\d+[.)])\s/
+const rejoinSoftWraps = (s) => {
+  const out = []
+  for (const line of s.split("\n")) {
+    const prev = out[out.length - 1]
+    const wrapped =
+      prev !== undefined &&
+      prev.trim() !== "" &&
+      line.trim() !== "" &&
+      !OPENS_BLOCK.test(line) &&
+      /[A-Za-z0-9-]$/.test(prev.trimEnd())
+    if (!wrapped) {
+      out.push(line)
+      continue
+    }
+    const hyphenated = /-$/.test(prev.trimEnd())
+    out[out.length - 1] = prev.trimEnd() + (hyphenated ? "" : " ") + line.trim()
+  }
+  return out.join("\n")
+}
+// "clause" is a sentence/bullet segment, SOFT WRAPS RE-JOINED. The proximity
+// window may cross spaces WITHIN a clause but can never cross a clause
+// boundary. That boundary is the fix for the defect where a whitespace-inclusive
+// `near(40)` over collapsed newlines spanned sentence breaks and flagged
+// ordinary prose - and rejoinSoftWraps is what keeps the boundary a SENTENCE
+// boundary rather than a LINE boundary, which would have been a second evasion
+// hole in the same guard.
 const clauses = (s) =>
-  s
-    .split(/(?<=[.;!?])\s+|\n+|\s*[•|]\s*/)
+  rejoinSoftWraps(s)
+    .split(/(?<=[.;!?])\s+|\n+|\s*[|\u2022]\s*/)
     .map((c) => c.replace(/\s+/g, " ").toLowerCase())
     .filter(Boolean)
 
@@ -119,9 +162,20 @@ const clauses = (s) =>
 // carried thirteen, so paraphrases built on `accredited`, `recognised` or
 // `regulated` walked straight past a green guard. One array, one consumer, and
 // adding a word to LICENCE_WORD now widens every rule that consumes it.
+//
+// The array is spelled as SPELLINGS, not as lemmas: a trigger reads prose, so
+// `licence` and `licenses` are both needed and neither subsumes the other. The
+// bare SINGULARS are here because "The exchange holds a licence from the SC." is
+// a claim - it is the same claim as "licensed" with a different part of speech -
+// and a guard whose thesis is class coverage cannot miss it. It is safe against
+// the in-word class: `\\blicence\\b` cannot match inside `unlicensed` (the `n`
+// before it is a word character, so the leading boundary fails) nor inside
+// `licences` (separately listed, and the trailing `s` fails the end boundary).
 const LICENCE_WORD = [
   "licensed",
+  "licence",
   "licences",
+  "license",
   "licenses",
   "licensing",
   "registered",
@@ -165,10 +219,19 @@ const LICENCE_STEM_RE =
 // the ruled vocabulary, and it made an honest sentence fire.
 const REGULATOR_TOKEN = "fsa|rmo|sec|msb|bnm"
 
-// Financial-entity nouns, declared as WORD PARTS so ONE declaration yields both
-// the squeezed form (parts concatenated) and a separator-tolerant clause form.
-// Deriving both shapes is what lets the entity rule keep real word boundaries -
-// see the note on `entity-licensing-claim` below.
+// Financial-entity nouns, declared as WORD PARTS so ONE declaration produces one
+// regex whose multi-word entries tolerate a space, a hyphen or NOTHING between
+// the parts - "money services", "money-services" and "moneyservices" all match
+// the same entry, so an author writing "digital-asset" cannot evade
+// "digital asset". Deriving the parts is what makes that possible; a second
+// hand-written hyphenated list would be the same drift defect in a new place.
+//
+// It yields ONE pattern, consumed only by `entity-licensing-claim` in clause
+// mode. It deliberately does NOT also yield a de-spaced pattern: squeezing
+// destroys word boundaries, and the in-word false positives that causes
+// ("registered" inside "preregistered", "authorized" inside "unauthorized") are
+// worse than any coverage a squeezed form would add. Line-wrap coverage is
+// obtained by rejoining soft-wrapped LINES instead - see rejoinSoftWraps.
 //
 // Deliberately ABSENT: broker, venue, connector, adapter, registry - "registered
 // broker", "registered trading venue" and "approved venue" are PICC's own
@@ -204,8 +267,7 @@ const FINANCIAL_ENTITY_PARTS = [
   { p: ["platform"] }
 ]
 const joinParts = (parts, sep) => parts.join(sep)
-const FINANCIAL_ENTITY = FINANCIAL_ENTITY_PARTS.map((e) => joinParts(e.p, ""))
-const FINANCIAL_ENTITY_CLAUSE_RE = FINANCIAL_ENTITY_PARTS.map((e) =>
+const FINANCIAL_ENTITY_RE = FINANCIAL_ENTITY_PARTS.map((e) =>
   e.stem ? joinParts(e.p, "[\\s-]?") : `\\b${joinParts(e.p, "[\\s-]?")}\\b`
 ).join("|")
 
@@ -244,8 +306,8 @@ const CLAIM_VOCABULARY = [
   {
     id: "entity-licensing-claim",
     mode: "clause",
-    re: new RegExp(`\\b(?:${LICENCE_WORD_RE})\\b(?=[a-z0-9,.+'"\\s-]{0,30}(?:${FINANCIAL_ENTITY_CLAUSE_RE}))`),
-    why: "ANY licensing word next to ANY financial entity, both word-BOUNDARY anchored. It runs in clause mode, not squeezed mode, and that is the whole point: squeezing destroys word boundaries, so a bare trigger there matches 'registered' inside 'preregistered' and inside 'unregistered', and 'authorized' inside 'unauthorized' - the last being high-frequency in an auth-heavy codebase. A preceding-character anchor cannot fix this either, because in de-spaced text almost every licence word IS preceded by a lowercase letter, so (?<![a-z]) silences all 20 paraphrases; and a bare \\b silences a licence word glued to a preceding word. Real boundaries in clause mode fix the class rather than three prefixes. The trigger is DERIVED from LICENCE_WORD, never hand-listed; PICC's own 'registered broker' / 'approved venue' are handled by leaving broker/venue/connector/adapter/registry out of the ENTITY list, not by narrowing the trigger"
+    re: new RegExp(`\\b(?:${LICENCE_WORD_RE})\\b(?=[a-z0-9,.+'"\\s-]{0,30}(?:${FINANCIAL_ENTITY_RE}))`),
+    why: "ANY licensing word next to ANY financial entity, both word-BOUNDARY anchored. It runs in clause mode, not squeezed mode, and that is the whole point: squeezing destroys word boundaries, so a bare trigger there matches 'registered' inside 'preregistered' and inside 'unregistered', and 'authorized' inside 'unauthorized' - the last being high-frequency in an auth-heavy codebase. A preceding-character anchor cannot fix this either, because in de-spaced text almost every licence word IS preceded by a lowercase letter, so (?<![a-z]) silences all 20 paraphrases; and a bare \\b silences a licence word glued to a preceding word. Real boundaries fix the class rather than three prefixes, and clause mode - with soft wraps RE-JOINED, so a newline is not a boundary - keeps line-wrap coverage without ever needing a squeezed twin, which would have reintroduced the in-word matches. The trigger is DERIVED from LICENCE_WORD, never hand-listed; PICC's own 'registered broker' / 'approved venue' are handled by leaving broker/venue/connector/adapter/registry out of the ENTITY list, not by narrowing the trigger"
   },
   {
     id: "kyc-exemption-claim",
@@ -694,7 +756,7 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
     }
   })
 
-  it("does not let the proximity window cross a sentence or line boundary", () => {
+  it("does not let the proximity window cross a SENTENCE boundary", () => {
     // The reviewer's three cases. Each pairs a DAX/regulator token in one
     // sentence with a licensing word in ANOTHER, which is the shape a
     // whitespace-inclusive window over collapsed newlines used to match.
@@ -705,8 +767,10 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
     ]) {
       expect(probe(text), `a window crossing a sentence boundary must not fire on: ${text}`).toEqual([])
     }
-    // Same shape across a LINE break rather than a sentence break: a DAX token
-    // on one line, a licensing word on another, with no pairing inside either.
+    // Same shape across a LINE break - but note WHAT makes it a boundary here.
+    // Soft-wrapped lines are now rejoined, so a newline is not a boundary in
+    // general; this one is a boundary because the first line ends a SENTENCE.
+    // "Dax" is on one line, a licensing word on the next, no pairing in either.
     expect(
       probe("Dax runs the desk.\nWe renewed the licence."),
       "a window crossing a line boundary must not fire"
@@ -724,6 +788,66 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
       probe("MX Global is a registered exchange."),
       "a genuine in-sentence claim must still fire"
     ).not.toEqual([])
+  })
+
+  it("catches a claim wrapped across a line break, and still silences in-word matches", () => {
+    // These two halves are in ONE test on purpose. The obvious fix for a
+    // line-wrap miss is a squeezed-mode twin of the entity rule, and squeezing
+    // is exactly what produces the in-word matches below. Split into two tests,
+    // a future change could win one by sacrificing the other; together, neither
+    // property can be given up.
+    //
+    // The first two are regressions: both FIRED under the pre-line-wrap-fix
+    // guard, in squeezed mode, and walked past once the rule moved to clause
+    // mode without soft-wrapped lines being rejoined.
+    for (const text of [
+      "MX Global is a registered\ndigital asset exchange.",
+      "MX Global is a registered digital\nasset exchange.",
+      "MX Global is an accredited\nmoney services business.",
+      "Hata is a licensed\nvirtual-asset service provider.",
+      "Luno is a regulated\ntrust company.",
+      "Funding Societies is a registered\nfinancial institution.",
+      // A three-line wrap, and a hyphenation break, and the exact case the file
+      // header cites as the reason squeezed mode exists.
+      "MX Global is a\nregistered\ndigital asset exchange.",
+      "Hata is a licensed digital-\nasset exchange.",
+      "MX Global is SC-\nregistered as an exchange."
+    ]) {
+      expect(probe(text), `a line-wrapped claim must still fire on: ${JSON.stringify(text)}`).not.toEqual([])
+    }
+    // And the property that must not be traded away to get the above.
+    for (const text of [
+      "Read the preregistered provider list before connecting.",
+      "The UI shows an unregistered platform state.",
+      "Respond 401 unauthorized to the payment provider.",
+      "The report shows a disapproval rate by provider.",
+      "The domain requires deregistration before the provider cutover.",
+      // Added with the singular `licence`: the boundary must survive the new
+      // word, so a negated "unlicensed" is still silent even with a nearby
+      // entity noun.
+      "The desk is unlicensed and the counterparty is a financial\nprovider."
+    ]) {
+      expect(probe(text), `a licence word inside a longer word must not fire on: ${JSON.stringify(text)}`).toEqual([])
+    }
+  })
+
+  it("does not join a line that ends a record to unrelated adjacent data", () => {
+    // The cost of closing the line-wrap hole, pinned. Soft wraps are rejoined
+    // ONLY when the previous line ends on a bare word; structured data ends each
+    // record on a delimiter, and joining those would read two adjacent KEYS as a
+    // claim. Without this, the rejoining is a licence to fire on honest config.
+    for (const text of [
+      '  licensed: false,\n  platform: "binance",',
+      "  approved: true,\n  platform: binance",
+      "  licensed: false,\n  firm: acme",
+      "  registered: true,\n  trust: acme",
+      // A bullet marker is a block start, so a wrapped line can never absorb the
+      // NEXT list item. Without this, the rejoining could merge two benign bullets
+      // into one claim.
+      "- platform fees apply\n- licensed: false"
+    ]) {
+      expect(probe(text), `a record boundary must stay a boundary on: ${JSON.stringify(text)}`).toEqual([])
+    }
   })
 
   it("does not match a licence word INSIDE a longer word", () => {
@@ -774,9 +898,29 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
     for (const text of [
       "MX Global is a registered exchange.",
       "We re-registered the venue and it is now an approved exchange.",
-      "Luno is an authorised electronic money issuer."
+      "Luno is an authorised electronic money issuer.",
+      // The singular noun, added to LICENCE_WORD this round. "holds a licence
+      // from the SC" is the same claim as "licensed" with a different part of
+      // speech, and it is the shape an author reaches for when writing about a
+      // licence rather than a venue. Both spellings, because neither subsumes
+      // the other. These exercise sc-regulator-reference, the rule the gap was
+      // found in; the entity rule consumes the same singulars.
+      "The exchange holds a licence from the SC.",
+      "The venue holds a license from the SC.",
+      "MX Global holds a licence as a digital asset exchange."
     ]) {
       expect(probe(text), `a real claim must still fire on: ${text}`).not.toEqual([])
+    }
+  })
+
+  it("does not let a sentence boundary become the new line-wrap hole", () => {
+    // rejoinSoftWraps must not have replaced one evasion with another. A SENTENCE
+    // end is still a boundary - the round-1 fix - while a soft wrap no longer is.
+    for (const text of [
+      "The operator is registered. Financial markets are discussed here.",
+      "The desk was registered. Platform fees apply."
+    ]) {
+      expect(probe(text), `a sentence boundary must stay a boundary on: ${text}`).toEqual([])
     }
   })
 
