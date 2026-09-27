@@ -147,44 +147,67 @@ const LICENCE_WORD_RE = LICENCE_WORD.join("|")
 const LICENCE_STEM_RE =
   "licen|regist|approv|authoris|authoriz|charter|accredit|regulat|recognis|recogniz|supervis"
 
-// Regulator / designation tokens as STANDALONE WORDS. Deliberately not extended
-// to fca/mas/asic: adding them made an honest sentence ("The desk is regulated
-// by the FCA") fire, and the entity rule already catches a licensing claim that
-// names a financial entity whatever the regulator.
-const REGULATOR_TOKEN = "sc|fsa|rmo|sec|msb|bnm"
+// Regulator / designation tokens as STANDALONE WORDS.
+//
+// `sc` is DELIBERATELY ABSENT. As a bare token it cannot be told apart from the
+// US state abbreviation - and \bsc\b makes that a live false positive, because
+// "Columbia, SC, the entity is registered in Delaware" is ordinary US-company
+// prose, and Funding Societies is a US entity this repo's own runbook routes to.
+// The two forms that actually matter are covered elsewhere, each by the rule
+// that can distinguish them:
+//   - the PREFIX forms ("SC-registered", "SC-regulated", "SC approval") are
+//     `explicit-sc-registration`, where "SC" is glued to its adjective and no
+//     other word can produce that shape;
+//   - the ARTICLE form ("regulated by the SC") is `sc-regulator-reference`,
+//     which requires the definite article, which a state abbreviation in a
+//     comma-delimited list never has.
+// fca/mas/asic are also absent: adding them was my own extension, it was not in
+// the ruled vocabulary, and it made an honest sentence fire.
+const REGULATOR_TOKEN = "fsa|rmo|sec|msb|bnm"
 
-// Financial-entity nouns. Deliberately ABSENT: broker, venue, connector,
-// adapter, registry - "registered broker", "registered trading venue" and
-// "approved venue" are PICC's own in-process broker registry and its
-// capture-approval ceremony, not a regulator. Keeping them out of the ENTITY
-// list rather than out of the TRIGGER list is what lets the trigger be derived
-// without reintroducing those false positives.
-const FINANCIAL_ENTITY = [
-  "exchange",
-  "digitalasset",
-  "assetwork",
-  "virtualasset",
-  "securit",
-  "bank",
-  "paymentprovider",
-  "moneyservices",
-  "financial",
-  "custodian",
-  "issuer",
-  "dealer",
-  "marketoperator",
-  "fintech",
-  "insur",
-  "trust",
-  "creditunion",
-  "provider",
-  "onramp",
-  "capitalmarket",
-  "brokerage",
-  "firm",
-  "platform"
+// Financial-entity nouns, declared as WORD PARTS so ONE declaration yields both
+// the squeezed form (parts concatenated) and a separator-tolerant clause form.
+// Deriving both shapes is what lets the entity rule keep real word boundaries -
+// see the note on `entity-licensing-claim` below.
+//
+// Deliberately ABSENT: broker, venue, connector, adapter, registry - "registered
+// broker", "registered trading venue" and "approved venue" are PICC's own
+// in-process broker registry and its capture-approval ceremony, not a regulator.
+// Keeping them out of the ENTITY list rather than out of the TRIGGER list is what
+// lets the trigger stay derived without reintroducing those false positives.
+//
+// `stem: true` marks a deliberate prefix: "securit" must also match
+// "securities", so those entries are not end-anchored with a word boundary.
+const FINANCIAL_ENTITY_PARTS = [
+  { p: ["exchange"] },
+  { p: ["digital", "asset"] },
+  { p: ["asset", "work"] },
+  { p: ["virtual", "asset"] },
+  { p: ["securit"], stem: true },
+  { p: ["bank"] },
+  { p: ["payment", "provider"] },
+  { p: ["money", "services"] },
+  { p: ["financial"] },
+  { p: ["custodian"] },
+  { p: ["issuer"] },
+  { p: ["dealer"] },
+  { p: ["market", "operator"] },
+  { p: ["fintech"] },
+  { p: ["insur"], stem: true },
+  { p: ["trust"] },
+  { p: ["credit", "union"] },
+  { p: ["provider"] },
+  { p: ["on", "ramp"] },
+  { p: ["capital", "markets"] },
+  { p: ["brokerage"] },
+  { p: ["firm"] },
+  { p: ["platform"] }
 ]
-const FINANCIAL_ENTITY_RE = FINANCIAL_ENTITY.join("|")
+const joinParts = (parts, sep) => parts.join(sep)
+const FINANCIAL_ENTITY = FINANCIAL_ENTITY_PARTS.map((e) => joinParts(e.p, ""))
+const FINANCIAL_ENTITY_CLAUSE_RE = FINANCIAL_ENTITY_PARTS.map((e) =>
+  e.stem ? joinParts(e.p, "[\\s-]?") : `\\b${joinParts(e.p, "[\\s-]?")}\\b`
+).join("|")
 
 // Distance window. Used ONLY in clause mode, where crossing a sentence is
 // impossible by construction. Narrow on purpose: every character of slack is a
@@ -220,9 +243,9 @@ const CLAIM_VOCABULARY = [
   },
   {
     id: "entity-licensing-claim",
-    mode: "squeezed",
-    re: new RegExp(`(?:${LICENCE_WORD_RE})(?=[a-z0-9,.+'"]${"{0,30}"}(?:${FINANCIAL_ENTITY_RE}))`),
-    why: "ANY licensing word next to ANY financial entity. The trigger is DERIVED from LICENCE_WORD, never hand-listed - the previous hand-listed subset had drifted to four words and let 'accredited', 'recognised' and 'regulated' paraphrases through. PICC's own 'registered broker' / 'approved venue' are handled by leaving broker/venue/connector/adapter/registry out of the ENTITY list, not by narrowing the trigger"
+    mode: "clause",
+    re: new RegExp(`\\b(?:${LICENCE_WORD_RE})\\b(?=[a-z0-9,.+'"\\s-]{0,30}(?:${FINANCIAL_ENTITY_CLAUSE_RE}))`),
+    why: "ANY licensing word next to ANY financial entity, both word-BOUNDARY anchored. It runs in clause mode, not squeezed mode, and that is the whole point: squeezing destroys word boundaries, so a bare trigger there matches 'registered' inside 'preregistered' and inside 'unregistered', and 'authorized' inside 'unauthorized' - the last being high-frequency in an auth-heavy codebase. A preceding-character anchor cannot fix this either, because in de-spaced text almost every licence word IS preceded by a lowercase letter, so (?<![a-z]) silences all 20 paraphrases; and a bare \\b silences a licence word glued to a preceding word. Real boundaries in clause mode fix the class rather than three prefixes. The trigger is DERIVED from LICENCE_WORD, never hand-listed; PICC's own 'registered broker' / 'approved venue' are handled by leaving broker/venue/connector/adapter/registry out of the ENTITY list, not by narrowing the trigger"
   },
   {
     id: "kyc-exemption-claim",
@@ -244,6 +267,15 @@ const CLAIM_VOCABULARY = [
         `|(?:${LICENCE_WORD_RE})\\b${near(20)}\\b(?:${REGULATOR_TOKEN})\\b`
     ),
     why: "a standalone regulator token next to any licensing word, in EITHER order, within one clause. Clause mode is what stops the window spanning a sentence break; the 20-char budget is what stops it spanning ordinary prose inside a sentence"
+  },
+  {
+    id: "sc-regulator-reference",
+    mode: "clause",
+    re: new RegExp(
+      `\\bthe sc\\b${near(20)}(?:${LICENCE_WORD_RE})\\b` +
+        `|(?:${LICENCE_WORD_RE})\\b${near(20)}\\bthe sc\\b`
+    ),
+    why: "'the SC' - the Securities Commission as a NAMED regulator, in either order against a licensing word. This exists because bare `sc` had to leave REGULATOR_TOKEN to stop \\bsc\\b reading as the US state abbreviation, and the definite article is what distinguishes the two: a state abbreviation in a comma-delimited list ('Columbia, SC,') is never preceded by 'the'. PREFIX forms ('SC-registered') stay with explicit-sc-registration, where the glue to the adjective is the signal"
   },
   {
     id: "named-regulator-spaced",
@@ -436,8 +468,11 @@ function countMatches(file, ruleId) {
   const rule = VOCAB_BY_ID.get(ruleId)
   if (!rule) throw new Error(`unknown vocabulary rule ${ruleId}`)
   const re = new RegExp(rule.re.source, rule.re.flags.includes("g") ? rule.re.flags : rule.re.flags + "g")
-  // A file contributes one hit per haystack it contains matches in, so a clause
-  // rule counts clauses and a whole-file rule counts occurrences.
+  // Counts EVERY match, in every haystack. `clause` mode yields one haystack per
+  // sentence/line/bullet, so a file with three licensing sentences contributes
+  // three - a clause rule counts sentences and a whole-file rule counts raw
+  // occurrences. Allowlist counts are stated in these terms, so getting this
+  // wrong would silently invalidate every one of them.
   let n = 0
   for (const hay of haystacksFor(file, rule.mode)) {
     const local = new RegExp(re.source, re.flags)
@@ -689,6 +724,60 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
       probe("MX Global is a registered exchange."),
       "a genuine in-sentence claim must still fire"
     ).not.toEqual([])
+  })
+
+  it("does not match a licence word INSIDE a longer word", () => {
+    // The derived trigger has no anchor, and squeezing destroys word boundaries,
+    // so 'registered' was matching inside 'preregistered' and inside
+    // 'unregistered', and 'authorized' inside 'unauthorized'. 'unauthorized' is
+    // the sharp one: it is high-frequency in an auth-heavy codebase and
+    // 'provider' is an entity noun, so any future auth code near one would fail
+    // this guard. `unauthorized` occurs in 4 tracked files today.
+    for (const text of [
+      "Read the preregistered provider list before connecting.",
+      "The UI shows an unregistered platform state.",
+      "Respond 401 unauthorized to the payment provider.",
+      "The report shows a disapproval rate by provider.",
+      "The domain requires deregistration before the provider cutover."
+    ]) {
+      expect(probe(text), `a licence word inside a longer word must not fire on: ${text}`).toEqual([])
+    }
+  })
+
+  it("does not read the US state abbreviation as the Securities Commission", () => {
+    // The earlier probe for this could not fail: it contained no licensing word
+    // and was already silent under the old guard, so it tested nothing about the
+    // window. This one carries a licensing word, and it DID fire under both the
+    // old and the fix-1 guard. Funding Societies is a US entity this repo's own
+    // runbook routes to, so ordinary US-company prose is the common case.
+    for (const text of [
+      "Based in Columbia, SC, the entity is registered in Delaware.",
+      "Based in Columbia, SC, the team ships every weekday."
+    ]) {
+      expect(probe(text), `the state abbreviation must not fire on: ${text}`).toEqual([])
+    }
+    // And the fix must not have been "stop matching SC". Both the named and the
+    // glued forms must still fire.
+    for (const text of [
+      "MX Global is regulated by the SC.",
+      "Hata is a DAX registered with the SC.",
+      "This provider is SC-regulated.",
+      "The platform is an approved SC-recognised venue."
+    ]) {
+      expect(probe(text), `a real SC reference must still fire on: ${text}`).not.toEqual([])
+    }
+  })
+
+  it("still fires on a licence word adjacent to real word boundaries", () => {
+    // The anti-regression half of the boundary fix: anchoring must not silence
+    // genuine claims, including one glued to a preceding word by a hyphen.
+    for (const text of [
+      "MX Global is a registered exchange.",
+      "We re-registered the venue and it is now an approved exchange.",
+      "Luno is an authorised electronic money issuer."
+    ]) {
+      expect(probe(text), `a real claim must still fire on: ${text}`).not.toEqual([])
+    }
   })
 
   it("handles PICC's own in-process registry by allowlist, not by silence", () => {
