@@ -69,9 +69,9 @@ $10 regardless.
 
 **Platform facts (2026-09-06, evening):**
 
-- **Bybit and MEXC both refuse this user** (region-restriction walls). Offshore exchanges of the
-  SC investor-alert class are **not reliably signup-able from Malaysia in 2026** — do not re-
-  recommend this class to this user.
+- **Bybit and MEXC both refuse this user** (region-restriction walls). Offshore exchanges are
+  **not reliably signup-able from Malaysia in 2026** — do not re-recommend offshore
+  exchanges to this user.
 - Region question **resolved**: Luno accepted the signup → the user is a Malaysian resident, no
   VPN. The two blocks are data points about those platforms' MY stances (MEXC's
   "Malaysia-friendly" reviews are stale or wrong), not about the user's location.
@@ -82,7 +82,7 @@ $10 regardless.
   Google Pay) and **delivers native USDC directly on Arbitrum One** (official Arbitrum chain page;
   corroborated by Eco's USDC-on-Arbitrum guide 2026-05: "MoonPay, Transak, and Coinbase Onramp all
   sell native USDC on Arbitrum directly to a wallet address"). Card cost 2–4% above spot ≈ RM 1–2
-  at this size. HYPE is not tradeable on Luno at all (SC approval aside, its table lists HYPE as
+  at this size. HYPE is not tradeable on Luno at all (its table lists HYPE as
   no-send/receive, SA/Nigeria only).
 - **MoonPay does not serve Malaysia** ("Coming soon to your region", 2026-09-06) and Coinbase
   Onramp is out (no Coinbase in MY). Of the card on-ramps that sell native USDC on Arbitrum,
@@ -113,13 +113,13 @@ exchange; funds go straight to your wallet, no exchange custody.
 Six Malaysian exchanges take direct MYR deposits via **FPX** — no P2P counterparty (Luno, Hata, MX
 Global, SINEGY, Kinetic/KDX, Torum):
 
-- **Hata** (the primary SC option now) — dual SC + Labuan FSA licence, Bybit-backed; FPX deposit
-  ~RM0.80 (instant); 0% maker / 0.10–0.40% taker; Instant Buy 1%. **Check in-app:** (a) is USDC
+- **Hata** — FPX deposit ~RM0.80 (instant); 0% maker / 0.10–0.40% taker; Instant Buy 1%.
+  **Check in-app:** (a) is USDC
   live in your market list? (stablecoins "rotate in/out"); (b) which networks can USDC leave on?
   (marketed rails: BEP-20, TRC-20, SOL, Polygon — **Arbitrum not named**); (c) withdrawal min/fee.
-  If USDC is live *and* Arbitrum is offered → best of both worlds (SC + FPX + direct delivery).
+  If USDC is live *and* Arbitrum is offered → best of both worlds (FPX + direct delivery).
   If USDC is ERC-20/Polygon-only → an extra CCTP/DEX hop is needed.
-- **Luno** — RMO-DAX since 2019; FPX deposit free ≥RM100 (RM1 below); **no USD stablecoin in MY**
+- **Luno** — FPX deposit free ≥RM100 (RM1 below); **no USD stablecoin in MY**
   (USDC/USDT/PYUSD/EURC all restricted, official table 2026-09-06). Usable only as the ETH leg of
   the fallback below.
 
@@ -235,7 +235,7 @@ report gate truth. Carrier A per §5 if the owner chooses automation.
   DOGE, LINK, ADA, … FIL; HYPE/MYR is listed). Route C's "buy USDC on Hata" branch is therefore
   **dead at the asset level** — stablecoins are not listed at all, not just rotated out.
   What survives is the **ETH-leg fallback on Hata** (buy ETH → withdraw → bridge → swap), which
-  becomes the **lead rail**: SC-regulated, eWallet-proven, KYC-clear. A 1% Instant Buy on ETH
+  becomes the **lead rail**: eWallet-proven. A 1% Instant Buy on ETH
   (or 0.40% taker on the Exchange) + the ETH withdrawal network fee + mainnet→Arbitrum bridge
   ($2–6 class via Across/CCTP per 2026 sources) + one Arbitrum DEX swap — see the
   "ETH-leg landing math" entry below for the current numbers.
