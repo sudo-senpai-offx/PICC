@@ -531,10 +531,21 @@ function countMatches(file, ruleId) {
   if (!rule) throw new Error(`unknown vocabulary rule ${ruleId}`)
   const re = new RegExp(rule.re.source, rule.re.flags.includes("g") ? rule.re.flags : rule.re.flags + "g")
   // Counts EVERY match, in every haystack. `clause` mode yields one haystack per
-  // sentence/line/bullet, so a file with three licensing sentences contributes
-  // three - a clause rule counts sentences and a whole-file rule counts raw
-  // occurrences. Allowlist counts are stated in these terms, so getting this
-  // wrong would silently invalidate every one of them.
+  // SENTENCE, per bullet, and per newline block that SURVIVED the soft-wrap
+  // rejoin - and "survived" is the load-bearing word. `clauses()` calls
+  // rejoinSoftWraps() first, so a paragraph soft-wrapped across six physical
+  // lines is ONE haystack, not six. This comment used to say one haystack per
+  // "sentence/line/bullet", and the "/line" was wrong the moment the rejoin
+  // landed: it predates it, and stated that way it would make an allowlist
+  // count depend on how the author happened to wrap the source, so the same
+  // unchanged text would need a different allowance after a reformat. A line
+  // that is NOT re-joined - a hard break, a record delimiter, anything whose
+  // predecessor does not end on a word - still starts a new haystack, which is
+  // what keeps structured data from merging across records. So a file with
+  // three licensing sentences contributes three regardless of wrapping, a
+  // clause rule counts sentences, and a whole-file rule counts raw occurrences.
+  // Allowlist counts are stated in these terms, so getting this wrong would
+  // silently invalidate every one of them.
   let n = 0
   for (const hay of haystacksFor(file, rule.mode)) {
     const local = new RegExp(re.source, re.flags)
@@ -851,8 +862,13 @@ describe("AC-049 - the vocabulary matches the claim CLASS, not five literal stri
   })
 
   it("does not match a licence word INSIDE a longer word", () => {
-    // The derived trigger has no anchor, and squeezing destroys word boundaries,
-    // so 'registered' was matching inside 'preregistered' and inside
+    // LICENCE_WORD carries no anchor of its own - its entries are bare stems like
+    // "registered" and "authorized" - but the rules that CONSUME it wrap the
+    // whole alternation in \b...\b (see entity-licensing-claim), so the
+    // boundary is applied at the point of use, not baked into the vocabulary.
+    // The anchor is therefore in the rule, not in the trigger list, and adding a
+    // word to LICENCE_WORD cannot silently drop it. Squeezing destroys word
+    // boundaries, so 'registered' was matching inside 'preregistered' and inside
     // 'unregistered', and 'authorized' inside 'unauthorized'. 'unauthorized' is
     // the sharp one: it is high-frequency in an auth-heavy codebase and
     // 'provider' is an entity noun, so any future auth code near one would fail

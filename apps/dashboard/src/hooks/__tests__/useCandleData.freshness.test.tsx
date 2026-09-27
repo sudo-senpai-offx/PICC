@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// T11 (slice 6 reskin) â€” the client must parse what the server already sends on
+// T11 (slice 6 reskin) — the client must parse what the server already sends on
 // every candles response (handlers.mjs:2334-2346): `stale`, `sourceMode`
 // ("auto"|"forced"|"fallback") and the per-candidate `sources[]` report (who was
-// tried, in what rank, and who won). The previous client ignored all three â€”
+// tried, in what rank, and who won). The previous client ignored all three —
 // that silence is exactly why the old badge could claim "EO live" no matter
 // what the server said.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
@@ -118,7 +118,7 @@ describe("useCandleData freshness passthrough (T11)", () => {
 
   it("defaults stale=false / sourceMode=null-like / [] when the empty-candles path omits stale", async () => {
     // The server's empty-candles branch (handlers.mjs:2328) carries sourceMode
-    // + sources but NO `stale` key â€” the client must not fabricate staleness.
+    // + sources but NO `stale` key — the client must not fabricate staleness.
     vi.stubGlobal("fetch", vi.fn(async () => json({
       ok: true, source: "none", feed: null, requestedTimeframe: 60, timeframe: 60, resolved: false,
       candles: [], sourceMode: "auto", sources: []

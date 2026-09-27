@@ -38,7 +38,7 @@ async function call(handleApi, method, path, body, headers) {
   return res
 }
 
-describe("Browser Studio â€” site detection", () => {
+describe("Browser Studio — site detection", () => {
   it("maps known dashboards to catalog entries", async () => {
     const { detectSite } = await import("../services/browserStudio.mjs")
     expect(detectSite("https://app.expertoption.finance/").id).toBe("expertoption")
@@ -105,7 +105,7 @@ describe("Browser Studio — trading venue redirects (Slice 5 / R5)", () => {
   })
 })
 
-describe("Browser Studio â€” credential vault", () => {
+describe("Browser Studio — credential vault", () => {
   let dir
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "picc-browser-vault-"))
@@ -132,7 +132,7 @@ describe("Browser Studio â€” credential vault", () => {
   })
 })
 
-describe("Browser Studio â€” settings, permissions and per-source prefs", () => {
+describe("Browser Studio — settings, permissions and per-source prefs", () => {
   let dir
   let m
   beforeAll(async () => {
@@ -233,7 +233,7 @@ describe("Browser Studio â€” settings, permissions and per-source prefs", (
   })
 })
 
-describe("Browser Studio â€” API routes", () => {
+describe("Browser Studio — API routes", () => {
   let handleApi
 
   beforeAll(async () => {

@@ -1,4 +1,4 @@
-// WS-7 T2 diagnostic Ã¢â‚¬â€ WHERE does the room-transition time actually go?
+// WS-7 T2 diagnostic — WHERE does the room-transition time actually go?
 //
 // The recorded budget evidence reports a 2747ms p95 for a legacy suite route
 // transition at 6x CPU throttle against a 250ms budget. A single stopwatch
@@ -109,10 +109,22 @@ test.describe("WS-7 T2 diagnostic", () => {
       await page.click("a[href='/suites/trading/markets']").catch(() => {})
       // Wait on the PROBE, not just the DOM. The read below takes roomName from
       // the probe, and the observer that writes it has no ordering guarantee
-      // against a selector wait, so the two could disagree. The click handler
-      // nulls roomAt/roomName and sets fromRoom, so a stale stamp cannot
-      // satisfy this; a swallowed click now times out loudly instead of
-      // recording a sample the probe never took.
+      // against a selector wait, so the two could disagree.
+      //
+      // THE ONLY CONJUNCT THAT ACTUALLY BLOCKS IS `q.roomName === expected`.
+      // This comment used to credit a different mechanism: "The click handler
+      // nulls roomAt/roomName and sets fromRoom, so a stale stamp cannot satisfy
+      // this." It does null them - but that is not what holds this wait, and the
+      // other two conjuncts are NOT a safety net. Traced through the swallowed-
+      // click case, `q.roomAt` is still non-null and `q.roomName !== q.fromRoom`
+      // is already true, so both are satisfied by the previous iteration's state
+      // and discriminate nothing. They are cheap sanity checks on the probe, not
+      // the mechanism.
+      //
+      // So: do NOT "simplify" this predicate down to the two room fields, and do
+      // not drop the equality on the grounds that the others look sufficient.
+      // `q.roomName === expected` is the conjunct that makes a swallowed click
+      // time out loudly instead of recording a sample the probe never took.
       await page.waitForFunction(
         (expected) => {
           const q = window.__ws7probe

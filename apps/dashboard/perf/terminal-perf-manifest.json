@@ -93,7 +93,7 @@
     {
       "label": "throttled-proxy (x86, CPU-limited)",
       "architecture": "x86",
-      "targetDeviceClaim": "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
+      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
       "throttle": {
         "mechanism": "cdp:Emulation.setCPUThrottlingRate",
         "rate": 1
@@ -141,7 +141,7 @@
     {
       "label": "throttled-proxy (x86, CPU-limited)",
       "architecture": "x86",
-      "targetDeviceClaim": "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
+      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
       "throttle": {
         "mechanism": "cdp:Emulation.setCPUThrottlingRate",
         "rate": 4
@@ -189,7 +189,7 @@
     {
       "label": "throttled-proxy (x86, CPU-limited)",
       "architecture": "x86",
-      "targetDeviceClaim": "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
+      "targetDeviceClaim": "UNVERIFIED — throttling an x86 host does not validate ARM64",
       "throttle": {
         "mechanism": "cdp:Emulation.setCPUThrottlingRate",
         "rate": 6

@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
-// T10 (slice 6 reskin) â€” the source-preference round-trip hook. The server
+// T10 (slice 6 reskin) — the source-preference round-trip hook. The server
 // (handlers.mjs:2370) already persists per-user chart source prefs:
-//   GET /api/trading/source-preference â†’ { ok, userId, source }
-//   POST { source }                      â†’ { ok, userId, source } (normalized;
+//   GET /api/trading/source-preference → { ok, userId, source }
+//   POST { source }                      → { ok, userId, source } (normalized;
 //                                          unknown slugs resolve to "auto")
 // The hook must:
-//   â€¢ load the saved pref on mount without blocking the chart that rides it
-//   â€¢ persist on the user's action and adopt the server-NORMALIZED answer
-//   â€¢ keep the last-good pref + a non-blocking notice when a persist fails
-//   â€¢ never let a slow/late GET clobber a choice the user made meanwhile
+//   • load the saved pref on mount without blocking the chart that rides it
+//   • persist on the user's action and adopt the server-NORMALIZED answer
+//   • keep the last-good pref + a non-blocking notice when a persist fails
+//   • never let a slow/late GET clobber a choice the user made meanwhile
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { useEffect, useRef } from "react"
 import { flushSync } from "react-dom"
@@ -193,7 +193,7 @@ describe("useSourcePreference (T10 round-trip)", () => {
     expect(ok).toBe(true)
     await h.settle(() => h.latest.pref === "ccxt")
     expect(h.latest.pref).toBe("ccxt")
-    // The stale GET finally settles LONG after the user's choice â€” it must lose.
+    // The stale GET finally settles LONG after the user's choice — it must lose.
     resolveGet({ ok: true, userId: "default", source: "expertoption" })
     // BLOCKED (WS-7 sweep-2) - no honest predicate exists at this site. The
     // hook discards the late response via a silent early return, so rejecting

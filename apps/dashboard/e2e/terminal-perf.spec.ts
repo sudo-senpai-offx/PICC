@@ -8,7 +8,7 @@ import isolatedEnv, { assertIsolatedEnv, ISOLATION_TMP_ROOT } from "./helpers/is
 
 assertIsolatedEnv(isolatedEnv, ISOLATION_TMP_ROOT)
 
-// WS-6 T10 Ã¢â‚¬â€ target-device performance harness (AC-018).
+// WS-6 T10 — target-device performance harness (AC-018).
 //
 // WHAT THIS MEASURES, AND WHAT IT DOES NOT
 // ------------------------------------------
@@ -169,7 +169,7 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
       records.push({
         label: "throttled-proxy (x86, CPU-limited)",
         architecture: "x86",
-        targetDeviceClaim: "UNVERIFIED Ã¢â‚¬â€ throttling an x86 host does not validate ARM64",
+        targetDeviceClaim: "UNVERIFIED — throttling an x86 host does not validate ARM64",
         throttle: { mechanism: "cdp:Emulation.setCPUThrottlingRate", rate },
         hostCpu,
         route: "/suites/trading/markets",

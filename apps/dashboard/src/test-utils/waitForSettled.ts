@@ -48,7 +48,16 @@ export async function waitForSettled<T>(
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    // Drain React's scheduler before reading, so we observe committed state.
+    // `flushSync` drains React's SYNC callback queue, so anything already
+    // scheduled synchronously commits before the read below. It does NOT wait
+    // for a promise-sourced update: React schedules those through the scheduler
+    // on a MessageChannel, which is a separate task and which this file exists
+    // because 10ms of wall clock no longer covered. What actually makes a later
+    // read observe committed state is the `pollMs` sleep at the bottom of the
+    // loop - that yields the thread and lets the scheduler's task run. So the
+    // flush keeps each read as fresh as it can be BETWEEN polls; it is not what
+    // makes any individual read authoritative, and the first read of a freshly
+    // resolved promise is still allowed to be stale by design.
     flushSync(() => {})
     const value = read()
     if (done(value)) return value
