@@ -57,12 +57,12 @@ order (~$10) clears comfortably after any fees.
 
 **Decision (2026-09-06, updated evening):** the original Route-B decision (bank rails via MEXC
 P2P) is dead — **MEXC refused signup** hours later (region-restriction wall, same class as Bybit).
-Two further facts reshaped the map: (1) **Luno confirmed the user is a Malaysian resident** (SC-
-registered DAXes serve MY residents only; signup accepted; no VPN involved) — the region question
+Two further facts reshaped the map: (1) **Luno confirmed the user is a Malaysian resident** (signup
+accepted; no VPN involved) — the region question
 is resolved; (2) **Luno MY offers no USD stablecoin** (official table: USDC/USDT/PYUSD/EURC all
 restricted for MY). Current decision: fund via **Route D (Transak)** — verified end-to-end,
 card/Apple Pay/Google Pay → native USDC on Arbitrum — as the default; **Route C via Hata** if
-SC-licensed + FPX bank rails matter more (needs in-app confirmation of USDC listing + withdrawal
+FPX bank rails matter more (needs in-app confirmation of USDC listing + withdrawal
 network). Amount: ~US$12–15 target; if the on-ramp's minimum order is higher, a slightly larger
 one-time fund is acceptable — ≥$10 *after fees* is what matters, and the PICC envelope stays at
 $10 regardless.
@@ -105,13 +105,13 @@ No exchange account — a fiat on-ramp (payment provider with KYC/AML, embedded 
    **No Arbitrum ETH needed for the deposit leg.**
 
 Caveats: 2–4% above spot on card; minimum order shown on the widget (some methods start ~$20–30 —
-if so, accept the larger one-time fund rather than splitting). Transak is not an SC-registered
-DAX — it is a licensed payment provider; funds go straight to your wallet, no exchange custody.
+if so, accept the larger one-time fund rather than splitting). Transak is a fiat on-ramp, not an
+exchange; funds go straight to your wallet, no exchange custody.
 
-### Route C — SC-registered exchange, no P2P at all (licensing verified; stablecoin availability unverified)
+### Route C — MYR exchange on-ramp, no P2P at all (regulatory status unverified; stablecoin availability unverified)
 
-Six SC-registered Malaysian DAXes exist (Dec 2025: Luno, Hata, MX Global, SINEGY, Kinetic/KDX,
-Torum). These take direct MYR deposits via **FPX** — no P2P counterparty, local regulatory recourse:
+Six Malaysian exchanges take direct MYR deposits via **FPX** — no P2P counterparty (Luno, Hata, MX
+Global, SINEGY, Kinetic/KDX, Torum):
 
 - **Hata** (the primary SC option now) — dual SC + Labuan FSA licence, Bybit-backed; FPX deposit
   ~RM0.80 (instant); 0% maker / 0.10–0.40% taker; Instant Buy 1%. **Check in-app:** (a) is USDC

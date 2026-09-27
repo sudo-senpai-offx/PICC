@@ -81,7 +81,7 @@ const STEPS: StepDef[] = [
     examples: ["ETH staking (Lido ~2–3.5%)", "SOL staking (Jito ~5–6%)", "USDT / USDC savings", "Luno holdings"],
     defaultName: "Crypto staking",
     setupHint:
-      "Malaysia: on-ramp via SC-registered exchanges (Luno, MX Global); on-chain staking is unregulated locally — use at your own risk. Set est $/day ≈ (staked amount × APY) ÷ 365."
+      "Malaysia: on-ramp via exchanges (Luno, MX Global); on-chain staking carries smart-contract risk — use at your own risk. Set est $/day ≈ (staked amount × APY) ÷ 365."
   },
   {
     category: "agent",

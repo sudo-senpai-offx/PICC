@@ -39,12 +39,12 @@ export const STREAM_CATEGORY_LABELS: Record<string, string> = {
 }
 
 export const CRYPTO_APPS: CatalogEntry[] = [
-  { id: "luno", name: "Luno", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://www.luno.com/my", note: "SC-registered DAX. Buy & hold BTC/ETH; no local staking product — log gains as manual balance." },
-  { id: "mx-global", name: "MX Global", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://mxglobal.com.my", note: "SC-registered DAX (Binance is an investor). BTC/ETH/USDT pairs." },
-  { id: "hata", name: "HATA Digital", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://www.hata.io", note: "SC-registered DAX (2026 list)." },
-  { id: "sinegy", name: "SINEGY DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://sinegy.com", note: "SC-registered DAX based in Penang." },
-  { id: "kinetic", name: "Kinetic DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://kineticdax.com", note: "SC-registered DAX in KL." },
-  { id: "staking-defi", name: "Staking / DeFi yield", category: "crypto", residential: false, vps: false, payout: "Crypto", url: "https://www.stakingrewards.com", note: "On-chain staking (ETH ~2–3.5%, SOL ~5–6% mid-2026). NOT offered by SC-registered MY exchanges — unregulated locally, use at your own risk." }
+  { id: "luno", name: "Luno", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://www.luno.com/my", note: "Buy & hold BTC/ETH; no local staking product — log gains as manual balance." },
+  { id: "mx-global", name: "MX Global", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://mxglobal.com.my", note: "BTC/ETH/USDT spot pairs." },
+  { id: "hata", name: "HATA Digital", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://www.hata.io", note: "Crypto exchange. PICC asserts no regulatory status for this venue." },
+  { id: "sinegy", name: "SINEGY DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://sinegy.com", note: "Crypto exchange based in Penang. PICC asserts no regulatory status for this venue." },
+  { id: "kinetic", name: "Kinetic DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://kineticdax.com", note: "Crypto exchange based in Kuala Lumpur. PICC asserts no regulatory status for this venue." },
+  { id: "staking-defi", name: "Staking / DeFi yield", category: "crypto", residential: false, vps: false, payout: "Crypto", url: "https://www.stakingrewards.com", note: "On-chain staking (ETH ~2–3.5%, SOL ~5–6% mid-2026). Self-custody and smart-contract risk apply — use at your own risk." }
 ]
 
 export const DEFI_APPS: CatalogEntry[] = [
@@ -60,9 +60,9 @@ export const NFT_APPS: CatalogEntry[] = [
 ]
 
 export const P2P_APPS: CatalogEntry[] = [
-  { id: "funding-circle", name: "Funding Societies", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.fundingsocieties.com.my", note: "Malaysia SC-licensed P2P SME lending; ~7–13% target returns with default risk. Auto-reinvest available." },
-  { id: "selangor-kuasa", name: "Selangor Kuasa (SKS)", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.selangorkuasa.com", note: "SC-licensed P2P Islamic financing platform." },
-  { id: "pitik", name: "Pitik.ai", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://pitik.ai", note: "SC-licensed agritech P2P for poultry/livestock financing." },
+  { id: "funding-circle", name: "Funding Societies", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.fundingsocieties.com.my", note: "P2P SME lending; ~7–13% target returns with default risk. Auto-reinvest available." },
+  { id: "selangor-kuasa", name: "Selangor Kuasa (SKS)", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.selangorkuasa.com", note: "P2P Islamic financing platform. PICC asserts no regulatory status for this venue." },
+  { id: "pitik", name: "Pitik.ai", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://pitik.ai", note: "Agritech P2P for poultry/livestock financing. PICC asserts no regulatory status for this venue." },
   { id: "stashaway", name: "StashAway Simple", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.stashaway.sg", note: "Not P2P but fixed-income cash management (~3–4% p.a.) — a low-effort parking yield." },
   { id: "peerberry", name: "PeerBerry", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://peerberry.com", note: "EU P2P lending marketplace; €10M+ interest paid out historically. Default risk applies." },
   { id: "brdge", name: "BRDGE", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://brdge.co", note: "Singapore-based SME lending marketplace." },
