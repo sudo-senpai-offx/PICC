@@ -666,6 +666,86 @@ describe("WS-7 AUTH-FAILOPEN — every store-fault shape, not just a parse error
   })
 })
 
+// All four /api/trading/journal routes were UNGATED — the window was checked line
+// by line. Not a judgement call about public-vs-private: this was unauthenticated
+// READ of the full trade journal and P&L/win-rate history, unauthenticated WRITE of
+// a trade record, unauthenticated MUTATION of one, and an unauthenticated
+// destructive DELETE by id. The delete is the serious one: anyone who can reach
+// the port can erase the trading record.
+describe("WS-7 AUTH-FAILOPEN — /api/trading/journal discloses nothing without a session", { timeout: TIMEOUT }, () => {
+  const JOURNAL = "/api/trading/journal"
+  const CLOSE = "/api/trading/journal/close"
+  const DEL = "/api/trading/journal/delete"
+  const token = "a".repeat(64)
+  const realSession = () => {
+    writeSessions({ sessions: { [token]: { userId: "u1", createdAt: 1, expiresAt: Date.now() + 3_600_000 } } })
+    writeUsers({ users: [USER_ROW] })
+  }
+
+  it("REFUSES the journal READ", async () => {
+    realSession()
+    const res = await call("GET", JOURNAL)
+    assertRefusedNoSession(res, { sentinels: ["entries", "stats", "winRate", "pnl"] })
+  })
+
+  it("REFUSES the journal WRITE", async () => {
+    realSession()
+    const res = await call("POST", JOURNAL, { body: { symbol: "EURUSD", side: "long" } })
+    assertRefusedNoSession(res, { sentinels: ["entry", "entries"] })
+  })
+
+  it("REFUSES the journal CLOSE mutation", async () => {
+    realSession()
+    const res = await call("POST", CLOSE, { body: { id: "e1", exitPrice: 1.2345 } })
+    assertRefusedNoSession(res, { sentinels: ["entry", "ok"] })
+  })
+
+  it("REFUSES the journal DELETE, and does not leak whether the id exists", async () => {
+    realSession()
+    const withId = await call("POST", DEL, { body: { id: "does-not-exist" } })
+    // The gate runs BEFORE the body is inspected, so a missing id cannot be
+    // distinguished from a present one by the status alone.
+    assertRefusedNoSession(withId, { sentinels: ["ok"] })
+  })
+
+  it("REFUSES all four on a store fault with 503", async () => {
+    faultStore()
+    for (const [method, route, body] of [
+      ["GET", JOURNAL, undefined],
+      ["POST", JOURNAL, { symbol: "EURUSD" }],
+      ["POST", CLOSE, { id: "e1", exitPrice: 1.2 }],
+      ["POST", DEL, { id: "e1" }]
+    ]) {
+      const res = await call(method, route, { body })
+      expect(res.status, `${method} ${route} must be refused on a store fault`).toBe(503)
+      expect(res.body?.error).toBe("auth store unavailable")
+    }
+  })
+
+  it("still serves all four to a real session", async () => {
+    realSession()
+    const auth = { headers: { authorization: `Bearer ${token}` } }
+    // Write an entry first so the read and the mutations have something to act on.
+    const created = await call("POST", JOURNAL, {
+      ...auth,
+      body: { symbol: "EURUSD", side: "long", entryPrice: 1.1 }
+    })
+    expect(created.status).toBe(200)
+    const id = created.body?.entry?.id
+    expect(id, "a real session must be able to write a journal entry").toBeTruthy()
+
+    const read = await call("GET", JOURNAL, auth)
+    expect(read.status).toBe(200)
+    expect(Array.isArray(read.body?.entries)).toBe(true)
+
+    const closed = await call("POST", CLOSE, { ...auth, body: { id, exitPrice: 1.5 } })
+    expect(closed.status).toBe(200)
+
+    const deleted = await call("POST", DEL, { ...auth, body: { id } })
+    expect(deleted.status).toBe(200)
+  })
+})
+
 // /api/trading/brokers had NO gate at all. It is not a bootstrap-bypass case —
 // it needs no store fault and it never consults the user store — it simply had no
 // auth check, so an anonymous GET answered 200 with the broker registry: which

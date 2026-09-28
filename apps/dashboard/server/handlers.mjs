@@ -4,7 +4,28 @@
 // local JSON billing/subscription sync (Supabase removed — D8). Every
 // provider degrades with an honest fallback.
 import { env, providers } from "./config.mjs"
-import { errorLogEnabled, recordClientReport } from "./errorLog.mjs"
+import { errorLogEnabled, recordClientReport, writeErrorEntry } from "./errorLog.mjs"
+
+/**
+ * WS-6 T10 INSTRUMENTATION (round 4) — one line per /api/auth/me answer.
+ *
+ * The terminal-performance flake is UNROOTED and this is the tool that would root
+ * it, not a hypothesis about it. `src` is "auth-me" so these lines are greppable
+ * away from every other entry in the same file, and `run` is the e2e run id so a
+ * failing run's lines can be isolated from a noisy shared log.
+ *
+ * Gated on the same PICC_ERROR_LOG master switch as the rest of the error log, so
+ * it is off by default and costs one boolean check per call. Wrapped in its own
+ * try/catch because a logging call must not be able to fail the request it observes.
+ */
+function traceAuthMe(branch, extra = {}) {
+  if (!errorLogEnabled()) return
+  try {
+    writeErrorEntry({ src: "auth-me", branch, run: process.env.PICC_E2E_RUN_ID ?? null, ...extra })
+  } catch {
+    /* instrumentation must never break the request */
+  }
+}
 import { assetsEquivalent } from "./services/assetCatalog.mjs"
 import { getHistory, statsFromHistory, downsample, clampDrift, clampVol, getQuote } from "./services/yahoo.mjs"
 import { researchTopic, serperVerdict } from "./services/serper.mjs"
@@ -31,6 +52,7 @@ import {
   loginAccount,
   verifyUser,
   revokeToken,
+  storeWriteFailures,
   hasUsers,
   resolveAuthUser,
   resolveHasUsers,
@@ -3446,7 +3468,22 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   // ── Trade Journal ───────────────────────────────────────────────────
+  // All four of these were UNGATED, and the window was checked line by line.
+  // This is not a judgement call about whether a route is *meant* to be public:
+  // it was unauthenticated READ of the user's full trade journal and P&L/win-rate
+  // history, unauthenticated WRITE of a trade record, unauthenticated MUTATION of
+  // one, and an unauthenticated destructive DELETE by id. The delete is the
+  // serious one: anyone who can reach the port can erase the trading record.
+  //
+  // requireAuth, the dominant idiom for user-owned data in this file (97 sites,
+  // and what /api/profile uses), rather than requireSessionOrFirstRun: a trade
+  // journal is personal data, and there is no first-run state in which an
+  // anonymous caller has a legitimate journal to read or write.
+  //
+  // The gate goes FIRST in every route, before the body is inspected, so a
+  // refusal cannot leak whether an id exists by returning 400 for a missing one.
   if (path === "/api/trading/journal" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
     const { listEntries, journalStats } = await import("./services/tradeJournal.mjs")
     const symbol = parsed.searchParams.get("symbol") || undefined
     const tag = parsed.searchParams.get("tag") || undefined
@@ -3457,6 +3494,7 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
   if (path === "/api/trading/journal" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const { addEntry } = await import("./services/tradeJournal.mjs")
     try {
       const entry = addEntry(body ?? {})
@@ -3467,6 +3505,7 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
   if (path === "/api/trading/journal/close" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const { closeEntry } = await import("./services/tradeJournal.mjs")
     const { id, exitPrice, exitTime, notes } = body ?? {}
     if (!id || exitPrice == null) return writeJson(res, 400, { error: "id and exitPrice required" })
@@ -3475,6 +3514,7 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
   if (path === "/api/trading/journal/delete" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const { deleteEntry } = await import("./services/tradeJournal.mjs")
     const id = String(body?.id ?? "")
     if (!id) return writeJson(res, 400, { error: "id required" })
@@ -4299,6 +4339,14 @@ const creds = await getVenueCredentials()
   // -------------------------------------------------------------------
   // Local auth — fully self-hosted accounts (users + sessions in server/data)
   // -------------------------------------------------------------------
+  // WS-6 T10 INSTRUMENTATION (round 4): the status body carries a count of
+  // persisted-store write failures, so a run in which the disk refused to persist
+  // is distinguishable from a healthy one after the fact. It is a diagnostic
+  // counter, not a health claim, and this route discloses no account data. It lives
+  // HERE rather than inside the block below because the block's comment is the
+  // allowlist marker for its hasUsers() call, and the guard requires that marker to
+  // be CONTIGUOUS with the call site - a comment wedged between them breaks the
+  // allowlist, which is the guard working as designed.
   if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {
     // NOT A GATE. hasUsers() here is the first-run SIGNUP HINT: it tells the
     // login page whether to offer "create the first account" instead of "sign
@@ -4309,16 +4357,22 @@ const creds = await getVenueCredentials()
     // page offering the signup form one time too often, which is recoverable,
     // whereas a wrong guess in the other direction would hide the signup form
     // from a genuinely fresh install. Pinned by ws7AuthBootstrapGateGuard.
-    writeJson(res, 200, { ok: true, hasUsers: await hasUsers(), authMode: "local" })
-    return
-  }
+      writeJson(res, 200, { ok: true, hasUsers: await hasUsers(), authMode: "local", storeWriteFailures: storeWriteFailures() })
+      return
+    }
 
   if (path === "/api/auth/signup" && req.method === "POST") {
     if (rateLimited(`auth:${clientIp(req)}`, 10, 60_000)) {
       return writeJson(res, 429, { error: "too many attempts — try again in a minute" })
     }
     const result = await createAccount(body)
-    if (result.error) return writeJson(res, 400, { error: result.error })
+    // The status is chosen from the result's `code`, never from string-matching its
+    // message. A store fault is not a malformed request: 400 claims the caller sent
+    // something wrong, and the client is entitled to believe it. This is the same
+    // "a status is a claim" rule /api/auth/me already follows at 503.
+    if (result.error) {
+      return writeJson(res, result.code === "auth_store_unavailable" ? 503 : 400, { error: result.error })
+    }
     writeJson(res, 200, { ok: true, token: result.token, user: result.user })
     return
   }
@@ -4328,14 +4382,30 @@ const creds = await getVenueCredentials()
       return writeJson(res, 429, { error: "too many attempts — try again in a minute" })
     }
     const result = await loginAccount(body)
-    if (result.error) return writeJson(res, 401, { error: result.error })
+    // 401 is a claim about the TOKEN, so it is sent only when the credentials
+    // really were rejected. A store fault never examined them.
+    if (result.error) {
+      return writeJson(res, result.code === "auth_store_unavailable" ? 503 : 401, { error: result.error })
+    }
     writeJson(res, 200, { ok: true, token: result.token, user: result.user })
     return
   }
 
   if (path === "/api/auth/signout" && req.method === "POST") {
-    await revokeToken(auth?.slice(7))
-    writeJson(res, 200, { ok: true })
+    // revokeToken throws AuthStoreUnavailable when the store could not be read or
+    // the write was refused, precisely so this caller cannot report a revocation
+    // that did not happen. Answering {ok:true} there would leave the token live
+    // for the rest of its TTL while the client clears its local session and
+    // believes it is signed out.
+    try {
+      const revoked = await revokeToken(auth?.slice(7))
+      writeJson(res, 200, { ok: true, revoked })
+    } catch (err) {
+      if (isAuthStoreUnavailable(err)) {
+        return writeJson(res, 503, { error: "auth store unavailable", revoked: false })
+      }
+      throw err
+    }
     return
   }
 
@@ -4344,14 +4414,41 @@ const creds = await getVenueCredentials()
     // session. So it must only ever be sent when the token really was rejected.
     // A store read/parse fault is an inconclusive answer and becomes 503, which
     // the client keeps its session through. See resolveAuthUser().
+    //
+    // ── WS-6 T10 INSTRUMENTATION (round 4) ─────────────────────────────────
+    // The terminal-performance flake is UNROOTED: rounds 1, 2 and 3 each proposed a
+    // mechanism, round 2's was disproven, and rounds 1 and 3 are mis-specified on
+    // the observable. Rather than propose a fourth, this records which branch
+    // answered and what it answered, so ONE failing run names the mechanism:
+    //
+    //   branch "confirmed"      200, session is real        -> look at the client
+    //   branch "rejected"       401, token really was refused -> look at lookup
+    //   branch "store-fault"    503, nothing was examined    -> look at the store
+    //
+    // A 401 line here is what produces the recorded 30s
+    // `[data-room='markets']` timeout. Six 503 lines spaced 1/2/4/8/8s would be the
+    // inconclusive chain instead — but the app RENDERS on that path, so the
+    // selector would be satisfied in about a second and it is not this failure.
+    // One of those two lines settles it.
+    //
+    // Gated by PICC_ERROR_LOG and never thrown from, so it costs one boolean check
+    // per /me call and cannot affect the request it is observing.
     let user
     try {
       user = await resolveAuthUser(auth)
     } catch (err) {
-      if (isAuthStoreUnavailable(err)) return writeJson(res, 503, { error: "auth store unavailable" })
+      if (isAuthStoreUnavailable(err)) {
+        traceAuthMe("store-fault", { reason: err?.message ?? "unknown" })
+        return writeJson(res, 503, { error: "auth store unavailable" })
+      }
+      traceAuthMe("unhandled", { reason: err?.message ?? "unknown" })
       throw err
     }
-    if (!user) return writeJson(res, 401, { error: "not authenticated" })
+    if (!user) {
+      traceAuthMe("rejected", { hadToken: Boolean(auth) })
+      return writeJson(res, 401, { error: "not authenticated" })
+    }
+    traceAuthMe("confirmed", { userId: user.id })
     writeJson(res, 200, { ok: true, user })
     return
   }

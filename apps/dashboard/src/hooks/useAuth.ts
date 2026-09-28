@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { fetchMe, getStoredSession, setStoredSession, shouldClearStoredSession } from "@/lib/auth"
 import type { LocalSession, LocalUser } from "@/lib/auth"
 
@@ -35,12 +35,59 @@ export const MAX_INCONCLUSIVE_CHECKS = 5
  */
 export const INCONCLUSIVE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000]
 
+/**
+ * WS-6 T10 INSTRUMENTATION (round 4) — one line per sign-out decision.
+ *
+ * The terminal-performance flake is UNROOTED. These two lines are the only thing
+ * that separates the two candidate mechanisms, and they separate it by ONE number:
+ *
+ *   reason "rejected"                with elapsedMs ~0.4s  -> a 401 destroyed a
+ *                                      session that the client still held
+ *   reason "inconclusive-exhausted"   with elapsedMs ~23000 -> six inconclusive
+ *                                      answers in a row
+ *
+ * Only the first is consistent with the recorded symptom. On the inconclusive
+ * path the effect calls setSession(stored) and setLoading(false), so the app
+ * RENDERS with the retained session and `[data-room='markets']` is satisfied in
+ * about a second — a 30s selector timeout does not match it. That is why rounds 1
+ * and 3 were mis-specified, and why no fourth mechanism is proposed here.
+ *
+ * Elapsed time is measured from the FIRST attempt of the chain, across all the
+ * effect re-runs, because that is the quantity the backoff describes.
+ *
+ * Cheap and silent when nothing is wrong: one console.debug, which the browser
+ * only surfaces with devtools open. Never throws.
+ */
+const AUTH_TRACE_ENABLED = () => {
+  try {
+    return typeof localStorage !== "undefined"
+  } catch {
+    return false
+  }
+}
+
+function traceSignOut(reason: "rejected" | "inconclusive-exhausted", inconclusive: number, startedAt: number) {
+  if (!AUTH_TRACE_ENABLED()) return
+  try {
+    console.debug("[auth] sign-out", {
+      reason,
+      inconclusivePass: inconclusive,
+      elapsedMs: Math.round(performance.now() - startedAt)
+    })
+  } catch {
+    /* instrumentation must never break sign-in */
+  }
+}
+
 export function useAuth() {
   const [session, setSession] = useState<LocalSession | null>(null)
   const [loading, setLoading] = useState(true)
   // Consecutive inconclusive answers. This is the retry driver: the effect is
   // keyed on it, so each increment schedules exactly one bounded re-check.
   const [inconclusive, setInconclusive] = useState(0)
+  // The start of the current chain of attempts, so traceSignOut can report how
+  // long the whole chain took rather than how long the last leg did.
+  const startedAt = useRef(typeof performance !== "undefined" ? performance.now() : 0)
 
   useEffect(() => {
     let alive = true
@@ -65,6 +112,7 @@ export function useAuth() {
       if (shouldClearStoredSession(result)) {
         // The server refused the token outright. That is the ONLY branch that
         // destroys a session.
+        traceSignOut("rejected", inconclusive, startedAt.current)
         setStoredSession(null)
         setSession(null)
         setInconclusive(0)
@@ -87,6 +135,7 @@ export function useAuth() {
       // until the tolerance above is spent.
       const next = inconclusive + 1
       if (next > MAX_INCONCLUSIVE_CHECKS) {
+        traceSignOut("inconclusive-exhausted", inconclusive, startedAt.current)
         setStoredSession(null)
         setSession(null)
         setLoading(false)

@@ -427,6 +427,21 @@ function siteFeedsRefusal(codeLines, index) {
  *    "answers the request", so a route that leaked data inside a 4xx body before
  *    its gate would pass.
  *
+ *    A THIRD limit, and the one most likely to bite a future edit:
+ *    findConnectorsRouteSites recognises exactly three dispatch spellings — a
+ *    `path === "…"` comparison, `path.startsWith("…")`, and `path.match(/…/)`.
+ *    A route dispatched by a `switch`, a lookup table, a route map, or any
+ *    equivalent is INVISIBLE to it, and silently so: no site is discovered, so no
+ *    assertion is made about it at all. Both `switch` and lookup-table shapes were
+ *    confirmed to be discovered as zero sites. There is no live instance of either
+ *    in the connectors family today, so this is a bound to name rather than a
+ *    hole — but a route added that way would arrive UNGATED and UNCHECKED, and the
+ *    seed-list count pin would not notice, because that reports a route as stale
+ *    only when it disappears entirely. Closing it means enumerating the dispatch
+ *    structure properly, which is the follow-up in the task report. It is not
+ *    attempted here for the same reason the region walk is not: a partial
+ *    approximation would report coverage that does not exist.
+ *
  * 4. A blanket requireSessionOrFirstRun() over every /api route in handleApi is
  *    NOT attempted, because many routes are legitimately public -
  *    /api/auth/signup, /api/auth/login, /api/auth/status, health, static-ish
@@ -1107,10 +1122,30 @@ function connectorsSiteIsGated(lines, index) {
   const GATED_SEED_ROUTES = [
     {
       path: "/api/trading/brokers",
+      gate: "requireSessionOrFirstRun",
       why:
         "the broker adapter registry: per adapter it names whether the exchange is configured, " +
         "whether it is connected, the rail mode (sessionLive / demoOnly) and every capability it " +
         "exposes, plus the active executor. It had no gate of any kind."
+    },
+    {
+      path: "/api/trading/journal",
+      gate: "requireAuth",
+      why:
+        "the user's full trade journal plus P&L and win-rate statistics. Ungated: an anonymous " +
+        "GET read it."
+    },
+    {
+      path: "/api/trading/journal/close",
+      gate: "requireAuth",
+      why: "mutation of a trade-journal entry by id. Ungated."
+    },
+    {
+      path: "/api/trading/journal/delete",
+      gate: "requireAuth",
+      why:
+        "DESTRUCTIVE delete of a trade-journal entry by id, unauthenticated. The most serious of " +
+        "the four: anyone who can reach the port could erase the trading record."
     }
   ]
 
@@ -1127,8 +1162,17 @@ function connectorsSiteIsGated(lines, index) {
         continue
       }
       for (const s of sites) {
-        const verdict = connectorsSiteIsGated(srcLines, s.index)
-        if (!verdict.ok) report.push(`handlers.mjs:${s.line}  ${s.text}  — ${verdict.why}`)
+        const region = routeHandlerRegion(srcLines, s.index)
+        // EITHER established gate counts. The question this list asks is "is this
+        // route gated", not "is it gated by the one function": requireAuth is the
+        // dominant idiom for user-owned data (97 sites) and the journal routes use
+        // it deliberately, while requireSessionOrFirstRun is the bootstrap-aware
+        // gate. Demanding one specific function would have forced a worse gate on
+        // the journal routes to satisfy a check.
+        const gated = region.some((l) => l.includes(`${GATE_CALL}(`) || l.includes("requireAuth("))
+        if (!gated) {
+          report.push(`handlers.mjs:${s.line}  ${s.text}  — no gate in this route's own block`)
+        }
       }
     }
     expect(
@@ -1152,7 +1196,7 @@ function connectorsSiteIsGated(lines, index) {
 
     expect(statics, "static import statements in handlers.mjs").toBe(73)
     expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(84)
-    expect(lines, "lines in handlers.mjs").toBe(5841)
+    expect(lines, "lines in handlers.mjs").toBe(5938)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

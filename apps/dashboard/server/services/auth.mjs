@@ -125,6 +125,7 @@ async function writeJSON(file, value) {
           /* ignore cleanup failure */
         }
         console.warn(`[picc-auth] write failed ${file}:`, retryErr.message)
+        recordStoreWriteFailure(file, retryErr)
         return false
       }
     }
@@ -134,8 +135,36 @@ async function writeJSON(file, value) {
       /* ignore cleanup failure */
     }
     console.warn(`[picc-auth] write failed ${file}:`, err.message)
+    recordStoreWriteFailure(file, err)
     return false
   }
+}
+
+/**
+ * Count of PERSISTED-STORE WRITE FAILURES, per file.
+ *
+ * WS-6 T10 INSTRUMENTATION (round 4). writeJSON swallows a write failure after
+ * logging it, so a run in which the disk refused to persist looks identical to a
+ * healthy run from the outside. Rounds 1-3 each guessed at a cause for the
+ * terminal-performance flake; this counter makes one of the guesses falsifiable in
+ * a single failing run instead: if `sessions.json` is 0 across a failing run, the
+ * write-fault mechanism is eliminated outright; if it is non-zero, confirmed.
+ *
+ * It is an export because /api/auth/status surfaces it, which is what makes it
+ * readable after the fact without a debugger. Memory-only and monotonic, so it is
+ * reset by a restart — that is fine, since the question is asked about one run.
+ */
+const STORE_WRITE_FAILURES = Object.create(null)
+
+function recordStoreWriteFailure(file, err) {
+  const key = file
+  STORE_WRITE_FAILURES[key] = (STORE_WRITE_FAILURES[key] ?? 0) + 1
+  console.warn(`[picc-auth] write-failure counter: ${key} = ${STORE_WRITE_FAILURES[key]} (${err?.code ?? err?.message})`)
+}
+
+/** A snapshot of the counter, for diagnostics. */
+export function storeWriteFailures() {
+  return { ...STORE_WRITE_FAILURES }
 }
 
 function hashPassword(password, salt) {
@@ -161,8 +190,15 @@ async function listUsers() {
   return Array.isArray(data.users) ? data.users : []
 }
 
+/**
+ * Persist the user list, reporting whether it was actually written.
+ *
+ * Returns writeJSON's boolean instead of discarding it. Discarding it is what let
+ * createAccount answer "account created" for a store that was never written — the
+ * write-side twin of the read-side rule readUsersStrict exists to enforce.
+ */
 async function saveUsers(users) {
-  await writeJSON(USERS_FILE, { users })
+  return writeJSON(USERS_FILE, { users })
 }
 
 /** True once at least one local account exists (first-run hint for the UI). */
@@ -247,13 +283,47 @@ export async function firstRunBootstrapAllowed() {
   return !(await resolveHasUsers())
 }
 
+/**
+ * A refusal that is a claim about the SERVER, not about the caller.
+ *
+ * The `code` is the machine-readable half, and it is what lets the HTTP layer map
+ * the refusal to a status WITHOUT string-matching the message. That matters
+ * because a store fault is neither "your credentials were wrong" nor "your request
+ * was malformed": answering 400 or 401 for it is a false claim about the caller,
+ * and a status in this codebase is a claim the client acts on. `/api/auth/me`
+ * already answers 503 for exactly this condition, so 400 here and 401 there were
+ * inconsistent with the rule established two functions away.
+ */
+function storeFault(store) {
+  return {
+    error:
+      `The ${store} store could not be read or written, so nothing was changed. ` +
+      "Check the server log for the underlying store fault.",
+    code: "auth_store_unavailable"
+  }
+}
+
 export async function createAccount({ email, password, name }) {
   const em = String(email ?? "").trim().toLowerCase()
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return { error: "A valid email address is required." }
   if (typeof password !== "string" || password.length < 8) {
     return { error: "Password must be at least 8 characters." }
   }
-  const users = await listUsers()
+
+  // STRICT, and the refusal happens BEFORE anything is written. The lenient read
+  // is what made this the worst defect in this task: a corrupt users.json is
+  // precisely what makes every authenticated route answer 503, so the owner cannot
+  // reach the UI to diagnose it — and the one endpoint still reachable is this
+  // one, which normalised the file and destroyed every account in it, scrypt
+  // password hashes included. A lost session is re-obtainable by logging in; a
+  // lost password hash is not.
+  let users
+  try {
+    users = await readUsersStrict()
+  } catch (err) {
+    if (isAuthStoreUnavailable(err)) return storeFault("user")
+    throw err
+  }
   if (users.some((u) => u.email === em)) return { error: "An account with this email already exists." }
 
   const id = randomBytes(12).toString("hex")
@@ -266,35 +336,39 @@ export async function createAccount({ email, password, name }) {
     passwordHash: hashPassword(password, salt),
     createdAt: new Date().toISOString()
   })
-  await withLock(USERS_FILE, () => saveUsers(users))
+  // The write result is CHECKED. A refused write leaves the store exactly as it
+  // was, so the honest answer is a store fault — not a token for an account that
+  // does not exist on disk.
+  const written = await withLock(USERS_FILE, () => saveUsers(users))
+  if (!written) return storeFault("user")
 
   const token = await createSession(id)
-  if (!token) {
-    return {
-      error:
-        "The session store could not be read, so no session was issued and nothing was written. " +
-        "Check the server log for the underlying store fault."
-    }
-  }
+  // The account now exists and is usable; only the session could not be issued.
+  // That is still a store fault, and it is not the same thing as a rejected signup.
+  if (!token) return storeFault("session")
   return { user: publicUser(users[users.length - 1]), token }
 }
 
 export async function loginAccount({ email, password }) {
   const em = String(email ?? "").trim().toLowerCase()
-  const users = await listUsers()
+  // Strict, for the truthfulness half of the same reason. Login writes nothing, so
+  // there is no destruction risk — but the lenient read answered "no account found"
+  // on a corrupt store, which is a false 401 about the caller's credentials. Someone
+  // who cannot log in deserves to be told the store is at fault.
+  let users
+  try {
+    users = await readUsersStrict()
+  } catch (err) {
+    if (isAuthStoreUnavailable(err)) return storeFault("user")
+    throw err
+  }
   const user = users.find((u) => u.email === em)
   if (!user) return { error: "No account found for this email. Create one first." }
   if (typeof password !== "string" || !verifyPassword(password, user.salt, user.passwordHash)) {
     return { error: "Incorrect password." }
   }
   const token = await createSession(user.id)
-  if (!token) {
-    return {
-      error:
-        "The session store could not be read, so no session was issued and nothing was written. " +
-        "Check the server log for the underlying store fault."
-    }
-  }
+  if (!token) return storeFault("session")
   return { user: publicUser(user), token }
 }
 
@@ -329,7 +403,17 @@ async function createSession(userId) {
       throw err
     }
     sessions[token] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS }
-    await writeJSON(SESSIONS_FILE, { sessions })
+    // The write result is CHECKED. writeJSON reports failure with a boolean and
+    // logs it; discarding that boolean is what let login answer 200 {ok:true} with
+    // a token that had never been persisted and could never authenticate. A
+    // refused write leaves the store exactly as it was, so there is no session to
+    // offer — and offering one anyway is the "swallow the fault" branch this
+    // function's own docstring says must not be taken.
+    const written = await writeJSON(SESSIONS_FILE, { sessions })
+    if (!written) {
+      console.warn("[picc-auth] createSession refused: sessions store could not be written; no session issued")
+      return null
+    }
     return token
   })
 }
@@ -456,7 +540,7 @@ export async function verifyToken(token) {
 }
 
 /**
- * Drop one session, REFUSING to write over a store that cannot be read.
+ * Drop one session, REFUSING to write over a store that cannot be read OR written.
  *
  * The same writer rule as createSession(), for the same reason: `readJSON` +
  * `data.sessions ?? {}` used to read a wrong-shaped store as `{}`, find no
@@ -464,11 +548,19 @@ export async function verifyToken(token) {
  * treat a store full of live sessions as empty. This version classifies the store
  * with the readers' rule and writes nothing at all when it cannot be read.
  *
- * Returns true when the token was revoked, false when there was nothing to do
- * (unknown or already-expired token) OR the store could not be read. The two are
- * deliberately not distinguished for the caller: a caller that wants to know why
- * its logout "succeeded" should read the log, and a store fault must never be
- * reported as a successful revocation.
+ * THREE outcomes, deliberately not collapsed into two:
+ *
+ *   - `true`   the token existed and the removal was PERSISTED.
+ *   - `false`  there was genuinely nothing to do: an unknown or already-expired
+ *              token. A clean no-op, and the caller may report success.
+ *   - THROWS AuthStoreUnavailable when the store could not be read or the write
+ *     was refused. A throw rather than a `false` because `false` would be
+ *     indistinguishable from the clean no-op, and the whole point is that a
+ *     revocation that did not happen must not be reported as one.
+ *
+ * An earlier version returned `false` for a store fault and documented that the
+ * caller could not tell the cases apart — which is a way of saying the return
+ * value carries no information. It does now.
  */
 export async function revokeToken(token) {
   if (!token) return false
@@ -479,13 +571,19 @@ export async function revokeToken(token) {
     } catch (err) {
       if (isAuthStoreUnavailable(err)) {
         console.warn("[picc-auth] revokeToken refused: sessions store could not be read; nothing written")
-        return false
       }
       throw err
     }
     if (!sessions[token]) return false
     delete sessions[token]
-    await writeJSON(SESSIONS_FILE, { sessions })
+    const written = await writeJSON(SESSIONS_FILE, { sessions })
+    if (!written) {
+      // Returning true here would tell the caller the token is gone while it is
+      // still live for the rest of its TTL — a logout the client believes and the
+      // server has not performed.
+      console.warn("[picc-auth] revokeToken refused: sessions store could not be written; token NOT revoked")
+      throw new AuthStoreUnavailable(`auth store write failed (${SESSIONS_FILE}): the session was not revoked`)
+    }
     return true
   })
 }
