@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 import { mkdirSync, readdirSync, realpathSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   assertContainedPath as assertContainedPathIn,
@@ -26,7 +26,20 @@ export const REQUIRED_ISOLATION_VARIABLES = Object.freeze([
   ...ISOLATION_PATH_VARIABLES,
   "PICC_VAULT_KEY",
   "PICC_ERROR_LOG",
-  "PICC_ENV_LOADED"
+  "PICC_ENV_LOADED",
+  // WS-7 slice B. The /api/auth/me branch trace (server/errorLog.mjs
+  // `writeAuthMeTrace`) is armed by this variable and by nothing else, so a run
+  // that never sets it is silent and a run that does is fully attributed. Before
+  // it was a required variable it was absent from every e2e run, which is what
+  // made round 4's trace unable to fire AND left `run: null` on the lines it did
+  // manage to write somewhere.
+  //
+  // NOTE THE SHAPE. It is deliberately NOT path-shaped: it is an opaque run
+  // label, not a location, and `testSupport/storeIsolation.mjs` would (correctly)
+  // treat an unlisted `_DIR`/`_FILE`/`_PATH` name as a misspelled store. It is
+  // still required, so a harness that forgot it is a hard throw rather than a
+  // silently untraceable run.
+  "PICC_E2E_RUN_ID"
 ])
 
 function mintTmpRoot() {
@@ -97,6 +110,17 @@ export function assertIsolatedEnv(env, tmpRoot) {
   if (typeof env.PICC_VAULT_KEY !== "string" || !/^[0-9a-f]{64}$/.test(env.PICC_VAULT_KEY)) {
     throw new Error("PICC_VAULT_KEY must be a fresh 32-byte lowercase hex value")
   }
+  // The run label has to be a safe, bounded, path-free token. It is used as a
+  // directory-name component by e2e/sharedAuth.ts's shared-session cache and as
+  // the `run` field on every /me trace line, so a value containing a separator
+  // would be a filename-traversal surface and an unbounded one would be a log
+  // bloat surface.
+  if (
+    typeof env.PICC_E2E_RUN_ID !== "string" ||
+    !/^[A-Za-z0-9._-]{1,64}$/.test(env.PICC_E2E_RUN_ID)
+  ) {
+    throw new Error("PICC_E2E_RUN_ID must be 1-64 characters of [A-Za-z0-9._-]")
+  }
 
   const canonicalRoot = realpathSync.native(resolve(tmpRoot))
   for (const name of ISOLATION_PATH_VARIABLES) {
@@ -128,6 +152,13 @@ function buildIsolatedEnv(tmpRoot) {
 
   env.PICC_VAULT_KEY = randomBytes(32).toString("hex")
   env.PICC_ERROR_LOG = "0"
+  // The run label. Taken from the isolation root this process just minted, which
+  // is already unique per harness load, already inside the repo's own
+  // gitignored `.playwright-tmp/`, and already `realpath`'d. That makes it stable
+  // across every spec in one `playwright test` invocation — so the whole run's
+  // /me lines share a `run` value — and different for the next invocation, so a
+  // later run can never inherit an earlier run's label.
+  env.PICC_E2E_RUN_ID = basename(ISOLATION_TMP_ROOT)
   // Block the repository `.env` from being loaded into the test server. `server/config.mjs:11-21`
   // calls `process.loadEnvFile()` unless PICC_ENV_LOADED is already set, and `apps/dashboard/.env`
   // holds real provider + CCXT credentials. Playwright MERGES the parent environment with

@@ -59,6 +59,66 @@ export function writeErrorEntry(entry) {
   }
 }
 
+// ── WS-7 slice B: the /api/auth/me branch trace ────────────────────────────
+// WHY THIS IS NOT writeErrorEntry(). Round 4 gated the /me trace on
+// errorLogEnabled(), i.e. on PICC_ERROR_LOG === "1". The e2e harness sets
+// PICC_ERROR_LOG = "0" and `e2e/command-centre-order-flow.spec.ts:34` pins
+// "1" as a must-reject escape, so no compliant e2e run could ever produce an
+// auth-me line. The instrumentation was green, reviewed, committed — and
+// unreachable in the only environment that would ever need it.
+//
+// So the /me trace is ARMED BY A DIFFERENT SIGNAL, not by relaxing that pin:
+//
+//   - It is armed by PICC_E2E_RUN_ID, which `e2e/helpers/isolatedEnv.mjs` builds
+//     into every e2e run (and which `e2e/sharedAuth.ts:41` already uses as a run
+//     scope). It is set nowhere else — not in dev, not in production — so this
+//     is an ALWAYS-ON-in-e2e / DEFAULT-OFF-elsewhere switch, not a diagnostic
+//     mode that had to be approved or gated.
+//
+//   - It writes to logFilePath() — the SAME PICC_ERROR_LOG_FILE every harness
+//     already redirects, because that variable is on the isolation contract and
+//     is therefore already guaranteed to be inside the run's own scratch. No new
+//     path, no new variable, and no way for this to invent a write location.
+//
+// COST. One property read and a string-length check when unarmed (every /me on a
+// dev box and in production); one ~200-byte synchronous append when armed. /me is
+// a few calls per page load, not a hot loop, and a browser-side CPU throttle
+// does not stretch a synchronous server-side write, so this cannot inflate the
+// terminal-performance numbers the spec measures.
+const authMeRunId = () => {
+  const run = process.env.PICC_E2E_RUN_ID
+  return typeof run === "string" && run.length > 0 ? run : null
+}
+
+/**
+ * Write ONE `src: "auth-me"` line naming the branch that answered /api/auth/me.
+ *
+ * Deliberately NOT gated on PICC_ERROR_LOG, and deliberately NOT written through
+ * writeErrorEntry() — that function's contract is "off unless the master switch
+ * says 1", and reusing it is precisely what made round 4's trace unreachable.
+ *
+ * Never throws. Returns whether a line was written, so a caller can tell a
+ * silent run from a broken sink without either of them being fatal.
+ */
+export function writeAuthMeTrace(entry) {
+  try {
+    const run = authMeRunId()
+    if (run === null) return false
+    const line =
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        pid: process.pid,
+        src: "auth-me",
+        run,
+        ...entry
+      }) + "\n"
+    appendFileSync(logFilePath(), line, { encoding: "utf8" })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function formatArgs(args) {
   return args
     .map((a) => {

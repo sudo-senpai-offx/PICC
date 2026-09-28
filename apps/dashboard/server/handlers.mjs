@@ -4,24 +4,22 @@
 // local JSON billing/subscription sync (Supabase removed — D8). Every
 // provider degrades with an honest fallback.
 import { env, providers } from "./config.mjs"
-import { errorLogEnabled, recordClientReport, writeErrorEntry } from "./errorLog.mjs"
+import { errorLogEnabled, recordClientReport, writeAuthMeTrace, writeErrorEntry } from "./errorLog.mjs"
 
 /**
- * WS-6 T10 INSTRUMENTATION (round 4) — one line per /api/auth/me answer.
+ * WS-6 T10 INSTRUMENTATION — one line per /api/auth/me answer.
  *
  * The terminal-performance flake is UNROOTED and this is the tool that would root
  * it, not a hypothesis about it. `src` is "auth-me" so these lines are greppable
  * away from every other entry in the same file, and `run` is the e2e run id so a
  * failing run's lines can be isolated from a noisy shared log.
  *
- * Gated on the same PICC_ERROR_LOG master switch as the rest of the error log, so
- * it is off by default and costs one boolean check per call. Wrapped in its own
- * try/catch because a logging call must not be able to fail the request it observes.
- */
+ * GATED ON PICC_E2E_RUN_ID, NOT ON PICC_ERROR_LOG. Round 4 gated this on the master
+ * error-log switch, which the e2e harness pins to "0" — so no compliant e2e run could
+ * produce a line and the file stayed green while unreachable. See errorLog.mjs. */
 function traceAuthMe(branch, extra = {}) {
-  if (!errorLogEnabled()) return
   try {
-    writeErrorEntry({ src: "auth-me", branch, run: process.env.PICC_E2E_RUN_ID ?? null, ...extra })
+    writeAuthMeTrace({ branch, ...extra })
   } catch {
     /* instrumentation must never break the request */
   }
@@ -53,6 +51,7 @@ import {
   verifyUser,
   revokeToken,
   storeWriteFailures,
+  storeReadFaults,
   hasUsers,
   resolveAuthUser,
   resolveHasUsers,
@@ -4339,14 +4338,15 @@ const creds = await getVenueCredentials()
   // -------------------------------------------------------------------
   // Local auth — fully self-hosted accounts (users + sessions in server/data)
   // -------------------------------------------------------------------
-  // WS-6 T10 INSTRUMENTATION (round 4): the status body carries a count of
-  // persisted-store write failures, so a run in which the disk refused to persist
-  // is distinguishable from a healthy one after the fact. It is a diagnostic
-  // counter, not a health claim, and this route discloses no account data. It lives
-  // HERE rather than inside the block below because the block's comment is the
-  // allowlist marker for its hasUsers() call, and the guard requires that marker to
-  // be CONTIGUOUS with the call site - a comment wedged between them breaks the
-  // allowlist, which is the guard working as designed.
+  // WS-6 T10 INSTRUMENTATION: the status body carries the two store counters, so a
+  // failing run can say WHICH mechanism fired: write>0 -> write fault; read>0 with
+  // write===0 -> read/shape fault; both 0 -> the store was healthy, look elsewhere.
+  // One counter could not, because a read or shape fault returns before writeJSON is
+  // called. Both are keyed on the FILE NAME (auth.mjs): this route is UNAUTHENTICATED
+  // and the absolute path disclosed the home directory and OS user name. They live
+  // HERE and not inside the block below because that block's comment is the allowlist
+  // marker for its hasUsers() call, which the guard requires to be CONTIGUOUS with the
+  // call site - a comment wedged between them breaks the allowlist, as it is designed to.
   if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {
     // NOT A GATE. hasUsers() here is the first-run SIGNUP HINT: it tells the
     // login page whether to offer "create the first account" instead of "sign
@@ -4357,7 +4357,7 @@ const creds = await getVenueCredentials()
     // page offering the signup form one time too often, which is recoverable,
     // whereas a wrong guess in the other direction would hide the signup form
     // from a genuinely fresh install. Pinned by ws7AuthBootstrapGateGuard.
-      writeJson(res, 200, { ok: true, hasUsers: await hasUsers(), authMode: "local", storeWriteFailures: storeWriteFailures() })
+      writeJson(res, 200, { ok: true, hasUsers: await hasUsers(), authMode: "local", storeWriteFailures: storeWriteFailures(), storeReadFaults: storeReadFaults() })
       return
     }
 
@@ -4431,8 +4431,8 @@ const creds = await getVenueCredentials()
     // selector would be satisfied in about a second and it is not this failure.
     // One of those two lines settles it.
     //
-    // Gated by PICC_ERROR_LOG and never thrown from, so it costs one boolean check
-    // per /me call and cannot affect the request it is observing.
+    // Gated by PICC_E2E_RUN_ID (see traceAuthMe above) and never thrown from, so it
+    // costs one string check per /me call when unarmed and cannot affect the request.
     let user
     try {
       user = await resolveAuthUser(auth)

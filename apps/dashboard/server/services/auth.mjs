@@ -4,7 +4,7 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { chmod, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const DATA_DIR = process.env.PICC_AUTH_DATA_DIR || fileURLToPath(new URL("../data", import.meta.url))
@@ -76,12 +76,16 @@ async function readJSONStrict(file, fallback) {
   try {
     raw = await readFile(file, "utf8")
   } catch (err) {
+    // A MISSING file is a genuine first run, not a fault, and must not be counted
+    // as one. Every other read failure is.
     if (err && err.code === "ENOENT") return fallback
+    recordStoreFault("read", file, err)
     throw new AuthStoreUnavailable(`auth store read failed (${file}): ${err?.message ?? err}`)
   }
   try {
     return JSON.parse(raw)
   } catch (err) {
+    recordStoreFault("read", file, err)
     throw new AuthStoreUnavailable(`auth store parse failed (${file}): ${err?.message ?? err}`)
   }
 }
@@ -141,30 +145,62 @@ async function writeJSON(file, value) {
 }
 
 /**
- * Count of PERSISTED-STORE WRITE FAILURES, per file.
+ * WS-6 T10 INSTRUMENTATION — store faults, counted on BOTH sides and kept apart.
  *
- * WS-6 T10 INSTRUMENTATION (round 4). writeJSON swallows a write failure after
- * logging it, so a run in which the disk refused to persist looks identical to a
- * healthy run from the outside. Rounds 1-3 each guessed at a cause for the
- * terminal-performance flake; this counter makes one of the guesses falsifiable in
- * a single failing run instead: if `sessions.json` is 0 across a failing run, the
- * write-fault mechanism is eliminated outright; if it is non-zero, confirmed.
+ * WHY TWO COUNTERS. Round 4 shipped one, and the review found the reason it could
+ * not settle the terminal-perf question: a read or shape fault returns from
+ * readSessionsStrict()/readUsersStrict() BEFORE writeJSON is ever called, so the
+ * write counter read 0 — and a read/shape fault is exactly the mode this
+ * machine's own sessions.json was in. "write === 0 eliminates the write-fault
+ * mechanism" is true. "0 means the store was healthy" is NOT, and the report's
+ * phrasing implied the latter. A single counter cannot express the difference,
+ * so there is now no way to read it that does.
  *
- * It is an export because /api/auth/status surfaces it, which is what makes it
- * readable after the fact without a debugger. Memory-only and monotonic, so it is
- * reset by a restart — that is fine, since the question is asked about one run.
+ * The discriminator a single failing run can apply:
+ *
+ *     write > 0                    -> the write-fault mechanism
+ *     read  > 0 and write === 0    -> the read/shape-fault mechanism
+ *     both === 0                   -> the store was healthy; look elsewhere
+ *
+ * WHY KEYED ON basename(file). Both counters are returned verbatim in the body of
+ * an UNAUTHENTICATED route (`/api/auth/status`). Keyed on the absolute path they
+ * disclosed the developer's home directory, the OS user name and the data layout
+ * to any anonymous caller. The file NAME is the whole diagnostic value — the
+ * question being asked is "which store, and which side" — so nothing is lost.
+ *
+ * Memory-only and monotonic, so a restart resets them; that is fine, because the
+ * question is asked about one run.
  */
 const STORE_WRITE_FAILURES = Object.create(null)
+const STORE_READ_FAULTS = Object.create(null)
 
-function recordStoreWriteFailure(file, err) {
-  const key = file
-  STORE_WRITE_FAILURES[key] = (STORE_WRITE_FAILURES[key] ?? 0) + 1
-  console.warn(`[picc-auth] write-failure counter: ${key} = ${STORE_WRITE_FAILURES[key]} (${err?.code ?? err?.message})`)
+function recordStoreFault(kind, file, err) {
+  const counters = kind === "write" ? STORE_WRITE_FAILURES : STORE_READ_FAULTS
+  // basename(), never the raw argument: `file` reaches this module as a joined
+  // absolute path and this function's output is served over HTTP.
+  const key = basename(file)
+  counters[key] = (counters[key] ?? 0) + 1
+  console.warn(`[picc-auth] ${kind}-fault counter: ${key} = ${counters[key]} (${err?.code ?? err?.message})`)
 }
 
-/** A snapshot of the counter, for diagnostics. */
+function recordStoreWriteFailure(file, err) {
+  recordStoreFault("write", file, err)
+}
+
+/** A snapshot of the refused-PERSIST counter, for diagnostics. */
 export function storeWriteFailures() {
   return { ...STORE_WRITE_FAILURES }
+}
+
+/**
+ * A snapshot of the unreadable-or-wrong-shaped counter, for diagnostics.
+ *
+ * Exported separately rather than folded into storeWriteFailures() because the
+ * two answer different questions and conflating them is what made round 4's
+ * single counter unreadable.
+ */
+export function storeReadFaults() {
+  return { ...STORE_READ_FAULTS }
 }
 
 function hashPassword(password, salt) {
@@ -232,6 +268,10 @@ async function readUsersStrict() {
   const users = data && typeof data === "object" ? data.users : undefined
   if (!Array.isArray(users)) {
     const shape = data === null ? "null" : Array.isArray(data) ? "an array" : typeof data
+    // A readable-but-wrong-shaped file is the mode that produced NO write fault
+    // at all, so it must reach the READ counter or the pair cannot tell it from
+    // a healthy store.
+    recordStoreFault("read", USERS_FILE, new Error(`expected a users array, got ${shape}`))
     throw new AuthStoreUnavailable(`auth store is corrupt (${USERS_FILE}): expected a users array, got ${shape}`)
   }
   return users
@@ -466,6 +506,10 @@ async function readSessionsStrict() {
           : Array.isArray(sessions)
             ? "an array"
             : typeof sessions
+    // Same reason as readUsersStrict(): a wrong-shaped sessions file is the
+    // documented 401 hazard and it never reaches writeJSON, so the read counter
+    // is the only place it can show up.
+    recordStoreFault("read", SESSIONS_FILE, new Error(`expected a sessions object, got ${got}`))
     throw new AuthStoreUnavailable(`auth store is corrupt (${SESSIONS_FILE}): expected a sessions object, got ${got}`)
   }
   return sessions
