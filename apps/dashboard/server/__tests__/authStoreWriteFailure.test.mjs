@@ -23,10 +23,14 @@
 // reads, real validation, real scrypt hashing. Only the syscall that represents "the
 // disk refused to persist" is replaced, because that is the condition under test and
 // a Windows ACL is not portable.
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+// WS-7 slice A: this is the suite whose round-4 sibling misspelled
+// PICC_AUTH_DATA_DIR and wrote a real account into the developer's live store.
+// The redirect now goes through the shared contract, which refuses a name it
+// does not know - so the typo can no longer be written quietly.
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const h = vi.hoisted(() => ({ failRename: false, renameCalls: 0 }))
 
@@ -46,8 +50,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   }
 })
 
-const DATA_DIR = mkdtempSync(join(tmpdir(), "picc-auth-writefail-"))
-vi.stubEnv("PICC_AUTH_DATA_DIR", DATA_DIR)
+const DATA_DIR = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-auth-writefail" })
 
 const SESSIONS = join(DATA_DIR, "sessions.json")
 const USERS = join(DATA_DIR, "users.json")

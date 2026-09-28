@@ -35,9 +35,12 @@
 // assertion is that the sentinel is ABSENT — i.e. the route refused before it
 // reached the dependency — not that a mock was called.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+// WS-7 slice A: the two per-service stores are redirected through the shared
+// contract in testSupport/storeIsolation.mjs, the same one the Playwright
+// harness uses, so neither can fall back to server/data independently.
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 vi.mock("../services/connectors.mjs", async (importOriginal) => {
   const actual = await importOriginal()
@@ -334,10 +337,12 @@ function assertRefusedNoSession(res, { sentinels = [] } = {}) {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "picc-bootstrap-gate-"))
-  ewalletDir = mkdtempSync(join(tmpdir(), "picc-bootstrap-wallet-"))
-  vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
-  vi.stubEnv("PICC_EWALLET_DATA_DIR", ewalletDir)
+  // WS-7 slice A: both stores are redirected through the shared contract, which
+  // asserts neither target is the real server/data and refuses an unknown name.
+  // Redirecting only one of them is the exact shape that put EURUSD into the
+  // real trading-watchlist.json during review of this work.
+  dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-bootstrap-gate" })
+  ewalletDir = useIsolatedStoreDir("PICC_EWALLET_DATA_DIR", { prefix: "picc-bootstrap-wallet" })
   vi.stubEnv("PICC_AGENTS_URL", "http://agents.invalid")
   // Never let a test reach a real agents service: a sentinel answer, so the
   // assertion below can prove the proxy was NOT driven.

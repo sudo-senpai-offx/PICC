@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { writeFileSync, rmSync } from "node:fs"
+// WS-7 slice A. This is the one repo-wide file that imports `../handlers.mjs`
+// STATICALLY (below), so a `beforeEach` redirect could never reach it: the
+// module graph is evaluated before any hook runs. It is under the invariant
+// anyway, because the redirect now happens in the vitest `setupFiles` hook, which
+// runs before the test file is imported. What this file still does per test is
+// point the stores at its own scratch directories, and it now does that through
+// the shared contract rather than by assigning `process.env` by hand.
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 import { join } from "node:path"
 import { handleApi } from "../handlers.mjs"
 import { env } from "../config.mjs"
@@ -226,11 +233,11 @@ describe("PICC API handlers", () => {
   })
 
   it("trading/readiness requires auth then returns a structured report", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "picc-ready-test-"))
+    const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-ready-test" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
-    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    // WS-7 slice A: the store is already redirected by useIsolatedStoreDir above.
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?readiness-test")
 
@@ -255,11 +262,11 @@ describe("PICC API handlers", () => {
     // being no gate; it now authenticates the way its autodetect sibling does,
     // which is STRENGTHENING it - the latency assertions are unchanged and the
     // request is now one a real signed-in user actually makes.
-    const dir = mkdtempSync(join(tmpdir(), "picc-brokers-latency-"))
+    const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-brokers-latency" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 600_000 } } }))
-    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    // WS-7 slice A: the store is already redirected by useIsolatedStoreDir above.
     vi.resetModules()
     const { handleApi: freshHandleApi } = await import("../handlers.mjs")
 
@@ -283,11 +290,11 @@ describe("PICC API handlers", () => {
   })
 
   it("autodetect proposes (never trusts) an adaptor without writes", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "picc-autodetect-"))
+    const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-autodetect" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
-    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    // WS-7 slice A: the store is already redirected by useIsolatedStoreDir above.
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?autodetect-test")
 
@@ -303,11 +310,11 @@ describe("PICC API handlers", () => {
   })
 
   it("autodetect matches an already-registered origin, still tuned:false", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "picc-autodetect-"))
+    const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-autodetect" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
-    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    // WS-7 slice A: the store is already redirected by useIsolatedStoreDir above.
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?autodetect-test2")
 
@@ -347,8 +354,7 @@ describe("PICC API handlers", () => {
   })
 
   it("notifications/vapid-public-key is public and honest when unset vs set", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "picc-vapid-test-"))
-    vi.stubEnv("PICC_NOTIFICATION_DATA_DIR", dir)
+    const dir = useIsolatedStoreDir("PICC_NOTIFICATION_DATA_DIR", { prefix: "picc-vapid-test" })
     delete process.env.VAPID_PUBLIC_KEY
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?vapid-unset")
@@ -373,8 +379,7 @@ describe("PICC API handlers", () => {
   })
 
   it("notifications subscribe-push then unsubscribe-push round-trips the server subscription", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "picc-sub-test-"))
-    vi.stubEnv("PICC_NOTIFICATION_DATA_DIR", dir)
+    const dir = useIsolatedStoreDir("PICC_NOTIFICATION_DATA_DIR", { prefix: "picc-sub-test" })
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?push-sub-test")
 
@@ -396,8 +401,7 @@ describe("PICC API handlers", () => {
   })
 
   it("notifications snooze endpoint: 200 on a known tag, no-op on re-snooze, 404 unknown, 400 missing", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "picc-snooze-test-"))
-    vi.stubEnv("PICC_NOTIFICATION_DATA_DIR", dir)
+    const dir = useIsolatedStoreDir("PICC_NOTIFICATION_DATA_DIR", { prefix: "picc-snooze-test" })
     delete process.env.VAPID_PUBLIC_KEY
     delete process.env.VAPID_PRIVATE_KEY
     vi.resetModules()
@@ -437,11 +441,11 @@ await new Promise((r) => setTimeout(r, 80))
     // Regression: two handlers used to share POST /api/trading/portfolio — the
     // analytics one won the dispatch chain and the cross-venue aggregator was
     // permanently unreachable. It now lives at /api/trading/portfolio/aggregate.
-    const dir = mkdtempSync(join(tmpdir(), "picc-portfolio-test-"))
+    const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-portfolio-test" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
-    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    // WS-7 slice A: the store is already redirected by useIsolatedStoreDir above.
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?portfolio-test")
     const authed = { authorization: `Bearer ${token}` }
@@ -462,11 +466,11 @@ await new Promise((r) => setTimeout(r, 80))
   })
 
   it("workflows/run returns 400 (not a crash) when the browser is closed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "picc-wf-test-"))
+    const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-wf-test" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
-    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    // WS-7 slice A: the store is already redirected by useIsolatedStoreDir above.
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?wf-run-test")
     const res = {
@@ -499,11 +503,11 @@ await new Promise((r) => setTimeout(r, 80))
   it("browser stream parses its searchParams and emits an SSE ready frame", async () => {
     // Regression: { ...parsed } used to drop URL.searchParams, so the
     // stream route crashed with "Cannot read properties of undefined (reading 'get')".
-    const dir = mkdtempSync(join(tmpdir(), "picc-auth-test-"))
+    const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-auth-test" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
-    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    // WS-7 slice A: the store is already redirected by useIsolatedStoreDir above.
     vi.resetModules()
     const { handleApi: hApi } = await import("../handlers.mjs?stream-test")
     const chunks = []
@@ -543,12 +547,11 @@ describe("POST /api/trading/regime (B-REG-4)", () => {
 
   let authDir
   beforeEach(() => {
-    authDir = mkdtempSync(join(tmpdir(), "picc-regime-test-"))
+    authDir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-regime-test" })
     const token = randomBytes(32).toString("hex")
     writeFileSync(join(authDir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
     writeFileSync(join(authDir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 60_000 } } }))
     this.token = token
-    vi.stubEnv("PICC_AUTH_DATA_DIR", authDir)
     vi.resetModules()
   })
   afterEach(() => {

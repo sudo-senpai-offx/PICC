@@ -25,13 +25,17 @@
 // corrupt store must never be silently overwritten, because overwriting it
 // destroys every OTHER live session in it. Refusing to write is the only safe
 // answer — refusing to issue a token only protects the new login.
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+// WS-7 slice A: the auth store is redirected through the shared contract rather
+// than by hand. The helper mints the directory, asserts it is not the real
+// server/data, and REFUSES a name the contract does not know - so a misspelling
+// here fails loudly instead of silently falling through `auth.mjs:10`'s
+// `|| default` and writing a real account into the developer's live store.
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
-const DATA_DIR = mkdtempSync(join(tmpdir(), "picc-auth-writer-"))
-vi.stubEnv("PICC_AUTH_DATA_DIR", DATA_DIR)
+const DATA_DIR = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-auth-writer" })
 
 const SESSIONS = join(DATA_DIR, "sessions.json")
 const USERS = join(DATA_DIR, "users.json")

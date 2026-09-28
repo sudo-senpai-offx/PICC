@@ -7,7 +7,14 @@ import { afterEach, expect, test, vi } from "vitest"
 import { existsSync } from "node:fs"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join, relative, sep } from "node:path"
+import { realServerDataDir } from "../../testSupport/storeIsolation.mjs"
+
+/** True when `candidate` is `parent` or lives under it. */
+function isInside(parent, candidate) {
+  const from = relative(parent, candidate)
+  return from === "" || (!from.startsWith(`..${sep}`) && from !== ".." && !isAbsolute(from))
+}
 
 const LEADER_FILE = "leader-ideas.json"
 
@@ -246,11 +253,28 @@ test("resetLeaderIdeasState wipes to a healthy empty store and persists (test se
   expect(m2.leaderIdeas().leaders).toEqual([])
 })
 
-test("VITEST memory mode writes no file and still serves the store", async () => {
+test("WS-7 slice A: an isolated run writes its store only into the run root, never the real server/data", async () => {
+  // This test used to assert `PICC_COMMAND_CENTRE_DATA_DIR` was UNSET under
+  // vitest, which was true only because the store's `canTouchDisk` guard
+  // (leaderIdeasState.mjs:12) refused the disk wholesale. WS-7 slice A points
+  // every store variable at a per-test temp root, so the variable is now
+  // legitimately set and the claim below is the one that actually matters: the
+  // store is redirected, and the two places the store must never write - the
+  // module's own hardcoded `new URL("../data")` default and the real
+  // `server/services/data` next to the module - are both untouched.
+  //
+  // This is a STRONGER claim than the one it replaces, not a weaker one. The old
+  // assertion passed for a store that was writing nowhere; the new one would
+  // fail for a store writing anywhere it was not supposed to.
   const m = await bootMem()
   m.importLeaderRecord(recordIn(), { now: NOW, audit: () => {} })
   expect(m.findLeader("leader-1").id).toBe("leader-1")
+
   const dataDir = process.env.PICC_COMMAND_CENTRE_DATA_DIR
-  expect(dataDir).toBeUndefined()
+  expect(typeof dataDir, "the store must be redirected, not left to its default").toBe("string")
+  expect(
+    isInside(realServerDataDir(), dataDir),
+    "the redirected store must not be the real server/data directory"
+  ).toBe(false)
   expect(existsSync(join(process.cwd(), "server", "services", "data", LEADER_FILE))).toBe(false)
 })

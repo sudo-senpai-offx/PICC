@@ -10,13 +10,12 @@
 // session. resolveAuthUser() keeps "no such session" and "could not read the
 // store" apart, so the handler can answer 503 for the second and a true 401
 // only for the first.
-import { mkdtempSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+// WS-7 slice A: see authSessionWriter.test.mjs for why this goes through the
+// shared contract instead of assigning `process.env` by hand.
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
-const DATA_DIR = mkdtempSync(join(tmpdir(), "picc-auth-store-"))
-process.env.PICC_AUTH_DATA_DIR = DATA_DIR
+const DATA_DIR = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-auth-store" })
 
 // Read control has to live in hoisted state because vi.mock factories are
 // hoisted above the module's own imports.

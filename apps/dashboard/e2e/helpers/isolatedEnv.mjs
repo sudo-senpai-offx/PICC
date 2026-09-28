@@ -1,45 +1,26 @@
 import { createHash, randomBytes } from "node:crypto"
-import { mkdirSync, readdirSync, realpathSync, statSync } from "node:fs"
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { mkdirSync, readdirSync, realpathSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  assertContainedPath as assertContainedPathIn,
+  ISOLATION_DIRECTORY_VARIABLES as directoryVariables,
+  ISOLATION_FILE_VARIABLES as fileVariables,
+  ISOLATION_PATH_VARIABLES,
+  ISOLATION_PATH_VARIABLE_KINDS as pathVariableKinds
+} from "../../testSupport/storeIsolation.mjs"
 
 const helperDir = dirname(fileURLToPath(import.meta.url))
 const dashboardDir = resolve(helperDir, "../..")
 const isolationBaseDir = join(dashboardDir, ".playwright-tmp")
 
-const directoryVariables = Object.freeze([
-  ["PICC_TRADING_DATA_DIR", "trading"],
-  ["PICC_AUTOMATOR_DATA_DIR", "automator"],
-  ["PICC_COMMAND_CENTRE_DATA_DIR", "command-centre"],
-  ["PICC_AUTH_DATA_DIR", "auth"],
-  ["PICC_BROWSER_DATA_DIR", "browser"],
-  ["PICC_ACCOUNT_METRICS_DATA_DIR", "account-metrics"],
-  ["PICC_ALERTS_DATA_DIR", "alerts"],
-  ["PICC_CONNECTOR_DATA_DIR", "connector"],
-  ["PICC_CAPTURE_CONFIG_DATA_DIR", "capture-config"],
-  ["PICC_DISPATCH_DATA_DIR", "dispatch"],
-  ["PICC_EWALLET_DATA_DIR", "ewallet"],
-  ["PICC_JOURNAL_DATA_DIR", "journal"],
-  ["PICC_NOTIFICATION_DATA_DIR", "notification"],
-  ["PICC_PROFILE_DATA_DIR", "profile"],
-  ["PICC_WATCHLIST_DATA_DIR", "watchlist"],
-  ["PICC_DATA_DIR", "data"]
-])
+// The variable list, the kinds map and the containment rule now live in
+// `testSupport/storeIsolation.mjs`, because the vitest harness enforces the same
+// policy and a second copy is how the class regrows. The POLICY did not move:
+// the error strings below are produced by the shared rule with this harness's
+// own label, so they are byte-for-byte what they were before the extraction.
 
-const fileVariables = Object.freeze([
-  ["PICC_SESSION_CAPTURE_SETTINGS_FILE", "session-capture-settings.json"],
-  ["PICC_LLM_SETTINGS_FILE", "llm-settings.json"]
-])
-
-const pathVariableKinds = new Map([
-  ...directoryVariables.map(([name]) => [name, "directory"]),
-  ...fileVariables.map(([name]) => [name, "file"])
-])
-
-export const ISOLATION_PATH_VARIABLES = Object.freeze([
-  ...directoryVariables.map(([name]) => name),
-  ...fileVariables.map(([name]) => name)
-])
+export { ISOLATION_PATH_VARIABLES }
 
 export const REQUIRED_ISOLATION_VARIABLES = Object.freeze([
   ...ISOLATION_PATH_VARIABLES,
@@ -56,32 +37,8 @@ function mintTmpRoot() {
   return realpathSync.native(tmpRoot)
 }
 
-function isStrictlyInside(root, candidate) {
-  const pathFromRoot = relative(root, candidate)
-  return pathFromRoot !== "" && pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot)
-}
-
 function assertContainedPath(tmpRoot, name, configuredPath, kind) {
-  const absolutePath = resolve(configuredPath)
-  if (!isStrictlyInside(tmpRoot, absolutePath)) {
-    throw new Error(`${name} resolves outside the Playwright isolation root: ${configuredPath}`)
-  }
-
-  if (kind === "directory") {
-    mkdirSync(absolutePath, { recursive: true, mode: 0o700 })
-  } else {
-    mkdirSync(dirname(absolutePath), { recursive: true, mode: 0o700 })
-  }
-
-  const canonicalParent = realpathSync.native(kind === "directory" ? absolutePath : dirname(absolutePath))
-  if (!statSync(canonicalParent).isDirectory()) {
-    throw new Error(`${name} does not resolve to a directory-backed path: ${configuredPath}`)
-  }
-
-  const canonicalPath = kind === "directory" ? canonicalParent : join(canonicalParent, basename(absolutePath))
-  if (!isStrictlyInside(tmpRoot, canonicalPath)) {
-    throw new Error(`${name} resolves outside the canonical Playwright isolation root: ${configuredPath}`)
-  }
+  assertContainedPathIn(tmpRoot, name, configuredPath, kind, "Playwright isolation")
 }
 
 function assertVaultFixtureFresh(tmpRoot) {

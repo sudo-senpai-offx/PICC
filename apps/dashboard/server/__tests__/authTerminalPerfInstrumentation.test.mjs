@@ -23,11 +23,11 @@
 // appending a test account to the developer's real server/data/users.json. The
 // "writes only into the temp store" test below exists because of that.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const HANDLERS = "../handlers.mjs"
 const AUTH = "../services/auth.mjs"
@@ -144,10 +144,12 @@ function authMeLines() {
 }
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), "picc-ws7-t10-"))
-  logFile = join(dir, "picc-errors.log")
-  process.env.PICC_AUTH_DATA_DIR = dir
-  process.env.PICC_ERROR_LOG_FILE = logFile
+  // WS-7 slice A: both redirected through the shared contract. This is the file
+  // that RECORDS the round-4 misspelling of PICC_AUTH_DATA_DIR (see the
+  // regression test at the bottom); the helper makes that typo unwritable here
+  // as well, because it refuses any name the contract does not know.
+  dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-ws7-t10" })
+  logFile = useIsolatedStoreDir("PICC_ERROR_LOG_FILE", { prefix: "picc-ws7-t10-log" })
   process.env.PICC_E2E_RUN_ID = "run-t10-fixture"
   delete process.env.PICC_ERROR_LOG
   RENAME_FAILS = false
@@ -175,10 +177,12 @@ afterEach(() => {
   vi.doUnmock("node:fs/promises")
   vi.resetModules()
   delete process.env.PICC_ERROR_LOG
-  delete process.env.PICC_ERROR_LOG_FILE
   delete process.env.PICC_E2E_RUN_ID
-  delete process.env.PICC_AUTH_DATA_DIR
+  // WS-7 slice A: the two store variables are owned by the shared vitest
+  // isolation setup, which restores them before the next test. Deleting them
+  // here would only be undone, so the teardown names what it still owns.
   rmSync(dir, { recursive: true, force: true })
+  rmSync(dirname(logFile), { recursive: true, force: true })
 })
 
 describe("WS-6 T10 instrumentation — /api/auth/me records its answer", () => {

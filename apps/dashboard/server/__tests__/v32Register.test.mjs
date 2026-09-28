@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { rmSync } from "node:fs"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 function makeReq(method, url, body, headers = {}) {
   const raw = body !== undefined ? JSON.stringify(body) : null
@@ -44,13 +43,11 @@ const ROW = (assetId) => ({
 describe("v3.2 engine register", () => {
   let dir, reg
   beforeEach(async () => {
-    dir = mkdtempSync(join(tmpdir(), "picc-v32reg-"))
-    process.env.PICC_V32_CONFIG_DATA_DIR = dir
+    dir = useIsolatedStoreDir("PICC_TRADING_DATA_DIR", { prefix: "picc-v32reg" })
     vi.resetModules()
     reg = await import("../services/v32Register.mjs")
   })
   afterEach(() => {
-    delete process.env.PICC_V32_CONFIG_DATA_DIR
     vi.resetModules()
     rmSync(dir, { recursive: true, force: true })
   })
@@ -103,13 +100,18 @@ describe("v3.2 engine register", () => {
 describe("engine/v32 endpoint is additive", () => {
   let dir, handleApi
   beforeEach(async () => {
-    dir = mkdtempSync(join(tmpdir(), "picc-v32reg-api-"))
-    process.env.PICC_V32_CONFIG_DATA_DIR = dir
+    // WS-7 slice A. This used to set `PICC_V32_CONFIG_DATA_DIR`, which NO server
+    // module reads - v3.2 config resolves `process.env.PICC_TRADING_DATA_DIR`
+    // (v32Config.mjs:62-68). So the redirect did nothing and this file was one
+    // call away from writing v32-config.json into the real server/data: the
+    // round-4 defect, still sitting in the tree, in the exact shape the new
+    // guard rejects. It now redirects the variable the code actually reads, and
+    // the helper would have refused the old name outright.
+    dir = useIsolatedStoreDir("PICC_TRADING_DATA_DIR", { prefix: "picc-v32reg-api" })
     vi.resetModules()
     handleApi = (await import("../handlers.mjs")).handleApi
   })
   afterEach(() => {
-    delete process.env.PICC_V32_CONFIG_DATA_DIR
     vi.resetModules()
     rmSync(dir, { recursive: true, force: true })
   })

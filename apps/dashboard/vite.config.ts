@@ -122,6 +122,14 @@ export default defineConfig(({ mode }) => {
     // vitest.config.ts). The e2e/ specs are Playwright's, not Vitest's — without this exclusion
     // `npx vitest run` collects them too and the serial floor fails on a harness mismatch.
     test: {
+      // WS-7 slice A: every unit test boots under the shared store-isolation
+      // contract. The setup file must run BEFORE the test module graph is
+      // evaluated, because several server modules capture their data dir in a
+      // module-scope `const` (auth.mjs:10, alertEngine.mjs:10, watchlist.mjs:10
+      // and others), and one repo-wide test imports `handlers.mjs` statically.
+      // `setupFiles` is the only hook that wins that race; a `beforeEach` in
+      // each file would already be too late.
+      setupFiles: ["./testSupport/vitestStoreIsolation.setup.mjs"],
       exclude: [...configDefaults.exclude, "**/e2e/**"]
     },
     server: {
