@@ -263,13 +263,18 @@ const HANDLERS = "../handlers.mjs?auth-bootstrap-gate-fails-closed"
  * Per-test budget, above vitest's 5s default.
  *
  * These are integration tests over the REAL module graph, not unit tests: each
- * one calls vi.resetModules() and re-imports handlers.mjs, a 5,548-line module
- * with 57 imports, plus every service it pulls in. Under a parallel worker pool
- * a single re-import occasionally ran past 5s, and one run failed on the
- * TIMEOUT with no assertion output - a flaky test that proves nothing about the
- * defect. The budget is raised rather than the work weakened: no assertion here
- * is relaxed, skipped or made cheaper, and the heavy re-import is kept because
- * dropping it would let store state leak between tests.
+ * one calls vi.resetModules() and re-imports handlers.mjs — a 5,841-line module
+ * with 73 static and 84 dynamic imports, plus every service it pulls in. Under a
+ * parallel worker pool a single re-import occasionally ran past 5s, and one run
+ * failed on the TIMEOUT with no assertion output - a flaky test that proves
+ * nothing about the defect. The budget is raised rather than the work weakened:
+ * no assertion here is relaxed, skipped or made cheaper, and the heavy re-import
+ * is kept because dropping it would let store state leak between tests.
+ *
+ * Those three figures are ASSERTED in ws7AuthBootstrapGateGuard ("the module-shape
+ * figures quoted about handlers.mjs are asserted, not remembered"), on the same
+ * comment-stripped view. An earlier version of this comment wrote them inline and
+ * they went stale the moment handlers.mjs grew.
  *
  * The budget was 30s, which is not defensible as a number: it is roughly 10x the
  * slowest observed test. It is now 10s, about 3x the slowest observed test
@@ -280,10 +285,12 @@ const HANDLERS = "../handlers.mjs?auth-bootstrap-gate-fails-closed"
  * ~1ms and a cold `import handlers.mjs` with its whole graph is ~428ms. The
  * re-import cost is handlers.mjs's dependency graph, NOT auth.mjs. Late-binding
  * auth.mjs's DATA_DIR would therefore recover ~1ms of ~428ms and could not be
- * the fix for anything; it was measured and deliberately not done. The actual
- * WS-6 T10 root cause was the sessions.json shape hole - a readable store of the
- * wrong shape made /api/auth/me answer 401 and destroyed a valid session with no
- * I/O error at all - and that is fixed in readSessionsStrict(), not here.
+ * the fix for anything; it was measured and deliberately not done. The
+ * WS-6 T10 terminal-performance flake is NOT root-caused: a shape fault cannot
+ * come from contention, because writeJSON persists with an atomic tmp+rename and
+ * a reader sees the old inode or the new one, never a partial file. What IS
+ * fixed here is a latent second path to the same session-destroying 401, and the
+ * actual trigger is still unidentified - see the task report.
  */
 const TIMEOUT = 10_000
 
@@ -303,6 +310,23 @@ async function call(method, url, opts = {}) {
 function assertRefused(res, { sentinels = [] } = {}) {
   expect(res.status, "a store fault must be refused, not admitted").toBe(503)
   expect(res.body?.error).toBe("auth store unavailable")
+  expect(res.headers?.["Content-Type"], "a refusal is JSON, never a protected stream").toBe("application/json")
+  for (const s of sentinels) {
+    expect(res.text, `protected payload ${s} must be absent from the response`).not.toContain(s)
+  }
+}
+
+/**
+ * The same two guarantees, for a refusal that is NOT a store fault.
+ *
+ * A 401 here is the CORRECT answer and asserting 503 would be wrong: the store
+ * was readable and the credentials really were absent, so "no such session" is
+ * the truth. What still has to hold is that the route refused and that the
+ * protected payload is absent — the payload check is the part that would catch a
+ * regression, since a route that answers 200+body is how this class started.
+ */
+function assertRefusedNoSession(res, { sentinels = [] } = {}) {
+  expect(res.status, "an unauthenticated caller must be refused, not admitted").toBe(401)
   expect(res.headers?.["Content-Type"], "a refusal is JSON, never a protected stream").toBe("application/json")
   for (const s of sentinels) {
     expect(res.text, `protected payload ${s} must be absent from the response`).not.toContain(s)
@@ -639,6 +663,64 @@ describe("WS-7 AUTH-FAILOPEN — every store-fault shape, not just a parse error
     })
     expect(res.status).toBe(503)
     expect(res.text).not.toContain(SENTINEL.history)
+  })
+})
+
+// /api/trading/brokers had NO gate at all. It is not a bootstrap-bypass case —
+// it needs no store fault and it never consults the user store — it simply had no
+// auth check, so an anonymous GET answered 200 with the broker registry: which
+// exchanges are CONFIGURED, whether each is connected, the rail mode
+// (sessionLive / demoOnly), and every capability the adapter exposes. The adjacent
+// route at handlers.mjs:3858 carries an explicit "intentionally public" comment;
+// this one carried none, so it is an omission rather than a decision.
+//
+// The payload matters because it is a reconnaissance surface: it names the live
+// trading rails a caller can reach and which of them are configured, which is
+// exactly the input an attacker picks a target with.
+describe("WS-7 AUTH-FAILOPEN — /api/trading/brokers discloses nothing without a session", { timeout: TIMEOUT }, () => {
+  const BROKERS = "/api/trading/brokers"
+
+  it("REFUSES the broker registry when the store is unreadable", async () => {
+    faultStore()
+    const res = await call("GET", BROKERS)
+    assertRefused(res)
+    // The protected payload: the adapter list and its per-source latency stats.
+    for (const leak of ["brokers", "activeExecutor", "capabilities", "configured", "latency"]) {
+      expect(res.text, `${leak} must not appear in a refused response`).not.toContain(leak)
+    }
+  })
+
+  it("REFUSES with a bad bearer token even on a healthy populated store", async () => {
+    // No store fault, no first-run bypass: this is the plain unauthenticated read.
+    writeSessions({ sessions: {} })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", BROKERS, { headers: { authorization: `Bearer ${"b".repeat(64)}` } })
+    assertRefusedNoSession(res, { sentinels: ["brokers", "activeExecutor", "capabilities"] })
+  })
+
+  it("REFUSES an anonymous read on a healthy populated store", async () => {
+    writeSessions({ sessions: {} })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", BROKERS)
+    assertRefusedNoSession(res, { sentinels: ["brokers", "activeExecutor", "capabilities"] })
+  })
+
+  it("still serves the registry to a real session", async () => {
+    const token = "a".repeat(64)
+    writeSessions({ sessions: { [token]: { userId: "u1", createdAt: 1, expiresAt: Date.now() + 3_600_000 } } })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", BROKERS, { headers: { authorization: `Bearer ${token}` } })
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body?.brokers)).toBe(true)
+  })
+
+  it("still serves the registry on a GENUINELY empty first-run store", async () => {
+    // The bootstrap bypass still applies here: with no accounts configured at
+    // all, refusing would make first-run setup impossible.
+    writeSessions({ sessions: {} })
+    writeUsers({ users: [] })
+    const res = await call("GET", BROKERS)
+    expect(res.status).toBe(200)
   })
 })
 

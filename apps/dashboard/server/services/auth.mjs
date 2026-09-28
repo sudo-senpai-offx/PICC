@@ -269,6 +269,13 @@ export async function createAccount({ email, password, name }) {
   await withLock(USERS_FILE, () => saveUsers(users))
 
   const token = await createSession(id)
+  if (!token) {
+    return {
+      error:
+        "The session store could not be read, so no session was issued and nothing was written. " +
+        "Check the server log for the underlying store fault."
+    }
+  }
   return { user: publicUser(users[users.length - 1]), token }
 }
 
@@ -281,14 +288,46 @@ export async function loginAccount({ email, password }) {
     return { error: "Incorrect password." }
   }
   const token = await createSession(user.id)
+  if (!token) {
+    return {
+      error:
+        "The session store could not be read, so no session was issued and nothing was written. " +
+        "Check the server log for the underlying store fault."
+    }
+  }
   return { user: publicUser(user), token }
 }
 
+/**
+ * Issue a session, REFUSING to write over a store that cannot be read.
+ *
+ * Returns null on a store fault, and writes NOTHING. This is a writer rule, not
+ * a propagation rule, and the distinction is the whole point:
+ *
+ *   - propagating would surface as an unhandled 500, which is what the lenient
+ *     read did for `{"sessions":"x"}` (`TypeError: Cannot create property … on
+ *     string 'x'`, escaping isAuthStoreUnavailable's name check);
+ *   - swallowing the fault would issue a token that cannot authenticate, and
+ *     write a store that no longer holds the sessions it used to;
+ *   - REFUSING is the only third option, and it is the safe one. A store this
+ *     code cannot read may still be the only record of OTHER users' live
+ *     sessions. Overwriting it with `{ sessions: {} }` because one login
+ *     happened to arrive first is how a single corrupt file signs everybody out.
+ *
+ * The read goes through readSessionsStrict(), so a writer and a reader can never
+ * disagree about what "broken" means. An ABSENT file is not broken: readJSONStrict
+ * substitutes a genuine `{ sessions: {} }`, so a fresh install still bootstraps.
+ */
 async function createSession(userId) {
   const token = randomBytes(32).toString("hex")
   return withLock(SESSIONS_FILE, async () => {
-    const data = await readJSON(SESSIONS_FILE, { sessions: {} })
-    const sessions = data.sessions ?? {}
+    let sessions
+    try {
+      sessions = await readSessionsStrict()
+    } catch (err) {
+      if (isAuthStoreUnavailable(err)) return null
+      throw err
+    }
     sessions[token] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS }
     await writeJSON(SESSIONS_FILE, { sessions })
     return token
@@ -296,27 +335,38 @@ async function createSession(userId) {
 }
 
 /**
- * THE ONE strict reader of sessions.json.
+ * THE one strict reader of sessions.json — and therefore the one shape rule
+ * every reader AND writer of that file shares.
  *
  * The mirror of readUsersStrict(), for the same reason: one store, one shape
- * rule, so that every reader of a given file agrees on what "broken" means.
+ * rule, so nothing that touches a given file can disagree about what "broken"
+ * means. This was NOT true when this function was first added: createSession()
+ * and revokeToken() still read through the lenient readJSON() and then wrote
+ * the result back, so a writer and a reader could classify the same file
+ * differently — and the writer was the dangerous one, because writing destroys
+ * whatever the store held. Both now come through here.
  *
- * This is the more dangerous of the two, because a wrong-shaped sessions file
- * does not merely mis-gate a route - it makes /api/auth/me answer 401 for a
- * session the client still holds, and fetchMe() maps 401 to `rejected`, which
- * makes shouldClearStoredSession DELETE A VALID SESSION. No read error is
- * needed for that: a well-formed JSON file of the wrong shape is enough, which
- * is exactly what a truncated-yet-valid write under store contention produces.
- * That is the WS-6 T10 terminal-performance flake, and it is why this reader
- * exists rather than a shape check at one call site.
+ * A wrong-shaped sessions file is a real 401 hazard, independent of anything
+ * else: lookupSession() returning null makes /api/auth/me answer 401, and
+ * fetchMe() maps 401 to `rejected`, which makes shouldClearStoredSession DELETE
+ * A VALID SESSION. No read error is required — a well-formed JSON file of the
+ * wrong shape is enough.
+ *
+ * What is deliberately NOT claimed: that a wrong shape is what causes the
+ * WS-6 T10 terminal-performance flake. It does not. writeJSON() persists with an
+ * atomic tmp+rename, so a concurrent reader sees the old inode or the new one
+ * and never a partial file, and a shape fault cannot be produced by contention.
+ * This reader closes a latent second path to the same 401; the flake's actual
+ * cause is still unidentified.
  *
  * A MISSING file is not a fault: readJSONStrict's ENOENT fallback is a genuine
- * `{ sessions: {} }`, so a fresh install still reads as "no sessions".
+ * `{ sessions: {} }`, so a fresh install still reads as "no sessions" and still
+ * bootstraps.
  *
  * Throws AuthStoreUnavailable on a read failure, a parse failure, OR a
  * readable-but-wrong shape. The shape guard is null-safe for the same reason as
  * in readUsersStrict(): `JSON.parse("null")` is `null`. The Array.isArray test
- * is NOT redundant with the typeof test - an array is `typeof === "object"`, so
+ * is NOT redundant with the typeof test — an array is `typeof === "object"`, so
  * without it `[token]` would be a legal-looking lookup on a corrupt store.
  */
 async function readSessionsStrict() {
@@ -379,7 +429,7 @@ async function lookupSession(token, { prune }) {
         // Re-read STRICTLY, not leniently. Between the read above and this
         // locked write a concurrent writer can replace the file, and the old
         // `d.sessions ?? {}` would then `delete` from whatever that was and
-        // write it straight back - turning a transient shape fault into a
+        // write it straight back — turning a transient shape fault into a
         // PERSISTENT one. The prune is a write; it has to earn that write.
         const sessions = await readSessionsStrict()
         delete sessions[token]
@@ -405,15 +455,38 @@ export async function verifyToken(token) {
   }
 }
 
+/**
+ * Drop one session, REFUSING to write over a store that cannot be read.
+ *
+ * The same writer rule as createSession(), for the same reason: `readJSON` +
+ * `data.sessions ?? {}` used to read a wrong-shaped store as `{}`, find no
+ * matching token, and skip the write — or, worse, read a parse failure as `{}` and
+ * treat a store full of live sessions as empty. This version classifies the store
+ * with the readers' rule and writes nothing at all when it cannot be read.
+ *
+ * Returns true when the token was revoked, false when there was nothing to do
+ * (unknown or already-expired token) OR the store could not be read. The two are
+ * deliberately not distinguished for the caller: a caller that wants to know why
+ * its logout "succeeded" should read the log, and a store fault must never be
+ * reported as a successful revocation.
+ */
 export async function revokeToken(token) {
-  if (!token) return
-  await withLock(SESSIONS_FILE, async () => {
-    const data = await readJSON(SESSIONS_FILE, { sessions: {} })
-    const sessions = data.sessions ?? {}
-    if (sessions[token]) {
-      delete sessions[token]
-      await writeJSON(SESSIONS_FILE, { sessions })
+  if (!token) return false
+  return withLock(SESSIONS_FILE, async () => {
+    let sessions
+    try {
+      sessions = await readSessionsStrict()
+    } catch (err) {
+      if (isAuthStoreUnavailable(err)) {
+        console.warn("[picc-auth] revokeToken refused: sessions store could not be read; nothing written")
+        return false
+      }
+      throw err
     }
+    if (!sessions[token]) return false
+    delete sessions[token]
+    await writeJSON(SESSIONS_FILE, { sessions })
+    return true
   })
 }
 

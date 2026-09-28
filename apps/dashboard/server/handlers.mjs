@@ -3838,6 +3838,23 @@ async function _handleApiInner(req, res, url, reqId) {
 
   // ── Broker adapter registry — plug-and-play venue status ──────────────
   if (path === "/api/trading/brokers" && req.method === "GET") {
+    // This route had NO auth check of any kind - no requireAuth, no
+    // requireSessionOrFirstRun - so an anonymous GET answered 200 with the whole
+    // broker registry. It is NOT a bootstrap-bypass case: it never consults the
+    // user store, so no store fault is needed and no first-run bypass was
+    // involved. It simply had no gate.
+    //
+    // The payload is a reconnaissance surface, not a health check: per adapter it
+    // names whether the exchange is CONFIGURED, whether it is connected, the rail
+    // mode (sessionLive / demoOnly), and every capability the adapter exposes
+    // (market-data, account, positions, close-position, ...), plus which adapter
+    // is the active executor. That is exactly the input an attacker chooses a
+    // target with.
+    //
+    // The adjacent route below (system/capabilities) is deliberately public and
+    // SAYS SO. This one had no such note, which is what distinguishes an omission
+    // from a decision. Pinned by ws7AuthBootstrapGateGuard.
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     try {
       const { listBrokers } = await import("./services/brokers.mjs")
       const { dataBusStats } = await import("./services/marketDataBus.mjs")

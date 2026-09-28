@@ -250,8 +250,25 @@ describe("PICC API handlers", () => {
   })
 
   it("trading/brokers reports a latency map (per-source candle fetch stats)", async () => {
+    // The route was GATED in WS-7 round 3 (it had no auth check at all, so an
+    // anonymous GET read the broker registry). This test used to rely on there
+    // being no gate; it now authenticates the way its autodetect sibling does,
+    // which is STRENGTHENING it - the latency assertions are unchanged and the
+    // request is now one a real signed-in user actually makes.
+    const dir = mkdtempSync(join(tmpdir(), "picc-brokers-latency-"))
+    const token = randomBytes(32).toString("hex")
+    writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [{ id: "u1", email: "a@b.c", password: "x", salt: "y" }] }))
+    writeFileSync(join(dir, "sessions.json"), JSON.stringify({ sessions: { [token]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 600_000 } } }))
+    vi.stubEnv("PICC_AUTH_DATA_DIR", dir)
+    vi.resetModules()
+    const { handleApi: freshHandleApi } = await import("../handlers.mjs")
+
     const res = makeRes()
-    await handleApi(makeReq("GET", "/api/trading/brokers", undefined, {}), res, "/api/trading/brokers")
+    await freshHandleApi(
+      makeReq("GET", "/api/trading/brokers", undefined, { authorization: `Bearer ${token}` }),
+      res,
+      "/api/trading/brokers"
+    )
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
     expect(Array.isArray(res.body.brokers)).toBe(true)
