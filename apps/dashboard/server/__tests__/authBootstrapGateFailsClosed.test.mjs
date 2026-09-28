@@ -260,18 +260,32 @@ function faultSessionStore() {
 const HANDLERS = "../handlers.mjs?auth-bootstrap-gate-fails-closed"
 
 /**
- * Per-test budget, well above vitest's 5s default.
+ * Per-test budget, above vitest's 5s default.
  *
  * These are integration tests over the REAL module graph, not unit tests: each
- * one calls vi.resetModules() and re-imports handlers.mjs, a 5.7k-line module
- * with ~120 imports, plus every service it pulls in. Under a parallel worker
- * pool a single re-import occasionally ran past 5s, and one run failed on the
- * TIMEOUT with no assertion output — a flaky test that proves nothing about the
+ * one calls vi.resetModules() and re-imports handlers.mjs, a 5,548-line module
+ * with 57 imports, plus every service it pulls in. Under a parallel worker pool
+ * a single re-import occasionally ran past 5s, and one run failed on the
+ * TIMEOUT with no assertion output - a flaky test that proves nothing about the
  * defect. The budget is raised rather than the work weakened: no assertion here
  * is relaxed, skipped or made cheaper, and the heavy re-import is kept because
  * dropping it would let store state leak between tests.
+ *
+ * The budget was 30s, which is not defensible as a number: it is roughly 10x the
+ * slowest observed test. It is now 10s, about 3x the slowest observed test
+ * (3.06s, the first-run admission cases, which do the most store I/O), so a real
+ * regression still fails and ordinary contention has room to breathe.
+ *
+ * MEASURED, so this is not a guess: on this host a cold `import auth.mjs` is
+ * ~1ms and a cold `import handlers.mjs` with its whole graph is ~428ms. The
+ * re-import cost is handlers.mjs's dependency graph, NOT auth.mjs. Late-binding
+ * auth.mjs's DATA_DIR would therefore recover ~1ms of ~428ms and could not be
+ * the fix for anything; it was measured and deliberately not done. The actual
+ * WS-6 T10 root cause was the sessions.json shape hole - a readable store of the
+ * wrong shape made /api/auth/me answer 401 and destroyed a valid session with no
+ * I/O error at all - and that is fixed in readSessionsStrict(), not here.
  */
-const TIMEOUT = 30_000
+const TIMEOUT = 10_000
 
 async function call(method, url, opts = {}) {
   const { handleApi } = await import(HANDLERS)
@@ -726,6 +740,85 @@ describe("WS-7 AUTH-FAILOPEN — /api/auth/me must not destroy a session on a co
     writeUsers({ users: [USER_ROW] })
     const res = await call("GET", ME, { headers: { authorization: `Bearer ${"b".repeat(64)}` } })
     expect(res.status, "a real miss is a real 401 — the fix must not make /me unrefusable").toBe(401)
+  })
+})
+
+// sessions.json is the SECOND store with no shape rule, and it is the more
+// dangerous of the two: a wrong-shaped sessions file makes lookupSession return
+// null, /api/auth/me answers 401, and fetchMe() maps 401 to "rejected", which
+// makes shouldClearStoredSession DESTROY A VALID SESSION. Unlike a read fault
+// this needs NO I/O error at all - a well-formed JSON file of the wrong shape
+// does it. That is the WS-6 T10 signature, and it is reachable via a
+// truncated-yet-valid write under store contention.
+describe("WS-7 AUTH-FAILOPEN — a wrong-shaped SESSIONS store is corruption, not a miss", { timeout: TIMEOUT }, () => {
+  const ME = "/api/auth/me"
+  const DECISIONS = "/api/trading/decisions"
+  const validToken = "a".repeat(64)
+
+  it("answers 503, not 401, for {\"sessions\":null} with a VALID session", async () => {
+    writeSessions({ sessions: null })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${validToken}` } })
+    // 401 is the session-destroying answer here, exactly as in the users.json
+    // case above. The client still holds this token and would be signed out.
+    expect(res.status, "a corrupt SESSIONS store must not be reported as a rejected token").toBe(503)
+    expect(res.body?.user).toBeUndefined()
+  })
+
+  it("answers 503, not 401, for {} with a VALID session", async () => {
+    writeSessions({})
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${validToken}` } })
+    expect(res.status).toBe(503)
+  })
+
+  it("answers 503, not 401, for a bare array with a VALID session", async () => {
+    writeSessions([])
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${validToken}` } })
+    expect(res.status).toBe(503)
+  })
+
+  it("answers 503, not 401, for a bare null with a VALID session", async () => {
+    writeSessions("null")
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${validToken}` } })
+    expect(res.status).toBe(503)
+    expect(res.body?.error).toBe("auth store unavailable")
+  })
+
+  it("refuses a gated route when the SESSIONS store is wrong-shaped and users exist", async () => {
+    // Populated users means the bootstrap bypass does NOT admit the caller, so
+    // this isolates the session read: without a shape rule verifyTokenStrict
+    // returns null and the caller is told the token is merely invalid (401).
+    writeSessions({ sessions: null })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", DECISIONS, { headers: { authorization: `Bearer ${validToken}` } })
+    expect(res.status, "a corrupt session store is 503, not a false 401").toBe(503)
+  })
+
+  it("refuses a gated route on a ?token= credential when the SESSIONS store is wrong-shaped", async () => {
+    writeSessions({ sessions: "x" })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", `${DECISIONS}?token=${"b".repeat(64)}`)
+    expect(res.status).toBe(503)
+  })
+
+  it("still gives a true 401 for a genuinely unknown token on a healthy sessions store", async () => {
+    writeSessions({ sessions: {} })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${validToken}` } })
+    // The shape rule must not make /me unrefusable: an empty-but-well-formed
+    // sessions store is a real miss, and a real miss is a real 401.
+    expect(res.status).toBe(401)
+  })
+
+  it("still CONFIRMS a valid session on a healthy sessions store", async () => {
+    writeSessions({ sessions: { [validToken]: { userId: "u1", createdAt: 1, expiresAt: Date.now() + 3_600_000 } } })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${validToken}` } })
+    expect(res.status).toBe(200)
+    expect(res.body?.user?.id).toBe("u1")
   })
 })
 

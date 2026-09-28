@@ -296,6 +296,48 @@ async function createSession(userId) {
 }
 
 /**
+ * THE ONE strict reader of sessions.json.
+ *
+ * The mirror of readUsersStrict(), for the same reason: one store, one shape
+ * rule, so that every reader of a given file agrees on what "broken" means.
+ *
+ * This is the more dangerous of the two, because a wrong-shaped sessions file
+ * does not merely mis-gate a route - it makes /api/auth/me answer 401 for a
+ * session the client still holds, and fetchMe() maps 401 to `rejected`, which
+ * makes shouldClearStoredSession DELETE A VALID SESSION. No read error is
+ * needed for that: a well-formed JSON file of the wrong shape is enough, which
+ * is exactly what a truncated-yet-valid write under store contention produces.
+ * That is the WS-6 T10 terminal-performance flake, and it is why this reader
+ * exists rather than a shape check at one call site.
+ *
+ * A MISSING file is not a fault: readJSONStrict's ENOENT fallback is a genuine
+ * `{ sessions: {} }`, so a fresh install still reads as "no sessions".
+ *
+ * Throws AuthStoreUnavailable on a read failure, a parse failure, OR a
+ * readable-but-wrong shape. The shape guard is null-safe for the same reason as
+ * in readUsersStrict(): `JSON.parse("null")` is `null`. The Array.isArray test
+ * is NOT redundant with the typeof test - an array is `typeof === "object"`, so
+ * without it `[token]` would be a legal-looking lookup on a corrupt store.
+ */
+async function readSessionsStrict() {
+  const data = await readJSONStrict(SESSIONS_FILE, { sessions: {} })
+  const sessions = data && typeof data === "object" ? data.sessions : undefined
+  const isPlainObject = sessions !== null && typeof sessions === "object" && !Array.isArray(sessions)
+  if (!isPlainObject) {
+    const got =
+      sessions === undefined
+        ? "no sessions object"
+        : sessions === null
+          ? "null"
+          : Array.isArray(sessions)
+            ? "an array"
+            : typeof sessions
+    throw new AuthStoreUnavailable(`auth store is corrupt (${SESSIONS_FILE}): expected a sessions object, got ${got}`)
+  }
+  return sessions
+}
+
+/**
  * The one place session lookup + expiry is decided.
  *
  * `prune` is an explicit flag because the two callers genuinely differ and that
@@ -321,8 +363,8 @@ async function createSession(userId) {
  */
 async function lookupSession(token, { prune }) {
   if (!token) return null
-  const data = await readJSONStrict(SESSIONS_FILE, { sessions: {} })
-  const s = (data.sessions ?? {})[token]
+  const sessions = await readSessionsStrict()
+  const s = sessions[token]
   if (!s) return null
 
   // A row with no usable expiresAt counts as DEAD, not as immortal. This is a
@@ -334,8 +376,12 @@ async function lookupSession(token, { prune }) {
   if (expired) {
     if (prune) {
       await withLock(SESSIONS_FILE, async () => {
-        const d = await readJSONStrict(SESSIONS_FILE, { sessions: {} })
-        const sessions = d.sessions ?? {}
+        // Re-read STRICTLY, not leniently. Between the read above and this
+        // locked write a concurrent writer can replace the file, and the old
+        // `d.sessions ?? {}` would then `delete` from whatever that was and
+        // write it straight back - turning a transient shape fault into a
+        // PERSISTENT one. The prune is a write; it has to earn that write.
+        const sessions = await readSessionsStrict()
         delete sessions[token]
         await writeJSON(SESSIONS_FILE, { sessions })
       })

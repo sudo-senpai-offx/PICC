@@ -110,17 +110,27 @@ function stripComments(src) {
   const out = src.split("")
   let i = 0
   /**
-   * True when a `/` at i opens a regex literal rather than being division.
-   * Conservative: after anything that can END a value, a `/` is division.
+   * The kind of the last SIGNIFICANT thing consumed: "value" if it could end a
+   * value, "op" otherwise, null before anything has been consumed.
+   *
+   * Tracked explicitly instead of by looking BACKWARDS through `out`. The
+   * backward scan was unsound in a way that silently disabled the entire file.
+   * A `/` immediately after a CLOSED STRING is division, but the previous
+   * character is a quote, and a quote is not in the old `[\w$)\]}.]`
+   * value-ender set - so the lexer read the division as the start of a regex
+   * literal and then blanked forward to the next `/` ON THE LINE. Given a real
+   * one-line gate
+   *
+   *     const v = "b" / (a); if (!(await verifyUser(auth)) && (await hasUsers())) return 401
+   *
+   * that blanked away `verifyUser()` and `hasUsers()`, leaving the scan with
+   * ZERO call sites - and a guard that finds zero sites passes vacuously. The
+   * predicate was not wrong; it was switched off, silently, by a legitimate
+   * coding style. Tracking the kind of the consumed token makes this the actual
+   * JS rule: after a complete value, `/` is division.
    */
-  const regexAllowed = () => {
-    for (let k = i - 1; k >= 0; k -= 1) {
-      const c = out[k]
-      if (c === " " || c === "\t" || c === "\r") continue
-      return !(c && /[\w$)\]}.]/.test(c))
-    }
-    return true
-  }
+  let prev = null
+  const regexAllowed = () => prev !== "value"
   const blank = (from, to) => {
     for (let k = from; k < to && k < src.length; k += 1) if (src[k] !== "\n") out[k] = " "
   }
@@ -166,6 +176,7 @@ function stripComments(src) {
       if (closed) {
         blank(i, j)
         i = j
+        prev = "value"
         continue
       }
       i += 1
@@ -184,7 +195,15 @@ function stripComments(src) {
         j += 1
       }
       i = j + 1
+      // A string literal is a complete value, so the next `/` is division. This
+      // is the case the old backward scan got wrong.
+      prev = "value"
       continue
+    }
+    // A value-ender means the next `/` is division; anything else leaves an
+    // operator position, where a regex literal may legitimately open.
+    if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
+      prev = /[\w$)\]}]/.test(ch) ? "value" : "op"
     }
     i += 1
   }
@@ -235,6 +254,155 @@ function scanCallSites(code, original = code) {
 const SITES = scanCallSites(CODE, SRC)
 
 /**
+ * The specifiers of the `./services/auth.mjs` import clause, as WRITTEN.
+ *
+ * A count over `resolveHasUsers(` call sites cannot see which binding that name
+ * resolves to. `import { hasUsers as resolveHasUsers }` leaves the count
+ * perfectly satisfied - still exactly one `resolveHasUsers(` call - while every
+ * gate silently reads the LENIENT reader, and `!lenient()` is precisely the
+ * fail-open inversion this guard exists to prevent. The import CLAUSE has to be
+ * pinned, not just the count of call sites.
+ */
+function authImportSpecifiers(src) {
+  const clause = src.match(/import\s*\{([^}]*)\}\s*from\s*["'][^"']*services\/auth\.mjs["']/)
+  if (!clause) return null
+  return clause[1]
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+const AUTH_SPECIFIERS = authImportSpecifiers(CODE)
+
+/**
+ * Every string literal's CONTENTS, in source order, by a LINEAR scan.
+ *
+ * Comments are skipped so a quote inside one is not mistaken for a string. A
+ * regex literal is NOT skipped, so a quote inside a character class can
+ * manufacture a phantom literal; that errs toward a false FAILURE here, which is
+ * the safe direction for a check whose whole job is to notice.
+ *
+ * Replaces /(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g, which had two defects. `[^\\\n]`
+ * cannot cross a newline, so a multi-line template literal was never inspected
+ * at all - and a template literal is the natural place to paste a long readable
+ * call-site shape. And the nested alternation-with-star is the classic
+ * backtracking shape, so a long non-matching run was needlessly slow.
+ */
+function stringLiteralContents(src) {
+  const found = []
+  let i = 0
+  while (i < src.length) {
+    const ch = src[i]
+    const two = src.slice(i, i + 2)
+    if (ch === "/" && two === "/*") {
+      const end = src.indexOf("*/", i + 2)
+      i = end === -1 ? src.length : end + 2
+      continue
+    }
+    if (ch === "/" && two === "//") {
+      const nl = src.indexOf("\n", i)
+      i = nl === -1 ? src.length : nl
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const quote = ch
+      let j = i + 1
+      let body = ""
+      while (j < src.length) {
+        if (src[j] === "\\") {
+          body += src[j] + (src[j + 1] ?? "")
+          j += 2
+          continue
+        }
+        if (src[j] === quote) break
+        // A plain quoted string cannot span lines. If one appears to, stop at the
+        // newline rather than running to EOF and inventing a huge literal.
+        if (quote !== "`" && src[j] === "\n") break
+        body += src[j]
+        j += 1
+      }
+      found.push(body)
+      i = j + 1
+      continue
+    }
+    i += 1
+  }
+  return found
+}
+
+/**
+ * Does an accepted site FEED a refusal one hop down the block?
+ *
+ * The marker+anchor verdict judges a line. It cannot see what that line's RESULT
+ * is used for afterwards, and this is the escape that proves it. Planted:
+ *
+ *     // <an allowlist entry's marker>
+ *     const hasAccts = await hasUsers()
+ *     if (!hasAccts) return writeJson(res, 401, { error: "authentication required" })
+ *
+ * Every part of that passes the existing checks - the marker sits on the site's
+ * own contiguous comment block, and `hasUsers()` is the site's exact anchor - and
+ * the route is still a bootstrap bypass that a store fault satisfies, because
+ * `!hasUsers()` cannot tell a genuine empty store from an unreadable one.
+ *
+ * Only the assignable shape is covered, which is the common one. The aliasing
+ * escapes are NOT, and are listed under KNOWN LIMITATIONS.
+ */
+function siteFeedsRefusal(codeLines, index) {
+  const assigned = codeLines[index].match(
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?\bhasUsers\s*\(/
+  )
+  if (!assigned) return null
+  const name = assigned[1]
+  const nameRe = new RegExp(`\\b${name}\\b`)
+  for (let k = index + 1; k < codeLines.length; k += 1) {
+    if (!nameRe.test(codeLines[k])) continue
+    if (/\b40[13]\b/.test(codeLines[k])) return `handlers.mjs:${k + 1}  ${codeLines[k].trim()}`
+  }
+  return null
+}
+
+/**
+ * KNOWN LIMITATIONS — escapes this guard does NOT close.
+ *
+ * Listed rather than asserted away, because a guard that claims more than it
+ * enforces is worse than one that admits its edge: the false claim is what let a
+ * fail-open route through in the first place. Each is a deliberate, accepted gap
+ * with the reason it is not closed here.
+ *
+ * 1. A REFERENCE TO hasUsers() TAKEN WITHOUT A CALL IS INVISIBLE. Every scan in
+ *    this file counts or anchors on the call `hasUsers(`, so these are all
+ *    invisible to all of them:
+ *
+ *        const h = hasUsers;  await h()
+ *        const { hasUsers: h } = svc;  await h()
+ *        hasUsers?.()
+ *        hasUsers.call(null)
+ *
+ *    Closing this needs real scope analysis - tracking every binding a function
+ *    object reaches - which is a parser, not a grep. It is NOT attempted here,
+ *    because a half-measure that looks like coverage is the failure mode this
+ *    file exists to prevent. The real protection is structural: there is exactly
+ *    one grantor of the bootstrap bypass (pinned above) and exactly one
+ *    documented lenient-reader caller, so a new call site has to be written
+ *    somewhere and is caught by the count and clause pins even when spelled
+ *    through a reference.
+ *
+ * 2. siteFeedsRefusal only sees a directly-assigned result used by name on a
+ *    line that also mentions 401/403. Passing the result through another
+ *    variable, or building the refusal with a status computed elsewhere, is not
+ *    detected.
+ *
+ * 3. The connectors route-coverage predicate is scoped to the connectors FAMILY
+ *    (verified >= 5 routes, each gated in its own block). A blanket
+ *    requireSessionOrFirstRun() over every /api route in handleApi is not
+ *    attempted, because many routes are legitimately public - /api/auth/signup,
+ *    /api/auth/login, /api/auth/status, health, static-ish reads - and
+ *    distinguishing them needs an owner decision about which routes are public.
+ *    Tracked as a follow-up rather than guessed at here.
+ */
+
+/**
  * Does this site look like a gate? MESSAGE-ONLY.
  *
  * It is deliberately not part of the verdict — it exists to label a failure
@@ -258,9 +426,18 @@ function isGate(site) {
  *                  marker cannot be lifted off a legitimate non-gate and pasted
  *                  onto a gate that reads the same function differently.
  *
- * One axis alone is escapable and both together are not: a bare marker check is
- * defeated by pasting, a bare anchor check by relocating, and a window check by
- * both. See the two "pasted"/"far above" tests, which plant those attacks.
+ * One axis alone is escapable: a bare marker check is defeated by pasting, a bare
+ * anchor check by relocating, and a window check by both. See the two
+ * "pasted"/"far above" tests, which plant those attacks.
+ *
+ * What this verdict is NOT: it is a statement about the LINE, and only about the
+ * line. It says this exact call is the exact expression an allowlist entry
+ * documented, in its own comment block. It does NOT say the line's RESULT cannot
+ * be used to build a refusal further down the block. A previous version of this
+ * comment claimed "both together are not escapable", which was false - the
+ * planted attack in the "hop-downstream" test below satisfies both axes and is
+ * still a bootstrap bypass. `siteFeedsRefusal` closes that hop; the escapes that
+ * remain are listed under KNOWN LIMITATIONS rather than asserted away here.
  */
 function isAccepted(site) {
   return ALLOWLIST.some((a) => site.above.includes(a.marker) && site.text.includes(a.anchor))
@@ -286,6 +463,7 @@ describe("WS-7 AUTH-FAILOPEN — no gate in handlers.mjs reads the lenient hasUs
   })
 
   it("every hasUsers() call site is a reasoned non-gate — no gate may read the lenient reader", () => {
+    const codeLines = CODE.split("\n")
     const unexplained = SITES.filter((s) => !isAccepted(s)).map((s) => {
       const looksLikeAGate = isGate(s) || /verifyUser|verifyToken|authentication required|\b40[13]\b/.test(s.window)
       return (
@@ -302,6 +480,37 @@ describe("WS-7 AUTH-FAILOPEN — no gate in handlers.mjs reads the lenient hasUs
         "firstRunBootstrapAllowed() answer by name). If it genuinely makes no authorisation " +
         "decision, say so in a NOT A GATE comment and add a reasoned ALLOWLIST entry above."
     ).toEqual([])
+
+    // The hop. marker+anchor judge a LINE; this judges what the line is FOR.
+    const feeders = SITES.map((s) => ({ s, feed: siteFeedsRefusal(codeLines, s.line - 1) }))
+      .filter((r) => r.feed && isAccepted(r.s))
+      .map((r) => `handlers.mjs:${r.s.line}  ${r.s.text}\n      feeds → ${r.feed}`)
+    expect(
+      feeders,
+      "an accepted call site whose RESULT builds a 401/403 further down the block is a bootstrap " +
+        "bypass wearing an allowlist entry's marker. `!hasUsers()` cannot tell a genuine empty " +
+        "store from an unreadable one, so the whole point of the allowlist is lost. Route it " +
+        "through requireSessionOrFirstRun() instead of computing the decision at the call site."
+    ).toEqual([])
+  })
+
+  it("a hop-downstream refusal is rejected even with a pasted marker and a matching anchor", () => {
+    // The attack that made the "both axes are unescapable" claim false. Every
+    // line satisfies marker AND anchor: the marker is on the site's own comment
+    // block, and `hasUsers()` is the site's exact anchor. It is still a bypass.
+    const planted = [
+      `// ${ALLOWLIST[0].marker}`,
+      "    const hasAccts = await hasUsers()",
+      '    if (!hasAccts) return writeJson(res, 401, { error: "authentication required" })'
+    ].join("\n")
+    const found = scanCallSites(planted)
+    expect(found, "the planted site must be discovered").toHaveLength(1)
+    expect(isAccepted(found[0]), "marker + anchor are both satisfied - this is the whole point").toBe(true)
+    const feed = siteFeedsRefusal(planted.split("\n"), found[0].line - 1)
+    expect(
+      feed,
+      "the hop check is the only thing that rejects this; marker+anchor cannot"
+    ).not.toBeNull()
   })
 
   it("no line pairs the lenient hasUsers() with a 401 refusal — the fail-open idiom itself", () => {
@@ -320,6 +529,55 @@ describe("WS-7 AUTH-FAILOPEN — no gate in handlers.mjs reads the lenient hasUs
       "a 401 guarded by the lenient hasUsers() is a bootstrap bypass a store fault can satisfy — " +
         "use requireSessionOrFirstRun()"
     ).toEqual([])
+  })
+
+  it("the auth.mjs import clause binds every reader under its own name", () => {
+    // No `as` anywhere in the clause. Aliasing is legal JS and invisible to a
+    // call-site count, so it is banned here: the names in this clause are the
+    // ones the count pins reason about, and a binding that does not match its
+    // name invalidates every one of those pins at once.
+    expect(
+      AUTH_SPECIFIERS,
+      "the auth.mjs import clause must be findable, or this guard reasons about nothing"
+    ).not.toBeNull()
+    expect(
+      AUTH_SPECIFIERS.filter((s) => /\bas\b/.test(s)),
+      "an aliased import in the auth.mjs clause is invisible to the resolveHasUsers()/hasUsers() " +
+        "count pins. `hasUsers as resolveHasUsers` keeps the count at exactly 1 while every gate " +
+        "reads the LENIENT reader - the fail-open inversion this file exists to prevent. " +
+        "Import the reader you mean, under the name you mean."
+    ).toEqual([])
+  })
+
+  it("the two user-store readers are both bound, so neither can be swapped out", () => {
+    expect(
+      AUTH_SPECIFIERS,
+      "hasUsers (lenient, one documented non-gate caller) and resolveHasUsers (strict, the gate's " +
+        "reader) must both stay imported: dropping the strict one would push a gate back onto the " +
+        "lenient reader, and dropping the lenient one would remove the first-run hint."
+    ).toEqual(expect.arrayContaining([LENIENT, "resolveHasUsers"]))
+  })
+
+  it("demonstrates the blind spot the clause pin closes", () => {
+    // Stated as a test so the clause pin above is not later removed as
+    // redundant. This planted attack satisfies the call-site count EXACTLY while
+    // routing every gate through the lenient reader.
+    const planted = [
+      'import { hasUsers as resolveHasUsers, firstRunBootstrapAllowed } from "./services/auth.mjs"',
+      "let anyUserExists",
+      "try { anyUserExists = await resolveHasUsers() } catch { anyUserExists = true }"
+    ].join("\n")
+    const count = (planted.match(/\bresolveHasUsers\s*\(/g) ?? []).length
+    expect(
+      count,
+      "the count pin is SATISFIED by this attack - which is the whole reason the import clause " +
+        "is pinned as well. If this ever becomes 0, the count pin is doing something different " +
+        "than assumed and this demonstration needs revisiting."
+    ).toBe(1)
+    expect(
+      authImportSpecifiers(planted).filter((s) => /\bas\b/.test(s)),
+      "the clause pin is the only thing standing between that alias and a fail-open gate"
+    ).toHaveLength(1)
   })
 
   it("has exactly one place that can grant the bootstrap bypass", () => {
@@ -343,8 +601,63 @@ describe("WS-7 AUTH-FAILOPEN — no gate in handlers.mjs reads the lenient hasUs
     // The three eWallet derivations are the only places allowed to act on the
     // bootstrap answer, and they must all go through bootstrapAnswer() so they
     // cannot re-introduce a store read (and with it an uncaught fault).
-    const derived = (CODE.match(/\bbootstrapAnswer\s*\(/g) ?? []).length
-    expect(derived, "exactly the three eWallet derivations: owner stamp, actor, selfApprove").toBe(4)
+    //
+    // The count is asserted as DEFINITION + 3 CALL SITES rather than a bare 4.
+    // A previous version asserted 4 while its message said "three", and the
+    // mismatch is why: the two numbers counted different things and the message
+    // only described one of them. Splitting the assertion means every number in
+    // these messages is checkable against the thing it names.
+    const definitions = (CODE.match(/(?:async\s+)?function\s+bootstrapAnswer\s*\(/g) ?? []).length
+    expect(definitions, "bootstrapAnswer() must be defined exactly once: the gate's own answer").toBe(1)
+    const derived = (CODE.match(/\bbootstrapAnswer\s*\(/g) ?? []).length - definitions
+    expect(
+      derived,
+      "exactly the three eWallet derivations - the order owner stamp, the actor stamp, and " +
+        "selfApprove - each reading the gate's answer. A fourth derivation is a new place that " +
+        "acts on the bootstrap decision, and it is a new fault-to-status mapping the gate no " +
+        "longer owns."
+    ).toBe(3)
+  })
+
+  it("the verifyUser() surface is enumerated, not assumed", () => {
+    // A count pin, deliberately, and NOT a claim that the surface is correct.
+    //
+    // KNOWN GAP, still open: verifyUser() returns null when the SESSIONS store
+    // faults, so the 35 sites below that are not the gate fail CLOSED but with
+    // the wrong status - a 401 where the shared gate answers 503. No access is
+    // granted, which is why this is a gap and not a hole, but 401 is the
+    // session-destroying status client-side (fetchMe maps it to `rejected`,
+    // shouldClearStoredSession deletes the session), so it is the same harm
+    // class as the WS-6 T10 flake on a different store.
+    //
+    // Pinning the count is what this round does about it: the surface becomes a
+    // number someone has to look at and change deliberately, instead of 36 call
+    // sites nobody has enumerated. Migrating a site is `verifyTokenStrict()` +
+    // `strictOrRefuse()`, exactly as the gate does it; that is a separate change
+    // with its own review, tracked as a follow-up. Do NOT let this count be
+    // relaxed - a decrease means sites were migrated (good, update it with the
+    // reason), and an increase means a new answer-401-on-fault site was added
+    // (ask why it cannot use the gate).
+    // Counted on CODE, not SRC, so the three comment mentions of `verifyUser(`
+    // in this file's neighbourhood do not inflate the number. A comment is not a
+    // call site, and a pin that counted them would be measuring prose.
+    const sites = (CODE.match(/\bverifyUser\s*\(/g) ?? []).length
+    expect(
+      sites,
+      "verifyUser() call sites in handlers.mjs, counted on CODE. Expected 36 as of WS-7 round 2. " +
+        "A decrease means a site was migrated to verifyTokenStrict() + strictOrRefuse() - " +
+        "good, update the number in the same change. An increase is a new route that answers " +
+        "401 when the sessions store faults: ask why it does not use requireSessionOrFirstRun()."
+    ).toBe(36)
+    const strict = (CODE.match(/\bverifyTokenStrict\s*\(/g) ?? []).length
+    expect(
+      strict,
+      "verifyTokenStrict() separates a store fault from a bad token, and is the only call site " +
+        "in the shared gate. Expected 1 as of WS-7 round 2 (the other two textual matches in " +
+        "handlers.mjs are the import specifier, which has no parens, and a comment). " +
+        "If this changes, a route outside the gate started separating the two - which is the " +
+        "migration step for the gap above, so change it in the same commit as the count above."
+    ).toBe(1)
   })
 
   it("resolveHasUsers() is not available as a second spelling of the decision", () => {
@@ -363,38 +676,344 @@ describe("WS-7 AUTH-FAILOPEN — no gate in handlers.mjs reads the lenient hasUs
     ).toBe(1)
   })
 
+/**
+ * The CONNECTORS family's route-dispatch sites, found from the dispatch
+ * structure itself.
+ *
+ * The previous predicate was `codeLines[i].includes("/api/connectors")`. That is
+ * not a route enumeration, it is a substring search, and it found 2 of the
+ * family's 5 routes: the three `path.match(/.../)` routes are invisible to it,
+ * because stripComments blanks regex bodies on purpose so their contents are not
+ * scanned as code. An ungated sibling in that blind spot passed silently.
+ *
+ * A line counts as a route site when BOTH hold:
+ *   - the ORIGINAL line matches a connectors route-dispatch shape, AND
+ *   - that same line still carries code in CODE - i.e. stripComments did not
+ *     blank it away, i.e. it is not a comment.
+ *
+ * The second condition is what keeps a route mentioned in prose from being
+ * counted as a route.
+ */
+function findConnectorsRouteSites(src, code) {
+  const srcLines = src.split("\n")
+  const codeLines = code.split("\n")
+  // The family, tolerating the escaped slashes a regex literal necessarily has:
+  // the real line reads `path.match(/^\/api\/connectors\/...`.
+  const family = /\\?\/api\\?\/connectors/
+  // The dispatch shapes a route can be spelled with.
+  const dispatch = [/path\s*===\s*["']/, /path\.startsWith\(\s*["']/, /path\.match\(/]
+  const sites = []
+  for (let i = 0; i < srcLines.length; i += 1) {
+    const line = srcLines[i]
+    if (!family.test(line)) continue
+    if (!dispatch.some((re) => re.test(line))) continue
+    if (!codeLines[i] || !codeLines[i].trim()) continue
+    sites.push({ line: i + 1, text: line.trim(), index: i })
+  }
+  return sites
+}
+
+/**
+ * The handler block that belongs to a route site, by indentation.
+ *
+ * This is the "route's own block" the gate has to live in. A proximity WINDOW is
+ * not that: copy a sibling route's gate line onto the line after an ungated
+ * block and a 12-line window still calls it gated. Ending the region at the
+ * block's own closing brace is what makes a gate in the NEXT route incapable of
+ * vouching for this one.
+ *
+ * Handles both dispatch spellings in this file: `if (path === ...)` owns the
+ * block that follows it, and a `const mMatch = path.match(...)` matcher owns the
+ * `if (mMatch ...)` block immediately after it.
+ */
+function routeHandlerRegion(lines, index) {
+  const baseIndent = (lines[index].match(/^\s*/) ?? [""])[0].length
+  const region = [lines[index]]
+  for (let k = index + 1; k < lines.length; k += 1) {
+    const line = lines[k]
+    if (line.trim() === "") {
+      region.push(line)
+      continue
+    }
+    const indent = (line.match(/^\s*/) ?? [""])[0].length
+    const trimmed = line.trim()
+    // The block's own closing brace ends the region.
+    if (indent === baseIndent && /^\}/.test(trimmed)) break
+    // Inside the block.
+    if (indent > baseIndent) {
+      region.push(line)
+      continue
+    }
+    // The `if (mMatch && ...)` that follows a matcher line is the same dispatch.
+    if (indent === baseIndent && /^if\s*\(/.test(trimmed)) {
+      region.push(line)
+      continue
+    }
+    break
+  }
+  return region
+}
+
+/**
+ * Does this line answer the request with something the gate is protecting?
+ *
+ * A 4xx writeJson is deliberately NOT counted. This codebase uses those as cheap
+ * preconditions before the authenticated work - `if (!getConnector(slug)) return
+ * writeJson(res, 404, ...)` runs before the gate on the /:slug/history route -
+ * and they carry no route data: a 404 body is an error message, not a balance.
+ * Requiring the gate to precede them would mean either moving the precondition
+ * behind the auth check, which is a real cost, or accepting a false positive on
+ * every one of them.
+ *
+ * The carve-out is narrow on purpose: only a 4xx is exempt. A 2xx writeJson, a
+ * bare `return <value>`, and any res.write/end all count, so a route that
+ * discloses data still has to be gated first.
+ */
+const answersRequest = (line) => {
+  if (/writeJson\s*\(\s*res\s*,\s*4\d\d/.test(line)) return false
+  return /\bwriteJson\s*\(/.test(line) || /^\s*return\s/.test(line) || /\bres\.(end|write|send)\b/.test(line)
+}
+
+/**
+ * Is this route site gated by the shared gate, IN ITS OWN BLOCK, BEFORE it
+ * answers the request?
+ *
+ * The ordering half matters as much as the presence half. A gate that appears
+ * after the route has already returned is dead code, and a dead gate is exactly
+ * what a presence-only check mistakes for safety.
+ */
+function connectorsSiteIsGated(lines, index) {
+  const region = routeHandlerRegion(lines, index)
+  const gateAt = region.findIndex((l) => l.includes(`${GATE_CALL}(`))
+  if (gateAt === -1) return { ok: false, why: "no gate in this route's own block" }
+  const answersAt = region.findIndex((l, i) => i !== gateAt && answersRequest(l))
+  if (answersAt !== -1 && gateAt > answersAt) {
+    return { ok: false, why: "the gate appears AFTER the route already answers" }
+  }
+  return { ok: true }
+}
+
   it("every /api/connectors route is gated", () => {
     // /api/connectors (the AGGREGATE) had no gate at all while its sibling
     // /api/connectors/:slug/history was gated and discloses the same class of
     // data — live balances. It needs no store fault to be exploited, so it is
     // strictly easier to reach than anything in the fail-open class. Discovered
-    // by scanning for the route literal, not listed.
-    const codeLines = CODE.split("\n")
-    const blocks = []
-    for (let i = 0; i < codeLines.length; i += 1) {
-      if (!codeLines[i].includes("/api/connectors")) continue
-      blocks.push({ line: i + 1, text: codeLines[i].trim() })
-    }
-    expect(blocks.length, "the connectors family must still be discovered by the scan").toBeGreaterThan(0)
-    const ungated = blocks.filter(
-      (b) => !codeLines.slice(b.line - 1, b.line + 12).some((l) => l.includes(`${GATE_CALL}(`))
-    )
+    // by walking the dispatch structure, not listed by hand.
+    const sites = findConnectorsRouteSites(SRC, CODE)
     expect(
-      ungated.map((b) => `handlers.mjs:${b.line}  ${b.text}`),
-      "every /api/connectors route must pass through requireSessionOrFirstRun(). The aggregate " +
-        "lists every connector (label, live url, selectors, tuning) plus getLatestSnapshots() " +
-        "— live balances — and its own /:slug/history sibling is gated, so it is the outlier."
+      sites.length,
+      "the connectors family must still be discovered by the scan; a count of 0 or 1 means the " +
+        "scan has gone blind again and this test is asserting nothing"
+    ).toBeGreaterThanOrEqual(5)
+    const lines = SRC.split("\n")
+    const ungated = sites
+      .map((s) => ({ s, verdict: connectorsSiteIsGated(lines, s.index) }))
+      .filter((r) => !r.verdict.ok)
+      .map((r) => `handlers.mjs:${r.s.line}  ${r.s.text}  — ${r.verdict.why}`)
+    expect(
+      ungated,
+      "every /api/connectors route must pass through requireSessionOrFirstRun() inside its OWN " +
+        "block and BEFORE it answers the request. The aggregate lists every connector (label, " +
+        "live url, selectors, tuning) plus getLatestSnapshots() — live balances — and its own " +
+        "/:slug/history sibling is gated, so it is the outlier."
     ).toEqual([])
+  })
+
+  it("the connectors scan sees the path.match routes, not just path ===", () => {
+    // The enumeration half of the fix, stated separately so a regression to a
+    // substring scan is caught even if the five routes happen to be gated.
+    const sites = findConnectorsRouteSites(SRC, CODE)
+    const matchRoutes = sites.filter((s) => s.text.includes("path.match"))
+    expect(
+      matchRoutes.length,
+      "a substring scan finds only the two path === routes; the three path.match routes are the " +
+        "blind spot in which an ungated sibling would pass silently"
+    ).toBeGreaterThanOrEqual(3)
+  })
+
+  it("rejects an ungated route whose SIBLING carries the gate just after it", () => {
+    // The 12-line proximity window, planted exactly as it was exploited: the
+    // aggregate has no gate, returns a response, and the very next route's gate
+    // used to vouch for it.
+    const planted = [
+      '  if (path === "/api/connectors" && req.method === "GET") {',
+      "    return respond(registry)",
+      "  }",
+      '  if (path === "/api/connectors/autodetect" && req.method === "POST") {',
+      `    if (!(await ${GATE_CALL}(req, res))) return true`,
+      "    return respondAuto()",
+      "  }"
+    ].join("\n")
+    const sites = findConnectorsRouteSites(planted, planted)
+    const lines = planted.split("\n")
+    const ungated = sites
+      .map((s) => connectorsSiteIsGated(lines, s.index))
+      .filter((v) => !v.ok)
+    expect(
+      ungated.map((v) => v.why),
+      "a gate in the NEXT route must not vouch for this one; that is what the region bound buys"
+    ).toHaveLength(1)
+  })
+
+  it("rejects a gate that appears after the route has already answered", () => {
+    // The other half of the proximity hole: presence without ordering is dead code.
+    const planted = [
+      '  if (path === "/api/connectors" && req.method === "GET") {',
+      "    return respond(registry)",
+      `    if (!(await ${GATE_CALL}(req, res))) return true`,
+      "  }"
+    ].join("\n")
+    const lines = planted.split("\n")
+    const sites = findConnectorsRouteSites(planted, planted)
+    const verdict = connectorsSiteIsGated(lines, sites[0].index)
+    expect(
+      verdict.ok,
+      "a gate that runs after the response is unreachable, and a presence-only check would call it safe"
+    ).toBe(false)
+    expect(verdict.why).toMatch(/AFTER/)
+  })
+
+  it("rejects an ungated path.match route", () => {
+    // The invisible-to-substrings case, on its own: nothing here contains a
+    // literal the old `includes("/api/connectors")` scan could have matched.
+    const planted = [
+      "  const historyMatch = path.match(/^\\/api\\/connectors\\/([a-z0-9_-]+)\\/history$/)",
+      "  if (historyMatch && req.method === \"GET\") {",
+      "    return respondHistory(historyMatch[1])",
+      "  }"
+    ].join("\n")
+    const lines = planted.split("\n")
+    const sites = findConnectorsRouteSites(planted, planted)
+    expect(sites, "the path.match route must be discovered at all").toHaveLength(1)
+    expect(
+      connectorsSiteIsGated(lines, sites[0].index).ok,
+      "an ungated /:slug/history route is a live-balance disclosure with no store fault needed"
+    ).toBe(false)
+  })
+
+  it("accepts a 4xx precondition that runs before the gate", () => {
+    // Pins the carve-out above so it cannot widen silently. A 404 that leaks no
+    // route data may precede the gate; this is the real /:slug/history shape.
+    const planted = [
+      "  const historyMatch = path.match(/^\\/api\\/connectors\\/([a-z0-9_-]+)\\/history$/)",
+      '  if (historyMatch && req.method === "GET") {',
+      '    if (!getConnector(slug)) return writeJson(res, 404, { ok: false, error: "unknown connector" })',
+      `    if (!(await ${GATE_CALL}(req, res))) return true`,
+      "    writeJson(res, 200, { ok: true, history: await getConnectorHistory(slug) })",
+      "    return",
+      "  }"
+    ].join("\n")
+    const lines = planted.split("\n")
+    const sites = findConnectorsRouteSites(planted, planted)
+    expect(
+      connectorsSiteIsGated(lines, sites[0].index).ok,
+      "a precondition 404 that carries no data must not be treated as the gate being too late"
+    ).toBe(true)
+  })
+
+  it("still rejects a 2xx disclosure that precedes the gate", () => {
+    // The mirror of the carve-out: dropping the 4xx exemption must not extend to
+    // a real disclosure. This is the attack the ordering half exists for.
+    const planted = [
+      '  if (path === "/api/connectors" && req.method === "GET") {',
+      "    writeJson(res, 200, { ok: true, connectors: registry })",
+      `    if (!(await ${GATE_CALL}(req, res))) return true`,
+      "  }"
+    ].join("\n")
+    const lines = planted.split("\n")
+    const sites = findConnectorsRouteSites(planted, planted)
+    const verdict = connectorsSiteIsGated(lines, sites[0].index)
+    expect(verdict.ok, "a 200 that runs before the gate is exactly the disclosure being protected").toBe(false)
+    expect(verdict.why).toMatch(/AFTER/)
+  })
+
+  it("accepts a properly gated path.match route", () => {
+    // The mirror, so the rejection above is not just a rule that rejects everything.
+    const planted = [
+      "  const historyMatch = path.match(/^\\/api\\/connectors\\/([a-z0-9_-]+)\\/history$/)",
+      "  if (historyMatch && req.method === \"GET\") {",
+      `    if (!(await ${GATE_CALL}(req, res))) return true`,
+      "    return respondHistory(historyMatch[1])",
+      "  }"
+    ].join("\n")
+    const lines = planted.split("\n")
+    const sites = findConnectorsRouteSites(planted, planted)
+    expect(connectorsSiteIsGated(lines, sites[0].index).ok).toBe(true)
   })
 
   it("no string literal in the file contains something shaped like a call site", () => {
     // stripComments preserves string CONTENTS (only the lexing is string-aware),
     // which is what lets the connectors predicate above see the route literal.
     // That is only sound while no string can manufacture a finding.
-    const offenders = [...SRC.matchAll(/(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g)]
-      .map((m) => m[0])
-      .filter((s) => new RegExp(`\\b${LENIENT}\\s*\\(`).test(s))
-    expect(offenders, "a string containing a call-site shape would be scanned as code").toEqual([])
+    //
+    // Every name the predicates in this file reason about is checked, not just
+    // hasUsers: a string containing `requireSessionOrFirstRun(` would manufacture a
+    // gate, and one containing `bootstrapAnswer(` would manufacture a derivation.
+    const shapes = [LENIENT, STRICT_HELPER, GATE_CALL, "resolveHasUsers", "bootstrapAnswer", "verifyUser"]
+    const offenders = stringLiteralContents(SRC)
+      .filter((body) => shapes.some((name) => new RegExp(`\\b${name}\\s*\\(`).test(body)))
+      .map((body) => (body.length > 80 ? `${body.slice(0, 77)}...` : body))
+    expect(
+      offenders,
+      "a string containing a call-site shape would be scanned as code, manufacturing a finding. " +
+        "This is checked for every name this file's predicates match on, not only hasUsers()."
+    ).toEqual([])
+  })
+
+  it("the string-literal scan reaches ACROSS newlines", () => {
+    // The defect this pins: the previous extractor was
+    // /(["'`])(?:\\.|(?!\1)[^\\\n])*\1/g. `[^\\\n]` cannot match a newline, so a
+    // multi-line template literal was never inspected at all - and a template
+    // literal is exactly where a long, readable call-site shape would be pasted.
+    const planted = ["const doc = `", "  example: hasUsers()", "`"].join("\n")
+    expect(
+      stringLiteralContents(planted).some((b) => /\bhasUsers\s*\(/.test(b)),
+      "a call-site shape inside a multi-line template must be visible to this check"
+    ).toBe(true)
+  })
+
+  it("the string-literal scan terminates quickly on a long non-matching body", () => {
+    // The same extractor had a nested alternation-with-star
+    // (`(?:\\.|(?!\\1)[^\\\\\\n])*`), the classic backtracking shape. This is a
+    // bound, not a benchmark: it fails if the scan becomes superlinear enough to
+    // matter on a file of this size, and it is a real assertion because the old
+    // pattern is exactly what regressed.
+    const long = `"${"a".repeat(200_000)}`
+    const started = process.hrtime.bigint()
+    stringLiteralContents(long)
+    const ms = Number(process.hrtime.bigint() - started) / 1e6
+    expect(ms, `scanning a 200kB literal took ${ms.toFixed(1)}ms`).toBeLessThan(1_000)
+  })
+
+  it("the lexer reads division after a string as division, not as a regex", () => {
+    // Pins a lexer bug that silently disabled this whole file rather than
+    // reporting a wrong answer. A `/` after a CLOSED STRING is division. The
+    // old backward scan saw the closing quote, did not recognise a quote as
+    // ending a value, and consumed forward to the next `/` ON THE LINE - which
+    // blanked the gate it was supposed to find and left the scan with zero call
+    // sites. Every predicate here passed VACUOUSLY on that fixture, and a
+    // vacuous pass is indistinguishable from a working guard at the call site.
+    const fixture = [
+      "async function gate() {",
+      '  const v = "b" / (a); if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "x" }) / 2',
+      "}"
+    ].join("\n")
+    const view = stripComments(fixture)
+    for (const name of [LENIENT, "verifyUser"]) {
+      expect(
+        new RegExp(`\\b${name}\\s*\\(`).test(view),
+        `the lexer blanked ${name}() behind a string division, so the scan would find nothing to check`
+      ).toBe(true)
+    }
+  })
+
+  it("the lexer still treats a regex literal as a literal", () => {
+    // The mirror of the case above: the fix must not have broken genuine regex
+    // detection, which is what stops `/^\/api\//` from blanking the whole file.
+    const fixture = 'const m = path.match(/^\\/api\\/connectors\\/(.+)$/); if (m) return 1'
+    const view = stripComments(fixture)
+    expect(view, "a regex literal's body must be blanked, not scanned as code").not.toContain("api/connectors")
+    expect(view, "the code around the regex literal must survive").toContain("path.match")
   })
 
   it("the only lenient hasUsers() reader in handlers.mjs is the first-run hint", () => {
