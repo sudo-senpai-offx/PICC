@@ -27,11 +27,19 @@
 // eight characters ending in U+009D - the undefined CP1252 byte 0x9D. Both
 // shapes are detected below.
 //
-// NOTHING IN THIS FILE REPRODUCES THOSE CHARACTERS LITERALLY, INCLUDING THIS
-// COMMENT. The examples above are given as code points for that reason, and the
-// detector's test samples are built from raw bytes. The first draft of this
-// guard wrote them out literally, and this guard then failed on ITSELF - which
-// is the only honest way to demonstrate that it has teeth.
+// NO MOJIBAKE SEQUENCE IS REPRODUCED LITERALLY IN THIS FILE, INCLUDING THIS
+// COMMENT. That is the precise claim, and it is deliberately narrower than "no
+// character from the tables above appears here", because it is not true: the
+// next paragraph quotes the BARE characters U+00E2, U+00E3 and U+00C5 on
+// purpose, to show why a bare lead byte is not a finding. Those are single
+// code points standing for themselves; the damage is the SEQUENCE, and no
+// sequence is written out. The examples above are given as code points for that
+// reason, and the detector's test samples are built from raw bytes. The first
+// draft of this guard wrote the sequences out literally, and this guard then
+// failed on ITSELF - which is the only honest way to demonstrate that it has
+// teeth. Do not "tidy" the bare characters in the next paragraph away to satisfy
+// a stricter reading of this line: they are the explanation of why the guard is
+// safe on honest multilingual text, and removing them would remove the argument.
 //
 // A BARE LEAD CHARACTER IS NOT A FINDING, AND THAT IS THE WHOLE TRICK.
 // `â` (U+00E2) and `ã` (U+00E3) are ordinary letters in French, Portuguese,
@@ -149,17 +157,52 @@ const trackedFiles = execFileSync("git", ["ls-files"], {
   .filter(Boolean)
   .filter((f) => !EXCLUDED_PREFIXES.some((p) => f.startsWith(p)))
 
+// WHY A NUL BYTE IS NOT SUFFICIENT TO CALL A FILE BINARY. It is necessary but
+// not sufficient, and treating it as sufficient silently dropped a TEXT file
+// from this guard's own scan: this repository uses a raw NUL byte deliberately,
+// as a cache-key separator in ws7RegulatoryClaimGuard.test.mjs, so that file
+// was classified binary and never scanned - which made this guard's headline
+// claim ("no tracked text file may carry...") false for one of the very files
+// its own commit had just edited. The bug was invisible for two independent
+// reasons: that file was not in HISTORICALLY_DAMAGED, and the vacuity floor
+// passed comfortably. Real binary data is not merely NUL-bearing, it is
+// DENSE in control bytes; a 64KB source file with one NUL is 0.0015% control.
+// Measured across every NUL-containing tracked file in this repository the
+// separation is four orders of magnitude - 0.000015 for the text file against
+// 0.199 for the lowest-density PNG - so 0.05 is not a tuned magic number, it
+// sits in the middle of an empty gap. This is the shape of test git itself uses.
+const BINARY_CONTROL_RATIO = 0.05
+
+function looksBinary(bytes) {
+  // Necessary but not sufficient: a NUL on its own means "binary", which is
+  // exactly the bug this second condition exists to remove.
+  if (!bytes.includes(0)) return false
+  const sample = bytes.subarray(0, Math.min(bytes.length, 65536))
+  let control = 0
+  for (const byte of sample) {
+    // Tab, LF and CR are TEXT whitespace and must not count against a file.
+    if (byte === 0x09 || byte === 0x0a || byte === 0x0d) continue
+    if (byte < 0x20 || byte === 0x7f) control++
+  }
+  return control / sample.length > BINARY_CONTROL_RATIO
+}
+
+/** Why each tracked file was not scanned. Absent means "it was scanned". */
+const SKIPPED = new Map()
+
 /** Read a tracked file as text, or return null if it is binary. */
 function readText(rel) {
   let bytes
   try {
     bytes = readFileSync(join(REPO_ROOT, rel))
   } catch {
+    SKIPPED.set(rel, "unreadable")
     return null
   }
-  // A NUL byte is the cheap, conventional binary test; decoding a PNG as UTF-8
-  // would manufacture thousands of false findings.
-  if (bytes.includes(0)) return null
+  if (looksBinary(bytes)) {
+    SKIPPED.set(rel, "binary")
+    return null
+  }
   return bytes.toString("utf8")
 }
 
@@ -190,9 +233,9 @@ const HISTORICALLY_DAMAGED = [
 
 describe("WS-7 T5c - encoding integrity: the detector can actually fail", () => {
   // These samples are built from HEX, never written as literals. A literal
-  // A literal misread em-dash (U+00E2 U+20AC U+201D) in this file would make the
-  // guard's own scan find the guard file, and
-  // an allowlist entry to excuse that would be a self-inflicted blind spot.
+  // misread em-dash (U+00E2 U+20AC U+201D) written into this file would make
+  // the guard's own scan find the guard file, and an allowlist entry to excuse
+  // that would be a self-inflicted blind spot.
   const MISREAD_EM_DASH = Buffer.from("c3a2e282ace2809d", "hex").toString("utf8")
   const MISREAD_ARROW = Buffer.from("c3a2e280a0e28099", "hex").toString("utf8")
   const MISREAD_BULLET = Buffer.from("c3a2e282acc2a2", "hex").toString("utf8")
@@ -252,12 +295,77 @@ describe("WS-7 T5c - encoding integrity: the detector can actually fail", () => 
   })
 })
 
+// SHAPE OF THE EXCLUSION, NOT A LIST OF NAMES. Anything this guard skips must
+// be skipped because it is BINARY, and binary-ness is a property of the bytes,
+// not of the file's name. So the assertions below are about SHAPE: every skip
+// must carry a binary reason, no skipped file may carry a text-ish extension,
+// and the skipped set must stay a negligible fraction of the corpus. A named
+// allowlist of "these files may be skipped" would be the precise thing this
+// guard exists to prevent - an exclusion that reads as coverage - and it would
+// rot silently the first time somebody renamed a file on it.
+const BINARY_EXTENSION =
+  /\.(png|jpe?g|gif|webp|avif|bmp|ico|tiff?|psd|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|bz2|xz|7z|mp3|mp4|mov|webm|avi|wav|flac|wasm|so|dll|dylib|exe|class|jar|pyc|o|obj)$/i
+
 describe("WS-7 T5c - encoding integrity: the scan set is real", () => {
   it("discovers a substantial number of tracked text files", () => {
     expect(
       SCAN.size,
       "the scan must actually cover the repository, not an empty or near-empty set"
     ).toBeGreaterThan(400)
+    // The absolute floor above cannot catch a rule that quietly drops a large
+    // SLICE of the corpus - a NUL heuristic going mass-misfire, or a read error
+    // firing en masse - because the remaining hundreds still clear it. A ratio
+    // is what distinguishes "the corpus" from "a convenient subset of it".
+    expect(
+      SCAN.size / trackedFiles.length,
+      "the scan must cover the corpus, not a convenient subset: a rule that dropped " +
+        "hundreds of files at once would leave every other test in this file green"
+    ).toBeGreaterThan(0.95)
+  })
+
+  it("excludes nothing that is not genuinely binary", () => {
+    // THE ASSERTION THAT FAILS ON A BARE-NUL RULE. This is the net for the
+    // defect that shipped: a text file containing a deliberate NUL was skipped
+    // as "binary" and never scanned, while every other assertion in this file
+    // stayed green because the corpus was still large and the file was not
+    // named in HISTORICALLY_DAMAGED.
+    const notBinary = [...SKIPPED.entries()]
+      .filter(([, reason]) => reason !== "binary")
+      .map(([file, reason]) => `${file} (skipped as ${reason})`)
+    expect(
+      notBinary,
+      "every file this guard skips must be skipped as binary; an unreadable or " +
+        "otherwise dropped text file is a silent coverage hole"
+    ).toEqual([])
+
+    const notBinaryShaped = [...SKIPPED.keys()].filter((file) => !BINARY_EXTENSION.test(file))
+    expect(
+      notBinaryShaped,
+      "a skipped file must look binary by extension. A source file here means the " +
+        "binary heuristic is too broad, which is how a text file stops being scanned."
+    ).toEqual([])
+  })
+
+  it("keeps the excluded set a negligible fraction of the corpus", () => {
+    expect(
+      SKIPPED.size / trackedFiles.length,
+      "the skipped set must stay negligible; a large one means the binary heuristic " +
+        "is misfiring in bulk"
+    ).toBeLessThan(0.05)
+  })
+
+  it("scans a text file that deliberately contains a NUL byte", () => {
+    // The concrete instance, pinned positively so the general shape assertions
+    // above cannot be satisfied by a rule that happens to agree today. This
+    // file uses a raw NUL as a cache-key separator; a bare-NUL binary test drops
+    // it. It is pinned as something that MUST BE SCANNED, which is the opposite
+    // of an allowlist entry.
+    const NUL_BEARING_TEXT =
+      "apps/dashboard/server/__tests__/ws7RegulatoryClaimGuard.test.mjs"
+    expect(
+      SCAN.has(NUL_BEARING_TEXT),
+      "a source file containing a deliberate NUL byte is still text and must be scanned"
+    ).toBe(true)
   })
 
   it("reaches every file this guard was written for", () => {
