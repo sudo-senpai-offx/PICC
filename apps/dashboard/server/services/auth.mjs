@@ -170,6 +170,26 @@ export async function hasUsers() {
   return (await listUsers()).length > 0
 }
 
+/**
+ * Whether at least one local account exists, separating a real answer from an
+ * unreadable store.
+ *
+ * hasUsers() keeps its lenient boolean for its one legitimate caller, the
+ * first-run signup hint on /api/auth/status, where "probably not" is the right
+ * answer to a degraded read.
+ *
+ * AUTH GATES must use this instead. `!hasUsers()` is the first-user bootstrap
+ * bypass, and hasUsers() answers `false` for BOTH "no accounts exist" and
+ * "users.json could not be read" — so gating on it turns a store fault into an
+ * unauthenticated pass for every guarded route. This throws
+ * AuthStoreUnavailable on a fault so the gate can refuse instead of waving
+ * requests through.
+ */
+export async function resolveHasUsers() {
+  const data = await readJSONStrict(USERS_FILE, { users: [] })
+  return Array.isArray(data.users) && data.users.length > 0
+}
+
 export async function createAccount({ email, password, name }) {
   const em = String(email ?? "").trim().toLowerCase()
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return { error: "A valid email address is required." }
@@ -218,22 +238,68 @@ async function createSession(userId) {
   })
 }
 
-export async function verifyToken(token) {
+/**
+ * The one place session lookup + expiry is decided.
+ *
+ * `prune` is an explicit flag because the two callers genuinely differ and that
+ * difference belongs where it is made, not hidden in duplicated logic:
+ *
+ *   - verifyToken(), prune: true. It is the general store reader and already
+ *     takes the write lock, so it garbage-collects the dead row it just found.
+ *     This keeps sessions.json from growing for a client that only ever calls
+ *     ordinary routes.
+ *   - resolveAuthUser() (/api/auth/me), prune: true. Same contract, and the
+ *     write costs one locked rewrite per already-dead session rather than one
+ *     per check — pruning only runs in the expired branch. Without it a client
+ *     that only ever calls /me would never collect its own dead sessions.
+ *
+ * Both callers pass it explicitly so the read/prune contract is stated at the
+ * call site instead of being implied by two divergent copies of this logic.
+ *
+ * Reads STRICTLY: a store fault raises AuthStoreUnavailable rather than
+ * looking like "no such session". verifyToken() maps that fault back to its
+ * documented null contract; resolveAuthUser() lets it reach the caller.
+ *
+ * Returns the live session's userId, or null for unknown/expired.
+ */
+async function lookupSession(token, { prune }) {
   if (!token) return null
-  const data = await readJSON(SESSIONS_FILE, { sessions: {} })
-  const sessions = data.sessions ?? {}
-  const s = sessions[token]
+  const data = await readJSONStrict(SESSIONS_FILE, { sessions: {} })
+  const s = (data.sessions ?? {})[token]
   if (!s) return null
-  if (Date.now() > s.expiresAt) {
-    await withLock(SESSIONS_FILE, async () => {
-      const d = await readJSON(SESSIONS_FILE, { sessions: {} })
-      const sess = d.sessions ?? {}
-      delete sess[token]
-      await writeJSON(SESSIONS_FILE, { sessions: sess })
-    })
+
+  // A row with no usable expiresAt counts as DEAD, not as immortal. This is a
+  // deliberate TIGHTENING of the previous `Date.now() > s.expiresAt`: with
+  // expiresAt undefined that comparison was `undefined > n` → false, so such a
+  // row was treated as valid forever. Expiry is the fail-closed direction, so
+  // "cannot tell when this ends" is resolved against the session.
+  const expired = typeof s.expiresAt !== "number" || Date.now() > s.expiresAt
+  if (expired) {
+    if (prune) {
+      await withLock(SESSIONS_FILE, async () => {
+        const d = await readJSONStrict(SESSIONS_FILE, { sessions: {} })
+        const sessions = d.sessions ?? {}
+        delete sessions[token]
+        await writeJSON(SESSIONS_FILE, { sessions })
+      })
+    }
     return null
   }
   return s.userId
+}
+
+export async function verifyToken(token) {
+  // Contract: never throws, and null means "cannot vouch for this token". A
+  // store fault is simply one more way of not being able to vouch, so it is
+  // reported as null. That keeps the fail-CLOSED behaviour every requireAuth
+  // caller already depends on, while the shared helper above still tells the
+  // callers that care that the store — rather than the token — was at fault.
+  try {
+    return await lookupSession(token, { prune: true })
+  } catch (err) {
+    if (isAuthStoreUnavailable(err)) return null
+    throw err
+  }
 }
 
 export async function revokeToken(token) {
@@ -279,18 +345,17 @@ export async function verifyUser(authorizationHeader) {
  */
 export async function resolveAuthUser(authorizationHeader) {
   if (!authorizationHeader?.startsWith("Bearer ")) return null
-  const token = authorizationHeader.slice(7)
-  if (!token) return null
-
-  const sessionData = await readJSONStrict(SESSIONS_FILE, { sessions: {} })
-  const session = (sessionData.sessions ?? {})[token]
-  if (!session) return null
-  // Read-only expiry check: an expired token is a genuine 401, and the cleanup
-  // write stays on verifyToken()'s locked path rather than racing it here.
-  if (Date.now() > session.expiresAt) return null
-
+  // prune: true, same as verifyToken(). The earlier draft of this used
+  // prune:false to keep /me off the write lock, on the theory that /me is the
+  // hot path. That was wrong: the write only happens inside the EXPIRED branch,
+  // so it costs one locked rewrite per already-dead session, once — after which
+  // the row is gone and later checks write nothing. Leaving it off meant a
+  // client that only ever calls /me never garbage-collected its own dead
+  // sessions, and sessions.json is re-read in full on every auth check.
+  const userId = await lookupSession(authorizationHeader.slice(7), { prune: true })
+  if (!userId) return null
   const userData = await readJSONStrict(USERS_FILE, { users: [] })
   const users = Array.isArray(userData.users) ? userData.users : []
-  const user = users.find((u) => u.id === session.userId)
+  const user = users.find((u) => u.id === userId)
   return user ? publicUser(user) : null
 }

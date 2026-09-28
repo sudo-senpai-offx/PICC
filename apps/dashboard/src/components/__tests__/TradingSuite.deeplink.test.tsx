@@ -11,7 +11,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 
 vi.mock("@/lib/auth", () => ({
   getStoredSession: () => ({ access_token: "t", user: { id: "u", name: "SP0 Observer", email: "sp0.observer@picc.local" } }),
-  fetchMe: async () => ({ id: "u", name: "SP0 Observer", email: "sp0.observer@picc.local" }),
+  fetchMe: async () => ({ kind: "confirmed", user: { id: "u", name: "SP0 Observer", email: "sp0.observer@picc.local" } }),
+  shouldClearStoredSession: (r: { kind: string }) => r?.kind === "rejected",
   signOutLocal: async () => {},
   setStoredSession: () => {},
   getToken: () => "t"

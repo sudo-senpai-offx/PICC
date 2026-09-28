@@ -12,8 +12,12 @@
 // TOKEN, and only the server may make that claim. Everything else — a network
 // error, a 5xx, a 429, a body that did not parse — is inconclusive and must
 // leave the stored session alone.
+//
+// fetchMe() is pure with respect to localStorage: it REPORTS a SessionCheck and
+// never mutates. The decision to destroy a session is the caller's, made via
+// shouldClearStoredSession() — so these tests assert both halves.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { fetchMe, getStoredSession } from "../auth"
+import { fetchMe, getStoredSession, setStoredSession, shouldClearStoredSession } from "../auth"
 
 const KEY = "picc.auth"
 const USER = { id: "u1", email: "e@example.test", name: "E", createdAt: "2026-01-01T00:00:00.000Z" }
@@ -33,7 +37,7 @@ function seedSession() {
   window.localStorage.setItem(KEY, JSON.stringify({ access_token: "tok", user: USER }))
 }
 
-describe("fetchMe — only an authoritative rejection destroys the session", () => {
+describe("fetchMe — reports which kind of answer it got", () => {
   beforeEach(() => {
     window.localStorage.clear()
     seedSession()
@@ -44,72 +48,91 @@ describe("fetchMe — only an authoritative rejection destroys the session", () 
     window.localStorage.clear()
   })
 
-  it("returns the user and keeps the session on 200", async () => {
+  it("reports `confirmed` with the user on 200", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(200, { ok: true, user: USER })))
-    await expect(fetchMe()).resolves.toEqual(USER)
-    expect(getStoredSession()).not.toBeNull()
+    const result = await fetchMe()
+    expect(result).toEqual({ kind: "confirmed", user: USER })
+    expect(shouldClearStoredSession(result)).toBe(false)
   })
 
-  it("clears the session when the server authoritatively answers 401", async () => {
+  it("reports `rejected` on an authoritative 401 and tells the caller to clear", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(401, { error: "not authenticated" })))
-    await expect(fetchMe()).resolves.toBeNull()
-    expect(getStoredSession()).toBeNull()
+    const result = await fetchMe()
+    expect(result).toEqual({ kind: "rejected" })
+    expect(shouldClearStoredSession(result)).toBe(true)
   })
 
-  it("clears the session on 403", async () => {
+  it("reports `rejected` on 403", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(403, { error: "forbidden" })))
-    await expect(fetchMe()).resolves.toBeNull()
-    expect(getStoredSession()).toBeNull()
+    expect(await fetchMe()).toEqual({ kind: "rejected" })
   })
 
   // The exact failure mode that produced the flake: the auth store was briefly
   // unreadable, the server said "could not tell", and the session was deleted.
-  it("KEEPS the session when the auth store is unavailable (503)", async () => {
+  it("reports `inconclusive` and never asks to clear when the auth store is unavailable (503)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(503, { error: "auth store unavailable" })))
-    await expect(fetchMe()).resolves.toBeUndefined()
+    const result = await fetchMe()
+    expect(result).toEqual({ kind: "inconclusive" })
+    expect(shouldClearStoredSession(result)).toBe(false)
     expect(getStoredSession()).not.toBeNull()
   })
 
-  it("KEEPS the session on a 500", async () => {
+  it("reports `inconclusive` on a 500", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(500, { error: "internal error" })))
-    await expect(fetchMe()).resolves.toBeUndefined()
-    expect(getStoredSession()).not.toBeNull()
+    expect(await fetchMe()).toEqual({ kind: "inconclusive" })
   })
 
-  it("KEEPS the session on a 429", async () => {
+  it("reports `inconclusive` on a 429", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(429, { error: "rate limit exceeded" })))
-    await expect(fetchMe()).resolves.toBeUndefined()
-    expect(getStoredSession()).not.toBeNull()
+    expect(await fetchMe()).toEqual({ kind: "inconclusive" })
   })
 
-  it("KEEPS the session when the request never completes", async () => {
+  it("reports `inconclusive` when the request never completes", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
         throw new TypeError("Failed to fetch")
       })
     )
-    await expect(fetchMe()).resolves.toBeUndefined()
-    expect(getStoredSession()).not.toBeNull()
+    expect(await fetchMe()).toEqual({ kind: "inconclusive" })
   })
 
-  it("KEEPS the session when a 200 body does not parse", async () => {
+  it("reports `inconclusive` when a 200 body does not parse", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(200, null, true)))
-    await expect(fetchMe()).resolves.toBeUndefined()
-    expect(getStoredSession()).not.toBeNull()
+    expect(await fetchMe()).toEqual({ kind: "inconclusive" })
   })
 
-  it("KEEPS the session when a 200 body carries no user", async () => {
+  it("reports `inconclusive` when a 200 body carries no user", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(200, { ok: true })))
-    await expect(fetchMe()).resolves.toBeUndefined()
-    expect(getStoredSession()).not.toBeNull()
+    expect(await fetchMe()).toEqual({ kind: "inconclusive" })
   })
 
-  it("returns null when there is no token to check", async () => {
+  it("reports `rejected` when there is no token to check", async () => {
     window.localStorage.clear()
     const spy = vi.fn()
     vi.stubGlobal("fetch", spy)
-    await expect(fetchMe()).resolves.toBeNull()
+    expect(await fetchMe()).toEqual({ kind: "rejected" })
     expect(spy).not.toHaveBeenCalled()
+  })
+
+  // fetchMe reports; it must not mutate. A single clearing site in the caller
+  // is what keeps this from becoming a two-place policy.
+  it("never mutates the stored session, whatever the answer", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(401, { error: "not authenticated" })))
+    await fetchMe()
+    expect(getStoredSession()).not.toBeNull()
+
+    setStoredSession(null)
+    expect(getStoredSession()).toBeNull()
+  })
+
+  it("only `rejected` ever clears the stored session", async () => {
+    window.localStorage.clear()
+    for (const kind of ["confirmed", "inconclusive", "rejected"] as const) {
+      seedSession()
+      const result = kind === "confirmed" ? { kind, user: USER } : { kind }
+      if (shouldClearStoredSession(result)) setStoredSession(null)
+      expect(getStoredSession() === null, `kind=${kind}`).toBe(kind === "rejected")
+    }
   })
 })

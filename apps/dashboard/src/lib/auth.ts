@@ -83,43 +83,64 @@ export async function signOutLocal(): Promise<void> {
 }
 
 /**
+ * The outcome of asking "is this token still good?".
+ *
+ * This is a discriminated union on purpose. The previous shape was
+ * `LocalUser | null`, which cannot express the difference the whole fix turns
+ * on — and `!undefined` is `true`, so a caller writing
+ * `if (!user) setStoredSession(null)` compiled cleanly and was verbatim the
+ * original bug. With a union keyed on `kind`, that mistake is a TYPE ERROR:
+ * `result.user` does not exist on the `rejected` and `inconclusive` variants,
+ * and forgetting to handle a variant is a compile error too.
+ *
+ * - `confirmed`     the server vouched for the token and returned the user
+ * - `rejected`      the server AUTHORITATIVELY refused the token (401/403)
+ * - `inconclusive`  we could not tell: network error, 5xx, 429, or a body that
+ *                   did not parse. This says NOTHING about the token, so the
+ *                   stored session must survive.
+ */
+export type SessionCheck =
+  | { kind: "confirmed"; user: LocalUser }
+  | { kind: "rejected" }
+  | { kind: "inconclusive" }
+
+/**
+ * Whether a check result means the stored session must be destroyed.
+ *
+ * Named so the intent is legible at the call site — the dangerous line in this
+ * module is the one that clears localStorage, and this makes "should I clear?"
+ * an explicit, type-checked question instead of a truthiness test.
+ */
+export function shouldClearStoredSession(result: SessionCheck): boolean {
+  return result.kind === "rejected"
+}
+
+/**
  * Validate the stored token server-side.
  *
- * "Is this token still good?" has THREE answers, not two, and collapsing them
- * is a real defect rather than a style question:
- *
- * - `LocalUser`   the server confirmed the token and returned the user
- * - `null`        the server AUTHORITATIVELY rejected the token (401/403), so
- *                 the stored session is cleared
- * - `undefined`   the answer was INCONCLUSIVE — network error, 5xx, 429, or a
- *                 body that did not parse. This proves nothing about the token,
- *                 so the caller must KEEP the session.
- *
- * The previous version answered `null` for every failure, so a single
- * inconclusive request permanently deleted a valid session and bounced the app
- * to /login. That is what made the WS-6 T10 terminal performance spec flake: a
- * throttled, host-loaded run could receive one unproven answer from
- * /api/auth/me, after which the markets room marker could never render and
- * `page.waitForSelector("[data-room='markets']")` burned its full 30s.
+ * Pure with respect to localStorage: it REPORTS and never mutates, so the
+ * decision to destroy a session stays with the caller, in one place. The
+ * original version cleared the session inside this function on any non-OK
+ * response, which is how one unprovable answer could permanently sign a user
+ * out — the WS-6 T10 terminal performance flake, where the app was left
+ * rendering /login and `page.waitForSelector("[data-room='markets']")` burned
+ * out its full 30s.
  */
-export async function fetchMe(): Promise<LocalUser | null | undefined> {
+export async function fetchMe(): Promise<SessionCheck> {
   const token = getToken()
-  if (!token) return null
+  if (!token) return { kind: "rejected" }
   let res: Response
   try {
     res = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
   } catch {
-    return undefined
+    return { kind: "inconclusive" }
   }
-  if (res.status === 401 || res.status === 403) {
-    setStoredSession(null)
-    return null
-  }
+  if (res.status === 401 || res.status === 403) return { kind: "rejected" }
   // 5xx / 429 / anything else: the token is unproven, not rejected.
-  if (!res.ok) return undefined
+  if (!res.ok) return { kind: "inconclusive" }
   const data = (await res.json().catch(() => null)) as { user?: LocalUser } | null
   // A 200 that carries no user is a malformed answer, not a rejection.
-  return data?.user ?? undefined
+  return data?.user ? { kind: "confirmed", user: data.user } : { kind: "inconclusive" }
 }
 
 export async function getAuthStatus(): Promise<{ hasUsers: boolean }> {

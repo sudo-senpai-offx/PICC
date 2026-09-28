@@ -34,6 +34,7 @@ import {
   hasUsers,
   verifyToken,
   resolveAuthUser,
+  resolveHasUsers,
   isAuthStoreUnavailable
 } from "./services/auth.mjs"
 import {
@@ -5444,7 +5445,27 @@ const BROWSER_ROUTES = {
 
 async function requireAuth(req, res) {
   if (isLocalhostRequest(req)) return true
-  if ((await verifyUser(req.headers.authorization)) || !(await hasUsers())) return true
+  if (await verifyUser(req.headers.authorization)) return true
+  // First-user bootstrap: with no accounts at all, anyone may through so the
+  // first one can be created. That bypass MUST NOT be satisfied by a store
+  // fault — hasUsers() answers false both for "no users" and for "users.json
+  // unreadable", so gating on it would serve every route below
+  // unauthenticated. resolveHasUsers() tells those two apart and we refuse
+  // (fail closed) when the store cannot be read.
+  let anyUserExists
+  try {
+    anyUserExists = await resolveHasUsers()
+  } catch (err) {
+    if (isAuthStoreUnavailable(err)) {
+      // Refuse the request. 503 rather than 401 on purpose: the token was not
+      // rejected, we simply could not vouch for anyone, and a 401 would make
+      // the browser delete a still-valid session (see resolveAuthUser).
+      writeJson(res, 503, { error: "auth store unavailable" })
+      return false
+    }
+    throw err
+  }
+  if (!anyUserExists) return true
   writeJson(res, 401, { error: "authentication required" })
   return false
 }
