@@ -82,17 +82,44 @@ export async function signOutLocal(): Promise<void> {
   }
 }
 
-/** Validate the stored token server-side; clears it when expired/invalid. */
-export async function fetchMe(): Promise<LocalUser | null> {
+/**
+ * Validate the stored token server-side.
+ *
+ * "Is this token still good?" has THREE answers, not two, and collapsing them
+ * is a real defect rather than a style question:
+ *
+ * - `LocalUser`   the server confirmed the token and returned the user
+ * - `null`        the server AUTHORITATIVELY rejected the token (401/403), so
+ *                 the stored session is cleared
+ * - `undefined`   the answer was INCONCLUSIVE — network error, 5xx, 429, or a
+ *                 body that did not parse. This proves nothing about the token,
+ *                 so the caller must KEEP the session.
+ *
+ * The previous version answered `null` for every failure, so a single
+ * inconclusive request permanently deleted a valid session and bounced the app
+ * to /login. That is what made the WS-6 T10 terminal performance spec flake: a
+ * throttled, host-loaded run could receive one unproven answer from
+ * /api/auth/me, after which the markets room marker could never render and
+ * `page.waitForSelector("[data-room='markets']")` burned its full 30s.
+ */
+export async function fetchMe(): Promise<LocalUser | null | undefined> {
   const token = getToken()
   if (!token) return null
-  const res = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) {
+  let res: Response
+  try {
+    res = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
+  } catch {
+    return undefined
+  }
+  if (res.status === 401 || res.status === 403) {
     setStoredSession(null)
     return null
   }
+  // 5xx / 429 / anything else: the token is unproven, not rejected.
+  if (!res.ok) return undefined
   const data = (await res.json().catch(() => null)) as { user?: LocalUser } | null
-  return data?.user ?? null
+  // A 200 that carries no user is a malformed answer, not a rejection.
+  return data?.user ?? undefined
 }
 
 export async function getAuthStatus(): Promise<{ hasUsers: boolean }> {

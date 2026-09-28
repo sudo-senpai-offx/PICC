@@ -31,9 +31,10 @@ import {
   loginAccount,
   verifyUser,
   revokeToken,
-  getUserById,
   hasUsers,
-  verifyToken
+  verifyToken,
+  resolveAuthUser,
+  isAuthStoreUnavailable
 } from "./services/auth.mjs"
 import {
   getProfile,
@@ -4303,10 +4304,18 @@ const creds = await getVenueCredentials()
   }
 
   if (path === "/api/auth/me" && (req.method === "GET" || req.method === "POST")) {
-    const userId = await verifyUser(auth)
-    if (!userId) return writeJson(res, 401, { error: "not authenticated" })
-    const user = await getUserById(userId)
-    if (!user) return writeJson(res, 401, { error: "user not found" })
+    // 401 is a CLAIM about the token, and the client acts on it by deleting the
+    // session. So it must only ever be sent when the token really was rejected.
+    // A store read/parse fault is an inconclusive answer and becomes 503, which
+    // the client keeps its session through. See resolveAuthUser().
+    let user
+    try {
+      user = await resolveAuthUser(auth)
+    } catch (err) {
+      if (isAuthStoreUnavailable(err)) return writeJson(res, 503, { error: "auth store unavailable" })
+      throw err
+    }
+    if (!user) return writeJson(res, 401, { error: "not authenticated" })
     writeJson(res, 200, { ok: true, user })
     return
   }

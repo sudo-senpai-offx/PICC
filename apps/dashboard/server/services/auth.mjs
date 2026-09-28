@@ -41,6 +41,51 @@ async function readJSON(file, fallback) {
   }
 }
 
+// ── Store faults are NOT "no such session" ──────────────────────────────
+// readJSON() above folds EVERY error into an empty fallback. For a store that
+// merely answers "is this list empty", that is a harmless convenience, but for
+// session/user lookup it is a lie: a transient I/O fault (a locked or renamed
+// file on Windows, a short read, a truncated write) becomes "this token is
+// unknown", and the browser — which treats /api/auth/me as authoritative —
+// DELETES a perfectly valid session and bounces the user to /login.
+//
+// That is not hypothetical: it is the root cause of the WS-6 T10 terminal
+// performance spec flaking on a `page.waitForSelector("[data-room='markets']")`
+// timeout. The spec seeds one shared account and then drives ~96 room
+// transitions; on a loaded host a single unproven answer from /api/auth/me left
+// the app rendering the login page, so the markets room marker could never
+// appear and the wait burned its full 30s.
+//
+// readJSONStrict() keeps the two apart. A file that does not exist yet still
+// means "nothing stored" (a fresh install is not a fault), but any other read
+// or parse failure is reported as AuthStoreUnavailable so the caller can answer
+// 503 "could not tell" instead of a false 401.
+export class AuthStoreUnavailable extends Error {
+  constructor(message) {
+    super(message)
+    this.name = "AuthStoreUnavailable"
+  }
+}
+
+export function isAuthStoreUnavailable(err) {
+  return Boolean(err) && err.name === "AuthStoreUnavailable"
+}
+
+async function readJSONStrict(file, fallback) {
+  let raw
+  try {
+    raw = await readFile(file, "utf8")
+  } catch (err) {
+    if (err && err.code === "ENOENT") return fallback
+    throw new AuthStoreUnavailable(`auth store read failed (${file}): ${err?.message ?? err}`)
+  }
+  try {
+    return JSON.parse(raw)
+  } catch (err) {
+    throw new AuthStoreUnavailable(`auth store parse failed (${file}): ${err?.message ?? err}`)
+  }
+}
+
 // Atomic tmp+rename persist (repo pattern, cf. notifier.mjs) with a 0600
 // mode: users.json/sessions.json hold password hashes and live session
 // bearer tokens — a crash mid-write must never truncate the store, and the
@@ -217,4 +262,35 @@ export async function getUserById(id) {
 export async function verifyUser(authorizationHeader) {
   if (!authorizationHeader?.startsWith("Bearer ")) return null
   return verifyToken(authorizationHeader.slice(7))
+}
+
+/**
+ * Resolve a `Bearer <token>` header to its user, keeping "no such session"
+ * separate from "the store could not be read".
+ *
+ * verifyUser() deliberately keeps its null-on-everything contract for the many
+ * callers that only need a boolean and must not start throwing. This entry
+ * point is for callers — /api/auth/me above all — that must not convert a store
+ * fault into a false "not authenticated", because the browser treats that
+ * answer as authoritative enough to delete the session.
+ *
+ * Returns null only when the token genuinely is not valid. Throws
+ * AuthStoreUnavailable when the answer could not be determined.
+ */
+export async function resolveAuthUser(authorizationHeader) {
+  if (!authorizationHeader?.startsWith("Bearer ")) return null
+  const token = authorizationHeader.slice(7)
+  if (!token) return null
+
+  const sessionData = await readJSONStrict(SESSIONS_FILE, { sessions: {} })
+  const session = (sessionData.sessions ?? {})[token]
+  if (!session) return null
+  // Read-only expiry check: an expired token is a genuine 401, and the cleanup
+  // write stays on verifyToken()'s locked path rather than racing it here.
+  if (Date.now() > session.expiresAt) return null
+
+  const userData = await readJSONStrict(USERS_FILE, { users: [] })
+  const users = Array.isArray(userData.users) ? userData.users : []
+  const user = users.find((u) => u.id === session.userId)
+  return user ? publicUser(user) : null
 }
