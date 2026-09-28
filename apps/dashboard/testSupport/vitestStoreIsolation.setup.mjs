@@ -21,12 +21,12 @@
 // WHAT IT DELIBERATELY DOES NOT DO. It does not set `PICC_VAULT_KEY`: the key
 // is derived from a `PICC_VAULT_KEY` env value OR a `picc-vault.key` FILE, and
 // which of the two is in play is itself asserted by `vault.test.mjs`, so
-// forcing one here would decide a question that test exists to ask. It does not
-// set `PICC_ENV_LOADED`, which controls whether `server/config.mjs` loads the
-// repository `.env` - that is a credential question, not a store question, and
-// changing it here would silently alter what the whole suite can see. Both are
-// reported rather than quietly decided.
-import { afterAll, beforeEach } from "vitest"
+// forcing one here would decide a question that test exists to ask.
+//
+// It DOES set `PICC_ENV_LOADED`, which round 1 did not - see the note where it is
+// set below for the exposure that closes and the one test that had to be made
+// explicit first.
+import { afterAll, beforeAll, beforeEach } from "vitest"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -38,6 +38,7 @@ import {
   NON_STORE_PICC_PATH_VARIABLES,
   assertContainedPath,
   assertNotRealStore,
+  canonicalizePath,
   isStrictlyInside,
   looksLikeIsolationPathName,
   redirectedStoreDirs
@@ -77,6 +78,36 @@ for (const [name, filename] of ISOLATION_FILE_VARIABLES) {
 // off, no test can reach the log at all unless it deliberately turns it on, and
 // a test that turns it on still writes inside the run root.
 setVar("PICC_ERROR_LOG", "0")
+
+// `PICC_ENV_LOADED=1` STOPS server/config.mjs FROM LOADING THE REPOSITORY `.env`
+// INTO THE TEST PROCESS. Set since round 2; round 1 left it unset and called that
+// a boundary it could not cross. It could.
+//
+// WHAT WAS EXPOSED. `server/config.mjs:11-21` calls `process.loadEnvFile()` unless
+// this flag is set, and 14 non-test modules import `config.mjs`, so every vitest
+// worker was reading `apps/dashboard/.env` on the developer's machine. That file
+// holds real provider credentials - `PICC_CCXT_PRIVATEKEY_HYPERLIQUID`,
+// `VAPID_PRIVATE_KEY`, BTCPay keys, GROQ. CI has no `.env`, so the CI exposure was
+// nil and this is a DEV-BOX exposure, which is exactly why it survived round 1.
+//
+// WHAT IT COST, AND WHY IT WAS NOT A BOUNDARY. Setting the flag makes one test fail:
+//
+//     PICC_ENV_LOADED=1 -> 1 failed | 60 passed (61)
+//     authBootstrapGateFailsClosed.test.mjs:480  expected 503 to be 401
+//
+// `handlers.mjs:4935` returns 503 on `!hasBtcpay()` before the 401 at :4936, and
+// the `.env` is what supplied BTCPAY_URL / BTCPAY_API_KEY / BTCPAY_STORE_ID. So
+// that file's 401 expectation was `.env`-CONTINGENT - it passed because of a
+// developer's credentials, which is a latent flake as much as a credential
+// problem. Round 1 recorded the cause as "editing the auth bootstrap gate is out
+// of bounds"; the file was already migrated by this slice and already had a
+// `beforeEach` calling `vi.resetModules()`, so three `vi.stubEnv` calls there make
+// the precondition explicit and the test passes with the flag set. Measured: 61/61
+// with the flag. The gate in handlers.mjs was NOT touched.
+//
+// This is the one place the setup changes what the whole suite can SEE, so it is
+// called out here rather than left for a future reader to infer.
+setVar("PICC_ENV_LOADED", "1")
 
 function mkdirRecursive(dir) {
   try {
@@ -178,6 +209,9 @@ const BASELINE_KEYS = new Set(Object.keys(process.env))
 // built at runtime from a function argument.
 // ---------------------------------------------------------------------------
 const REPAIRED = []
+/** Rate-limiting for the honest-repair line, so ~85 files do not each print one. */
+let REPAIR_WARNED = false
+const REPAIR_TALLY = new Map()
 
 function emptyDirectory(dir) {
   let entries
@@ -201,33 +235,34 @@ function targetExists(configured) {
   }
 }
 
-beforeEach(() => {
-  for (const name of ISOLATION_PATH_VARIABLES) {
-    const configured = process.env[name]
-    if (typeof configured !== "string" || configured.length === 0) {
-      REPAIRED.push(name)
-      process.env[name] = OWNED.get(name)
-      continue
-    }
-    // A file that `rmSync`d its scratch directory in `afterEach` leaves the
-    // variable pointing at a path that no longer exists. Nothing broke, but the
-    // next module to read it would silently recreate the tree, so re-mint rather
-    // than leave a dangling value behind.
-    if (!targetExists(configured)) {
-      REPAIRED.push(name)
-      process.env[name] = OWNED.get(name)
-      continue
-    }
-    assertNotRealStore(name, configured)
-  }
-
+beforeAll(() => {
   // THE HARNESS'S OWN SHARED RULE, finally called. Until round 1 of review this
   // function was imported here, re-exported below, and never invoked - so vitest
   // enforced a weaker policy than the Playwright harness it claims to share. It
   // applies to the values the harness itself owns, which is where "inside the run
   // root" is a guarantee rather than an assumption: a test that redirected the
   // variable at its own mkdtemp keeps that directory, and is covered instead by
-  // the real-store check above.
+  // the per-test real-store check.
+  //
+  // ONCE PER FILE, NOT ONCE PER TEST, and that is the whole point of the move.
+  //
+  // Round 2 of review MEASURED this loop in `beforeEach` at ~2.3 ms/test on this
+  // box (~8.4 s across the suite) - and it cost MORE than the pre-existing
+  // `assertNotRealStore` loop it sits beside, because it is syscall-bound:
+  // `mkdirSync` plus `realpathSync.native` for each of the 19 variables, per test,
+  // per worker. Under parallel disk contention that degrades superlinearly, which
+  // is exactly the condition the suite's 5s-timeout flakes appear in, and it is
+  // also on the `windows-latest` CI leg.
+  //
+  // What it buys is small, and that is the argument for moving it: every value
+  // checked here is `join(RUN_ROOT, <dir>)`, constructed by this module, already
+  // `realpath`'d once at load, and already checked by loop 1. The guarantee is
+  // about the RUN ROOT, not about the 3726th test. Re-asserting an invariant
+  // about a constant, thousands of times per second, is how a cheap check becomes
+  // an expensive one.
+  //
+  // The per-test check that genuinely varies - a value aimed at the live store -
+  // stays in `beforeEach` below, and is the one that must run every time.
   for (const name of ISOLATION_PATH_VARIABLES) {
     if (process.env[name] !== OWNED.get(name)) continue
     assertContainedPath(
@@ -237,6 +272,31 @@ beforeEach(() => {
       ISOLATION_PATH_VARIABLE_KINDS.get(name),
       "vitest isolation"
     )
+  }
+})
+
+beforeEach(() => {
+  // 1. THE PER-TEST CHECK THAT MATTERS. A store variable aimed at the live store
+  //    is rejected before any test body runs, every time. This one is cheap enough
+  //    to repeat (a realpath per variable) and it is the check whose result can
+  //    differ between one test and the next.
+  for (const name of ISOLATION_PATH_VARIABLES) {
+    const configured = process.env[name]
+    if (typeof configured !== "string" || configured.length === 0) {
+      REPAIRED.push({ name, reason: "unset" })
+      process.env[name] = OWNED.get(name)
+      continue
+    }
+    // A file that `rmSync`d its scratch directory in `afterEach` leaves the
+    // variable pointing at a path that no longer exists. Nothing broke, but the
+    // next module to read it would silently recreate the tree, so re-mint rather
+    // than leave a dangling value behind.
+    if (!targetExists(configured)) {
+      REPAIRED.push({ name, reason: "target removed" })
+      process.env[name] = OWNED.get(name)
+      continue
+    }
+    assertNotRealStore(name, configured)
   }
 
   // UNCONDITIONALLY, not only while the variable still holds the harness value.
@@ -291,13 +351,25 @@ afterAll(() => {
   //    and demanding the harness value would fail every one of them. The property
   //    that must hold is "inside the run root, inside the OS temp dir, or absent"
   //    - which is what a real-store value and a repo-root value both fail.
+  //
+  //    BOTH SIDES ARE CANONICALISED, and that is a macOS fix rather than tidiness.
+  //    The 85 hand-rolled files mint from `os.tmpdir()`, which on macOS returns
+  //    `/var/folders/...` while `realpathSync.native(tmpdir())` returns
+  //    `/private/var/folders/...`. A lexical comparison of the two fails for every
+  //    one of them, so the teardown would throw on a clean macOS run. macOS is not
+  //    in the CI matrix, so CI would never have shown it - it would have been a
+  //    hard local failure for a macOS developer with no signal about the cause.
+  //    Round 2 of review raised it; canonicalising the CONFIGURED value here is
+  //    what closes it, and the guard test exercises it against a symlinked
+  //    stand-in so the behaviour is proven on this platform too.
   const scratch = [RUN_ROOT, realpathSync.native(tmpdir())]
   for (const name of ISOLATION_PATH_VARIABLES) {
     const configured = process.env[name]
     if (typeof configured !== "string" || configured.length === 0) continue
     try {
       assertNotRealStore(name, configured)
-      if (!scratch.some((root) => isStrictlyInside(root, configured) || configured === root)) {
+      const canonical = canonicalizePath(configured)
+      if (!scratch.some((root) => isStrictlyInside(root, canonical) || canonical === root)) {
         problems.push(
           `${name} ended the run at ${configured}, which is neither inside the run root ` +
             `(${RUN_ROOT}) nor inside the OS temp dir. A store target outside scratch is a store ` +
@@ -312,13 +384,30 @@ afterAll(() => {
   if (problems.length > 0) {
     throw new Error(`WS-7 test-store isolation violated in ${resolve(RUN_ROOT)}:\n- ${problems.join("\n- ")}`)
   }
+  // THE REPAIR REPORT, RATE-LIMITED. Round 1 warned once per test file that had
+  // deleted a store variable, which is ~85 files printing a line nobody reads.
+  // The cost that matters is not the noise, it is that a reviewer scanning output
+  // for isolation problems would learn to skip these lines - and then miss the one
+  // that mattered.
+  //
+  // The genuinely alarming case does NOT come through here: a value pointing at
+  // the live store fails the test in `beforeEach` with the full target path in the
+  // message, and an unknown PICC_ path variable fails in `afterAll` above. Those
+  // are already loud, which is why this line only has to cover the two HONEST
+  // reasons - unset, or pointing at a scratch directory the test deleted - and
+  // why it is emitted once per process with a count rather than once per file.
   if (REPAIRED.length > 0) {
-    // Deliberately NOT a failure. Reported here so a leaked `delete` is
-    // discoverable in the run output without turning eighty honest cleanups
-    // red; the repair above is what keeps the invariant intact.
-    console.warn(
-      `[picc-test-isolation] restored ${[...new Set(REPAIRED)].join(", ")} after a test deleted them`
-    )
+    const names = [...new Set(REPAIRED.map((entry) => entry.name))]
+    if (REPAIR_WARNED) {
+      REPAIR_TALLY.set(names.join(", "), (REPAIR_TALLY.get(names.join(", ")) || 0) + REPAIRED.length)
+    } else {
+      REPAIR_WARNED = true
+      console.warn(
+        `[picc-test-isolation] re-pointed ${REPAIRED.length} store variable(s) across this worker ` +
+          `after a test deleted them: ${names.join(", ")}. Honest teardown in ~85 files; further ` +
+          "occurrences in this worker are counted, not printed."
+      )
+    }
   }
 
   for (const [name, previous] of PREVIOUS) {

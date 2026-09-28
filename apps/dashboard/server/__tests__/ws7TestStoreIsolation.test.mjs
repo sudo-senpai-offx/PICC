@@ -40,7 +40,7 @@
 // and the samples are strings.
 import { describe, expect, it, afterAll, beforeAll } from "vitest"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, mkdtempSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -51,6 +51,8 @@ import {
   NON_PICC_PATH_ENVIRONMENT_VARIABLES,
   assertContainedPath,
   assertNotRealStore,
+  canonicalizePath,
+  isStrictlyInside,
   looksLikeIsolationPathName,
   realServerDataDir,
   resolveDashboardRoot,
@@ -58,6 +60,7 @@ import {
 } from "../../testSupport/storeIsolation.mjs"
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
+const DASHBOARD = join(REPO_ROOT, "apps", "dashboard")
 const SELF = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep).join("/")
 const EXCLUDED_PREFIXES = [".freebuff/worktrees/"]
 
@@ -110,11 +113,14 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
 const PATH_CALL = /\b(join|resolve|fileURLToPath|isAbsolute)\(|\bnew URL\(/
 const PATH_SHAPED_NAME = /_(DIR|FILE|PATH)$/
 // THREE SPELLINGS, because round 1 of review found the scan only covered one of
-// them. The repository already reads `process.env[name]` in six places
+// them. The repository already reads `process.env[name]` in eight modules
 // (handlers.mjs:1867, ceremonyGates.mjs:18, perpsGates.mjs:73, riskGates.mjs:36,
-// riskState.mjs:54, leaderGuard.mjs:8) - all numeric indices today, so there is no
-// current miss, but a store introduced through that door would have been invisible
-// to this scan AND to the staleness test, which is two ways of not looking.
+// riskState.mjs:54, copytrade/leaderGuard.mjs:8, spreadFeedSeam.mjs:48,
+// venues/hyperliquidPerps.mjs:116) - all numeric indices, a const, or a credential
+// template today, so there is no current miss, but a store introduced through that
+// door would have been invisible to this scan AND to the staleness test, which is
+// two ways of not looking. `COMPUTED_ENV_READ_MODULES` below is the per-module
+// record, and both staleness checks are there.
 const ENV_READ_DOTTED = /process\.env\.(PICC_[A-Z0-9_]+)/g
 const ENV_READ_BRACKET_LITERAL = /process\.env\[\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*\]/g
 // A computed index cannot be resolved to a name by reading the text, so it is
@@ -355,18 +361,102 @@ const REAL_STORE_MUTATIONS = discoverRealStoreMutations(
 // root and the OS temp dir. What it cannot do any more is accommodate a redirect
 // at the live store, because this rule is not an inventory and cannot be
 // satisfied by editing one.
-const LIVE_STORE_VALUE =
+// The tokens that name the live store directly, as ONE token. Kept as its own
+// pattern because it is the control for the widened one below.
+const LIVE_STORE_TOKENS =
   /server[/\\]data|["'`]\.\.\/data["'`]|realServerDataDir|REAL_SERVER_DATA_DIR|serverDataDir|realStore/
+
+// THE WIDENED PATTERN, and the reason for it.
+//
+// Round 2 of review reproduced the round-0 attack in a spelling the tokens above
+// miss entirely, because `server/data` there is THREE tokens:
+//
+//     process.env.PICC_AUTH_DATA_DIR = join(process.cwd(), "server", "data")
+//
+// `server[/\\]data` requires the two path segments to be adjacent, so a path built
+// from arguments matched nothing, and a store that re-reads `process.env` per call
+// (connectors.mjs:272, ewallet.mjs:39, v32Config.mjs:65, chartPrefs.mjs:25,
+// riskGates.mjs:44) writes THERE. This is not a hypothetical: it is the same landed
+// write, spelled differently.
+//
+// The fix reuses `REAL_STORE_REFERENCE.source`, which already knew about
+// `"server" , "data"` as separate arguments (detector 3 needed it for a different
+// reason). Composing two patterns rather than writing a third means there is one
+// place that knows what the live store looks like as a path, not three.
+const LIVE_STORE_VALUE = new RegExp(`(?:${REAL_STORE_REFERENCE.source})|(?:${LIVE_STORE_TOKENS.source})`)
+
+/** Net parenthesis depth of a line: how many continuation lines it leaves open. */
+function parenDelta(line) {
+  let depth = 0
+  for (const ch of line) {
+    if (ch === "(") depth += 1
+    else if (ch === ")") depth -= 1
+  }
+  return depth
+}
+
+/**
+ * Drop a trailing `//` comment, requiring whitespace before the slashes.
+ *
+ * A guard should read CODE, and the shape that matters is prettier's own:
+ *
+ *     join(process.cwd(), "server",
+ *                          "data")
+ *
+ * where a comment between the two arguments stops any whitespace-only pattern
+ * from spanning them. Requiring the leading whitespace is what keeps
+ * `process.env["https://x"]` intact - and, more importantly here, keeps a path
+ * like `"../data"` and any URL literal from being silently rewritten.
+ */
+function stripLineComment(line) {
+  return line.replace(/(^|\s)\/\/.*$/, "$1")
+}
+
+/**
+ * A LOGICAL UNIT is a line plus the continuation lines its parentheses leave open.
+ *
+ * A path built across a line break is still one expression, and a line-based scan
+ * sees only the first half of it. Each unit records the line it STARTS on, so a
+ * finding is still reported at the assignment rather than at the closing paren.
+ *
+ * A unit OWNS an assignment only if its own FIRST line opens it. Without that
+ * rule a unit that swallowed an `it("...", () => {` header would also report the
+ * assignment inside it, and the round-1 exact-attack test would see two findings
+ * for one attack.
+ */
+function logicalUnits(text, maxLookahead = 8) {
+  const lines = text.split("\n")
+  const units = []
+  for (let i = 0; i < lines.length; i++) {
+    const first = stripLineComment(lines[i])
+    let code = first
+    let depth = parenDelta(first)
+    let j = i
+    while (depth > 0 && j + 1 < lines.length && j - i < maxLookahead) {
+      j += 1
+      const next = stripLineComment(lines[j]).trim()
+      code += " " + next
+      depth += parenDelta(next)
+    }
+    units.push({ line: i + 1, first, code, display: lines[i].trim() })
+  }
+  return units
+}
 
 function discoverRealStoreRedirects(files, isolation, reader = read) {
   const out = []
   for (const file of files) {
     const text = reader(file)
-    // Pass 1: identifiers this file binds to the live store.
+    const units = logicalUnits(text)
+    // Pass 1: identifiers this file binds to the live store. The declaration must
+    // OPEN on the unit's first line, and the VALUE is tested against the whole
+    // unit so that `const live = join(root, "server",` / `"data")` still binds.
     const tainted = new Set()
-    for (const line of text.split("\n")) {
-      const decl = line.match(/^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(.+)$/)
-      if (decl && LIVE_STORE_VALUE.test(decl[2])) tainted.add(decl[1])
+    for (const unit of units) {
+      const decl = unit.first.match(/^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(.+)$/)
+      if (!decl) continue
+      const continuation = unit.code.slice(unit.first.length)
+      if (LIVE_STORE_VALUE.test(`${decl[2]}${continuation}`)) tainted.add(decl[1])
     }
     // Pass 2: a store-variable assignment fed by the live store, directly or by
     // an alias.
@@ -376,17 +466,19 @@ function discoverRealStoreRedirects(files, isolation, reader = read) {
     // `vi.stubEnv("X", v)` are the same assignment written three ways, and a
     // reviewer's first guess is rarely the only spelling a future author uses.
     // The `(?!=)` guard keeps `==`, `===` and `=>` from reading as an assignment.
-    text.split("\n").forEach((line, index) => {
+    for (const unit of units) {
+      // Ownership: the assignment must OPEN on this unit's own first line. The
+      // value is then tested against the whole unit, so a path continued onto the
+      // next line is still seen whole.
       const target =
-        line.match(/process\.env\.(PICC_[A-Z0-9_]+)\s*=(?!=)(.*)$/) ??
-        line.match(/process\.env\[\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*\]\s*=(?!=)(.*)$/) ??
-        line.match(/vi\.stubEnv\(\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*,\s*(.*?)\s*\)/)
-      if (!target || !isolation.has(target[1])) return
-      const value = target[2].trim()
-      if (LIVE_STORE_VALUE.test(value) || tainted.has(value)) {
-        out.push(`${file}:${index + 1} ${line.trim()}`)
+        unit.first.match(/process\.env\.(PICC_[A-Z0-9_]+)\s*=(?!=)(.*)$/) ??
+        unit.first.match(/process\.env\[\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*\]\s*=(?!=)(.*)$/) ??
+        unit.first.match(/vi\.stubEnv\(\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*,\s*(.*?)\s*\)/)
+      if (!target || !isolation.has(target[1])) continue
+      if (LIVE_STORE_VALUE.test(unit.code) || tainted.has(target[2].trim())) {
+        out.push(`${file}:${unit.line} ${unit.display}`)
       }
-    })
+    }
   }
   return out
 }
@@ -396,29 +488,199 @@ const REAL_STORE_REDIRECTS = discoverRealStoreRedirects(
   ISOLATION_SET
 )
 
+// Round 2 of review: the round-0 attack in three MORE spellings, all of which the
+// first version of LIVE_STORE_VALUE missed.
+//
+// The pattern matched `server/data` as ONE token, so a path BUILT from parts -
+// `join(process.cwd(), "server", "data")` - matched nothing. These are the shapes
+// that reproduce the landed attack exactly, because a store that re-reads
+// `process.env` per call writes HERE, and the `delete` in an afterEach puts the
+// variable back where the end-state sampler expects to find it.
+//
+// The controls matter as much as the findings: an honest
+// `mkdtempSync(join(tmpdir(), ...))` redirect and an `===` comparison must stay
+// clean, or the guard is noise and gets deleted.
+const SPLIT_JOIN_SHAPES = [
+  [
+    "one-token-per-arg join",
+    'process.env.PICC_AUTH_DATA_DIR = join(process.cwd(), "server", "data")'
+  ],
+  [
+    "aliased split join",
+    'const live = join(REPO_ROOT, "apps/dashboard", "server", "data"); process.env.PICC_AUTH_DATA_DIR = live'
+  ],
+  [
+    "join split across a continuation line",
+    'process.env.PICC_AUTH_DATA_DIR = join(process.cwd(), "server", // continuation line\n                   "data")'
+  ]
+]
+
+const HONEST_REDIRECTS = [
+  'process.env.PICC_AUTH_DATA_DIR = mkdtempSync(join(tmpdir(), "picc-store-auth-"))',
+  'expect(process.env.PICC_AUTH_DATA_DIR === join(tmpdir(), "x")).toBe(true)'
+]
+
+// The pattern as it stood after round 1, kept here ONLY as a control. If the
+// fixed pattern and this one ever agree on a shape, the control has stopped
+// proving anything and the test below is vacuous.
+const ROUND1_LIVE_STORE_VALUE = LIVE_STORE_TOKENS
+
+describe("WS-7 slice A - the live-store detector survives a path built from parts", () => {
+  it("catches every split-join spelling of the landed attack", () => {
+    const FILE = "apps/dashboard/server/__tests__/plantedSplitJoin.test.mjs"
+    for (const [label, source] of SPLIT_JOIN_SHAPES) {
+      expect(
+        discoverRealStoreRedirects([FILE], ISOLATION_SET, () => source),
+        `the ${label} spelling must be caught: it is the round-0 attack, rebuilt`
+      ).toHaveLength(1)
+    }
+  })
+
+  it("the control: the round-1 pattern missed all three, which is the defect", () => {
+    // Proves the three tests above are not vacuous. If this ever fails, the
+    // fixed pattern is no longer fixing anything.
+    for (const [label, source] of SPLIT_JOIN_SHAPES) {
+      expect(
+        ROUND1_LIVE_STORE_VALUE.test(source),
+        `the round-1 pattern unexpectedly matched the ${label} spelling, so the "must be caught" ` +
+          "tests are no longer proving anything"
+      ).toBe(false)
+    }
+  })
+
+  it("leaves an honest scratch redirect and an equality test clean", () => {
+    const FILE = "apps/dashboard/server/__tests__/honest.test.mjs"
+    for (const source of HONEST_REDIRECTS) {
+      expect(discoverRealStoreRedirects([FILE], ISOLATION_SET, () => source), source).toEqual([])
+    }
+  })
+
+  it("the real corpus stays clean under the widened pattern", () => {
+    // The point of a widened pattern is that it is SAFE to widen. If the fixed
+    // pattern flags any real test file, the fix has traded a false negative for
+    // a false positive and the guard is now noise.
+    expect(
+      REAL_STORE_REDIRECTS,
+      "the fixed pattern must not flag any real test file - a rule that cries wolf gets deleted"
+    ).toEqual([])
+  })
+})
+
 // DETECTOR 4 - stores that WRITE the real data directory with no variable to
 // redirect, derived rather than listed.
 //
 // Round 1 shipped one member of this set (`vault.mjs`) and asserted only
 // `> 0` and `< 19`, so a second member was compatible and only a REMOVAL was
-// detectable. The set is now SCANNED: a module qualifies when it hardcodes a
-// path into the data directory, performs a mutating filesystem call, and reads no
-// `PICC_*_DIR` / `PICC_*_FILE` variable at all. `localstore.mjs` is the useful
-// negative control - it hardcodes `new URL("../data")` and mutates, but it reads
-// PICC_DATA_DIR, so it is correctly not in the set.
+// detectable. The set is now SCANNED.
+//
+// WHAT ROUND 2 CHANGED, AND WHY THE CONDITION IS PER PATH. The round-1 judgement
+// was per FILE - "hardcoded data path AND a mutating call AND no PICC_*_DIR /
+// _FILE read anywhere" - and round 2 of review measured three false negatives
+// behind it. The worst was the third: a module that hardcodes `../data`, WRITES to
+// it, and separately reads some other store variable was judged redirectable,
+// because the read was somewhere else in the file. The property that actually
+// matters is "is this hardcoded path a FALLBACK to a redirectable variable", and
+// that is a question about the path, not the file.
+//
+// The corpus is what makes this tractable. 36 server modules hardcode a data
+// path, and 34 of them do it as the RIGHT-HAND SIDE of a fallback:
+//
+//     export const DATA = process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", ...))
+//
+// which is redirectable, because the variable wins. Only `vault.mjs:31` and
+// `browserBridge.mjs:22` assign a hardcoded path with no variable beside it:
+//
+//     const DEFAULT_DIR = fileURLToPath(new URL("../data", import.meta.url))
+//     export const BROWSER_DATA_DIR = fileURLToPath(new URL("../data/browser-profiles", ...))
+//
+// So the per-path rule - a hardcoded data path with no `process.env.X ||` / `??`
+// fallback in the same expression - selects exactly the two real ones, from a
+// property of the CODE rather than from a list anyone has to remember to edit.
+//
+// `localstore.mjs` remains the useful negative control: it hardcodes
+// `new URL("../data")` and mutates, but behind `PICC_DATA_DIR`, so it is
+// correctly not in the set.
 const HARDCODED_DATA_PATH =
   /new URL\(\s*"(?:\.\.\/)+data(?:\/|"|')|join\(\s*__dirname\s*,\s*"\.\."\s*,\s*"data"|["'`]\.\.\/data\//
+
+// A redirectable variable winning over a hardcoded default, in either spelling.
+// Deliberately matches any `PICC_` name rather than only `_DIR`/`_FILE`: a
+// bracket read of a path-shaped name such as `PICC_DATA` IS a redirect, and
+// round 1's narrower pattern treated it as the absence of one - a false POSITIVE
+// in the opposite direction.
+const STORE_FALLBACK =
+  /process\.env(?:\.\s*PICC_[A-Z0-9_]+|\[\s*["'`]PICC_[A-Z0-9_]+["'`]\s*\])\s*(?:\|\||\?\?|:(?!:))/
+
+// ANY PICC_ read, used for the proximity test below.
+const ANY_PICC_READ = /process\.env(?:\.\s*PICC_[A-Z0-9_]+|\[\s*["'`]PICC_[A-Z0-9_]+["'`]\s*\])/
+
+// Round 2 of review: `open(..., "w")`, `cpSync`, `link`, `truncate` and friends
+// were mutating calls this list did not know about. Measured against the corpus
+// the wider list adds ZERO modules today - so this is future-proofing, not a fix
+// for a live miss - but the cost of being wrong here is a store that writes the
+// real directory and is not reported.
+const MUTATING_FS_WIDE =
+  /\b(writeFileSync|appendFileSync|rmSync|unlinkSync|mkdirSync|renameSync|copyFileSync|cpSync|truncateSync|linkSync|symlinkSync|createWriteStream|writeFile|appendFile|rm|rename|mkdir|rmdir|cp|link|symlink|truncate|utimesSync|chmodSync)\s*\(|\bopen(?:Sync)?\s*\([^)]*["']w/
+
 const STORE_VARIABLE_READ =
   /process\.env\.(PICC_[A-Z0-9_]*(?:_DIR|_FILE))|process\.env\[\s*["'`](PICC_[A-Z0-9_]*(?:_DIR|_FILE))/g
 
-function discoverUnredirectableStores(files, reader = read) {
+/**
+ * Is this hardcoded data path guarded IN ITS OWN EXPRESSION?
+ *
+ * True when the expression that defines it is guarded by a `PICC_` variable:
+ *
+ *     const DATA = process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL("../data", ...))
+ *
+ * or by the ternary and early-return spellings of the same idiom. This is the
+ * per-path half of the judgement, and it is the part that is exact.
+ */
+function hardcodedPathGuardedInPlace(units, index) {
+  if (STORE_FALLBACK.test(units[index].code)) return true
+  const previous = units[index - 1]
+  return Boolean(previous && ANY_PICC_READ.test(previous.code))
+}
+
+/**
+ * The WHOLE-FILE backstop, and the limit of this detector, stated here rather
+ * than left for a reader to discover.
+ *
+ * Round 2 of review asked for "reads no variable that redirects THIS path" rather
+ * than "reads no `_DIR`/`_FILE` variable at all", and the distinction is real:
+ * `llmSettings.mjs:10` and `sessionCaptureSettings.mjs:10` both hardcode a
+ * `DEFAULT_FILE` on one line and consult their contract variable on another, and
+ * a purely per-path rule reports both - two false positives that would bury the
+ * two real ones. So the module-level fallback is kept: a module that consults ANY
+ * contract store variable is treated as redirectable.
+ *
+ * WHAT THAT COSTS, MEASURED AND NOT GUESSED. It means a module that hardcodes a
+ * path, writes to it, and separately reads an UNRELATED contract store variable
+ * is not reported. Deciding that the unrelated variable does not feed this write
+ * needs dataflow, and a regex cannot supply it. The honest disposition is the one
+ * this guard now takes: the limit is asserted by a test below, so it is
+ * machine-visible, and the guard is named for what it enforces.
+ */
+function discoverUnredirectableStores(files, isolation = ISOLATION_SET, reader = read) {
   const out = []
   for (const file of files) {
     const text = reader(file)
-    if (!HARDCODED_DATA_PATH.test(text)) continue
-    if (!MUTATING_FS.test(text)) continue
-    const reads = [...text.matchAll(STORE_VARIABLE_READ)].map((m) => m[1] || m[2])
-    if (new Set(reads).size === 0) out.push(file)
+    const units = logicalUnits(text)
+    // A module must actually MUTATE to be a store a test cannot redirect. A
+    // module that only reads a hardcoded path is not a write hazard.
+    if (!units.some((unit) => MUTATING_FS_WIDE.test(unit.code))) continue
+    if (!units.some((unit) => HARDCODED_DATA_PATH.test(unit.code))) continue
+    // Per path: every hardcoded data path guarded where it is defined.
+    const allGuardedInPlace = units.every(
+      (unit, index) => !HARDCODED_DATA_PATH.test(unit.code) || hardcodedPathGuardedInPlace(units, index)
+    )
+    if (allGuardedInPlace) continue
+    // Module-level backstop, and the documented limit: a module consulting ANY
+    // contract store variable is redirectable.
+    const contractReads = [
+      ...text.matchAll(/process\.env(?:\.\s*([A-Z][A-Z0-9_]*)|\[\s*["'`]([A-Za-z][\w]*)["'`]\s*\])/g)
+    ].map((m) => m[1] || m[2])
+    if (contractReads.some((name) => isolation.has(name))) continue
+    out.push(file)
   }
   return out.sort()
 }
@@ -586,11 +848,23 @@ describe("WS-7 slice A - store-isolation guard: the root resolves on a fresh che
   const FIXTURE = mkdtempSync(join(tmpdir(), "picc-root-fixture-"))
   afterAll(() => rmSync(FIXTURE, { recursive: true, force: true }))
 
+  // Build a synthetic apps/dashboard root carrying BOTH tracked markers. Written
+  // as a helper so a fixture and the marker list cannot drift apart: when round 2
+  // added the second marker, the two existing fixtures failed exactly because
+  // they hand-listed a marker set that was no longer the real one.
+  const makeRoot = (name) => {
+    const dir = join(FIXTURE, name)
+    mkdirSync(join(dir, "testSupport"), { recursive: true })
+    writeFileSync(join(dir, "package.json"), '{ "name": "@picc/dashboard" }\n', "utf8")
+    writeFileSync(join(dir, "testSupport", "storeIsolation.mjs"), "export default []\n", "utf8")
+    return dir
+  }
+
   it("has teeth: a CI-shaped tree WITHOUT server/data resolves (the case that broke CI)", () => {
-    // package.json present, server/data ABSENT - exactly what a fresh clone is.
-    const checkoutShaped = join(FIXTURE, "checkout-shaped")
+    // Both tracked markers present, server/data ABSENT - exactly what a fresh
+    // clone is. The data directory is the one thing that must NOT be required.
+    const checkoutShaped = makeRoot("checkout-shaped")
     mkdirSync(join(checkoutShaped, "server"), { recursive: true })
-    writeFileSync(join(checkoutShaped, "package.json"), '{ "name": "@picc/dashboard" }\n', "utf8")
     expect(
       existsSync(join(checkoutShaped, "server", "data")),
       "this fixture must NOT have a data directory, or the test proves nothing"
@@ -603,9 +877,8 @@ describe("WS-7 slice A - store-isolation guard: the root resolves on a fresh che
   })
 
   it("resolves a developer-shaped tree WITH server/data, unchanged behaviour", () => {
-    const developerShaped = join(FIXTURE, "developer-shaped")
+    const developerShaped = makeRoot("developer-shaped")
     mkdirSync(join(developerShaped, "server", "data"), { recursive: true })
-    writeFileSync(join(developerShaped, "package.json"), '{ "name": "@picc/dashboard" }\n', "utf8")
     expect(resolveDashboardRoot({ moduleUrl: "http://localhost:3000/x.js", cwd: developerShaped })).toBe(
       resolve(developerShaped)
     )
@@ -619,6 +892,51 @@ describe("WS-7 slice A - store-isolation guard: the root resolves on a fresh che
     expect(() => resolveDashboardRoot({ moduleUrl: "http://localhost:3000/x.js", cwd: notTheDashboard })).toThrow(
       /cannot locate the apps\/dashboard root/
     )
+  })
+
+  it("rejects the REPO ROOT, which is the case one marker let through", () => {
+    // Round 2 of review. The repo root is an npm-workspace root, so it HAS a
+    // package.json - and a one-marker rule accepted it. That is not cosmetic:
+    // with the real store computed as `<repo root>/server/data`, a store aimed
+    // squarely at the real `apps/dashboard/server/data` was ACCEPTED, because
+    // nothing was inside the (wrong) real directory. The invariant was asserted
+    // in a comment and no longer enforced.
+    //
+    // This is the same failure as the original CI bug, inverted: the first rule
+    // was too STRICT and broke a real checkout, this one was too LOOSE and
+    // silently disarmed a containment check.
+    const repoRoot = resolve(DASHBOARD, "..", "..")
+    expect(
+      existsSync(join(repoRoot, "package.json")),
+      "this test only means something if the repo root really does have a package.json"
+    ).toBe(true)
+    expect(() => resolveDashboardRoot({ moduleUrl: "http://localhost:3000/x.js", cwd: repoRoot })).toThrow(
+      /cannot locate the apps\/dashboard root/
+    )
+  })
+
+  it("the real store is still rejected on the correct root, so the hole is unreachable", () => {
+    // Stated precisely, because the first draft of this test got it backwards.
+    // `assertNotRealStore` given a DELIBERATELY WRONG `realDir` does not fire, and
+    // should not: it is being asked to compare against `<repo root>/server/data`,
+    // and `apps/dashboard/server/data` genuinely is not inside that. The round-2
+    // defect was never that comparison - it was that the wrong root was
+    // REACHABLE. With the repo root rejected, the state cannot be constructed.
+    //
+    // So the two halves are: the wrong root is refused (test above), and the right
+    // root still protects the real store (here).
+    const realStore = join(DASHBOARD, "server", "data")
+    expect(() => assertNotRealStore("PICC_AUTH_DATA_DIR", realStore)).toThrow(/real server data store/)
+    expect(() =>
+      assertNotRealStore("PICC_AUTH_DATA_DIR", realStore, { realDir: realServerDataDir({ root: DASHBOARD }) })
+    ).toThrow(/real server data store/)
+    // And the honest control: a scratch path is accepted on the same root.
+    const scratch = mkdtempSync(join(tmpdir(), "picc-root-scratch-"))
+    expect(() => assertNotRealStore("PICC_AUTH_DATA_DIR", scratch)).not.toThrow()
+  })
+
+  it("accepts the real dashboard root, which has BOTH markers", () => {
+    expect(resolveDashboardRoot({ moduleUrl: "http://localhost:3000/x.js", cwd: DASHBOARD })).toBe(DASHBOARD)
   })
 
   it("prefers a real module URL over the cwd, and never consults the filesystem for it", () => {
@@ -752,6 +1070,75 @@ describe("WS-7 slice A - store-isolation guard: the contract covers every store 
       .toBeLessThan(ISOLATION_PATH_VARIABLES.length * 2)
   })
 
+  it("PINS THE LIMIT: a hardcoded path beside an UNRELATED store variable is not reported", () => {
+    // Round 2 of review asked for the per-path condition, and this is the case
+    // it was aimed at. It is NOT caught, and the test says so rather than
+    // pretending otherwise.
+    //
+    // WHY IT CANNOT BE, WITH A REGEX. Deciding that `PICC_AUTH_DATA_DIR` does not
+    // feed the `../data/app.log` write needs dataflow. The alternative - reporting
+    // on "no contract variable in the file" alone - was measured and reports
+    // `llmSettings.mjs:10` and `sessionCaptureSettings.mjs:10`, which each
+    // hardcode a `DEFAULT_FILE` on one line and consult their contract variable on
+    // another. Two false positives to catch one theoretical miss is a bad trade
+    // for a guard whose job is to name real stores.
+    //
+    // This test is therefore a TRIPWIRE, not a victory lap. If someone later gives
+    // the predicate dataflow, this fails and they have to update the prose above
+    // and the reason text for the two real stores - which is the point.
+    const FILE = "apps/dashboard/server/services/decoy.mjs"
+    const SOURCE = [
+      'import { writeFileSync } from "node:fs"',
+      "const CREDENTIALS = process.env.PICC_AUTH_DATA_DIR",
+      'export const LOG = fileURLToPath(new URL("../data/app.log", import.meta.url))',
+      "export function append(line) {",
+      "  writeFileSync(LOG, line, 'utf8')",
+      "}",
+      "export const used = CREDENTIALS"
+    ].join("\n")
+    expect(
+      discoverUnredirectableStores([FILE], ISOLATION_SET, () => SOURCE),
+      "the known limit changed. If this now reports, the predicate got real dataflow - update the " +
+        "comment on discoverUnredirectableStores and re-verify the derived set is still exactly 2."
+    ).toEqual([])
+  })
+
+  it("does NOT report the fallback idiom, where the env variable wins", () => {
+    // The control, and it is 34 modules rather than 2: `process.env.X ||` a
+    // hardcoded default is the idiom almost every store uses. Reporting those
+    // would bury the two real ones.
+    const FILE = "apps/dashboard/server/services/fallbackStyle.mjs"
+    const SOURCE = [
+      'import { writeFileSync, mkdirSync } from "node:fs"',
+      "export const DATA = process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL('../data', import.meta.url))",
+      "export function save(x) {",
+      "  mkdirSync(DATA, { recursive: true })",
+      "  writeFileSync(DATA, x)",
+      "}"
+    ].join("\n")
+    expect(discoverUnredirectableStores([FILE], ISOLATION_SET, () => SOURCE)).toEqual([])
+  })
+
+  it("and the derived set is still exactly the two real stores", () => {
+    expect(UNREDIRECTABLE_STORES).toEqual([
+      "apps/dashboard/server/services/browserBridge.mjs",
+      "apps/dashboard/server/services/vault.mjs"
+    ])
+  })
+
+  it("the derived set matches what the code actually contains", () => {
+    // The set is derived, so also show the two members are still hardcoded paths
+    // with no env fallback - the property the derivation is based on.
+    for (const file of UNREDIRECTABLE_STORES) {
+      const text = read(file)
+      expect(text, `${file} must still hardcode a data path`).toMatch(HARDCODED_DATA_PATH)
+      expect(
+        text,
+        `${file} is reported as unredirectable, so it must have no PICC_ fallback on that path`
+      ).not.toMatch(STORE_FALLBACK)
+    }
+  })
+
   it("covers EVERY discovered store path variable", () => {
     const uncovered = [...DISCOVERED.entries()]
       .filter(([name]) => !ISOLATION_PATH_VARIABLES.includes(name))
@@ -879,8 +1266,8 @@ describe("WS-7 slice A - store-isolation guard: the contract covers every store 
   })
 
   it("accounts for every computed `process.env[...]` read in the server", () => {
-    // Six modules do this today, all for scalars or credential templates. Each
-    // says why its index cannot resolve a store, and a seventh is a failure
+    // Eight modules do this today, all for scalars or credential templates. Each
+    // says why its index cannot resolve a store, and a ninth is a failure
     // rather than a silent widening of the blind spot.
     expect(
       unaccountedComputedEnvReaders(),
@@ -1070,18 +1457,18 @@ describe("WS-7 slice A - store-isolation guard: no new ad-hoc store redirects", 
   })
 
   it("names the contract's one deliberate blind spot", () => {
-    // Minor 3 of round 1: the blind spot belongs in the header, not only in a
-    // review comment. Nothing in the server honours a non-`PICC_` store variable
-    // today, and rather than leave that as a comment this test makes the boundary
-    // a checked list - see NON_PICC_PATH_ENVIRONMENT_VARIABLES.
+    // Minor 3 of round 1, extended by round 2. The shape predicate is a HEURISTIC:
+    // `LOCALAPPDATA` and `ProgramFiles` are real Windows directories that no
+    // `_DIR`/`_FILE`/`_PATH` test can match. Rather than pretend the scan is
+    // exhaustive, the known non-PICC_ path reads are RECORDED and the check below
+    // is honest about what it can and cannot see.
     const serverNames = new Set()
     const bracketNames = new Set()
     for (const file of serverFiles) {
       for (const line of read(file).split("\n")) {
-        for (const m of line.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)) serverNames.add(m[1])
+        for (const m of line.matchAll(/process\.env\.([A-Za-z][A-Za-z0-9_]*)/g)) serverNames.add(m[1])
         // The bracket spelling is the under-served one, so every non-PICC_ name in
-        // it has to be recorded whether or not it looks like a path. That is what
-        // catches `ProgramFiles(x86)`, a real directory that no shape test matches.
+        // it has to be recorded whether or not it looks like a path.
         for (const m of line.matchAll(/process\.env\[\s*["'`]([^"'`[\]]+)["'`]\s*\]/g)) {
           bracketNames.add(m[1])
         }
@@ -1094,13 +1481,8 @@ describe("WS-7 slice A - store-isolation guard: no new ad-hoc store redirects", 
     expect(
       [...new Set(unrecorded)].sort(),
       "the server reads a path-shaped env var that is neither PICC_-prefixed nor recorded in " +
-        "NON_PICC_PATH_ENVIRONMENT_VARIABLES, so every prefix-keyed rule in this file is blind to it. " +
-        "Add a PICC_ variable for that store, or record it with the reason it does not need one."
+        "NON_PICC_PATH_ENVIRONMENT_VARIABLES, so every prefix-keyed rule in this file is blind to it."
     ).toEqual([])
-    expect(
-      Object.keys(NON_PICC_PATH_ENVIRONMENT_VARIABLES).length,
-      "the list is a boundary, not a dumping ground: two entries is the honest number today"
-    ).toBe(2)
     for (const [name, reason] of Object.entries(NON_PICC_PATH_ENVIRONMENT_VARIABLES)) {
       expect(
         serverNames.has(name) || bracketNames.has(name),
@@ -1110,17 +1492,84 @@ describe("WS-7 slice A - store-isolation guard: no new ad-hoc store redirects", 
     }
   })
 
-  it("enforces the shared containment rule, not just the real-store rule", () => {
-    // Round 1: `assertContainedPath` was imported into the vitest setup,
-    // re-exported from it, and NEVER CALLED - so the vitest harness enforced a
-    // weaker policy than the Playwright harness it claims to share. It is now
-    // invoked in the setup's `beforeEach` for every value the harness itself owns,
-    // where "inside the run root" is a guarantee rather than an assumption.
+  it("records ALL THREE Windows directories browserBridge reads, not one", () => {
+    // Round 2 of review, and the specific finding: the round-1 comment presented
+    // `ProgramFiles(x86)` as "the one case where the shape predicate is not
+    // enough". It was not the one case. `browserBridge.mjs` reads three OS
+    // directories - two dotted, one bracketed - and two of the three are invisible
+    // to the shape predicate. All read-only and OS-owned, so no live defect; the
+    // cost was a boundary that was wrong in a way that would have hidden the next
+    // one.
+    const bridge = read("apps/dashboard/server/services/browserBridge.mjs")
+    const osDirs = [...bridge.matchAll(/process\.env(?:\.([A-Za-z][\w]*)|\[["'\`]([^"'\]]+)["'\`]\s*\])/g)]
+      .map((m) => m[1] || m[2])
+      .filter((name) => /^(LOCALAPPDATA|ProgramFiles|ProgramFiles\(x86\))$/.test(name))
+    expect(
+      [...new Set(osDirs)].sort(),
+      "this test only means something if the module still reads the three OS directories"
+    ).toEqual(["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"])
+    for (const name of osDirs) {
+      expect(
+        Object.prototype.hasOwnProperty.call(NON_PICC_PATH_ENVIRONMENT_VARIABLES, name),
+        `${name} is read by browserBridge.mjs and must be recorded in the boundary list`
+      ).toBe(true)
+    }
+    expect(Object.keys(NON_PICC_PATH_ENVIRONMENT_VARIABLES).length).toBe(4)
+  })
+
+  it("the setup file ACTUALLY CALLS assertContainedPath, inside beforeAll/beforeEach", () => {
+    // Round 2 of review, and this is the guard that was missing. Round 1 asserted
+    // the FUNCTION's behaviour and said in a comment that it would "still pass if
+    // the setup stopped CALLING it" - which is true, and is exactly the failure
+    // mode the round-0 review exists to stop: a shape check standing in for
+    // enforcement. Round 1 had been asked to close that and did not.
     //
-    // Asserted here on the function itself, because the call site is the setup
-    // file and a test cannot observe another file's hooks: if the setup stopped
-    // calling it, this test would still pass - which is why the reasoning above
-    // is load-bearing and this is a shape check, not the enforcement.
+    // So this reads the setup's SOURCE and requires the call site. It is a static
+    // check on a static file, which is honest: it cannot prove the call is
+    // reached at runtime, but it does fail when the call is deleted, moved out of
+    // both hooks, or renamed away - the three ways this wiring has already been
+    // wrong.
+    const setupPath = "apps/dashboard/testSupport/vitestStoreIsolation.setup.mjs"
+    const source = read(setupPath)
+    const hooks = [...source.matchAll(/\b(beforeAll|beforeEach|afterAll|afterEach)\(\s*(?:\(\)|async \(\)|\([^)]*\))\s*=>\s*\{/g)]
+    expect(hooks.length, `could not find the setup hooks in ${setupPath}`).toBeGreaterThanOrEqual(2)
+    // Which hook bodies contain the call. Scan from each hook's opening brace.
+    const hookBodies = new Map()
+    for (const match of hooks) {
+      const hook = match[1]
+      const start = match.index + match[0].length
+      let depth = 0
+      let end = start
+      for (let i = start - 1; i < source.length; i++) {
+        if (source[i] === "{") depth++
+        else if (source[i] === "}") {
+          depth--
+          if (depth === 0) {
+            end = i
+            break
+          }
+        }
+      }
+      hookBodies.set(hook, source.slice(start, end))
+    }
+    const callers = [...hookBodies.entries()].filter(([, body]) => /\bassertContainedPath\s*\(/.test(body))
+    expect(
+      callers.map(([hook]) => hook),
+      `${setupPath} imports and re-exports assertContainedPath but never CALLS it in a hook, so the ` +
+        "vitest harness enforces a weaker policy than the Playwright harness it shares a contract " +
+        "with. This is the round-1 regression, reintroduced."
+    ).not.toEqual([])
+    expect(
+      callers.every(([hook]) => hook === "beforeAll" || hook === "beforeEach"),
+      "assertContainedPath must be called from a BEFORE hook, not from teardown"
+    ).toBe(true)
+  })
+
+  it("the containment function rejects a sibling and the root, and accepts a child", () => {
+    // The FUNCTION's behaviour, which is what this test is actually about - named
+    // for that, rather than for the wiring the test above checks. Round 1 called
+    // this "enforces the shared containment rule" and that name overclaimed: it
+    // asserts a shape, and the wiring assertion lives in the test above.
     const ROOT = mkdtempSync(join(tmpdir(), "picc-contained-"))
     try {
       mkdirSync(join(ROOT, "auth"), { recursive: true })
@@ -1136,6 +1585,49 @@ describe("WS-7 slice A - store-isolation guard: no new ad-hoc store redirects", 
       )
     } finally {
       rmSync(ROOT, { recursive: true, force: true })
+    }
+  })
+
+  it("teardown containment survives a SYMLINKED temp root, as on macOS", () => {
+    // The macOS defect round 2 raised, exercised on this platform. `os.tmpdir()`
+    // returns `/var/folders/...` while `realpathSync.native(tmpdir())` returns
+    // `/private/var/folders/...`, so a LEXICAL comparison of a hand-rolled mint
+    // against the canonical temp root fails for all 85 of them. macOS is not in the
+    // CI matrix, so this would have been a hard local failure for a macOS
+    // developer with no signal about the cause.
+    //
+    // The shape reproduced here is the one that matters, and it is constructible
+    // anywhere: a symlink whose LEXICAL form is not under the canonical root,
+    // pointing at a directory that IS. On macOS that is `/var/...` versus
+    // `/private/var/...`; here it is ALIAS/ versus REAL/.
+    const REAL = mkdtempSync(join(tmpdir(), "picc-macos-real-"))
+    const ALIAS_PARENT = mkdtempSync(join(tmpdir(), "picc-macos-aliasparent-"))
+    const ALIAS = join(ALIAS_PARENT, "var")
+    let linked = false
+    try {
+      symlinkSync(REAL, ALIAS, "junction")
+      linked = true
+    } catch {
+      // no junction support on this filesystem
+    }
+    try {
+      if (!linked) return
+      const canonicalRoot = realpathSync.native(REAL)
+      const lexical = join(ALIAS, "store")
+      const canonical = canonicalizePath(lexical)
+      expect(canonical, "the fixture must actually differ lexically from its canonical form").not.toBe(lexical)
+      expect(
+        isStrictlyInside(canonicalRoot, lexical),
+        "the fixture must be one a LEXICAL check rejects, or it proves nothing"
+      ).toBe(false)
+      expect(
+        isStrictlyInside(canonicalRoot, canonical),
+        "canonicalising the configured value is what makes the teardown check accept a path under a " +
+          "symlinked temp root - this IS the macOS fix, and it is what setup.mjs now does"
+      ).toBe(true)
+    } finally {
+      rmSync(REAL, { recursive: true, force: true })
+      rmSync(ALIAS_PARENT, { recursive: true, force: true })
     }
   })
 
@@ -1401,7 +1893,7 @@ describe("WS-7 slice A - store-isolation guard: the unredirectable stores are de
     }
     const reader = (file) => PLANTED[file]
     expect(
-      discoverUnredirectableStores(Object.keys(PLANTED), reader),
+      discoverUnredirectableStores(Object.keys(PLANTED), ISOLATION_SET, reader),
       "a store that hardcodes the data directory and honours no variable must be detected without " +
         "anyone adding it to a list"
     ).toEqual(["apps/dashboard/server/services/plantedBridge.mjs"])
@@ -1416,6 +1908,6 @@ describe("WS-7 slice A - store-isolation guard: the unredirectable stores are de
       ].join("\n")
     }
     const reader = (file) => PLANTED[file]
-    expect(discoverUnredirectableStores(Object.keys(PLANTED), reader)).toEqual([])
+    expect(discoverUnredirectableStores(Object.keys(PLANTED), ISOLATION_SET, reader)).toEqual([])
   })
 })

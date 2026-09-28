@@ -352,6 +352,29 @@ beforeEach(() => {
     json: async () => ({ marker: SENTINEL.agents })
   }))
   seedOrders({ [SEEDED_ORDER.id]: { ...SEEDED_ORDER } })
+  // WS-7 slice A, round 2: make the BTCPay precondition EXPLICIT rather than
+  // inherited from whatever the machine happens to have.
+  //
+  // `handlers.mjs:4935` returns 503 on `!hasBtcpay()` before the 401 at :4936, so
+  // this file's `expected 401` assertions are only valid when BTCPay IS
+  // configured. That used to be true by accident: the repository `.env` supplies
+  // BTCPAY_URL / BTCPAY_API_KEY / BTCPAY_STORE_ID, and `server/config.mjs` loaded
+  // it into the vitest worker. Round 1 tried to set `PICC_ENV_LOADED=1` to stop
+  // that load, measured the 503-vs-401 failure, and recorded the cause as "out of
+  // bounds". It was not out of bounds: `config.mjs:54-56` reads `process.env` at
+  // module-evaluation time and this `beforeEach` already calls `vi.resetModules()`
+  // at :355, so a stub set here is picked up by the per-test import.
+  //
+  // Three effects, all of them wanted:
+  //   1. the 401 assertions no longer depend on a developer's `.env`;
+  //   2. the test passes with `PICC_ENV_LOADED=1`, so the credential exposure
+  //      closes without weakening this file;
+  //   3. the values are inert sentinels, so no real BTCPay endpoint is reachable.
+  //
+  // `.invalid` is reserved by RFC 2606 and cannot resolve.
+  vi.stubEnv("BTCPAY_URL", "https://btcpay.invalid")
+  vi.stubEnv("BTCPAY_API_KEY", "test-only-not-a-real-key")
+  vi.stubEnv("BTCPAY_STORE_ID", "test-only-store")
   vi.resetModules()
 })
 

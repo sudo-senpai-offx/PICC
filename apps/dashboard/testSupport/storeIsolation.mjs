@@ -52,26 +52,21 @@
 //    It is a boundary, not a live defect.
 //
 // 2. `PICC_ENV_LOADED`, AND THEREFORE THE REPOSITORY `.env`. The Playwright
-//    harness sets `PICC_ENV_LOADED=1`, which stops `server/config.mjs:11-21` from
-//    calling `process.loadEnvFile()` and pulling `apps/dashboard/.env` - real
-//    provider keys, a Hyperliquid private key, and a VAPID private key - into the
-//    server process. The vitest harness does NOT set it, because doing so was
-//    measured and breaks an existing test:
+//    harness set this first; the vitest harness set it in round 2, having left it
+//    unset in round 1 on the mistaken grounds that the fix was out of bounds. It
+//    stops `server/config.mjs:11-21` calling `process.loadEnvFile()`, which was
+//    pulling real provider keys - `PICC_CCXT_PRIVATEKEY_HYPERLIQUID`,
+//    `VAPID_PRIVATE_KEY`, BTCPay keys, GROQ - into every vitest worker on the
+//    developer's machine. 14 non-test modules import `config.mjs`.
 //
-//        PICC_ENV_LOADED=1 npx vitest run server/__tests__/authBootstrapGateFailsClosed.test.mjs
-//        -> 1 failed | 60 passed (61)
-//        -> authBootstrapGateFailsClosed.test.mjs:480
-//           AssertionError: expected 503 to be 401
-//
-//    Root cause of that failure, found by reading the keys (not the values) in
-//    `.env`: it supplies `BTCPAY_API_KEY`, `BTCPAY_STORE_ID` and `BTCPAY_URL`, and
-//    the `/api/btcpay/invoice` route's status depends on whether they are present.
-//    So that test's expectation is `.env`-CONTINGENT, and correcting it means
-//    editing the auth bootstrap gate - explicitly out of bounds for this slice.
-//    The exposure is therefore real, pre-existing, and carried deliberately:
-//    14 non-test modules import `config.mjs`, so the load happens in the vitest
-//    worker today. Setting the flag is a two-line change here plus a decision
-//    about that one test, and it should be taken as its own piece of work.
+//    It cost exactly one test, and that test was the interesting part:
+//    `PICC_ENV_LOADED=1` turned `authBootstrapGateFailsClosed.test.mjs:480` from
+//    401 into 503, because `handlers.mjs:4935` returns 503 on `!hasBtcpay()` before
+//    the 401 at :4936, and the `.env` is what supplied the BTCPay keys. So the
+//    file's 401 expectation had been `.env`-CONTINGENT all along - a latent flake,
+//    not just a credential problem. Three `vi.stubEnv` calls in that file's
+//    existing `beforeEach` make the precondition explicit and it passes 61/61
+//    with the flag set. The gate in `handlers.mjs` was not touched.
 
 // The real per-service store directory. Every store below falls back to this
 // path (via `new URL("../data", import.meta.url)` or `join(__dirname, "..",
@@ -100,14 +95,35 @@ import { tmpdir } from "node:os"
 // false, and every one of the 57 jsdom suites died in `beforeEach` - while the
 // same code passed on a developer box, where the directory is full of live data.
 //
-// THE SHAPE OF THE FIX. `package.json` is the marker that identifies an
-// `apps/dashboard` root, and it is TRACKED, so it is present in a fresh clone. The
-// data directory is a runtime artefact of having run the app, not a property of
-// the repository, so requiring it confuses "this is not the dashboard root" with
-// "the developer has never run the app". The real store is still named and still
-// compared against - `realServerDataDir()` still resolves to
-// `<root>/server/data` whether or not it exists, and a containment check against a
-// path that does not exist is not a vacuous pass, it is a comparison of strings.
+// THE SHAPE OF THE FIX, and why ONE marker was not enough.
+//
+// `package.json` is TRACKED, so it is present in a fresh clone - that is what
+// fixed the pipeline. But it is also present at the REPOSITORY ROOT, because
+// this is an npm workspace, and round 2 of review measured what that costs:
+//
+//     resolveDashboardRoot({ cwd: "<repo root>" })  ->  <repo root>   (accepted)
+//     assertNotRealStore("PICC_AUTH_DATA_DIR", "<repo>/apps/dashboard/server/data",
+//                        { realDir: realServerDataDir({ root: "<repo root>" }) })
+//     ->  NO THROW
+//
+// The real store was then computed as `<repo root>/server/data`, so a store aimed
+// squarely at the real `apps/dashboard/server/data` was accepted: it was not
+// INSIDE the (wrong) real directory. The invariant was asserted in a comment and
+// no longer enforced. That is the same defect as the original CI bug, inverted -
+// the first rule was too strict and broke a real checkout, this one was too loose
+// and silently disarmed a containment check.
+//
+// So: TWO tracked markers, and the second one must be UNIQUE to apps/dashboard.
+// `testSupport/storeIsolation.mjs` is tracked and exists at no other workspace
+// root, so it cannot be satisfied by a parent directory. The data directory stays
+// out of it: it is a runtime artefact of having run the app, not a property of the
+// repository, which is what broke CI the first time.
+const ROOT_MARKERS = ["package.json", join("testSupport", "storeIsolation.mjs")]
+
+// The real store is still named and still compared against - `realServerDataDir()`
+// resolves to `<root>/server/data` whether or not it exists, and a containment
+// check against a path that does not exist is a comparison of strings, not a
+// vacuous pass.
 //
 // The function is a pure, injectable core so that a test can prove BOTH branches
 // on a synthetic tree. A check that can only be exercised on a machine that
@@ -118,15 +134,21 @@ export function resolveDashboardRoot({ moduleUrl, cwd, exists = existsSync } = {
     return resolve(fileURLToPath(new URL(".", here)), "..")
   }
   // jsdom (and any other non-file module environment): the vitest root is the
-  // process cwd, and it is verified rather than trusted - a wrong cwd would
-  // otherwise make every check below vacuously pass.
+  // process cwd, and it is verified rather than trusted. With a WRONG root the
+  // real store is computed against that wrong root, and a store aimed at the true
+  // `apps/dashboard/server/data` is then outside it - so every containment check
+  // below passes vacuously. Two markers close that.
   const candidate = resolve(cwd ?? process.cwd())
-  if (!exists(join(candidate, "package.json"))) {
+  const missing = ROOT_MARKERS.filter((marker) => !exists(join(candidate, marker)))
+  if (missing.length > 0) {
     throw new Error(
       `cannot locate the apps/dashboard root from a non-file module environment (cwd ${candidate}). ` +
         "testSupport/storeIsolation.mjs must be imported from a module URL or run with apps/dashboard " +
-        "as the cwd. Only package.json is required: server/data is gitignored, untracked and absent " +
-        "from a fresh CI checkout, so requiring it broke the pipeline while passing locally."
+        `as the cwd. Missing marker(s): ${missing.join(", ")}. Both must be present because the ` +
+        "REPOSITORY ROOT also has a package.json - accepting it would compute the real store as " +
+        "<repo root>/server/data and quietly accept a store aimed at the true apps/dashboard/server/data. " +
+        "Note server/data is deliberately NOT a marker: it is gitignored, untracked and absent from a " +
+        "fresh CI checkout, so requiring it broke the pipeline while passing locally."
     )
   }
   return candidate
@@ -245,10 +267,20 @@ export function knownPiccPathVariable(name) {
 // Every rule in this module and in the CI guard is keyed on the `PICC_` prefix.
 // A store variable named anything else - `AUTH_DAT_DIR`, `TRADING_STORE` - would
 // be invisible to the coverage claim, to the misspelling check, and to the
-// real-store-redirect scan. Nothing in the server does that today, and rather than
-// leave that as a comment the guard asserts the list below is complete against a
-// scan, so the boundary is checked rather than assumed. Add a `PICC_` variable for
-// a new store; the guard will tell you if a non-`PICC_` one appears.
+// real-store-redirect scan.
+//
+// THE SHAPE PREDICATE IS A HEURISTIC, AND THIS LIST IS WHERE THAT SHOWS.
+// `looksLikeIsolationPathName` asks whether a name ends in (or contains)
+// `_DIR`/`_FILE`/`_PATH`. That catches PICC-style names and misses perfectly real
+// directories that do not use the convention: `LOCALAPPDATA` and `ProgramFiles`
+// are both Windows directories, and neither matches. So the boundary check admits
+// every non-`PICC_` name that is EITHER path-shaped OR read in the bracket
+// spelling, and a scan that finds an unrecorded one fails the guard. Round 2 of
+// review is what caught the two dotted Windows names - the earlier version of
+// this comment claimed `ProgramFiles(x86)` was "the one case", and it was not.
+//
+// Add a `PICC_` variable for a new store; the guard will tell you if a non-`PICC_`
+// one appears unrecorded.
 // ---------------------------------------------------------------------------
 export const NON_PICC_PATH_ENVIRONMENT_VARIABLES = Object.freeze({
   GEMINI_SERVICE_ACCOUNT_FILE:
@@ -256,16 +288,19 @@ export const NON_PICC_PATH_ENVIRONMENT_VARIABLES = Object.freeze({
     "credential descriptor, read-only from this application's point of view, and a different class " +
     "from a per-service store: nothing in the server writes to it, so redirecting it would isolate " +
     "nothing. It is listed so that a future non-PICC_ STORE cannot slip past the prefix-keyed rules.",
-  // Recorded because it is the one case where the SHAPE PREDICATE ALONE IS NOT
-  // ENOUGH: `ProgramFiles(x86)` is a directory, but it does not end in _DIR or
-  // _FILE, so the unanchored `_ (DIR|FILE|PATH)` test does not match it. The
-  // boundary check below therefore also admits every non-PICC_ name that appears
-  // in the bracket spelling, whether or not it is path-shaped.
+  LOCALAPPDATA:
+    "browserBridge.mjs:69 reads process.env.LOCALAPPDATA to locate a per-user Windows browser profile " +
+    "directory. Read-only and OS-owned. NOT path-shaped by the contract's _DIR/_FILE/_PATH predicate, " +
+    "so it is invisible to the shape test - which is exactly why the boundary check admits every " +
+    "non-PICC_ path-shaped read AND every non-PICC_ bracket read.",
+  ProgramFiles:
+    "browserBridge.mjs:77 reads process.env.ProgramFiles to locate a 64-bit Windows install " +
+    "directory. Read-only, OS-owned, and not path-shaped by the _DIR/_FILE/_PATH predicate: a Windows " +
+    "system directory is a path without a conventional suffix.",
   "ProgramFiles(x86)":
     "browserBridge.mjs:78 reads process.env[\"ProgramFiles(x86)\"] in bracket spelling to locate a " +
-    "32-bit Windows install directory. Read-only, owned by the OS, and on the module already " +
-    "recorded in UNREDIRECTABLE_REASONS. Listed because the shape predicate misses it: a Windows " +
-    "system directory is a path without a _DIR suffix."
+    "32-bit Windows install directory. Read-only, OS-owned, and on the module already recorded in " +
+    "UNREDIRECTABLE_REASONS. The one bracket-spelled member of the three."
 })
 
 /**
@@ -433,12 +468,23 @@ export function assertRedirectableStoreVariable(name) {
 // re-mints when the current value has gone missing.
 // ---------------------------------------------------------------------------
 
-/** variable name -> the scratch directory this helper minted for it, in order. */
+/**
+ * variable name -> every scratch directory minted for it, in mint order.
+ *
+ * AN ARRAY, NOT A SINGLE VALUE. Round 2 of review measured the last-write-wins
+ * version: mint A then B for one variable and `redirectedStoreDirs()` returned
+ * only B. A was on disk, unrecorded, never emptied between tests, and never
+ * removed - so for `handlers.test.mjs` (many `beforeEach` mints) and
+ * `leaderIdeasState.bootMem` (no `rmSync` at all) that is a growing `%TEMP%` leak
+ * and a per-test reset that silently misses every earlier directory. The JSDoc
+ * said "in order" while the code kept only the last, which is the kind of
+ * mismatch that makes a comment stop being read.
+ */
 const REDIRECTS = new Map()
 
 /** Scratch directories minted by the helper, so the setup can reset them too. */
 export function redirectedStoreDirs() {
-  return [...REDIRECTS.values()]
+  return [...REDIRECTS.values()].flat()
 }
 
 /**
@@ -463,7 +509,11 @@ export function useIsolatedStoreDir(name, { prefix } = {}) {
   assertNotRealStore(name, canonical)
   const target = kind === "directory" ? canonical : join(canonical, isolationFileName(name) || "isolated.json")
   process.env[name] = target
-  REDIRECTS.set(name, canonical)
+  // PUSH, never overwrite: a second mint for the same variable must not orphan
+  // the first directory.
+  const previous = REDIRECTS.get(name)
+  if (previous) previous.push(canonical)
+  else REDIRECTS.set(name, [canonical])
   return target
 }
 
