@@ -35,7 +35,7 @@
 // assertion is that the sentinel is ABSENT — i.e. the route refused before it
 // reached the dependency — not that a mock was called.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -229,10 +229,49 @@ function faultStore() {
   writeUsers("{ not json")
 }
 
+/**
+ * The READ branch, not the parse branch: users.json exists but cannot be read.
+ * A directory in its place is EISDIR on both Windows and POSIX, which is the
+ * same class as the Windows locked/renamed file that motivated this whole fix.
+ */
+function unreadableStore() {
+  writeSessions({ sessions: {} })
+  rmSync(join(dir, "users.json"), { force: true })
+  mkdirSync(join(dir, "users.json"))
+}
+
+/**
+ * The inverse: a POPULATED user store whose SESSION store cannot be parsed.
+ *
+ * The user store must be POPULATED on purpose. With a genuinely EMPTY user
+ * store the bootstrap bypass admits the caller before the session store is ever
+ * consulted, which is correct first-run behaviour and would mask the fault
+ * under test. Populating it isolates the session fault: no bootstrap, so the
+ * only way through is a credential, and that is the path being examined.
+ */
+function faultSessionStore() {
+  writeSessions("{ not json")
+  writeUsers({ users: [USER_ROW] })
+}
+
 // One fixed specifier: beforeEach resets the module registry, so every test gets
 // a fresh handlers/config/auth graph that re-reads the stubbed env. (A
 // template-literal specifier is not supported by vite's dynamic-import-vars.)
 const HANDLERS = "../handlers.mjs?auth-bootstrap-gate-fails-closed"
+
+/**
+ * Per-test budget, well above vitest's 5s default.
+ *
+ * These are integration tests over the REAL module graph, not unit tests: each
+ * one calls vi.resetModules() and re-imports handlers.mjs, a 5.7k-line module
+ * with ~120 imports, plus every service it pulls in. Under a parallel worker
+ * pool a single re-import occasionally ran past 5s, and one run failed on the
+ * TIMEOUT with no assertion output — a flaky test that proves nothing about the
+ * defect. The budget is raised rather than the work weakened: no assertion here
+ * is relaxed, skipped or made cheaper, and the heavy re-import is kept because
+ * dropping it would let store state leak between tests.
+ */
+const TIMEOUT = 30_000
 
 async function call(method, url, opts = {}) {
   const { handleApi } = await import(HANDLERS)
@@ -284,7 +323,7 @@ afterEach(() => {
   rmSync(ewalletDir, { recursive: true, force: true })
 })
 
-describe("WS-7 AUTH-FAILOPEN — a user-store fault never satisfies the bootstrap bypass", () => {
+describe("WS-7 AUTH-FAILOPEN — a user-store fault never satisfies the bootstrap bypass", { timeout: TIMEOUT }, () => {
   // ── The three live SSE feeds ────────────────────────────────────────────
   it("1235 /api/trading/realtime refuses instead of opening a live trading feed", async () => {
     faultStore()
@@ -430,21 +469,30 @@ describe("WS-7 AUTH-FAILOPEN — a user-store fault never satisfies the bootstra
   })
 })
 
-describe("WS-7 AUTH-FAILOPEN — the fix cannot be satisfied by breaking first-run", () => {
-  it("still admits a remote caller on a GENUINELY empty store (read route)", async () => {
+describe("WS-7 AUTH-FAILOPEN — the fix cannot be satisfied by breaking first-run", { timeout: TIMEOUT }, () => {
+  // These assert ADMISSION (200 plus the real payload), not merely "not refused".
+  // `not.toBe(401)/not.toBe(503)` is satisfied by 200, 204, 400, 404, 500 and 502,
+  // so it proves only that the route is not over-refused. That is a real
+  // property, but on a deterministic handler it is a weaker one than it looks,
+  // so where the handler's success path is fixed the assertion is 200 AND the
+  // protected payload is PRESENT. /api/connectors/:slug/history is used because
+  // it answers 200 deterministically; /api/trading/decisions can answer 502 when
+  // getDecisions() fails, so it cannot carry a 200 assertion.
+  const FIRST_RUN_ROUTE = "/api/connectors/expertoption/history"
+
+  it("still admits a remote caller on a GENUINELY empty store, with its payload", async () => {
     writeSessions({ sessions: {} })
     writeUsers({ users: [] })
 
-    const res = await call("GET", "/api/trading/decisions")
-    // Admitted: neither refusal status.
-    expect(res.status).not.toBe(401)
-    expect(res.status).not.toBe(503)
+    const res = await call("GET", FIRST_RUN_ROUTE)
+    expect(res.status, "a genuine first run is ADMITTED, not refused").toBe(200)
+    expect(res.text, "admitted means the payload is actually served").toContain(SENTINEL.history)
   })
 
-  it("still admits a remote caller when no user store exists at all", async () => {
-    const res = await call("GET", "/api/trading/decisions")
-    expect(res.status).not.toBe(401)
-    expect(res.status).not.toBe(503)
+  it("still admits a remote caller when no user store exists at all, with its payload", async () => {
+    const res = await call("GET", FIRST_RUN_ROUTE)
+    expect(res.status, "a fresh install with no store is ADMITTED").toBe(200)
+    expect(res.text).toContain(SENTINEL.history)
   })
 
   it("still creates a first-run eWallet order on a genuinely empty store", async () => {
@@ -487,7 +535,7 @@ describe("WS-7 AUTH-FAILOPEN — the fix cannot be satisfied by breaking first-r
 // is from a NON-loopback peer, so flipping requireSessionOrFirstRun's
 // `allowLocalhost` default from false to true — widening every gate at once —
 // would have been invisible. These two tests close it from both directions.
-describe("WS-7 AUTH-FAILOPEN — a loopback bypass must be asked for, never defaulted", () => {
+describe("WS-7 AUTH-FAILOPEN — a loopback bypass must be asked for, never defaulted", { timeout: TIMEOUT }, () => {
   const LOOPBACK = { socket: { remoteAddress: "127.0.0.1" } }
 
   it("a LOOPBACK caller on a route with no bypass is still refused on a store fault", async () => {
@@ -509,13 +557,18 @@ describe("WS-7 AUTH-FAILOPEN — a loopback bypass must be asked for, never defa
 
   it("the two /api/trading/* routes that DO carry the bypass still admit a loopback caller", async () => {
     faultStore()
-    const res = await call("GET", "/api/trading/decisions", LOOPBACK)
+    const res = await call("GET", "/api/trading/realtime", LOOPBACK)
     // Pre-existing behaviour, deliberately preserved: these two routes already
     // had isLocalhostRequest() and removing it would be a functional change
-    // outside this slice. The loopback caller gets in, so the bypass is real —
-    // which is exactly why it must stay opt-in and named at the call site.
-    expect(res.status).not.toBe(401)
-    expect(res.status).not.toBe(503)
+    // outside this slice. The loopback peer is ADMITTED — 200 and the SSE
+    // envelope — so the bypass is real, which is exactly why it must stay
+    // opt-in and named at the call site. /api/trading/realtime is used because
+    // its 200 is deterministic; /api/trading/decisions can answer 502.
+    expect(res.status).toBe(200)
+    // The SSE envelope lives in the Content-Type header and in the frames
+    // themselves; the bypass is proven by the stream being OPEN, not refused.
+    expect(res.headers?.["Content-Type"]).toBe("text/event-stream")
+    expect(res.text).toContain("event:")
   })
 
   it("a LOOPBACK caller on a healthy, populated store still gets a real 401", async () => {
@@ -532,7 +585,151 @@ describe("WS-7 AUTH-FAILOPEN — a loopback bypass must be asked for, never defa
   })
 })
 
-describe("WS-7 AUTH-FAILOPEN — valid-JSON-but-wrong-shape is corruption, not a fresh install", () => {
+// The REVIEW ROUND found four holes the first round's tests could not see,
+// because every one of them needs a different fault SHAPE than a parse error.
+describe("WS-7 AUTH-FAILOPEN — every store-fault shape, not just a parse error", { timeout: TIMEOUT }, () => {
+  it("refuses on the READ branch: users.json exists but cannot be read", async () => {
+    // The Windows locked/renamed-file shape that motivated the whole fix. Only
+    // the PARSE branch was covered before.
+    unreadableStore()
+    const res = await call("GET", "/api/connectors/expertoption/history")
+    assertRefused(res, { sentinels: [SENTINEL.history] })
+  })
+
+  it("refuses when users.json parses to a bare null, rather than answering 500", async () => {
+    // JSON.parse("null") === null, so `data.users` was a TypeError. It escaped
+    // isAuthStoreUnavailable (a name check) and surfaced as an unhandled 500,
+    // contradicting the documented contract.
+    writeSessions({ sessions: {} })
+    writeUsers("null")
+    const res = await call("GET", "/api/connectors/expertoption/history")
+    expect(res.status).toBe(503)
+    expect(res.body?.error).toBe("auth store unavailable")
+  })
+
+  it("refuses a ?token= caller when the SESSION store is faulty, rather than claiming the token is bad", async () => {
+    // verifyToken() maps a store fault to null BY CONTRACT, so the gate used to
+    // answer 401 here — the exact false claim about the token that 503 was
+    // chosen to avoid, on the one credential path that never reached the user
+    // store at all.
+    faultSessionStore()
+    const res = await call("GET", "/api/trading/realtime?token=" + "a".repeat(64))
+    expect(res.status).toBe(503)
+    expect(res.text).not.toContain("text/event-stream")
+  })
+
+  it("refuses a header-credential caller when the SESSION store is faulty", async () => {
+    faultSessionStore()
+    const res = await call("GET", "/api/connectors/expertoption/history", {
+      headers: { authorization: `Bearer ${"a".repeat(64)}` }
+    })
+    expect(res.status).toBe(503)
+    expect(res.text).not.toContain(SENTINEL.history)
+  })
+})
+
+// The aggregate connector route had NO gate at all — a live-balance disclosure
+// needing no store fault, so strictly easier to reach than the fail-open class.
+describe("WS-7 AUTH-FAILOPEN — /api/connectors discloses nothing without a session", { timeout: TIMEOUT }, () => {
+  const AGG = "/api/connectors"
+
+  it("REFUSES the aggregate connector route when the store is unreadable", async () => {
+    faultStore()
+    const res = await call("GET", AGG)
+    assertRefused(res)
+    // The protected payload: the registry (live url, selectors, tuning) and the
+    // latest snapshots, which carry balance / today / lifetime / payoutThreshold.
+    expect(res.text).not.toContain("connectors")
+    expect(res.text).not.toContain("latest")
+  })
+
+  it("REFUSES the aggregate connector route when the store is unreadable (POST too)", async () => {
+    faultStore()
+    const res = await call("POST", AGG, { body: {} })
+    assertRefused(res)
+    expect(res.text).not.toContain("connectors")
+  })
+
+  it("still serves the aggregate on a GENUINELY empty first-run store", async () => {
+    writeSessions({ sessions: {} })
+    writeUsers({ users: [] })
+    const res = await call("GET", AGG)
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body?.connectors)).toBe(true)
+  })
+
+  it("still serves the aggregate to a real session", async () => {
+    const token = "a".repeat(64)
+    writeSessions({ sessions: { [token]: { userId: "u1", createdAt: 1, expiresAt: Date.now() + 3_600_000 } } })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", AGG, { headers: { authorization: `Bearer ${token}` } })
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body?.connectors)).toBe(true)
+  })
+
+  it("still refuses an unauthenticated remote caller on a healthy, populated store", async () => {
+    writeSessions({ sessions: {} })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", AGG)
+    expect(res.status).toBe(401)
+    expect(res.text).not.toContain("connectors")
+  })
+})
+
+// resolveAuthUser() is the SECOND strict reader of the same file. It tolerated
+// the shapes resolveHasUsers() calls CORRUPTION, so a corrupt store produced a
+// false 401 from /api/auth/me — and fetchMe() maps 401 to "rejected", which makes
+// shouldClearStoredSession DESTROY A VALID SESSION. That is the WS-6 T10 flake
+// this whole line of work exists to remove, reintroduced for the new shapes.
+describe("WS-7 AUTH-FAILOPEN — /api/auth/me must not destroy a session on a corrupt store", { timeout: TIMEOUT }, () => {
+  const ME = "/api/auth/me"
+  const validSession = () => {
+    const token = "a".repeat(64)
+    writeSessions({ sessions: { [token]: { userId: "u1", createdAt: 1, expiresAt: Date.now() + 3_600_000 } } })
+    return token
+  }
+
+  it("answers 503, not 401, for {\"users\":null} with a VALID session", async () => {
+    const token = validSession()
+    writeUsers({ users: null })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${token}` } })
+    // 401 here is the session-destroying answer: fetchMe() calls it "rejected".
+    expect(res.status, "a corrupt store must not be reported as a rejected token").toBe(503)
+    expect(res.body?.user).toBeUndefined()
+  })
+
+  it("answers 503, not 401, for {} with a VALID session", async () => {
+    const token = validSession()
+    writeUsers({})
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${token}` } })
+    expect(res.status).toBe(503)
+  })
+
+  it("answers 503, not 401, for a bare null with a VALID session", async () => {
+    const token = validSession()
+    writeUsers("null")
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${token}` } })
+    expect(res.status).toBe(503)
+    expect(res.body?.error).toBe("auth store unavailable")
+  })
+
+  it("still CONFIRMS a valid session on a healthy store", async () => {
+    const token = validSession()
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${token}` } })
+    expect(res.status).toBe(200)
+    expect(res.body?.user?.id).toBe("u1")
+  })
+
+  it("still gives a true 401 for a genuinely unknown token on a healthy store", async () => {
+    writeSessions({ sessions: {} })
+    writeUsers({ users: [USER_ROW] })
+    const res = await call("GET", ME, { headers: { authorization: `Bearer ${"b".repeat(64)}` } })
+    expect(res.status, "a real miss is a real 401 — the fix must not make /me unrefusable").toBe(401)
+  })
+})
+
+describe("WS-7 AUTH-FAILOPEN — valid-JSON-but-wrong-shape is corruption, not a fresh install", { timeout: TIMEOUT }, () => {
   it("refuses when users.json parses to {\"users\":null}", async () => {
     writeSessions({ sessions: {} })
     writeUsers({ users: null })
@@ -555,7 +752,8 @@ describe("WS-7 AUTH-FAILOPEN — valid-JSON-but-wrong-shape is corruption, not a
     writeSessions({ sessions: {} })
     writeUsers({ users: [] })
 
-    const res = await call("GET", "/api/trading/decisions")
-    expect(res.status).not.toBe(503)
+    const res = await call("GET", "/api/connectors/expertoption/history")
+    expect(res.status, "the empty shape is the genuine first-run case, and is ADMITTED").toBe(200)
+    expect(res.text).toContain(SENTINEL.history)
   })
 })

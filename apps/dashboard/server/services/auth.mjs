@@ -171,6 +171,37 @@ export async function hasUsers() {
 }
 
 /**
+ * THE ONE strict reader of users.json.
+ *
+ * Both strict callers — resolveHasUsers() and resolveAuthUser() — go through
+ * here, because they must agree on what counts as a broken store. When they
+ * did not, the same input produced two different verdicts: resolveHasUsers()
+ * called `{"users":null}` CORRUPTION, while resolveAuthUser() collapsed it to
+ * `[]`, missed the user, and returned "not authenticated". /api/auth/me then
+ * answered 401, which fetchMe() maps to `rejected`, which
+ * shouldClearStoredSession acts on by DELETING A VALID SESSION — the exact
+ * WS-6 T10 terminal-performance flake this line of work exists to remove,
+ * reintroduced for the newly-classified shapes. One reader, one rule.
+ *
+ * A MISSING file is not a fault: readJSONStrict's ENOENT fallback is a genuine
+ * `{ users: [] }`, so a fresh install still reads as a first run.
+ *
+ * Throws AuthStoreUnavailable on a read failure, a parse failure, OR a
+ * readable-but-wrong shape. The shape guard is null-safe on purpose:
+ * `JSON.parse("null")` is `null`, and a bare `data.users` threw a TypeError
+ * that escaped isAuthStoreUnavailable (a name check) as an unhandled 500.
+ */
+async function readUsersStrict() {
+  const data = await readJSONStrict(USERS_FILE, { users: [] })
+  const users = data && typeof data === "object" ? data.users : undefined
+  if (!Array.isArray(users)) {
+    const shape = data === null ? "null" : Array.isArray(data) ? "an array" : typeof data
+    throw new AuthStoreUnavailable(`auth store is corrupt (${USERS_FILE}): expected a users array, got ${shape}`)
+  }
+  return users
+}
+
+/**
  * Whether at least one local account exists, separating a real answer from an
  * unreadable store.
  *
@@ -178,26 +209,16 @@ export async function hasUsers() {
  * first-run signup hint on /api/auth/status, where "probably not" is the right
  * answer to a degraded read.
  *
- * AUTH GATES must use this instead. `!hasUsers()` is the first-user bootstrap
- * bypass, and hasUsers() answers `false` for BOTH "no accounts exist" and
- * "users.json could not be read" — so gating on it turns a store fault into an
- * unauthenticated pass for every guarded route. This throws
- * AuthStoreUnavailable on a fault so the gate can refuse instead of waving
- * requests through.
+ * AUTH GATES must not use this. It answers "is the store POPULATED", which is
+ * not the gate's question and inverts dangerously: `!resolveHasUsers()` is the
+ * first-user bootstrap bypass, and a fault must never read as empty. Ask for
+ * the gate's own question with firstRunBootstrapAllowed(), or call
+ * requireSessionOrFirstRun() in handlers.mjs. handlers.mjs pins this function
+ * to a single occurrence in ws7AuthBootstrapGateGuard, because a second caller
+ * is how the fail-open class regrows.
  */
 export async function resolveHasUsers() {
-  const data = await readJSONStrict(USERS_FILE, { users: [] })
-  // A missing file already returned the { users: [] } fallback above, so an
-  // absent store is still a genuine first run. Anything else that is not an
-  // array is CORRUPTION, not an empty install: `{"users":null}`, `{}` and a
-  // bare `[]` all used to answer "empty" here and so granted the bootstrap
-  // bypass on a store that is plainly damaged. A shape fault is a store fault.
-  if (!Array.isArray(data.users)) {
-    throw new AuthStoreUnavailable(
-      `auth store is corrupt (${USERS_FILE}): expected a users array, got ${Array.isArray(data) ? "an array" : typeof data}`
-    )
-  }
-  return data.users.length > 0
+  return (await readUsersStrict()).length > 0
 }
 
 /**
@@ -390,8 +411,29 @@ export async function resolveAuthUser(authorizationHeader) {
   // sessions, and sessions.json is re-read in full on every auth check.
   const userId = await lookupSession(authorizationHeader.slice(7), { prune: true })
   if (!userId) return null
-  const userData = await readJSONStrict(USERS_FILE, { users: [] })
-  const users = Array.isArray(userData.users) ? userData.users : []
+  // readUsersStrict(), NOT a local shape check. This is the second strict reader
+  // of the same file, and when the two disagreed a readable-but-corrupt store
+  // produced a false "not authenticated" here — which /api/auth/me turns into a
+  // 401, which the client turns into a deleted session. One rule, one reader.
+  const users = await readUsersStrict()
   const user = users.find((u) => u.id === userId)
   return user ? publicUser(user) : null
+}
+
+/**
+ * The GATE's credential check: same lookup, but a store fault is reported
+ * instead of being flattened to "no such session".
+ *
+ * verifyUser()/verifyToken() deliberately keep their null-on-everything
+ * contract, and roughly forty handlers.mjs call sites depend on it — a boolean
+ * check must not start throwing. But an auth GATE is not a boolean check: it is
+ * the thing that decides whether a caller is let in, and answering 401 there on
+ * a store fault is a claim about the TOKEN that was never examined. The gate
+ * needs to be able to say "I could not determine", so it uses this.
+ *
+ * Returns the live session's userId, or null for an unknown/expired token.
+ * Throws AuthStoreUnavailable when the store could not be read or parsed.
+ */
+export async function verifyTokenStrict(token) {
+  return lookupSession(token, { prune: true })
 }

@@ -32,10 +32,10 @@ import {
   verifyUser,
   revokeToken,
   hasUsers,
-  verifyToken,
   resolveAuthUser,
   resolveHasUsers,
   firstRunBootstrapAllowed,
+  verifyTokenStrict,
   isAuthStoreUnavailable
 } from "./services/auth.mjs"
 import {
@@ -4753,11 +4753,11 @@ const creds = await getVenueCredentials()
     // Bind the order to an owner. In the single-owner first-run (no accounts
     // configured yet) the local operator is the implicit owner; once accounts
     // exist the order must carry the authenticated user's id (audit Fix 6).
-    // The bootstrap answer is the SAME strict one the gate used, so an order
-    // can only ever be stamped "local-owner" when the store is genuinely empty
-    // — never because the store could not be read. A fault refused above and
-    // never reaches this line, so the two cannot disagree.
-    const userId = (await verifyUser(auth)) || (await firstRunBootstrapAllowed() ? "local-owner" : null)
+    // The bootstrap answer is the gate's OWN verified answer, reused rather than
+    // re-read: an order can only ever be stamped "local-owner" when the store is
+    // genuinely empty, never because the store could not be read. A fault was
+    // refused at the gate above, so this cannot disagree with it.
+    const userId = (await verifyUser(auth)) || (bootstrapAnswer(req) ? "local-owner" : null)
     if (!userId) return writeJson(res, 401, { error: "authentication required" })
     const ewallet = String(body.ewallet ?? "tng").toLowerCase()
     if (!walletInfo(ewallet)) return writeJson(res, 400, { error: `unsupported eWallet (use ${WALLET_IDS.join(", ")})` })
@@ -4780,21 +4780,23 @@ const creds = await getVenueCredentials()
   if (path === "/api/billing/ewallet/submit" && req.method === "POST") {
     // Confirms a payment order — same auth bar as /api/billing/ewallet/order.
     if (!(await requireSessionOrFirstRun(req, res))) return true
-    const actorUserId = (await verifyUser(auth)) || (await firstRunBootstrapAllowed() ? "local-owner" : null)
+    const actorUserId = (await verifyUser(auth)) || (bootstrapAnswer(req) ? "local-owner" : null)
     if (!actorUserId) return writeJson(res, 401, { error: "authentication required" })
     // Self-approve is only allowed in the single-owner admin/demo mode (no
     // real accounts configured). Once real accounts exist, only the order's
     // OWNER may confirm it — never an arbitrary caller (audit Fix 6).
     //
-    // THIS IS THE MONEY-STATE GATE, and it is the strict answer by name.
+    // THIS IS THE MONEY-STATE GATE, and it reads the answer the gate above
+    // already verified — not a second store read, so a mid-request fault cannot
+    // turn this into an unhandled 500, and the two cannot disagree.
     // submitEwalletOrder() short-circuits the owner check on selfApprove
     // (ewallet.mjs: `if (!owner && !selfApprove) throw`), so a selfApprove
     // reached without a real session admits a LEGACY OWNERLESS order straight
     // to status:"confirmed", self_approved:true — precisely the guarantee that
-    // file's own comment claims a stray caller can never break. Deriving it
-    // from the strict helper can only ever move it toward false: a store fault
-    // refuses at the gate above, so it can never be produced here at all.
-    const selfApprove = await firstRunBootstrapAllowed()
+    // file's own comment claims a stray caller can never break. Deriving it this
+    // way can only ever move it toward false: a store fault is refused at the
+    // gate, and an authenticated caller is never a bootstrap caller.
+    const selfApprove = bootstrapAnswer(req)
     const { orderId, confirmRef } = body
     if (!orderId) return writeJson(res, 400, { error: "orderId required" })
     try {
@@ -4870,6 +4872,18 @@ const creds = await getVenueCredentials()
   // Read-only by design: PICC never executes on external platforms.
   // -------------------------------------------------------------------
   if (path === "/api/connectors" && (req.method === "GET" || req.method === "POST")) {
+    // This aggregate route was the one connector endpoint with NO gate at all,
+    // while its own /:slug/history sibling below IS gated and discloses the same
+    // class of data. The payload is the full registry (slug, label, category,
+    // transports, live url, tuned flag, selectors) plus getLatestSnapshots() —
+    // which is connector_latest.json, i.e. balance / today / lifetime /
+    // payoutThreshold / currency / extra per connector. That is a live-balance
+    // disclosure, and it needs NO store fault to reach, so it was strictly
+    // easier to exploit than anything the fail-open class covered. There is no
+    // global auth middleware in requestListener, so this line is the only gate
+    // there is. Pinned by ws7AuthBootstrapGateGuard ("every /api/connectors route
+    // is gated").
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     const connectors = listConnectors().map((c) => ({
       slug: c.slug,
       label: c.label,
@@ -5531,24 +5545,35 @@ async function requireAuth(req, res) {
  * empty store. Returns false having ALREADY written the response, so a call
  * site is exactly one line and can never double-write.
  *
- * WHY 503 AND NOT 401 ON A STORE FAULT. A 401 is a claim about the TOKEN: it
- * says these credentials were examined and refused. On a store fault nothing
- * was examined, so 401 is a lie — and the client acts on the claim, not on the
- * truth. That is precisely the harm /api/auth/me was hardened against in
- * 4505445: one unproven answer was enough for the browser to destroy a valid
- * session. It is worse here, because 401 is also the conventional signal to
- * "re-authenticate", which would send an operator to fix a session that was
- * never the problem. 503 says what is true — the server could not determine —
- * and the client already treats 5xx as inconclusive and keeps its session
- * (see fetchMe() in src/lib/auth.ts).
+ * WHY 503 AND NOT 401 ON A STORE FAULT. A 401 is a claim about the CREDENTIAL:
+ * it says these credentials were examined and refused. On a store fault nothing
+ * was examined, so 401 is simply false. Two consequences follow, and they are
+ * the whole justification — neither depends on client behaviour:
  *
- * 503 is also the SAFE answer for the money and cost POSTs specifically
- * (/api/billing/ewallet/*, /api/agents/*): it invites a RETRY, and this gate
- * runs BEFORE any state is created, so a retry after a 503 re-enters the same
- * refusal having changed nothing. A refused order is not a half-made one. The
- * routes are also rate-limited, and submitEwalletOrder answers a repeat
- * confirmation with { already: true }, so a retry storm cannot weld an order to
- * confirmed either.
+ *   1. TRUTHFULNESS. 503 is a claim about the SERVER's ability to answer, and
+ *      "the user store could not be read" is exactly what happened. A 401 would
+ *      be an answer the server does not have. It would also be the conventional
+ *      "re-authenticate" signal, sending an operator to fix a session that was
+ *      never the problem.
+ *   2. RETRY SAFETY, which is the part that matters most for the money and cost
+ *      POSTs (/api/billing/ewallet/*, /api/agents/*). 503 invites a RETRY, and
+ *      this gate runs BEFORE any state is created, so a retry after a 503
+ *      re-enters the same refusal having changed nothing — a refused order is
+ *      not a half-made one. The routes are also rate-limited, and
+ *      submitEwalletOrder answers a repeat confirmation with { already: true },
+ *      so even an unbounded retry storm cannot weld an order to confirmed. A 401
+ *      would be retry-safe too, but it would misdirect the operator instead.
+ *
+ * Note the client only treats 401 specially on /api/auth/me, which is why that
+ * route's 503 was justified by session-destruction and these are not: no other
+ * caller destroys a session on a 401, so the arguments here are the two above.
+ *
+ * THE CREDENTIAL CHECK IS STRICT TOO. verifyUser()/verifyToken() flatten a store
+ * fault to null by contract, and about forty call sites depend on that. An auth
+ * GATE is not one of them: answering 401 there on a faulted sessions.json is the
+ * same false claim about the credential, on the one path where the user store is
+ * never even consulted. So the gate uses verifyTokenStrict(), which reports the
+ * fault instead of hiding it.
  *
  * WHY THE LOOPBACK BYPASS IS OPT-IN AND OFF BY DEFAULT. `allowLocalhost`
  * defaults to FALSE, so adding this gate to a route can never silently widen
@@ -5563,22 +5588,72 @@ async function requireAuth(req, res) {
  * @param {boolean} [opts.allowLocalhost] documented loopback bypass.
  */
 async function requireSessionOrFirstRun(req, res, { token = "", allowLocalhost = false } = {}) {
+  // Set BEFORE any early return, so bootstrapAnswer() is never undefined and
+  // never has to guess. A caller admitted on a real session or a loopback
+  // bypass is NOT a bootstrap caller, and must not be able to derive
+  // "local-owner" or selfApprove from this request.
+  req.__bootstrap = false
   if (allowLocalhost && isLocalhostRequest(req)) return true
-  if (token) return Boolean(await verifyToken(token))
-  if (await verifyUser(req.headers.authorization)) return true
-  let bootstrap
-  try {
-    bootstrap = await firstRunBootstrapAllowed()
-  } catch (err) {
-    if (!isAuthStoreUnavailable(err)) throw err
-    // Refuse. Deliberately before any state is created, and deliberately not
-    // 401 — see the note above.
-    writeJson(res, 503, { error: "auth store unavailable" })
-    return false
+
+  // A ?token= caller has made the token the credential, so the token decides and
+  // the bootstrap is not consulted — the pre-existing precedence, kept.
+  const bearer = token || String(req.headers.authorization ?? "").replace(/^Bearer /, "")
+  if (bearer) {
+    const userId = await strictOrRefuse(res, () => verifyTokenStrict(bearer))
+    if (userId === STORE_FAULT) return false
+    if (userId) return true
+    // A present-but-unknown credential is a real miss on a readable store, so
+    // the honest answer is 401. (With no credential at all we fall through to
+    // the bootstrap below, which is the genuinely-first-run case.)
+    if (token) {
+      writeJson(res, 401, { error: "authentication required" })
+      return false
+    }
   }
-  if (bootstrap) return true
+
+  req.__bootstrap = await strictOrRefuse(res, () => firstRunBootstrapAllowed())
+  if (req.__bootstrap === STORE_FAULT) return false
+  if (req.__bootstrap) return true
   writeJson(res, 401, { error: "authentication required" })
   return false
+}
+
+/** Marker for "the store faulted, and the refusal has already been written". */
+const STORE_FAULT = Symbol("auth-store-fault")
+
+/**
+ * Run a strict store read, turning an AuthStoreUnavailable into a 503 that is
+ * written HERE rather than by the caller.
+ *
+ * Centralised so the fault-to-status mapping exists once. The alternative — a
+ * try/catch at every call site — is what put fourteen copies of the bypass in
+ * the file in the first place.
+ */
+async function strictOrRefuse(res, read) {
+  try {
+    return await read()
+  } catch (err) {
+    if (!isAuthStoreUnavailable(err)) throw err
+    writeJson(res, 503, { error: "auth store unavailable" })
+    return STORE_FAULT
+  }
+}
+
+/**
+ * The gate's OWN verified answer to "may an unauthenticated caller through?",
+ * for routes that must derive from it.
+ *
+ * The eWallet routes need the bootstrap answer twice more — for the order's
+ * owner stamp and for selfApprove, which short-circuits the owner check in
+ * submitEwalletOrder. They used to call firstRunBootstrapAllowed() a second and
+ * third time, which meant a second and third store read: a fault there escaped
+ * as an unhandled 500 rather than the documented 503. Reading the answer the gate
+ * already computed removes the re-read entirely, so the two cannot disagree and
+ * there is nothing left to catch. Strict `=== true` so an un-gated request
+ * (undefined) can never derive a bypass.
+ */
+function bootstrapAnswer(req) {
+  return req.__bootstrap === true
 }
 
 // Stricter gate for routes that disclose credential/venue configuration state. `requireAuth` treats

@@ -16,10 +16,13 @@ import type { LocalSession, LocalUser } from "@/lib/auth"
  * while giving up on a genuinely dead backend within ~23s. At the bounded
  * backoff below that is FIVE waits, not four: the sign-out check happens on the
  * way IN to a /me call, so the 8s entry is spent twice — once returning to
- * inconclusive #4, and once more on the #5 pass that trips the limit. The waits
- * are therefore 1s, 2s, 4s, 8s and 8s, totalling 23s, and the 6th consecutive
- * inconclusive answer signs out. Comfortably longer than any plausible restart,
- * and short enough that "still signed in" never becomes a lie.
+ * inconclusive #4, and once more on the pass that runs with inconclusive
+ * already at 5. That sixth pass is the one that trips `next > MAX`, so the
+ * waits are 1s, 2s, 4s, 8s and 8s, totalling 23s, and the SIXTH consecutive
+ * inconclusive answer signs out. (Pass 5 sets inconclusive = 5 and does not
+ * trip; the label that matters is the pass, not the counter value.) Comfortably
+ * longer than any plausible restart, and short enough that "still signed in"
+ * never becomes a lie.
  */
 export const MAX_INCONCLUSIVE_CHECKS = 5
 
