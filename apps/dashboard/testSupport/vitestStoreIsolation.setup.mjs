@@ -27,17 +27,20 @@
 // changing it here would silently alter what the whole suite can see. Both are
 // reported rather than quietly decided.
 import { afterAll, beforeEach } from "vitest"
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, realpathSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import {
   ISOLATION_DIRECTORY_VARIABLES,
   ISOLATION_FILE_VARIABLES,
   ISOLATION_PATH_VARIABLES,
+  ISOLATION_PATH_VARIABLE_KINDS,
   NON_STORE_PICC_PATH_VARIABLES,
   assertContainedPath,
   assertNotRealStore,
-  looksLikeIsolationPathName
+  isStrictlyInside,
+  looksLikeIsolationPathName,
+  redirectedStoreDirs
 } from "./storeIsolation.mjs"
 
 const RUN_ROOT = realpathSync.native(mkdtempSync(join(tmpdir(), "picc-vitest-store-")))
@@ -153,6 +156,26 @@ const BASELINE_KEYS = new Set(Object.keys(process.env))
 // ws7TestStoreIsolation before the suite runs, and again at teardown below; the
 // second is rejected on the line below. An unset variable is a leak, not an
 // attack, and the safe response to a leak is to put the redirect back.
+//
+// THE RUNTIME CHECKS HERE CANNOT, ALONE, CLOSE THE RESTORE IDIOM, AND ROUND 1 OF
+// REVIEW SHOWED WHY. The sequence below defeats every check in this file:
+//
+//     beforeEach(test1)  -> variable at the harness value            OK
+//     test body          -> process.env.PICC_AUTH_DATA_DIR = <real store>
+//                           write lands in the real store            SUCCEEDED
+//     afterEach          -> delete process.env.PICC_AUTH_DATA_DIR    (85+ files do)
+//     beforeEach(test2)  -> repaired to the harness value            OK
+//     afterAll check 2   -> variable at the harness value            "no problem"
+//
+// Every check reported clean while a file landed in real server/data. Five stores
+// re-read `process.env` per call (connectors.mjs:272, ewallet.mjs:39,
+// v32Config.mjs:65, chartPrefs.mjs:25, riskGates.mjs:44), so a mid-test
+// reassignment genuinely MOVES the store. The fix is therefore AT THE SOURCE and
+// STATIC - ws7TestStoreIsolation Claim 3 now fires on a store-variable
+// assignment whose value is not scratch-derived - and the checks below are
+// defence in depth, not the primary defence. They are kept because they cost
+// nothing and they catch the shapes a static scan cannot see, such as a redirect
+// built at runtime from a function argument.
 // ---------------------------------------------------------------------------
 const REPAIRED = []
 
@@ -169,6 +192,15 @@ function emptyDirectory(dir) {
   }
 }
 
+/** True when a configured value still points at something that exists. */
+function targetExists(configured) {
+  try {
+    return existsSync(configured)
+  } catch {
+    return false
+  }
+}
+
 beforeEach(() => {
   for (const name of ISOLATION_PATH_VARIABLES) {
     const configured = process.env[name]
@@ -177,17 +209,50 @@ beforeEach(() => {
       process.env[name] = OWNED.get(name)
       continue
     }
-    assertNotRealStore(name, configured)
-  }
-  // Only the harness-owned directories are reset. A test that redirected the
-  // variable at its own mkdtemp keeps that directory exactly as it left it.
-  for (const name of ISOLATION_PATH_VARIABLES) {
-    if (process.env[name] !== OWNED.get(name)) continue
-    if (OWNED.get(name) === SETTINGS_DIR || ISOLATION_FILE_VARIABLES.some(([n]) => n === name)) {
-      emptyDirectory(SETTINGS_DIR)
+    // A file that `rmSync`d its scratch directory in `afterEach` leaves the
+    // variable pointing at a path that no longer exists. Nothing broke, but the
+    // next module to read it would silently recreate the tree, so re-mint rather
+    // than leave a dangling value behind.
+    if (!targetExists(configured)) {
+      REPAIRED.push(name)
+      process.env[name] = OWNED.get(name)
       continue
     }
-    emptyDirectory(OWNED.get(name))
+    assertNotRealStore(name, configured)
+  }
+
+  // THE HARNESS'S OWN SHARED RULE, finally called. Until round 1 of review this
+  // function was imported here, re-exported below, and never invoked - so vitest
+  // enforced a weaker policy than the Playwright harness it claims to share. It
+  // applies to the values the harness itself owns, which is where "inside the run
+  // root" is a guarantee rather than an assumption: a test that redirected the
+  // variable at its own mkdtemp keeps that directory, and is covered instead by
+  // the real-store check above.
+  for (const name of ISOLATION_PATH_VARIABLES) {
+    if (process.env[name] !== OWNED.get(name)) continue
+    assertContainedPath(
+      RUN_ROOT,
+      name,
+      process.env[name],
+      ISOLATION_PATH_VARIABLE_KINDS.get(name),
+      "vitest isolation"
+    )
+  }
+
+  // UNCONDITIONALLY, not only while the variable still holds the harness value.
+  // The previous version skipped the reset as soon as a migrated file had
+  // redirected the variable through useIsolatedStoreDir(), because that
+  // comparison went false and the per-test reset silently switched itself off
+  // for the rest of the file. The harness directory is emptied either way.
+  emptyDirectory(SETTINGS_DIR)
+  for (const [name] of ISOLATION_DIRECTORY_VARIABLES) emptyDirectory(OWNED.get(name))
+
+  // And the scratch directories the helper minted, when they still exist. A
+  // helper-minted directory belongs to the test that asked for it, so it is
+  // emptied between tests rather than left accumulating.
+  for (const dir of redirectedStoreDirs()) {
+    if (dir === RUN_ROOT || ISOLATION_DIRECTORY_VARIABLES.some(([n]) => OWNED.get(n) === dir)) continue
+    emptyDirectory(dir)
   }
 })
 
@@ -215,15 +280,30 @@ afterAll(() => {
     )
   }
 
-  // 2. A store variable that ENDED the run aimed at the live store. The
-  //    beforeEach check catches the common shape, but a test that redirects
-  //    late - in the last test of a file, or from an async callback the hook
-  //    ordering does not cover - is only visible here.
+  // 2. A store variable that ENDED the run aimed at the live store, or aimed at
+  //    something that is not scratch at all. The beforeEach check covers the
+  //    common shape; this catches a redirect that lands late - in the last test
+  //    of a file, or from a callback the hook ordering does not cover.
+  //
+  //    "EQUALS THE VALUE THE HARNESS SET" is deliberately NOT asserted, and the
+  //    reason is worth stating rather than looking like an omission: 85 files
+  //    legitimately leave the variable pointing at their OWN scratch directory,
+  //    and demanding the harness value would fail every one of them. The property
+  //    that must hold is "inside the run root, inside the OS temp dir, or absent"
+  //    - which is what a real-store value and a repo-root value both fail.
+  const scratch = [RUN_ROOT, realpathSync.native(tmpdir())]
   for (const name of ISOLATION_PATH_VARIABLES) {
     const configured = process.env[name]
     if (typeof configured !== "string" || configured.length === 0) continue
     try {
       assertNotRealStore(name, configured)
+      if (!scratch.some((root) => isStrictlyInside(root, configured) || configured === root)) {
+        problems.push(
+          `${name} ended the run at ${configured}, which is neither inside the run root ` +
+            `(${RUN_ROOT}) nor inside the OS temp dir. A store target outside scratch is a store ` +
+            "the harness cannot vouch for."
+        )
+      }
     } catch (error) {
       problems.push(error.message)
     }

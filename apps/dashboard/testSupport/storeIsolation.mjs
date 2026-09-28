@@ -41,6 +41,37 @@
 //
 // NOT A PRODUCTION MODULE. It imports nothing and is loaded by both harnesses,
 // so it must stay dependency-free plain ESM.
+//
+// THE TWO BLIND SPOTS, WRITTEN DOWN HERE RATHER THAN LEFT IN A REVIEW COMMENT.
+//
+// 1. NON-`PICC_` NAMES. Every rule above is keyed on the `PICC_` prefix, so a
+//    store variable named anything else - `AUTH_DAT_DIR`, `TRADING_STORE` - is
+//    invisible to the coverage claim, to the misspelling check, and to the
+//    real-store-redirect scan. `ws7TestStoreIsolation.test.mjs` asserts that no
+//    such variable exists today, so the boundary is checked rather than assumed.
+//    It is a boundary, not a live defect.
+//
+// 2. `PICC_ENV_LOADED`, AND THEREFORE THE REPOSITORY `.env`. The Playwright
+//    harness sets `PICC_ENV_LOADED=1`, which stops `server/config.mjs:11-21` from
+//    calling `process.loadEnvFile()` and pulling `apps/dashboard/.env` - real
+//    provider keys, a Hyperliquid private key, and a VAPID private key - into the
+//    server process. The vitest harness does NOT set it, because doing so was
+//    measured and breaks an existing test:
+//
+//        PICC_ENV_LOADED=1 npx vitest run server/__tests__/authBootstrapGateFailsClosed.test.mjs
+//        -> 1 failed | 60 passed (61)
+//        -> authBootstrapGateFailsClosed.test.mjs:480
+//           AssertionError: expected 503 to be 401
+//
+//    Root cause of that failure, found by reading the keys (not the values) in
+//    `.env`: it supplies `BTCPAY_API_KEY`, `BTCPAY_STORE_ID` and `BTCPAY_URL`, and
+//    the `/api/btcpay/invoice` route's status depends on whether they are present.
+//    So that test's expectation is `.env`-CONTINGENT, and correcting it means
+//    editing the auth bootstrap gate - explicitly out of bounds for this slice.
+//    The exposure is therefore real, pre-existing, and carried deliberately:
+//    14 non-test modules import `config.mjs`, so the load happens in the vitest
+//    worker today. Setting the flag is a two-line change here plus a decision
+//    about that one test, and it should be taken as its own piece of work.
 
 // The real per-service store directory. Every store below falls back to this
 // path (via `new URL("../data", import.meta.url)` or `join(__dirname, "..",
@@ -60,28 +91,65 @@ import { join, resolve, sep, isAbsolute, relative, basename, dirname } from "nod
 import { mkdirSync, mkdtempSync, realpathSync, statSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 
-/** The `apps/dashboard` directory, located the way THIS module was loaded. */
-export function dashboardRoot() {
-  const here = import.meta.url
-  if (here.startsWith("file:")) {
+// WHY THE CWD FALLBACK VALIDATES `package.json` AND NOT `server/data`. This
+// check is the exact line that took CI down in review round 1, and the reason is
+// worth keeping in the code. `apps/dashboard/server/data/` is gitignored
+// (`.gitignore:38`) with ZERO tracked files, and `.github/workflows/ci.yml` runs
+// checkout -> `npm ci` -> `npm test` with nothing in the pipeline that creates
+// it. So on a pipeline runner the directory does not exist, `existsSync` returns
+// false, and every one of the 57 jsdom suites died in `beforeEach` - while the
+// same code passed on a developer box, where the directory is full of live data.
+//
+// THE SHAPE OF THE FIX. `package.json` is the marker that identifies an
+// `apps/dashboard` root, and it is TRACKED, so it is present in a fresh clone. The
+// data directory is a runtime artefact of having run the app, not a property of
+// the repository, so requiring it confuses "this is not the dashboard root" with
+// "the developer has never run the app". The real store is still named and still
+// compared against - `realServerDataDir()` still resolves to
+// `<root>/server/data` whether or not it exists, and a containment check against a
+// path that does not exist is not a vacuous pass, it is a comparison of strings.
+//
+// The function is a pure, injectable core so that a test can prove BOTH branches
+// on a synthetic tree. A check that can only be exercised on a machine that
+// happens to have the right directory is how this defect shipped.
+export function resolveDashboardRoot({ moduleUrl, cwd, exists = existsSync } = {}) {
+  const here = moduleUrl ?? import.meta.url
+  if (typeof here === "string" && here.startsWith("file:")) {
     return resolve(fileURLToPath(new URL(".", here)), "..")
   }
   // jsdom (and any other non-file module environment): the vitest root is the
   // process cwd, and it is verified rather than trusted - a wrong cwd would
   // otherwise make every check below vacuously pass.
-  const cwd = resolve(process.cwd())
-  if (!existsSync(join(cwd, "server", "data")) || !existsSync(join(cwd, "package.json"))) {
+  const candidate = resolve(cwd ?? process.cwd())
+  if (!exists(join(candidate, "package.json"))) {
     throw new Error(
-      `cannot locate the apps/dashboard root from a non-file module environment (cwd ${cwd}). ` +
-        "testSupport/storeIsolation.mjs must be imported from a module URL or run with apps/dashboard as the cwd."
+      `cannot locate the apps/dashboard root from a non-file module environment (cwd ${candidate}). ` +
+        "testSupport/storeIsolation.mjs must be imported from a module URL or run with apps/dashboard " +
+        "as the cwd. Only package.json is required: server/data is gitignored, untracked and absent " +
+        "from a fresh CI checkout, so requiring it broke the pipeline while passing locally."
     )
   }
-  return cwd
+  return candidate
 }
 
-/** The real, gitignored, untracked per-service store directory. */
-export function realServerDataDir() {
-  return join(dashboardRoot(), "server", "data")
+/** The `apps/dashboard` directory, located the way THIS module was loaded. */
+export function dashboardRoot() {
+  return resolveDashboardRoot({})
+}
+
+/**
+ * The real, gitignored, untracked per-service store directory.
+ *
+ * `root` is injectable so a test can aim the containment rule at a temporary
+ * stand-in and exercise a junction with the real store nowhere near it - the
+ * junction tests in `ws7TestStoreIsolation.test.mjs` do exactly that. Note this
+ * returns a PATH whether or not the directory exists; that is the point. A
+ * containment check against a path that is not there yet is a string comparison,
+ * not a vacuous pass, and several stores legitimately point at a not-yet-created
+ * directory.
+ */
+export function realServerDataDir({ root } = {}) {
+  return join(root ?? dashboardRoot(), "server", "data")
 }
 
 // ---------------------------------------------------------------------------
@@ -171,14 +239,82 @@ export function knownPiccPathVariable(name) {
   )
 }
 
-/** True when `name` has the shape a store-isolation variable must have. */
+// ---------------------------------------------------------------------------
+// THE ONE BLIND SPOT, TURNED INTO A CHECKED LIST.
+//
+// Every rule in this module and in the CI guard is keyed on the `PICC_` prefix.
+// A store variable named anything else - `AUTH_DAT_DIR`, `TRADING_STORE` - would
+// be invisible to the coverage claim, to the misspelling check, and to the
+// real-store-redirect scan. Nothing in the server does that today, and rather than
+// leave that as a comment the guard asserts the list below is complete against a
+// scan, so the boundary is checked rather than assumed. Add a `PICC_` variable for
+// a new store; the guard will tell you if a non-`PICC_` one appears.
+// ---------------------------------------------------------------------------
+export const NON_PICC_PATH_ENVIRONMENT_VARIABLES = Object.freeze({
+  GEMINI_SERVICE_ACCOUNT_FILE:
+    "config.mjs:33 reads a Vertex AI service-account JSON path, dotted spelling. It is a cloud " +
+    "credential descriptor, read-only from this application's point of view, and a different class " +
+    "from a per-service store: nothing in the server writes to it, so redirecting it would isolate " +
+    "nothing. It is listed so that a future non-PICC_ STORE cannot slip past the prefix-keyed rules.",
+  // Recorded because it is the one case where the SHAPE PREDICATE ALONE IS NOT
+  // ENOUGH: `ProgramFiles(x86)` is a directory, but it does not end in _DIR or
+  // _FILE, so the unanchored `_ (DIR|FILE|PATH)` test does not match it. The
+  // boundary check below therefore also admits every non-PICC_ name that appears
+  // in the bracket spelling, whether or not it is path-shaped.
+  "ProgramFiles(x86)":
+    "browserBridge.mjs:78 reads process.env[\"ProgramFiles(x86)\"] in bracket spelling to locate a " +
+    "32-bit Windows install directory. Read-only, owned by the OS, and on the module already " +
+    "recorded in UNREDIRECTABLE_REASONS. Listed because the shape predicate misses it: a Windows " +
+    "system directory is a path without a _DIR suffix."
+})
+
+/**
+ * True when `name` has the shape a store-isolation variable must have.
+ *
+ * UNANCHORED, and that is the point. The first version anchored on `$`, which
+ * caught the round-4 shape (`PICC_AUTH_DAT_DIR`) but let `PICC_DATA_DIRR` through
+ * in silence - verified, and reported in review round 1. A trailing-typo is the
+ * same defect as a middle-typo; there is no reason to catch one and not the other.
+ * The cost of being broader is that a few more names reach the reasoned
+ * NON_STORE map, which is a visible reviewable act rather than a silent failure.
+ */
 export function looksLikeIsolationPathName(name) {
-  return /_(DIR|FILE|PATH)$/.test(name)
+  return /_(DIR|FILE|PATH)/.test(name)
 }
 
 export function isStrictlyInside(root, candidate) {
   const pathFromRoot = relative(root, candidate)
   return pathFromRoot !== "" && pathFromRoot !== ".." && !pathFromRoot.startsWith(`..${sep}`) && !isAbsolute(pathFromRoot)
+}
+
+/**
+ * Canonicalise a path that may not exist yet, by resolving its deepest EXISTING
+ * ancestor and re-appending the remainder.
+ *
+ * WHY THIS EXISTS. `assertNotRealStore` used `resolve()`, which is lexical: on
+ * Windows `resolve` does not follow a junction, so a value of
+ * `<tmp>/auth` where `<tmp>/auth` is a junction to the real store passes a purely
+ * lexical check while the module underneath writes straight into the live data.
+ * The review demonstrated exactly that junction. `realpathSync.native` closes it,
+ * but it throws on a path that does not exist - and a test that `rmSync`d its
+ * scratch directory in `afterEach` legitimately leaves `process.env` pointing at a
+ * path that is gone. So: canonicalise what exists, keep the rest verbatim.
+ */
+export function canonicalizePath(target) {
+  let head = resolve(target)
+  const tail = []
+  for (;;) {
+    try {
+      // Copied rather than reversed in place: `tail.reverse()` would mutate the
+      // accumulator this loop is building, which is a footgun for the next edit.
+      return join(realpathSync.native(head), ...[...tail].reverse())
+    } catch {
+      const parent = dirname(head)
+      if (parent === head) return resolve(target)
+      tail.push(basename(head))
+      head = parent
+    }
+  }
 }
 
 // The containment rule, lifted verbatim out of the Playwright helper so both
@@ -213,13 +349,21 @@ export function assertContainedPath(root, name, configuredPath, kind, rootLabel 
  *
  * Containment inside one run root is the stronger rule, but it is not the rule
  * that matters for a test which builds its own `mkdtemp` directory - such a path
- * is outside every run root and is perfectly safe. The rule that must never
- * bend is the one below: a test target may never BE the developer's live store.
+ * is outside every run root and is perfectly safe. The rule that must never bend
+ * is the one below: a test target may never BE the developer's live store.
+ *
+ * BOTH SIDES ARE CANONICALISED. A lexical `resolve` on the target walks straight
+ * through a junction, so `<tmp>/auth -> <repo>/apps/dashboard/server/data` passed
+ * the previous version while the module underneath wrote into the live store. The
+ * real directory is canonicalised for the same reason: on macOS `/var` is a symlink
+ * to `/private/var`, and a lexical comparison against a non-canonical configured
+ * path would miss it. `realDir` is injectable so a test can exercise a junction
+ * against a temporary stand-in without the real store being involved at all.
  */
-export function assertNotRealStore(name, configuredPath) {
-  const realDir = realServerDataDir()
-  const target = resolve(configuredPath)
-  if (isStrictlyInside(realDir, target) || target === resolve(realDir)) {
+export function assertNotRealStore(name, configuredPath, { realDir = realServerDataDir() } = {}) {
+  const canonicalReal = canonicalizePath(realDir)
+  const target = canonicalizePath(configuredPath)
+  if (target === canonicalReal || isStrictlyInside(canonicalReal, target)) {
     throw new Error(
       `${name} resolves into the real server data store (${realDir}): ${configuredPath}. ` +
         "A test that points a store at the live data directory writes real accounts, real tokens " +
@@ -265,11 +409,51 @@ export function assertRedirectableStoreVariable(name) {
   return kind
 }
 
+// ---------------------------------------------------------------------------
+// REDIRECT BOOKKEEPING, so "the harness owns this variable" is a fact rather
+// than a comparison against one remembered string.
+//
+// The first version of `useIsolatedStoreDir` assigned `process.env` and returned,
+// with no record that it had done so. Three things then went wrong, all found in
+// review round 1:
+//
+//   1. The vitest setup's per-test reset only emptied a variable's harness-owned
+//      directory while `process.env[name] === OWNED.get(name)`. Once a migrated
+//      file had redirected the variable through this helper, that equality was
+//      false for the rest of the file, so the harness directory was NEVER EMPTIED
+//      AGAIN for that variable - the per-test reset silently switched itself off.
+//   2. `handlers.test.mjs` and `v32Register.test.mjs` `rmSync` their scratch
+//      directory in `afterEach` and leave `process.env` pointing at a path that no
+//      longer exists. Nothing noticed, because nothing re-checked existence.
+//   3. `vi.unstubAllEnvs()` in a teardown no longer restores anything for a
+//      variable the helper assigned directly rather than through `vi.stubEnv`.
+//
+// Recording each redirect makes all three visible: the setup empties BOTH the
+// harness directory and any helper-minted directory that still exists, and
+// re-mints when the current value has gone missing.
+// ---------------------------------------------------------------------------
+
+/** variable name -> the scratch directory this helper minted for it, in order. */
+const REDIRECTS = new Map()
+
+/** Scratch directories minted by the helper, so the setup can reset them too. */
+export function redirectedStoreDirs() {
+  return [...REDIRECTS.values()]
+}
+
 /**
  * Mint a fresh scratch directory, point `name` at it, and hand back the path.
- * The returned directory is NOT cleaned up by the harness - a test that made a
- * store durable across a module restart still needs it to survive for the length
- * of the test - so the caller keeps the `rmSync` it already had.
+ *
+ * THE CONTRACT, precisely, because a comment once asserted the opposite:
+ *   - the directory is NOT cleaned up at teardown. A test that made a store
+ *     durable across a module restart still needs it for the length of the test,
+ *     so the caller keeps the `rmSync` it already had.
+ *   - the variable is NOT restored to its previous value at teardown, and it is
+ *     NOT restored merely because it was `delete`d. What the harness guarantees is
+ *     narrower and is what the next `beforeEach` actually does: the variable is
+ *     re-pointed at a live, empty harness-owned directory before every test.
+ *   - the assignment is recorded, so the harness resets the minted directory too
+ *     and can tell a deleted path from a live one.
  */
 export function useIsolatedStoreDir(name, { prefix } = {}) {
   const kind = assertRedirectableStoreVariable(name)
@@ -277,13 +461,10 @@ export function useIsolatedStoreDir(name, { prefix } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `picc-store-${label}-`))
   const canonical = realpathSync.native(dir)
   assertNotRealStore(name, canonical)
-  if (kind === "directory") {
-    process.env[name] = canonical
-  } else {
-    // A file variable: hand back a path in a fresh directory and parent it.
-    process.env[name] = join(canonical, isolationFileName(name) || "isolated.json")
-  }
-  return process.env[name]
+  const target = kind === "directory" ? canonical : join(canonical, isolationFileName(name) || "isolated.json")
+  process.env[name] = target
+  REDIRECTS.set(name, canonical)
+  return target
 }
 
 export default ISOLATION_PATH_VARIABLES

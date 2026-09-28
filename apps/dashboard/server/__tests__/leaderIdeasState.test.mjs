@@ -4,11 +4,11 @@
 // leader-ideas.json file and remembers nothing on its own — one leader is ever
 // followed by an operator action only.
 import { afterEach, expect, test, vi } from "vitest"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, relative, sep } from "node:path"
-import { realServerDataDir } from "../../testSupport/storeIsolation.mjs"
+import { realServerDataDir, useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 /** True when `candidate` is `parent` or lives under it. */
 function isInside(parent, candidate) {
@@ -62,6 +62,11 @@ const boot = async ({ corrupt = null, version = null, healthy = null } = {}) => 
 }
 
 const bootMem = async () => {
+  // "Memory mode" under WS-7 slice A means an EMPTY scratch directory, not an
+  // unset variable: the store's canTouchDisk guard now returns true, so the way to
+  // boot with no persisted state is a fresh empty target rather than no target.
+  const memDir = useIsolatedStoreDir("PICC_COMMAND_CENTRE_DATA_DIR", { prefix: "picc-leader-mem" })
+  void memDir
   vi.resetModules()
   return import("../services/commandCentre/leaderIdeasState.mjs")
 }
@@ -253,19 +258,18 @@ test("resetLeaderIdeasState wipes to a healthy empty store and persists (test se
   expect(m2.leaderIdeas().leaders).toEqual([])
 })
 
-test("WS-7 slice A: an isolated run writes its store only into the run root, never the real server/data", async () => {
+test("WS-7 slice A: an isolated run writes its store INTO the run root, and nowhere else", async () => {
   // This test used to assert `PICC_COMMAND_CENTRE_DATA_DIR` was UNSET under
   // vitest, which was true only because the store's `canTouchDisk` guard
   // (leaderIdeasState.mjs:12) refused the disk wholesale. WS-7 slice A points
   // every store variable at a per-test temp root, so the variable is now
-  // legitimately set and the claim below is the one that actually matters: the
-  // store is redirected, and the two places the store must never write - the
-  // module's own hardcoded `new URL("../data")` default and the real
-  // `server/services/data` next to the module - are both untouched.
+  // legitimately set and that assertion became false.
   //
-  // This is a STRONGER claim than the one it replaces, not a weaker one. The old
-  // assertion passed for a store that was writing nowhere; the new one would
-  // fail for a store writing anywhere it was not supposed to.
+  // The replacement asserts the thing that actually matters, and - unlike the
+  // first draft of this test, which only checked the variable was a string -
+  // it checks WHERE THE WRITE WENT. `persist()` at leaderIdeasState.mjs:84-88 is a
+  // synchronous writeFileSync, so the file is on disk by the time
+  // importLeaderRecord returns and needs no polling.
   const m = await bootMem()
   m.importLeaderRecord(recordIn(), { now: NOW, audit: () => {} })
   expect(m.findLeader("leader-1").id).toBe("leader-1")
@@ -276,5 +280,14 @@ test("WS-7 slice A: an isolated run writes its store only into the run root, nev
     isInside(realServerDataDir(), dataDir),
     "the redirected store must not be the real server/data directory"
   ).toBe(false)
+
+  // The positive half, which the name claims and the first draft did not check.
+  const written = join(dataDir, LEADER_FILE)
+  expect(existsSync(written), `the store must have persisted into the run root at ${written}`).toBe(true)
+  expect(JSON.parse(readFileSync(written, "utf8")).leaders.some((l) => l.id === "leader-1")).toBe(true)
+
+  // And the two places it must never have written: the module's own hardcoded
+  // `new URL("../data")` default, and the real store.
   expect(existsSync(join(process.cwd(), "server", "services", "data", LEADER_FILE))).toBe(false)
+  expect(existsSync(join(realServerDataDir(), LEADER_FILE))).toBe(false)
 })

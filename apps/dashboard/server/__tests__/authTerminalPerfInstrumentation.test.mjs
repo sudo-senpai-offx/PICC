@@ -179,8 +179,13 @@ afterEach(() => {
   delete process.env.PICC_ERROR_LOG
   delete process.env.PICC_E2E_RUN_ID
   // WS-7 slice A: the two store variables are owned by the shared vitest
-  // isolation setup, which restores them before the next test. Deleting them
-  // here would only be undone, so the teardown names what it still owns.
+  // isolation setup. An earlier version of this comment said the setup
+  // "restores them before the next test", which was not true as written: the
+  // setup RE-POINTS a deleted variable at the harness value, it does not
+  // restore the value this test had chosen. The corrected statement is that
+  // this teardown leaves the variables untouched, and the setup re-establishes
+  // them from its own contract on the next `beforeEach` - so a leftover value
+  // here cannot leak into the next test either way.
   rmSync(dir, { recursive: true, force: true })
   rmSync(dirname(logFile), { recursive: true, force: true })
 })
