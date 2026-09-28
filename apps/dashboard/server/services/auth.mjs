@@ -187,7 +187,43 @@ export async function hasUsers() {
  */
 export async function resolveHasUsers() {
   const data = await readJSONStrict(USERS_FILE, { users: [] })
-  return Array.isArray(data.users) && data.users.length > 0
+  // A missing file already returned the { users: [] } fallback above, so an
+  // absent store is still a genuine first run. Anything else that is not an
+  // array is CORRUPTION, not an empty install: `{"users":null}`, `{}` and a
+  // bare `[]` all used to answer "empty" here and so granted the bootstrap
+  // bypass on a store that is plainly damaged. A shape fault is a store fault.
+  if (!Array.isArray(data.users)) {
+    throw new AuthStoreUnavailable(
+      `auth store is corrupt (${USERS_FILE}): expected a users array, got ${Array.isArray(data) ? "an array" : typeof data}`
+    )
+  }
+  return data.users.length > 0
+}
+
+/**
+ * MAY AN UNAUTHENTICATED CALLER THROUGH BECAUSE THE STORE IS GENUINELY EMPTY?
+ *
+ * This is the answer an auth gate actually needs, stated in the gate's own
+ * terms, so the call site reads as the decision it is:
+ *
+ *     if (!(await verifyUser(auth)) && !(await firstRunBootstrapAllowed())) {
+ *       return writeJson(res, 401, { error: "authentication required" })
+ *     }
+ *
+ * It is the ONLY entry point for the first-user bootstrap bypass. Folding
+ * resolveHasUsers() into it here means the class of bug - a bootstrap gate
+ * reading an answer that cannot distinguish "no accounts" from "the store is
+ * unreadable" - is closed at one place instead of at every call site, which is
+ * how fourteen routes in handlers.mjs each came to admit an unauthenticated
+ * caller whenever users.json was unreadable or corrupt.
+ *
+ * Throws AuthStoreUnavailable when the store cannot be read or is corrupt. A
+ * gate MUST refuse on that, never treat it as "empty": the bypass exists to
+ * let the very first account be created, and no legitimate first-run state
+ * involves a damaged store.
+ */
+export async function firstRunBootstrapAllowed() {
+  return !(await resolveHasUsers())
 }
 
 export async function createAccount({ email, password, name }) {

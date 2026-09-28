@@ -35,6 +35,7 @@ import {
   verifyToken,
   resolveAuthUser,
   resolveHasUsers,
+  firstRunBootstrapAllowed,
   isAuthStoreUnavailable
 } from "./services/auth.mjs"
 import {
@@ -1232,8 +1233,7 @@ async function _handleApiInner(req, res, url, reqId) {
       return true
     }
     const token = parsed.searchParams.get("token") ?? ""
-    const ok = isLocalhostRequest(req) || (token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization)))
-    if (!ok) return writeJson(res, 401, { error: "authentication required" })
+    if (!(await requireSessionOrFirstRun(req, res, { token, allowLocalhost: true }))) return true
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -1330,8 +1330,7 @@ async function _handleApiInner(req, res, url, reqId) {
 
   if (path === "/api/trading/decisions" && req.method === "GET") {
     const token = parsed.searchParams.get("token") ?? ""
-    const ok = isLocalhostRequest(req) || (token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization)))
-    if (!ok) return writeJson(res, 401, { error: "authentication required" })
+    if (!(await requireSessionOrFirstRun(req, res, { token, allowLocalhost: true }))) return true
     try {
       writeJson(res, 200, { ok: true, ...(await withTimeout(getDecisions(), 20000)) })
     } catch (err) {
@@ -3095,6 +3094,16 @@ async function _handleApiInner(req, res, url, reqId) {
       try {
         const { getSourcePref } = await import("./services/chartPrefs.mjs")
         const { verifyUser, hasUsers } = await import("./services/auth.mjs")
+        // NOT A GATE. This is preference-key SELECTION, not authorisation: it
+        // picks whose saved chart-source preference to read, and both branches
+        // collapse to the same "default" key when it cannot be resolved. A
+        // degraded store here can only cost a user their saved pin — it cannot
+        // admit anyone to anything, and this whole block is already wrapped in
+        // a try/catch with a plain `auto` fan-in fallback. It must therefore
+        // stay on the lenient hasUsers(): routing it through the strict helper
+        // would throw, and the catch would swallow that into the same fallback
+        // while making the block look like a security decision. Pinned by
+        // ws7AuthBootstrapGateGuard.test.mjs.
         const hasAccts = await hasUsers()
         const userId = hasAccts ? ((await verifyUser(req.headers.authorization)) ?? "default") : "default"
         const pref = getSourcePref(userId)
@@ -4274,6 +4283,15 @@ const creds = await getVenueCredentials()
   // Local auth — fully self-hosted accounts (users + sessions in server/data)
   // -------------------------------------------------------------------
   if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {
+    // NOT A GATE. hasUsers() here is the first-run SIGNUP HINT: it tells the
+    // login page whether to offer "create the first account" instead of "sign
+    // in". It authorises nothing — the route discloses no account data, and
+    // the bootstrap it hints at is enforced by requireSessionOrFirstRun() /
+    // requireAuth on the routes that actually matter. "Probably no accounts"
+    // is the right answer to a degraded read here: the failure mode is a login
+    // page offering the signup form one time too often, which is recoverable,
+    // whereas a wrong guess in the other direction would hide the signup form
+    // from a genuinely fresh install. Pinned by ws7AuthBootstrapGateGuard.
     writeJson(res, 200, { ok: true, hasUsers: await hasUsers(), authMode: "local" })
     return
   }
@@ -4621,9 +4639,7 @@ const creds = await getVenueCredentials()
 
   if (path === "/api/agents/run" && req.method === "POST") {
     if (!env.agentsUrl) return writeJson(res, 503, { error: "agents service not configured (set PICC_AGENTS_URL)" })
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     if (rateLimited(`agents:${clientIp(req)}`, 30, 60_000)) {
       return writeJson(res, 429, { error: "too many agent runs — try again in a minute" })
     }
@@ -4654,9 +4670,7 @@ const creds = await getVenueCredentials()
 
   if (path === "/api/agents/settings" && (req.method === "GET" || req.method === "POST")) {
     if (!env.agentsUrl) return writeJson(res, 503, { error: "agents service not configured (set PICC_AGENTS_URL)" })
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     try {
       const r = await withTimeout(
         fetch(`${env.agentsUrl}/settings`, {
@@ -4735,11 +4749,15 @@ const creds = await getVenueCredentials()
   }
 
   if (path === "/api/billing/ewallet/order" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "authentication required" })
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     // Bind the order to an owner. In the single-owner first-run (no accounts
     // configured yet) the local operator is the implicit owner; once accounts
     // exist the order must carry the authenticated user's id (audit Fix 6).
-    const userId = (await verifyUser(auth)) || (!(await hasUsers()) ? "local-owner" : null)
+    // The bootstrap answer is the SAME strict one the gate used, so an order
+    // can only ever be stamped "local-owner" when the store is genuinely empty
+    // — never because the store could not be read. A fault refused above and
+    // never reaches this line, so the two cannot disagree.
+    const userId = (await verifyUser(auth)) || (await firstRunBootstrapAllowed() ? "local-owner" : null)
     if (!userId) return writeJson(res, 401, { error: "authentication required" })
     const ewallet = String(body.ewallet ?? "tng").toLowerCase()
     if (!walletInfo(ewallet)) return writeJson(res, 400, { error: `unsupported eWallet (use ${WALLET_IDS.join(", ")})` })
@@ -4761,13 +4779,22 @@ const creds = await getVenueCredentials()
 
   if (path === "/api/billing/ewallet/submit" && req.method === "POST") {
     // Confirms a payment order — same auth bar as /api/billing/ewallet/order.
-    if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "authentication required" })
-    const actorUserId = (await verifyUser(auth)) || (!(await hasUsers()) ? "local-owner" : null)
+    if (!(await requireSessionOrFirstRun(req, res))) return true
+    const actorUserId = (await verifyUser(auth)) || (await firstRunBootstrapAllowed() ? "local-owner" : null)
     if (!actorUserId) return writeJson(res, 401, { error: "authentication required" })
     // Self-approve is only allowed in the single-owner admin/demo mode (no
     // real accounts configured). Once real accounts exist, only the order's
     // OWNER may confirm it — never an arbitrary caller (audit Fix 6).
-    const selfApprove = !(await hasUsers())
+    //
+    // THIS IS THE MONEY-STATE GATE, and it is the strict answer by name.
+    // submitEwalletOrder() short-circuits the owner check on selfApprove
+    // (ewallet.mjs: `if (!owner && !selfApprove) throw`), so a selfApprove
+    // reached without a real session admits a LEGACY OWNERLESS order straight
+    // to status:"confirmed", self_approved:true — precisely the guarantee that
+    // file's own comment claims a stray caller can never break. Deriving it
+    // from the strict helper can only ever move it toward false: a store fault
+    // refuses at the gate above, so it can never be produced here at all.
+    const selfApprove = await firstRunBootstrapAllowed()
     const { orderId, confirmRef } = body
     if (!orderId) return writeJson(res, 400, { error: "orderId required" })
     try {
@@ -4781,7 +4808,14 @@ const creds = await getVenueCredentials()
   }
 
   if (path === "/api/btcpay/invoice" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) return writeJson(res, 401, { error: "authentication required" })
+    // NO bootstrap gate here, and that is deliberate rather than an omission.
+    // This route used to carry a `!(await verifyUser(auth)) && (await
+    // hasUsers())` line that was DEAD: the two lines below it re-check
+    // `if (!userId) return 401` with no first-user bypass at all, so the earlier
+    // check could never be the deciding one. It read as a first-run bypass a
+    // future edit could rely on, which is the exact hazard the other thirteen
+    // gates carried. A real session is required unconditionally, so there is no
+    // store answer to get wrong and no helper to call.
     if (!hasBtcpay()) return writeJson(res, 503, { error: "BTCPay Server not configured" })
     const userId = await verifyUser(auth)
     if (!userId) return writeJson(res, 401, { error: "authentication required" })
@@ -4854,9 +4888,7 @@ const creds = await getVenueCredentials()
   if (historyMatch && req.method === "GET") {
     const slug = historyMatch[1].toLowerCase()
     if (!getConnector(slug)) return writeJson(res, 404, { ok: false, error: `unknown connector "${slug}"` })
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     const limit = Number(parsed.searchParams.get("limit")) || 100
     writeJson(res, 200, { ok: true, provider: slug, history: await getConnectorHistory(slug, limit) })
     return
@@ -4867,9 +4899,7 @@ const creds = await getVenueCredentials()
     const slug = streamMatch[1].toLowerCase()
     const conn = getConnector(slug)
     if (!conn) return writeJson(res, 404, { ok: false, error: `unknown connector "${slug}"` })
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     // Same cross-origin snooping guard as the other SSE streams.
     const origin = req.headers.origin
     if (origin && !TRUSTED_ORIGINS.includes(String(origin))) {
@@ -4924,9 +4954,12 @@ const creds = await getVenueCredentials()
     const slug = collectMatch[1].toLowerCase()
     const conn = getConnector(slug)
     if (!conn) return writeJson(res, 404, { ok: false, error: `unknown connector "${slug}"` })
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    // Auth is the only thing standing between a remote caller and a real
+    // browser driven at an arbitrary attacker-supplied body.url, so this gate
+    // runs before the rate limiter and before collectSource is reached. See
+    // the SSRF note on the report: the auth fix closes the fail-open, NOT the
+    // missing URL validation.
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     if (rateLimited(`connectors:${clientIp(req)}`, 10, 60_000)) {
       return writeJson(res, 429, { error: "too many collections — try again in a minute" })
     }
@@ -4957,9 +4990,7 @@ const creds = await getVenueCredentials()
   // Rate-limited; returns the proposal alone (no write to the registry). A
   // tuned adaptor is only ever reachable by a human, never by this endpoint.
   if (path === "/api/connectors/autodetect" && req.method === "POST") {
-    if (!(await verifyUser(auth)) && (await hasUsers())) {
-      return writeJson(res, 401, { error: "authentication required" })
-    }
+    if (!(await requireSessionOrFirstRun(req, res))) return true
     if (rateLimited(`autodetect:${clientIp(req)}`, 10, 60_000)) {
       return writeJson(res, 429, { error: "too many autodetect calls — try again in a minute" })
     }
@@ -5400,8 +5431,17 @@ const BROWSER_ROUTES = {
       return true
     }
     const token = parsed.searchParams.get("token") ?? ""
-    const ok = token ? Boolean(await verifyToken(token)) : !(await hasUsers()) || Boolean(await verifyUser(req.headers.authorization))
-    if (!ok) { writeJson(res, 401, { error: "authentication required" }); return true }
+    // DELIBERATELY NO `allowLocalhost` HERE, unlike its two /api/trading/*
+    // siblings. Adding the loopback bypass to the single most sensitive stream
+    // in the file would widen exposure for no functional gain: the dashboard
+    // already opens this with `fetch(url, { headers: { Authorization } })`
+    // (streamBrowser() in src/lib/api.ts), so a signed-in local operator
+    // authenticates normally and never needed the bypass. And the bypass is
+    // unsound behind the supported reverse-proxy/tunnel setup, where the proxy
+    // itself is loopback — the same reasoning requireAuthStrict() is built on.
+    // What this route serves is studioStatus() and latestStudioFrame(): live
+    // screen frames of the operator's own logged-in browser session.
+    if (!(await requireSessionOrFirstRun(req, res, { token }))) return true
     if (req.method !== "GET") return false
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -5466,6 +5506,77 @@ async function requireAuth(req, res) {
     throw err
   }
   if (!anyUserExists) return true
+  writeJson(res, 401, { error: "authentication required" })
+  return false
+}
+
+/**
+ * The ONE place the first-user bootstrap bypass is expressed for a route.
+ *
+ * Fourteen routes each carried their own copy of
+ *
+ *     if (!(await verifyUser(auth)) && (await hasUsers())) return 401
+ *
+ * which is fail-OPEN: hasUsers() answers `false` for both "no accounts exist"
+ * and "users.json is unreadable or corrupt", so a single damaged store
+ * satisfied the bypass and served all fourteen unauthenticated — a live
+ * trading feed, live screen frames, the agents proxy (real LLM spend), eWallet
+ * order creation and confirmation (real money state), connector earnings
+ * history, and a drive-by browser pointed at an attacker-supplied URL. The
+ * copies were not wrong individually; the class was simply unenforced, and a
+ * fix applied per site does not survive the fifteenth site. So the decision
+ * lives here once and every gate routes through it.
+ *
+ * Returns true when the request may proceed — a real session, or a genuinely
+ * empty store. Returns false having ALREADY written the response, so a call
+ * site is exactly one line and can never double-write.
+ *
+ * WHY 503 AND NOT 401 ON A STORE FAULT. A 401 is a claim about the TOKEN: it
+ * says these credentials were examined and refused. On a store fault nothing
+ * was examined, so 401 is a lie — and the client acts on the claim, not on the
+ * truth. That is precisely the harm /api/auth/me was hardened against in
+ * 4505445: one unproven answer was enough for the browser to destroy a valid
+ * session. It is worse here, because 401 is also the conventional signal to
+ * "re-authenticate", which would send an operator to fix a session that was
+ * never the problem. 503 says what is true — the server could not determine —
+ * and the client already treats 5xx as inconclusive and keeps its session
+ * (see fetchMe() in src/lib/auth.ts).
+ *
+ * 503 is also the SAFE answer for the money and cost POSTs specifically
+ * (/api/billing/ewallet/*, /api/agents/*): it invites a RETRY, and this gate
+ * runs BEFORE any state is created, so a retry after a 503 re-enters the same
+ * refusal having changed nothing. A refused order is not a half-made one. The
+ * routes are also rate-limited, and submitEwalletOrder answers a repeat
+ * confirmation with { already: true }, so a retry storm cannot weld an order to
+ * confirmed either.
+ *
+ * WHY THE LOOPBACK BYPASS IS OPT-IN AND OFF BY DEFAULT. `allowLocalhost`
+ * defaults to FALSE, so adding this gate to a route can never silently widen
+ * its exposure: a bypass has to be asked for by name and justified in a
+ * comment. It is unsound behind a reverse proxy or tunnel, where the proxy
+ * itself is loopback — the same reasoning documented on requireAuthStrict
+ * below. Only the two /api/trading/* routes that already had it pass it.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.token] bearer token from the query string, for the
+ *   SSE feeds the browser opens with fetch() + a header or ?token=.
+ * @param {boolean} [opts.allowLocalhost] documented loopback bypass.
+ */
+async function requireSessionOrFirstRun(req, res, { token = "", allowLocalhost = false } = {}) {
+  if (allowLocalhost && isLocalhostRequest(req)) return true
+  if (token) return Boolean(await verifyToken(token))
+  if (await verifyUser(req.headers.authorization)) return true
+  let bootstrap
+  try {
+    bootstrap = await firstRunBootstrapAllowed()
+  } catch (err) {
+    if (!isAuthStoreUnavailable(err)) throw err
+    // Refuse. Deliberately before any state is created, and deliberately not
+    // 401 — see the note above.
+    writeJson(res, 503, { error: "auth store unavailable" })
+    return false
+  }
+  if (bootstrap) return true
   writeJson(res, 401, { error: "authentication required" })
   return false
 }

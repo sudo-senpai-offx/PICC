@@ -13,8 +13,11 @@ import type { LocalSession, LocalUser } from "@/lib/auth"
  * survives until reload instead of redirecting cleanly.
  *
  * 5 is chosen to ride out a real but short outage (a server restart or redeploy)
- * while giving up on a genuinely dead backend within ~15s. At the bounded
- * backoff below that is 5 retries after 1s, 2s, 4s and 8s; the 6th consecutive
+ * while giving up on a genuinely dead backend within ~23s. At the bounded
+ * backoff below that is FIVE waits, not four: the sign-out check happens on the
+ * way IN to a /me call, so the 8s entry is spent twice — once returning to
+ * inconclusive #4, and once more on the #5 pass that trips the limit. The waits
+ * are therefore 1s, 2s, 4s, 8s and 8s, totalling 23s, and the 6th consecutive
  * inconclusive answer signs out. Comfortably longer than any plausible restart,
  * and short enough that "still signed in" never becomes a lie.
  */
