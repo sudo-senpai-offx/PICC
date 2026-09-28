@@ -43,6 +43,7 @@ import {
   looksLikeIsolationPathName,
   redirectedStoreDirs
 } from "./storeIsolation.mjs"
+import { createRepairReporter } from "./repairReporter.mjs"
 
 const RUN_ROOT = realpathSync.native(mkdtempSync(join(tmpdir(), "picc-vitest-store-")))
 
@@ -208,10 +209,14 @@ const BASELINE_KEYS = new Set(Object.keys(process.env))
 // nothing and they catch the shapes a static scan cannot see, such as a redirect
 // built at runtime from a function argument.
 // ---------------------------------------------------------------------------
-const REPAIRED = []
-/** Rate-limiting for the honest-repair line, so ~85 files do not each print one. */
-let REPAIR_WARNED = false
-const REPAIR_TALLY = new Map()
+// The repair reporter. Its rate limit is an exclusive-create marker file in the OS
+// temp dir, NOT a module flag and not `globalThis`: vitest re-evaluates this setup
+// module for every test file, and under the default `pool: 'forks'` + `isolate: true`
+// each file can also get a fresh execution context, so only the filesystem survives.
+// Round 2 used a module flag and printed one line per file anyway - see
+// testSupport/repairReporter.mjs and the guard test that asserts the tally is
+// surfaced and the wording is true.
+const reporter = createRepairReporter()
 
 function emptyDirectory(dir) {
   let entries
@@ -283,7 +288,7 @@ beforeEach(() => {
   for (const name of ISOLATION_PATH_VARIABLES) {
     const configured = process.env[name]
     if (typeof configured !== "string" || configured.length === 0) {
-      REPAIRED.push({ name, reason: "unset" })
+      reporter.note(name)
       process.env[name] = OWNED.get(name)
       continue
     }
@@ -292,7 +297,7 @@ beforeEach(() => {
     // next module to read it would silently recreate the tree, so re-mint rather
     // than leave a dangling value behind.
     if (!targetExists(configured)) {
-      REPAIRED.push({ name, reason: "target removed" })
+      reporter.note(name)
       process.env[name] = OWNED.get(name)
       continue
     }
@@ -384,31 +389,19 @@ afterAll(() => {
   if (problems.length > 0) {
     throw new Error(`WS-7 test-store isolation violated in ${resolve(RUN_ROOT)}:\n- ${problems.join("\n- ")}`)
   }
-  // THE REPAIR REPORT, RATE-LIMITED. Round 1 warned once per test file that had
-  // deleted a store variable, which is ~85 files printing a line nobody reads.
-  // The cost that matters is not the noise, it is that a reviewer scanning output
-  // for isolation problems would learn to skip these lines - and then miss the one
-  // that mattered.
+  // THE REPAIR REPORT. Round 2 printed one line per test file that had deleted a
+  // store variable, which is ~85 files of noise, and its message claimed a per-worker
+  // rate limit and a tally that did not exist. Round 3 routes it through
+  // `createRepairReporter`, which emits AT MOST ONE line per run (filesystem
+  // marker, so it survives vitest's per-file module re-evaluation) and states the
+  // real per-file count plus the run total.
   //
-  // The genuinely alarming case does NOT come through here: a value pointing at
-  // the live store fails the test in `beforeEach` with the full target path in the
-  // message, and an unknown PICC_ path variable fails in `afterAll` above. Those
-  // are already loud, which is why this line only has to cover the two HONEST
-  // reasons - unset, or pointing at a scratch directory the test deleted - and
-  // why it is emitted once per process with a count rather than once per file.
-  if (REPAIRED.length > 0) {
-    const names = [...new Set(REPAIRED.map((entry) => entry.name))]
-    if (REPAIR_WARNED) {
-      REPAIR_TALLY.set(names.join(", "), (REPAIR_TALLY.get(names.join(", ")) || 0) + REPAIRED.length)
-    } else {
-      REPAIR_WARNED = true
-      console.warn(
-        `[picc-test-isolation] re-pointed ${REPAIRED.length} store variable(s) across this worker ` +
-          `after a test deleted them: ${names.join(", ")}. Honest teardown in ~85 files; further ` +
-          "occurrences in this worker are counted, not printed."
-      )
-    }
-  }
+  // Nothing alarming comes through here, and that is deliberate rather than lucky:
+  // a value pointing at the live store fails the test in `beforeEach` with the full
+  // target path in the message, and an unknown PICC_ path variable fails in
+  // `afterAll` above. This line only ever covers the two HONEST reasons - unset, or
+  // a scratch directory the test deleted.
+  reporter.report()
 
   for (const [name, previous] of PREVIOUS) {
     if (previous === undefined) delete process.env[name]

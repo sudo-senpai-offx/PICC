@@ -58,6 +58,7 @@ import {
   resolveDashboardRoot,
   useIsolatedStoreDir
 } from "../../testSupport/storeIsolation.mjs"
+import { createRepairReporter } from "../../testSupport/repairReporter.mjs"
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 const DASHBOARD = join(REPO_ROOT, "apps", "dashboard")
@@ -379,11 +380,46 @@ const LIVE_STORE_TOKENS =
 // riskGates.mjs:44) writes THERE. This is not a hypothetical: it is the same landed
 // write, spelled differently.
 //
-// The fix reuses `REAL_STORE_REFERENCE.source`, which already knew about
-// `"server" , "data"` as separate arguments (detector 3 needed it for a different
-// reason). Composing two patterns rather than writing a third means there is one
-// place that knows what the live store looks like as a path, not three.
-const LIVE_STORE_VALUE = new RegExp(`(?:${REAL_STORE_REFERENCE.source})|(?:${LIVE_STORE_TOKENS.source})`)
+// ROUND 3 FOUND THE NEXT LAYER. Requiring adjacency is still too strong. Every
+// construction below puts a bounded run of PUNCTUATION between the two segments, and
+// no adjacency test can see any of them:
+//
+//     process.cwd() + "/server/" + "data"          gap: /" + "
+//     join(root, "server", ["data"].join(""))      gap: ", ["
+//     `${root}/server/${"data"}`                   gap: /${"
+//     root + "/../server/data"                      gap: /../server/
+//
+// The reviewer landed the concatenation form FOR REAL, inside one of the 85
+// inventoried legacy files with the delete-in-afterEach idiom, and judged it MORE
+// likely to be written by a real author than the array-join form. So the rule is
+// now: a bounded run of NON-ALPHANUMERIC, NON-NEWLINE characters between `server`
+// and `data`.
+//
+// THE GAP CLASS IS THE LOAD-BEARING DECISION, and it is deliberately narrow. It
+// admits quotes, slashes, backslashes, `+ , . ( ) [ ] { } $ :` and spaces - the
+// punctuation every path construction uses - and it REJECTS any letter or digit.
+// That is what keeps `serverConfig` / `dataProvider` and every camelCase identifier
+// out, and it is why the bound is stated rather than assumed:
+//
+//   * 1..24 non-alphanumerics, so the two segments must really be adjacent-ish.
+//   * No newline, because a gap spanning lines is `logicalUnits`' job, not the
+//     pattern's, and the two must not overlap.
+//
+// Lowercase only, and deliberately so: an `i` flag would make
+// `PICC_FOO_SERVER_DATA_BAR` match, and a variable name is not a path.
+//
+// The `..` form gets its own pattern because it has no `server` segment at all.
+// Composing with `REAL_STORE_REFERENCE` (which already knew about
+// `"server" , "data"` as separate arguments) keeps ONE place that knows what the live
+// store looks like as a path, rather than four.
+const LIVE_SERVER_DATA_GAP = /server[^A-Za-z0-9\n]{1,24}?data/
+const LIVE_PARENT_DATA_GAP = /\.\.[^A-Za-z0-9\n]{1,8}?data/
+const LIVE_STORE_VALUE = new RegExp(
+  `(?:${REAL_STORE_REFERENCE.source})` +
+    `|(?:${LIVE_STORE_TOKENS.source})` +
+    `|(?:${LIVE_SERVER_DATA_GAP.source})` +
+    `|(?:${LIVE_PARENT_DATA_GAP.source})`
+)
 
 /** Net parenthesis depth of a line: how many continuation lines it leaves open. */
 function parenDelta(line) {
@@ -424,7 +460,28 @@ function stripLineComment(line) {
  * assignment inside it, and the round-1 exact-attack test would see two findings
  * for one attack.
  */
-function logicalUnits(text, maxLookahead = 8) {
+/**
+ * How many continuation lines a unit may swallow.
+ *
+ * Round 2 used a literal `8`, and round 3 of review showed the consequence: a call
+ * padded past eight lines - by a formatter, a comment block, or just a long
+ * argument list - was invisible to the scan, so the attack landed. An arbitrary
+ * small constant was the wrong shape of answer.
+ *
+ * The real requirement is "until the parentheses balance", because that is what
+ * defines the end of the expression. A cap is still needed so a pathological file
+ * cannot make this quadratic, so the cap is stated and TESTED rather than guessed:
+ * the test uses 12 padding lines, which fails against 8 and passes against this.
+ *
+ * **THE REMAINING BOUND, STATED RATHER THAN IMPLIED.** A continuation longer than
+ * this is not followed, so a path assembled across more than 32 further lines is
+ * missed. Nothing in the corpus comes close - the deepest real call is far under
+ * ten - but the bound is real and a future author who pads a call past it gets
+ * silence, not a finding.
+ */
+const MAX_CONTINUATION_LINES = 32
+
+function logicalUnits(text, maxLookahead = MAX_CONTINUATION_LINES) {
   const lines = text.split("\n")
   const units = []
   for (let i = 0; i < lines.length; i++) {
@@ -470,10 +527,23 @@ function discoverRealStoreRedirects(files, isolation, reader = read) {
       // Ownership: the assignment must OPEN on this unit's own first line. The
       // value is then tested against the whole unit, so a path continued onto the
       // next line is still seen whole.
+      //
+      // FIVE SPELLINGS, and round 3 of review is why there are five. Round 1 added
+      // the first three because a detector that knows one spelling of an assignment
+      // has four holes. Round 3 found the other two - neither of which is an
+      // assignment at all to a `process.env.X =` regex, so neither was reachable
+      // however good the VALUE pattern got:
+      //
+      //     Object.assign(process.env, { PICC_AUTH_DATA_DIR: <live> })
+      //     ({ PICC_AUTH_DATA_DIR: process.env.PICC_AUTH_DATA_DIR } = { ... })
+      //
+      // A wrong-value guard that cannot see the write is the round-0 defect again.
       const target =
         unit.first.match(/process\.env\.(PICC_[A-Z0-9_]+)\s*=(?!=)(.*)$/) ??
         unit.first.match(/process\.env\[\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*\]\s*=(?!=)(.*)$/) ??
-        unit.first.match(/vi\.stubEnv\(\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*,\s*(.*?)\s*\)/)
+        unit.first.match(/vi\.stubEnv\(\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*,\s*(.*?)\s*\)/) ??
+        unit.first.match(/Object\.assign\(\s*process\.env\s*,\s*\{[^}]*?\b(PICC_[A-Z0-9_]+)\s*:\s*([^,}]+)/) ??
+        unit.first.match(/\(\s*\{[^}]*?\b(PICC_[A-Z0-9_]+)\s*:\s*process\.env\.\1\b/)
       if (!target || !isolation.has(target[1])) continue
       if (LIVE_STORE_VALUE.test(unit.code) || tainted.has(target[2].trim())) {
         out.push(`${file}:${unit.line} ${unit.display}`)
@@ -520,10 +590,126 @@ const HONEST_REDIRECTS = [
   'expect(process.env.PICC_AUTH_DATA_DIR === join(tmpdir(), "x")).toBe(true)'
 ]
 
+// Round 3 of review: the attack in the spellings that were still MISSING after
+// round 2, each of which reproduces it through a store that re-reads
+// `process.env` per call.
+//
+// The round-2 pattern required the `server` and `data` tokens to be ADJACENT -
+// `"server" , "data"` or `server/data` or `"../data"`. Anything that builds the
+// path out of NON-adjacent tokens is outside both of those, and the reviewer landed
+// it for real, inside one of the 85 inventoried legacy files, with the
+// delete-in-afterEach idiom. So these are the shapes that still got through.
+//
+// The string-concatenation form is the one that matters most: the reviewer judged
+// `process.cwd() + "/server/" + "data"` MORE likely to be written by a real author
+// than the `["data"].join("")` form, which is why this is Important and not Minor.
+const EVASION_SHAPES = [
+  [
+    "direct string concatenation",
+    'process.env.PICC_AUTH_DATA_DIR = process.cwd() + "/server/" + "data"'
+  ],
+  [
+    "aliased string concatenation",
+    'const LIVE = process.cwd() + "/server/" + "data"; process.env.PICC_AUTH_DATA_DIR = LIVE'
+  ],
+  [
+    "array-joined segment",
+    'process.env.PICC_AUTH_DATA_DIR = join(root, "server", ["data"].join(""))'
+  ],
+  [
+    "array-literal segment",
+    'process.env.PICC_AUTH_DATA_DIR = join(root, "server", ["data"])'
+  ],
+  [
+    "template literal construction",
+    "process.env.PICC_AUTH_DATA_DIR = `${root}/server/${\"data\"}`"
+  ],
+  [
+    "aliased template literal",
+    'const live = `${root}/server/${"data"}`; process.env.PICC_AUTH_DATA_DIR = live'
+  ],
+  [
+    "template literal via vi.stubEnv",
+    'vi.stubEnv("PICC_AUTH_DATA_DIR", `${root}/server/${"data"}`)'
+  ],
+  [
+    "Object.assign onto process.env",
+    'Object.assign(process.env, { PICC_AUTH_DATA_DIR: process.cwd() + "/server/" + "data" })'
+  ],
+  [
+    "destructuring assignment",
+    "({ PICC_AUTH_DATA_DIR: process.env.PICC_AUTH_DATA_DIR } = { PICC_AUTH_DATA_DIR: root + '/server/data' })"
+  ]
+]
+
+// NOT an evasion, and kept precisely because it is one the round-2 pattern already
+// caught: `server/data` appears here as a single token, so the old adjacent test saw
+// it. Listed separately so the "round 3 missed all of these" control below stays
+// true, and asserted caught so it stays caught.
+const ALREADY_COVERED_SHAPES = [
+  ["parent-relative concatenation", 'process.env.PICC_AUTH_DATA_DIR = REPO_ROOT + "/../server/data"']
+]
+
+// A continuation deeper than the old `maxLookahead = 8` ceiling. Written with real
+// newlines so the line COUNT is the thing under test.
+const DEEP_CONTINUATION_SOURCE = [
+  "process.env.PICC_AUTH_DATA_DIR = join(",
+  '  process.cwd(),',
+  ...Array.from({ length: 12 }, (_, i) => `  /* pad ${i} */`),
+  '  "server",',
+  '  "data")'
+].join("\n")
+
 // The pattern as it stood after round 1, kept here ONLY as a control. If the
 // fixed pattern and this one ever agree on a shape, the control has stopped
 // proving anything and the test below is vacuous.
 const ROUND1_LIVE_STORE_VALUE = LIVE_STORE_TOKENS
+
+// The pattern as it stood after round 2, which fixed the ADJACENT split-join forms.
+// Round 2's prose claimed "two things were needed, not one" - composition with
+// REAL_STORE_REFERENCE and the logicalUnits stitching - and that was correct, but
+// the round-2 control could not prove it: BOTH patterns return false on the raw
+// continuation string, so it isolated neither change. This is the missing
+// half-control, and it isolates the stitching specifically.
+// The pattern as it stood after round 2, which fixed the ADJACENT split-join forms.
+// Spelled out LITERALLY rather than aliased to LIVE_STORE_VALUE: an alias would
+// capture the round-3 widening and the control would compare a pattern with itself,
+// which passes for the wrong reason - the defect this control exists to catch.
+const ROUND2_LIVE_STORE_VALUE = new RegExp(
+  `(?:${REAL_STORE_REFERENCE.source})|(?:${LIVE_STORE_TOKENS.source})`
+)
+
+/**
+ * The round-2 PIPELINE, verbatim: the round-2 value pattern behind the round-2
+ * three-alternative target, with the round-2 `maxLookahead` of 8.
+ *
+ * The control above is written against this rather than against the current
+ * pipeline, because a control that shares code with the thing it is testing can
+ * only ever agree with it. This is a small re-implementation on purpose.
+ */
+function round2Pipeline(source) {
+  const ROUND2_MAX_LOOKAHEAD = 8
+  const ROUND2_TARGET =
+    /process\.env\.(PICC_[A-Z0-9_]+)\s*=(?!=)(.*)$|process\.env\[\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*\]\s*=(?!=)(.*)$|vi\.stubEnv\(\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*,\s*(.*?)\)/
+  const out = []
+  const units = logicalUnits(source, ROUND2_MAX_LOOKAHEAD)
+  const tainted = new Set()
+  for (const unit of units) {
+    const decl = unit.first.match(/^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(.+)$/)
+    if (decl && ROUND2_LIVE_STORE_VALUE.test(decl[2])) tainted.add(decl[1])
+  }
+  for (const unit of units) {
+    const target =
+      unit.first.match(/process\.env\.(PICC_[A-Z0-9_]+)\s*=(?!=)(.*)$/) ??
+      unit.first.match(/process\.env\[\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*\]\s*=(?!=)(.*)$/) ??
+      unit.first.match(/vi\.stubEnv\(\s*["'`](PICC_[A-Z0-9_]+)["'`]\s*,\s*(.*?)\s*\)/)
+    if (!target || !ISOLATION_SET.has(target[1])) continue
+    if (ROUND2_LIVE_STORE_VALUE.test(unit.code) || tainted.has(target[2].trim())) {
+      out.push(`${unit.line} ${unit.display}`)
+    }
+  }
+  return out
+}
 
 describe("WS-7 slice A - the live-store detector survives a path built from parts", () => {
   it("catches every split-join spelling of the landed attack", () => {
@@ -534,6 +720,112 @@ describe("WS-7 slice A - the live-store detector survives a path built from part
         `the ${label} spelling must be caught: it is the round-0 attack, rebuilt`
       ).toHaveLength(1)
     }
+  })
+
+  it("catches every round-3 evasion spelling, none of which round 2 caught", () => {
+    const FILE = "apps/dashboard/server/__tests__/plantedEvasion.test.mjs"
+    for (const [label, source] of EVASION_SHAPES) {
+      expect(
+        discoverRealStoreRedirects([FILE], ISOLATION_SET, () => source),
+        `the ${label} spelling must be caught: it reproduces the landed write, rebuilt`
+      ).toHaveLength(1)
+    }
+  })
+
+  it("catches a continuation deeper than the old 8-line ceiling", () => {
+    // The old `logicalUnits(text, maxLookahead = 8)` gave up after 8 lines, so a
+    // call padded past that was invisible. 12 padding lines here, so this fails
+    // against the old ceiling.
+    const FILE = "apps/dashboard/server/__tests__/plantedDeep.test.mjs"
+    expect(
+      discoverRealStoreRedirects([FILE], ISOLATION_SET, () => DEEP_CONTINUATION_SOURCE),
+      "a continuation deeper than 8 lines must still be caught - the ceiling is now derived, not guessed"
+    ).toHaveLength(1)
+  })
+
+  it("the control: the round-2 PIPELINE missed every one of them", () => {
+    // The honest form of the control, and the one round 2 got wrong.
+    //
+    // Round 3 pointed out that a control against the VALUE pattern alone cannot
+    // classify a shape: `Object.assign(...)` is missed by the value pattern AND
+    // unreachable because no target regex recognised it as an assignment, while the
+    // destructuring shape is missed only because of the target. So instead of
+    // labelling shapes, this runs the ROUND-2 PIPELINE - the old value pattern
+    // behind the old three-alternative target - and asserts it finds nothing for
+    // every shape. That is the defect statement itself.
+    for (const [label, source] of EVASION_SHAPES) {
+      expect(
+        round2Pipeline(source),
+        `the round-2 pipeline unexpectedly caught the ${label} spelling, so the "must be caught" ` +
+          "test is not proving anything"
+      ).toEqual([])
+    }
+  })
+
+  it("and still catches a shape round 2 already covered", () => {
+    const FILE = "apps/dashboard/server/__tests__/plantedCovered.test.mjs"
+    for (const [label, source] of ALREADY_COVERED_SHAPES) {
+      expect(
+        discoverRealStoreRedirects([FILE], ISOLATION_SET, () => source),
+        `${label} was already caught by round 2 and must stay caught`
+      ).toHaveLength(1)
+    }
+  })
+
+  it("catches the attack inside an INVENTORIED legacy file, not only an untracked one", () => {
+    // The reviewer landed the round-3 spelling in one of the 85 hand-rolled files,
+    // because the inventory records variable NAMES and not VALUES - so editing an
+    // inventoried file's value was invisible to it. The fix that matters is that the
+    // value scan covers inventoried files too, and this asserts it with a real
+    // inventoried path plus the delete-in-afterEach idiom.
+    // A real inventoried file, taken from the inventory rather than named by hand,
+    // so the test cannot rot into asserting something about a file that has since
+    // been migrated. (`handlers.test.mjs` was the obvious choice and is WRONG here:
+    // round 1 migrated it, so it is no longer hand-rolled.)
+    const INVENTORIED = [...HAND_ROLLED.keys()].find((f) => f.endsWith(".test.mjs"))
+    expect(
+      INVENTORIED,
+      "the hand-rolled inventory must be non-empty, or this test proves nothing"
+    ).toBeDefined()
+    const SOURCE = [
+      'const LIVE = process.cwd() + "/server/" + "data"',
+      "process.env.PICC_AUTH_DATA_DIR = LIVE",
+      'writeFileSync(join(LIVE, "PROOF.json"), "{}")',
+      "afterEach(() => {",
+      "  delete process.env.PICC_AUTH_DATA_DIR",
+      "})"
+    ].join("\n")
+    expect(
+      discoverRealStoreRedirects([INVENTORIED], ISOLATION_SET, () => SOURCE),
+      "a real-store value in an INVENTORIED file must be caught: the inventory records names, so the " +
+        "value check is the only thing standing behind it"
+    ).toHaveLength(1)
+  })
+
+  it("the control: composition alone does NOT catch a continuation line", () => {
+    // Minor 3 of round 3. The round-2 control ran both patterns against the RAW
+    // continuation string, where both return false, so it could not show WHICH of
+    // the two round-2 changes did the work. This runs the control against the
+    // STITCHED text, which is what the scanner actually sees:
+    //
+    //   ROUND2 pattern + raw source      -> false   (a line-based scan sees `"server",` and stops)
+    //   ROUND2 pattern + stitched source  -> TRUE    (so the pattern was never the problem)
+    //
+    // i.e. for shape 3 the stitching is load-bearing and composition is not, which is
+    // the claim round 2's prose made and its test could not support.
+    const [, continuation] = SPLIT_JOIN_SHAPES.find(([label]) => label.includes("continuation"))
+    const stitched = logicalUnits(continuation)
+      .map((unit) => unit.code)
+      .join(" ")
+    expect(
+      ROUND2_LIVE_STORE_VALUE.test(continuation),
+      "on the RAW source the pattern cannot see it - that is the point"
+    ).toBe(false)
+    expect(
+      ROUND2_LIVE_STORE_VALUE.test(stitched),
+      "on the STITCHED source the pattern matches, which is why logicalUnits is the half of round 2 " +
+        "that actually did the work for this shape"
+    ).toBe(true)
   })
 
   it("the control: the round-1 pattern missed all three, which is the defect", () => {
@@ -600,8 +892,25 @@ describe("WS-7 slice A - the live-store detector survives a path built from part
 // `localstore.mjs` remains the useful negative control: it hardcodes
 // `new URL("../data")` and mutates, but behind `PICC_DATA_DIR`, so it is
 // correctly not in the set.
-const HARDCODED_DATA_PATH =
-  /new URL\(\s*"(?:\.\.\/)+data(?:\/|"|')|join\(\s*__dirname\s*,\s*"\.\."\s*,\s*"data"|["'`]\.\.\/data\//
+const HARDCODED_DATA_PATH = new RegExp(
+  // QUOTE-INSENSITIVE, WITH A BACKREFERENCE ON THE CLOSING QUOTE. Round 3 of review
+  // found the first alternative required a DOUBLE quote, so the identical module
+  // written with single quotes was silently clean, and the third alternative only
+  // rescued that form when a trailing slash was present. The corpus is 31
+  // double-quoted / 0 single-quoted and no prettier or lint config pins a quote
+  // style, so this was latent rather than live - but the guard's own planted
+  // fixtures use single quotes, so the habit is already in the file.
+  //
+  // The backreference is why this is `new RegExp` rather than a literal: it
+  // guarantees the closing quote MATCHES the opening one, so a mismatched form does
+  // not match and start flagging nonsense.
+  //
+  // \x60 is a backtick, written as an escape so this source line contains no
+  // literal backtick to read past the rest of the pattern.
+  "new URL\\(\\s*([\"'\\x60])((?:\\.\\./)+data)(?:\\/|\\1)" +
+    "|join\\(\\s*__dirname\\s*,\\s*\"\\.\"\\s*,\\s*\"data\"" +
+    "|[\"'\\x60]\\.\\.\\/data\\/"
+)
 
 // A redirectable variable winning over a hardcoded default, in either spelling.
 // Deliberately matches any `PICC_` name rather than only `_DIR`/`_FILE`: a
@@ -622,8 +931,11 @@ const ANY_PICC_READ = /process\.env(?:\.\s*PICC_[A-Z0-9_]+|\[\s*["'`]PICC_[A-Z0-
 const MUTATING_FS_WIDE =
   /\b(writeFileSync|appendFileSync|rmSync|unlinkSync|mkdirSync|renameSync|copyFileSync|cpSync|truncateSync|linkSync|symlinkSync|createWriteStream|writeFile|appendFile|rm|rename|mkdir|rmdir|cp|link|symlink|truncate|utimesSync|chmodSync)\s*\(|\bopen(?:Sync)?\s*\([^)]*["']w/
 
-const STORE_VARIABLE_READ =
-  /process\.env\.(PICC_[A-Z0-9_]*(?:_DIR|_FILE))|process\.env\[\s*["'`](PICC_[A-Z0-9_]*(?:_DIR|_FILE))/g
+// DELETED IN ROUND 3: `STORE_VARIABLE_READ` used to live here. Round 2 replaced its
+// only consumer - the per-file "does this module read any _DIR/_FILE variable"
+// check - with the per-path rule, and left the pattern behind. One occurrence in the
+// file meant zero uses. It is named here rather than simply deleted so the next
+// reader does not go looking for a rule that is no longer running.
 
 /**
  * Is this hardcoded data path guarded IN ITS OWN EXPRESSION?
@@ -1119,6 +1431,50 @@ describe("WS-7 slice A - store-isolation guard: the contract covers every store 
     expect(discoverUnredirectableStores([FILE], ISOLATION_SET, () => SOURCE)).toEqual([])
   })
 
+  it("detects a hardcoded data path in EITHER quote style", () => {
+    // Round 3 of review. The `new URL("...")` alternative required a DOUBLE quote,
+    // so the IDENTICAL module written with single quotes was clean - and the third
+    // alternative only rescued the single-quoted form when a trailing slash was
+    // present. The corpus is 31 double-quoted / 0 single-quoted today and there is no
+    // prettier or lint config enforcing a quote style, so this is LATENT rather than
+    // live - but the guard's OWN planted fixtures use single quotes, which is the
+    // author's habit already showing up in the codebase.
+    const DOUBLE = 'export const D = fileURLToPath(new URL("../data", import.meta.url))'
+    const SINGLE = "export const D = fileURLToPath(new URL('../data', import.meta.url))"
+    const BACKTICK = "export const D = fileURLToPath(new URL(`../data`, import.meta.url))"
+    for (const [label, source] of [
+      ["double", DOUBLE],
+      ["single", SINGLE],
+      ["backtick", BACKTICK]
+    ]) {
+      const file = `apps/dashboard/server/services/quotes-${label}.mjs`
+      expect(
+        discoverUnredirectableStores([file], ISOLATION_SET, () => `${source}\nwriteFileSync(D, "x")`),
+        `the ${label}-quoted hardcoded data path must be detected`
+      ).toEqual([file])
+    }
+    // And the control: the same shape with NO mutation is not a write hazard.
+    for (const [label, source] of [
+      ["double", DOUBLE],
+      ["single", SINGLE]
+    ]) {
+      expect(
+        discoverUnredirectableStores([`x-${label}`], ISOLATION_SET, () => source),
+        `the ${label}-quoted read-only module is not a store a test cannot redirect`
+      ).toEqual([])
+    }
+  })
+
+  it("and the contract backstop still holds with single-quoted fallbacks", () => {
+    // The control for the rule's backstop, with quotes varied so the quote fix and
+    // the backstop are not confused with one another.
+    const source = [
+      "const D = process.env.PICC_TRADING_DATA_DIR || fileURLToPath(new URL('../data', import.meta.url))",
+      "writeFileSync(D, 'x')"
+    ].join("\n")
+    expect(discoverUnredirectableStores(["x.mjs"], ISOLATION_SET, () => source)).toEqual([])
+  })
+
   it("and the derived set is still exactly the two real stores", () => {
     expect(UNREDIRECTABLE_STORES).toEqual([
       "apps/dashboard/server/services/browserBridge.mjs",
@@ -1517,6 +1873,82 @@ describe("WS-7 slice A - store-isolation guard: no new ad-hoc store redirects", 
     expect(Object.keys(NON_PICC_PATH_ENVIRONMENT_VARIABLES).length).toBe(4)
   })
 
+  it("the repair reporter SILENT by default, and opt-in for the once-per-run line", () => {
+    // Round 3 of review. Round 2's rate-limiter was module state, so vitest's
+    // per-file re-evaluation of the setup module reset it and the "~85 files each
+    // print one" noise was unchanged; the message claimed "across this worker" (it
+    // was per file) and "counted, not printed" (the tally was never read - dead
+    // code). Four runs of four legacy files produced four warnings.
+    //
+    // And the round-3 attempt at a once-per-run line BROKE A REAL TEST:
+    // `authTerminalPerfInstrumentation.test.mjs > is completely silent when
+    // PICC_ERROR_LOG is not 1` asserts nothing is written to the output, so any
+    // line at all fails it. So the honest default is silence, with the tally always
+    // written to a file and the line available on request.
+    const scope = `guard-${process.pid}-${Date.now()}`
+    const warnings = []
+    const quiet = createRepairReporter({ warn: (m) => warnings.push(m), scope, enabled: false })
+    quiet.note("PICC_AUTH_DATA_DIR")
+    quiet.note("PICC_AUTH_DATA_DIR")
+    quiet.note("PICC_TRADING_DATA_DIR")
+    const quietResult = quiet.report()
+
+    expect(warnings, "nothing may be printed by default - a real test asserts complete silence").toEqual([])
+    expect(quietResult, "the tally must still be surfaced, just not printed").not.toBeNull()
+    expect(quietResult.printed).toBe(false)
+    expect(quietResult.runTotal).toBe(3)
+    // The tally is on disk either way, so the information round 2 threw away exists.
+    expect(
+      existsSync(quiet.tallyPath()),
+      "the run tally must be written even when nothing is printed - that is the part round 2 lost"
+    ).toBe(true)
+
+    // Opt in, and the line appears with wording that is true.
+    const loud = createRepairReporter({ warn: (m) => warnings.push(m), scope: `${scope}-loud`, enabled: true })
+    loud.note("PICC_DATA_DIR")
+    const loudResult = loud.report()
+    expect(loudResult.printed).toBe(true)
+    expect(warnings).toHaveLength(1)
+    expect(loudResult.message).toMatch(/1 store variable\(s\)/)
+    expect(loudResult.message).toMatch(/PICC_TEST_ISOLATION_REPORT_REPAIRS=1/)
+    expect(loudResult.message).toMatch(/Run total so far: 1/)
+    // The wording round 2 got wrong, asserted as wrong.
+    expect(loudResult.message, "must not claim per-worker scope").not.toMatch(/across this worker/)
+    expect(loudResult.message, "must not claim counting while nothing counted it").not.toMatch(/counted, not printed/)
+  })
+
+  it("a reporter with nothing to report is silent and writes nothing", () => {
+    const scope = `guard-empty-${process.pid}-${Date.now()}`
+    const warnings = []
+    const reporter = createRepairReporter({ warn: (m) => warnings.push(m), scope, enabled: true })
+    expect(reporter.report()).toBeNull()
+    expect(warnings).toEqual([])
+  })
+
+  it("the setup RECORDS and REPORTS repairs through the reporter", () => {
+    // The wiring, because a reporter nothing calls is exactly the dead code round 2
+    // shipped. Reads the setup's source and requires both call sites in hooks.
+    const source = read("apps/dashboard/testSupport/vitestStoreIsolation.setup.mjs")
+    expect(
+      /\bcreateRepairReporter\s*\(/.test(source),
+      "the setup must build a reporter; a module-level array of repairs is what round 2 shipped"
+    ).toBe(true)
+    expect(
+      /\breporter\.note\s*\(/.test(source),
+      "the setup must call reporter.note() where it repairs a store variable"
+    ).toBe(true)
+    expect(
+      /\breporter\.report\s*\(\s*\)/.test(source),
+      "the setup must call reporter.report() in teardown, or the tally is never surfaced"
+    ).toBe(true)
+    // And the dead round-2 machinery must be gone.
+    expect(source, "REPAIR_TALLY was written and never read - dead code").not.toMatch(/\bREPAIR_TALLY\b/)
+    expect(source, "REPAIR_WARNED was module state, reset per test file").not.toMatch(/\bREPAIR_WARNED\b/)
+    expect(source, "the old per-file warn line is what the reviewer measured as still noisy").not.toMatch(
+      /across this worker/
+    )
+  })
+
   it("the setup file ACTUALLY CALLS assertContainedPath, inside beforeAll/beforeEach", () => {
     // Round 2 of review, and this is the guard that was missing. Round 1 asserted
     // the FUNCTION's behaviour and said in a comment that it would "still pass if
@@ -1588,7 +2020,7 @@ describe("WS-7 slice A - store-isolation guard: no new ad-hoc store redirects", 
     }
   })
 
-  it("teardown containment survives a SYMLINKED temp root, as on macOS", () => {
+  it("teardown containment survives a SYMLINKED temp root, as on macOS", (ctx) => {
     // The macOS defect round 2 raised, exercised on this platform. `os.tmpdir()`
     // returns `/var/folders/...` while `realpathSync.native(tmpdir())` returns
     // `/private/var/folders/...`, so a LEXICAL comparison of a hand-rolled mint
@@ -1611,7 +2043,13 @@ describe("WS-7 slice A - store-isolation guard: no new ad-hoc store redirects", 
       // no junction support on this filesystem
     }
     try {
-      if (!linked) return
+      // A VISIBLE SKIP, not a bare `return`. Round 3 of review: a bare return in a
+      // test body is a skip with no signal - the run reports the test as PASSED,
+      // so a filesystem that cannot make the junction would quietly turn this
+      // assertion off. `ctx.skip()` shows up in the report as skipped, which is
+      // the truth. (The junction succeeds on this box, so the body does run here -
+      // the reviewer confirmed that independently too.)
+      if (!linked) return ctx.skip()
       const canonicalRoot = realpathSync.native(REAL)
       const lexical = join(ALIAS, "store")
       const canonical = canonicalizePath(lexical)
