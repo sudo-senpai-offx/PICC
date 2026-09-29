@@ -61,6 +61,136 @@ const LINES = SRC.split("\n")
 const GATES = ["requireAuth(", "requireSessionOrFirstRun(", "requireAuthStrict("]
 
 // ---------------------------------------------------------------------------
+// COMMENTS BLANKED — the fix for C1, ported from ws7AuthBootstrapGateGuard
+// ---------------------------------------------------------------------------
+//
+// WHY THIS FILE NEEDS IT, and why its own header used to be false. The header
+// above claims "this guard NEVER READS A COMMENT TO REACH A VERDICT". That was
+// asserted, not true. `isGated` scanned `site.region`, whose lines came from
+// `LINES` — the RAW source — and asked whether any line CONTAINS a gate name. A
+// comment is a line. So the claim and the code disagreed, and the disagreement
+// had teeth: handlers.mjs:4364 (`GET /api/auth/status`) carries a nine-line
+// comment whose prose contains the literal `requireSessionOrFirstRun(`. The
+// guard reported that route — which has no gate at all — as GATED, and the
+// inventory told the owner it was closed. Delete the real `requireAuth` from
+// this slice's own alerts/delete route, leave the comment, and the build stays
+// green.
+//
+// The sibling guard hit the same wall from the other side: handlers.mjs
+// documents the defect it just fixed, so a scan that read comment text reported
+// the documentation as an unfixed call site forever. Its `stripComments` is
+// ported here nearly verbatim, because the lexer it grew is the actual fix and a
+// simpler `//`-only stripper reintroduces the same class of failure from a new
+// direction: blanking a line that carries a URL in a string, leaving the gate on
+// that line invisible, and making every predicate in this file pass VACUOUSLY. A
+// guard that a legitimate coding style can switch off is not a guard.
+//
+// STRING-AWARE, and load-bearing: a stripper that only knows `//` and `/*` blanks
+// from the `//` onward INCLUDING text inside a string literal. handlers.mjs has
+// real lines that put a URL default beside route logic (the Stripe success/cancel
+// defaults, the 5173 origin default), so that is not a contrived spelling.
+//
+// STRING CONTENTS ARE DELIBERATELY PRESERVED (only the lexing is string-aware),
+// because the dispatch predicates need to see the `"/api/health"` literal in the
+// code view. That is only safe if no string literal contains something that looks
+// like a gate call — asserted below, so the decision cannot rot into either a
+// phantom gate or a phantom finding.
+//
+// The regex branch is defensive hardening, not a fix for a demonstrated failure:
+// a regex literal cannot contain a bare `//`, so this exists so the lexer does not
+// read `/^\/api\//` as a comment and blank the rest of the file.
+function stripComments(src) {
+  const out = src.split("")
+  let i = 0
+  /**
+   * The kind of the last SIGNIFICANT thing consumed: "value" if it could end a
+   * value, "op" otherwise, null before anything has been consumed.
+   *
+   * Tracked explicitly instead of looking BACKWARDS through `out`, which was
+   * unsound: a `/` after a CLOSED STRING is division, but the previous character
+   * is a quote, which is not in the `[\w$)\]}.]` value-ender set — so a backward
+   * scan read the division as a regex literal and blanked forward to the next `/`
+   * ON THE LINE, taking a real gate with it. That is the vacuous-pass failure
+   * again, reached by a different road.
+   */
+  let prev = null
+  const regexAllowed = () => prev !== "value"
+  const blank = (from, to) => {
+    for (let k = from; k < to && k < src.length; k += 1) if (src[k] !== "\n") out[k] = " "
+  }
+  while (i < src.length) {
+    const ch = src[i]
+    const two = src.slice(i, i + 2)
+    if (ch === "/" && two === "/*") {
+      const end = src.indexOf("*/", i + 2)
+      const stop = end === -1 ? src.length : end + 2
+      blank(i, stop)
+      i = stop
+      continue
+    }
+    if (ch === "/" && two === "//") {
+      const nl = src.indexOf("\n", i)
+      const stop = nl === -1 ? src.length : nl
+      blank(i, stop)
+      i = stop
+      continue
+    }
+    if (ch === "/" && regexAllowed()) {
+      let j = i + 1
+      let inClass = false
+      let closed = false
+      while (j < src.length) {
+        const c = src[j]
+        if (c === "\\") {
+          j += 2
+          continue
+        }
+        if (c === "\n") break
+        if (c === "[") inClass = true
+        else if (c === "]") inClass = false
+        else if (c === "/" && !inClass) {
+          j += 1
+          closed = true
+          break
+        }
+        j += 1
+      }
+      // An unterminated `/` was division after all: leave the line intact rather
+      // than blanking the remainder of the file on a bad guess.
+      if (closed) {
+        blank(i, j)
+        i = j
+        prev = "value"
+        continue
+      }
+      i += 1
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      // Scanned past WITHOUT being blanked, so a `//` inside is not a comment.
+      let j = i + 1
+      while (j < src.length) {
+        if (src[j] === "\\") {
+          j += 2
+          continue
+        }
+        if (src[j] === ch) break
+        if (ch !== "`" && src[j] === "\n") break
+        j += 1
+      }
+      i = j + 1
+      prev = "value"
+      continue
+    }
+    if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
+      prev = /[\w$)\]}]/.test(ch) ? "value" : "op"
+    }
+    i += 1
+  }
+  return out.join("")
+}
+
+// ---------------------------------------------------------------------------
 // DISCOVERY — four dispatch forms, all structural
 // ---------------------------------------------------------------------------
 
@@ -142,10 +272,34 @@ function ownCommentBlock(lines, index) {
   return lines.slice(top, index).join("\n")
 }
 
+/**
+ * Every /api route the dispatcher recognises, with the block that handles it.
+ *
+ * `lines` is the RAW source, and that is deliberate: an allowlist `marker` is the
+ * route's dispatch line VERBATIM as a human wrote it, including any trailing
+ * comment, and `ownComment` has to be the real comment because the
+ * `sourceComment` rule exists to let a justification live in the source. Both
+ * come from the raw view.
+ *
+ * `region` is the OTHER view: the same block with every comment's content
+ * blanked, and that is the only view `isGated` ever reads. Fix round 1 made
+ * that split load-bearing — scanning the raw region meant a comment naming a
+ * gate was a gate (C1). Discovery itself also runs against the blanked view, so a
+ * dispatch written inside a comment is never mistaken for a real route.
+ *
+ * `rawRegion` is kept because `regionCarries` has to see comments to enforce the
+ * `sourceComment` rule; it is never used to reach a gate verdict.
+ *
+ * One input, two views, computed here. Taking a second array as a parameter
+ * would let a caller pass a raw view and silently restore the defect, which is
+ * how the pre-fix version of this function came to scan comments in the first
+ * place.
+ */
 function discoverRouteSites(lines) {
+  const code = stripComments(lines.join("\n")).split("\n")
   const sites = []
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]
+  for (let i = 0; i < code.length; i += 1) {
+    const line = code[i]
     const text = line.trim()
     if (text === "" || text.startsWith("//") || text.startsWith("*") || text.startsWith("/*")) continue
 
@@ -158,9 +312,10 @@ function discoverRouteSites(lines) {
         line: i + 1,
         index: i,
         form: "table",
-        marker: text,
+        marker: lines[i].trim(),
         ownComment: ownCommentBlock(lines, i),
-        region: routeHandlerRegion(lines, i)
+        region: routeHandlerRegion(code, i),
+        rawRegion: routeHandlerRegion(lines, i)
       })
       continue
     }
@@ -171,16 +326,17 @@ function discoverRouteSites(lines) {
       const re = /path\.match\(\s*\/([^\n]*?)\/([a-z]*)/.exec(line)
       const pattern = re ? re[1] : "?"
       let j = i + 1
-      while (j < lines.length && !new RegExp(`^\\s*if\\s*\\(\\s*${matcher[1]}\\b`).test(lines[j])) j += 1
-      if (j < lines.length) {
+      while (j < code.length && !new RegExp(`^\\s*if\\s*\\(\\s*${matcher[1]}\\b`).test(code[j])) j += 1
+      if (j < code.length) {
         sites.push({
           route: `match:/${pattern}/`,
           line: i + 1,
           index: j,
           form: "path.match",
-          marker: text,
+          marker: lines[i].trim(),
           ownComment: ownCommentBlock(lines, i),
-          region: routeHandlerRegion(lines, j)
+          region: routeHandlerRegion(code, j),
+          rawRegion: routeHandlerRegion(lines, j)
         })
       }
       continue
@@ -199,9 +355,10 @@ function discoverRouteSites(lines) {
       line: i + 1,
       index: i,
       form: text.includes("path.startsWith") ? "path.startsWith" : "path ===",
-      marker: text,
+      marker: lines[i].trim(),
       ownComment: ownCommentBlock(lines, i),
-      region: routeHandlerRegion(lines, i)
+      region: routeHandlerRegion(code, i),
+      rawRegion: routeHandlerRegion(lines, i)
     })
   }
   return sites
@@ -366,9 +523,166 @@ function inlineGateOffset(region) {
 }
 
 /**
+ * IS THE GATE ON AN UNCONDITIONAL PATH? The fix for C2.
+ *
+ * The pre-fix `isGated` asked "is there a gate-bearing line before the first
+ * line that answers". That is a question about TEXT and the thing that matters
+ * is about CONTROL FLOW, and on handlers.mjs:3687 the two came apart: the gate
+ * text `if (!(await requireAuth(req, res))) return true` sits at the top of a
+ * block guarded by
+ *
+ *     if (req.method === "POST" && ["webhook-settings","webhook-test"].includes(action))
+ *
+ * so a GET — and `read`, `read-all`, `clear` and inject — never passes it, and
+ * `clear` DELETES stored notifications for an anonymous caller. The comment
+ * above it states an intent the code does not implement.
+ *
+ * THE DISCRIMINATOR, and it is the cheap one: a block that has already CLOSED
+ * before the gate cannot enclose it. `/api/trading/realtime`, `/api/packs/ack`
+ * and `/api/webfetch/limits/reset` each sit behind an `if` that writes a 4xx and
+ * returns, so their gates are at the region's top level and stay unconditional.
+ * A predicate that counted "any enclosing `if` anywhere above" would exonerate
+ * their real gates and put three genuinely-gated routes on the offender list —
+ * the mirror image of the defect. Only blocks that are still OPEN at the gate's
+ * position count, and only if they are ones that may not execute.
+ *
+ * WHY NESTING AND NOT "the gate must be the region's first statement", which is
+ * the other cheap rule and is wrong: `const { svc } = await import(...)` before
+ * a gate is ordinary and does not make the gate conditional. Dozens of real
+ * routes are written that way, and that rule would have put every one of them on
+ * the offender list — a false positive is how a guard gets switched off.
+ *
+ * `try` / `finally` / a bare block do not introduce conditionality: their bodies
+ * are reached whenever the statement is reached. `if` / `else` / `for` / `while`
+ * / `do` / `switch` / `catch` do, because their bodies are reached only on some
+ * requests.
+ */
+const CONDITIONAL_OPENERS = /^(?:if|else|for|while|do|switch|catch)\b/
+const NEUTRAL_OPENERS = /^(?:try|finally)\b/
+// The words after which a `{` is a BLOCK rather than an object literal. `const`
+// is deliberately absent: `const { notify, getNotifications } = await import(…)`
+// opens a destructuring pattern, and reading it as a block made every
+// import-then-gate route look conditional.
+const BLOCK_WORD_BEFORE = /(?:^|[^\w$])(?:if|else|for|while|do|switch|catch|try|finally)\s*$/
+
+/**
+ * Classify each brace on a line: a block opener, a block closer, or neither.
+ *
+ * NEEDED, and not decoration. The first cut of the C2 fix counted every `{` as
+ * a block opener, and the control test that exists to stop a false positive
+ * caught it immediately: `if (!env.thing) return writeJson(res, 503, { error:
+ * "thing not configured" })` opens an OBJECT literal mid-line, so the counter
+ * popped the region root, then re-pushed the payload's `{` as a conditional
+ * opener, and the genuinely-unconditional gate after it was reported nested in a
+ * conditional. Distinguishing a block from an object literal is a parser question;
+ * the cheap discriminator is the preceding token, and it is exact for every shape
+ * in this file.
+ */
+function braceRoles(line) {
+  const roles = []
+  let quote = null
+  let prevChar = ""
+  let prevWord = ""
+  for (let k = 0; k < line.length; k += 1) {
+    const c = line[k]
+    if (quote) {
+      if (c === "\\") k += 1
+      else if (c === quote) {
+        quote = null
+        prevChar = c
+        prevWord = ""
+      }
+      continue
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c
+      prevChar = c
+      prevWord = ""
+      continue
+    }
+    if (c === " " || c === "\t" || c === "\r" || c === "\n") continue
+    if (c === "{") {
+      const isBlock =
+        prevChar === "" ||
+        prevChar === ")" ||
+        prevChar === ";" ||
+        prevChar === "{" ||
+        prevChar === "}" ||
+        prevChar === ">" ||
+        BLOCK_WORD_BEFORE.test(prevWord)
+      roles.push(isBlock ? "open" : "object")
+      prevChar = "{"
+      prevWord = ""
+      continue
+    }
+    if (c === "}") {
+      roles.push("close")
+      prevChar = "}"
+      prevWord = ""
+      continue
+    }
+    if (/[\w$]/.test(c)) {
+      prevWord += c
+      prevChar = c
+      continue
+    }
+    if (c === "=" && line[k + 1] === ">") {
+      prevWord = ""
+      prevChar = ">"
+      k += 1
+      continue
+    }
+    prevWord = ""
+    prevChar = c
+  }
+  return roles
+}
+
+/**
+ * The reason `region[gateAt]` is only reached on SOME requests, or null when it
+ * is reached on every request that entered the region.
+ */
+function conditionalReason(region, gateAt, gateOffsetOnLine = null) {
+  const stack = []
+  for (let i = 0; i < region.length; i += 1) {
+    const line = region[i]
+    const text = line.trim()
+    if (text === "") continue
+    const roles = braceRoles(line)
+    // A `}` closes a block opened earlier, so it can never enclose the gate.
+    for (const role of roles) if (role === "close") stack.pop()
+
+    if (i === gateAt) {
+      // The gate's own line: an opener in the statement body BEFORE the gate puts
+      // the gate inside it, exactly as a block would. The region's own dispatch
+      // `if` is excluded because statementBody() has already consumed it.
+      if (gateOffsetOnLine !== null) {
+        const head = statementBody(line).text.slice(0, Math.max(0, gateOffsetOnLine))
+        if (/\bif\s*\(|\bfor\s*\(|\bwhile\s*\(|\bswitch\s*\(|\bcatch\s*\(/.test(head)) {
+          return "the gate is inside a conditional opened on the dispatch line"
+        }
+      }
+      return stack.some(Boolean)
+        ? "the gate is nested inside a conditional block, so it does not run for every request to this route"
+        : null
+    }
+
+    // The region's first line is the dispatch itself. Its block is the ROOT and
+    // always executes — otherwise every route would be "conditional" in itself.
+    const isRoot = i === 0
+    const enclosing = stack.some(Boolean)
+    const conditional = isRoot ? false : NEUTRAL_OPENERS.test(text) ? enclosing : enclosing || CONDITIONAL_OPENERS.test(text)
+    for (const role of roles) if (role === "open" || role === "object") stack.push(conditional && role === "open")
+  }
+  return null
+}
+
+/**
  * THE VERDICT. A site is GATED when a gate sits in its OWN block, BEFORE the
- * route answers. Both halves matter: a gate after the response is dead code,
- * and a presence-only check calls dead code safety.
+ * route answers, and on a path every request to the route takes. All three
+ * halves matter: a gate after the response is dead code, a presence-only check
+ * calls dead code safety, and a gate that only some requests reach (C2) is not a
+ * gate for the route at all.
  */
 function isGated(site) {
   const region = site.region
@@ -395,13 +709,18 @@ function isGated(site) {
   // On the gate's own line, only what sits IN FRONT of the gate call counts, so
   // the gate's trailing `return true` is not mistaken for an answer.
   const line = region[gateAt]
+  let gateOffset = null
   if (!inline) {
     const offsets = GATES.map((g) => line.indexOf(g)).filter((o) => o !== -1)
-    const gateOffset = offsets.length ? Math.min(...offsets) : -1
+    gateOffset = offsets.length ? Math.min(...offsets) : -1
     if (gateOffset !== -1 && firstAnswerOffset(line, gateOffset) !== -1) {
       return { ok: false, why: "the route answers BEFORE its gate" }
     }
   }
+  // THE C2 CHECK. For an inline gate the `if` IS the gate, so only a block still
+  // open above it can make it conditional.
+  const conditional = conditionalReason(region, gateAt, gateOffset === null ? null : gateOffset)
+  if (conditional) return { ok: false, why: conditional }
   return { ok: true, how: inline ? "inline verifyUser idiom" : "shared gate" }
 }
 
@@ -1190,6 +1509,24 @@ const DECLARED_PUBLIC = [
 
   // ── AUTH (structurally public) ──────────────────────────────────────────
   {
+    marker: 'if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Login-page bootstrap hint, and the answer has to be available BEFORE a session exists — that is the whole " +
+      "point of it. Discloses exactly three things: `hasUsers` (a boolean), the literal authMode \"local\", and two " +
+      "process-scoped fault counters keyed by BASENAME (`users.json`, `sessions.json`) via auth.mjs's recordStoreFault, " +
+      "which takes basename(file) precisely because the raw argument is a joined absolute path and this body is served " +
+      "over HTTP. No account data, no user rows, no absolute path, no home directory, no OS user name — the path " +
+      "disclosure that used to live here was already removed at handlers.mjs:4360 and this entry is the reason it " +
+      "stayed removed. DECISION ITEM: the counters tell an anonymous caller that a store is failing, which is a small " +
+      "operational-fingerprint disclosure. It is accepted because the failure it reports is not exploitable from " +
+      "outside (the counters are informational; the auth decision is made by verifyUser/hasUsers, not by them) and " +
+      "because a login page that cannot see its own store is broken exactly when it is needed most. " +
+      "RECOMMENDATION: leave public; if the owner wants the counters gone, they can move to the `store-fault` log line " +
+      "the comment above the route already points at.",
+    owner: "declared",
+    sourceComment: "NOT A GATE."
+  },
+  {
     marker: 'if (path === "/api/auth/signup" && req.method === "POST") {',
     reason:
       "Account creation. Structurally public: requiring a session to create the first account is " +
@@ -1254,9 +1591,20 @@ function indexAllowlist(entries) {
 
 const { byMarker: ALLOWLIST_BY_MARKER, duplicates: ALLOWLIST_DUPLICATES } = indexAllowlist(DECLARED_PUBLIC)
 
-/** Is this site's own contiguous comment block (and body) carrying the given text? */
+/**
+ * Is this site's own contiguous comment block (and body) carrying the given text?
+ *
+ * `rawRegion`, NOT `region`. A `sourceComment` is by definition a COMMENT, and
+ * `region` is the comment-blanked view that `isGated` reads, so consulting
+ * `region` here would make every `sourceComment` rule unsatisfiable. This is the
+ * one place in the file that reads comment text, and it does so only to CHECK
+ * that a written justification exists at the route — never to reach a gate
+ * verdict. Fix round 1 introduced the split; this is where the two views are
+ * each used for what they are for.
+ */
 function regionCarries(site, needle) {
-  return site.region.some((l) => l.includes(needle)) || site.ownComment.includes(needle)
+  const body = site.rawRegion ?? site.region
+  return body.some((l) => l.includes(needle)) || site.ownComment.includes(needle)
 }
 
 describe("WS-7 slice C — every /api route is gated or declared public with a reason", () => {
@@ -1564,23 +1912,301 @@ describe("WS-7 slice C — the guard's own teeth", () => {
     )
   })
 
+  it("a table keyed from a VARIABLE is invisible, and the backstop makes that loud", () => {
+    // LIMITATION I1, ADDED IN FIX ROUND 1, and it is the SECOND silent blind spot
+    // rather than the first. Limitation 5 below named only the name-bound
+    // literal door; this is a different one and it was undisclosed, which is
+    // worse than a bound nobody knows about.
+    //
+    // TABLE_DISPATCH is `^\s*"(?<route>\/api[^"]*)"\s*:\s*…` — the key must be a
+    // quoted literal at the start of the trimmed line. So
+    //
+    //     const H = { ["/api/x"]: async (req, res) => {…} }   // computed key
+    //     const H = { KEY:     async (req, res) => {…} }      // name-bound key
+    //
+    // are discovered as no site at all, so no assertion is made about either and
+    // the route arrives unchecked. The second is the same class as the
+    // name-bound literal already bounded, and is caught by that backstop; the
+    // first is genuinely new: a `/api/…` string that never appears at the start
+    // of a line.
+    const computed = ['const H = { ["/api/planted/computed-key"]: async (req, res) => {', "  return true", "} }"].join(
+      "\n"
+    )
+    const named = [
+      'const KEY = "/api/planted/named-key"',
+      "const H = {",
+      "  KEY: async (req, res) => {",
+      "    return true",
+      "  }",
+      "}"
+    ].join("\n")
+    expect(
+      discoverRouteSites(computed.split("\n")),
+      "THIS IS BOUND I1, SHOWN: a route table whose key is a computed property is discovered by no form in " +
+        "discoverRouteSites, so it arrives unchecked. The backstop below is what keeps it loud."
+    ).toEqual([])
+    expect(discoverRouteSites(named.split("\n")), "and a name-bound table key is the same blindness").toEqual([])
+  })
+
+  it("no route table key is computed or name-bound, so bound I1 stays loud", () => {
+    // THE BACKSTOP for I1, and it is the same shape as the name-bound-literal
+    // backstop so the two bounds fail the same loud way. Resolving a table key to
+    // its literal is scope analysis — a parser, not a scan — so the achievable
+    // thing is to make the corpus of such keys provably empty.
+    //
+    // It also covers the case the first backstop cannot see: a `/api/…` literal
+    // that appears in the file but is never a dispatch operand at all, because it
+    // is an object key reached through a variable. Asserting that every `/api/…`
+    // string in handlers.mjs is either a discovered dispatch marker or an
+    // allowlist marker is the strong form, and it is what would catch a table
+    // route written this way even if the spelling drifted.
+    const offenders = []
+    for (const site of SITES) {
+      if (site.form !== "table") continue
+      if (!/^\s*"\/api\/[^"]*"\s*:/.test(site.rawRegion?.[0] ?? site.region[0] ?? "")) {
+        offenders.push(`handlers.mjs:${site.line}  a table site whose key is not a leading string literal`)
+      }
+    }
+    expect(
+      offenders,
+      "a discovered table site whose key is not a leading \"/api/…\" literal means TABLE_DISPATCH matched something " +
+        "this file cannot reason about. Widen the key handling deliberately rather than trusting the match."
+    ).toEqual([])
+
+    // The strong form: every `/api/…` string in the code view is accounted for by
+    // a discovered dispatch marker or an allowlist entry. A literal in neither is
+    // a route nobody is asserting anything about.
+    const accounted = new Set()
+    for (const site of SITES) accounted.add(site.route)
+    const unaccounted = []
+    const code = stripComments(SRC)
+    code.split("\n").forEach((raw, i) => {
+      for (const m of raw.matchAll(/["'`](\/api\/[^"'`]*)["'`]/g)) {
+        if (!accounted.has(m[1]) && !/[=,]|:/.test(raw.slice(0, m.index).trimEnd().slice(-1))) {
+          // A `/api/…` string with no dispatch operator in front of it on the line.
+          if (!/\b(?:===|startsWith|match|includes|join|path)\b/.test(raw)) unaccounted.push(`handlers.mjs:${i + 1}  ${m[1]}`)
+        }
+      }
+    })
+    expect(
+      unaccounted,
+      "a /api/… string literal that is neither a discovered dispatch route nor part of a route expression is a path " +
+        "this guard cannot see. It is most likely a route table keyed from a variable (bound I1) or a route assembled " +
+        "at runtime — either way the route behind it is unchecked."
+    ).toEqual([])
+  })
+
+  it("no string literal in handlers.mjs contains a gate call, so preserving strings is safe", () => {
+    // THE OTHER HALF OF C1, and the reason it needed two assertions rather than
+    // one. `stripComments` blanks comment CONTENT but deliberately PRESERVES
+    // string CONTENTS, because the dispatch predicates need to see the
+    // `"/api/health"` literal in the code view. Preserving strings is only safe
+    // while no string literal contains something that looks like a gate call —
+    // otherwise C1 comes straight back through the string door:
+    //
+    //     const note = "remember to call requireAuth() here"
+    //
+    // is a comment in all but spelling, and the scan would read it as this
+    // route's gate. The sibling guard carries the same assertion for the same
+    // reason. The corpus is 0 today — verified, not assumed — so the rule costs
+    // nothing, and if it ever becomes non-zero the guard says why it is unsafe
+    // instead of quietly reading the string as a gate.
+    const offenders = []
+    LINES.forEach((raw, i) => {
+      const code = stripComments(raw)
+      let quote = null
+      let buf = ""
+      for (let k = 0; k < code.length; k += 1) {
+        const c = code[k]
+        if (quote) {
+          if (c === "\\") {
+            buf += code[k + 1] ?? ""
+            k += 1
+            continue
+          }
+          if (c === quote) {
+            for (const g of GATES) if (buf.includes(g)) offenders.push(`handlers.mjs:${i + 1}  ${g}`)
+            quote = null
+            buf = ""
+            continue
+          }
+          buf += c
+          continue
+        }
+        if (c === '"' || c === "'" || c === "`") quote = c
+      }
+    })
+    expect(
+      offenders,
+      "a string literal containing a gate call would be read as a gate, because stripComments preserves string " +
+        "contents so the dispatch predicates can see route literals. Either reword the string or extend the lexer — " +
+        "do not leave a comment-in-a-string able to satisfy a gate"
+    ).toEqual([])
+  })
+
+  it("stripComments blanks a comment that names a gate, and preserves the code beside it", () => {
+    // THE PORT IS PROVEN TO DO BOTH THINGS, not merely to exist. If it stopped
+    // blanking, C1 returns; if it over-blanked — blanking a line that also
+    // carries real code, which is how the sibling guard's predicates once
+    // started passing vacuously — the gate on that line would vanish and routes
+    // would be reported ungated. Both directions are asserted here on fixtures,
+    // and the second fixture is the real one-line shape that caused it.
+    const commented = [
+      'if (path === "/api/planted/x" && req.method === "GET") {',
+      "  // requireAuth() is NOT called here.",
+      "  return true",
+      "}"
+    ].join("\n")
+    const view = stripComments(commented)
+    expect(view, "the comment's gate name must be gone from the code view").not.toContain("requireAuth(")
+    expect(
+      stripComments('  const gate = "requireAuth(" // gone\n  const keep = 1'),
+      "a real line comment is blanked even when the line also carries code"
+    ).not.toContain("// gone")
+    // A URL in a string on the same line as a gate must not blank the gate: this
+    // is the exact shape that made the sibling guard's hasUsers() scan find ZERO
+    // sites and pass every predicate vacuously.
+    const urlOnGateLine = [
+      '  const home = "http://localhost:5173"; if (!(await requireAuth(req, res))) return true',
+      "  const v = \"b\" / (a); if (!(await requireAuth(req, res))) return true"
+    ].join("\n")
+    for (const line of stripComments(urlOnGateLine).split("\n")) {
+      expect(
+        line,
+        "a quoted // must not blank the gate on the same line — a guard a coding style can switch off is not a guard"
+      ).toContain("requireAuth(")
+    }
+    // And the whole point: the line numbers survive, so a code offset still
+    // points at the right row.
+    expect(stripComments("a\n// c\nb").split("\n").length, "line count must be preserved").toBe(3)
+  })
+
   it("a comment pasted onto an ungated route does not excuse it", () => {
     // THE COMMENT-BYPASS ATTACK, on the surface where it previously worked. The
     // source comment that justifies a declared-public route is copied verbatim
     // onto a DIFFERENT, ungated route — exactly what defeated a window-based
     // marker check in the earlier rounds. It must change nothing here, because
     // this guard never reads a comment to reach a verdict.
+    //
+    // RE-POINTED IN FIX ROUND 1. This fixture used a comment with NO gate name in
+    // it, so it passed for the wrong reason: `isGated` scans the region's lines
+    // for a gate substring and this comment contained none, so the assertion held
+    // without the comment ever being load-bearing. It proved nothing about the
+    // class it was named for. The comment below now contains a gate name — the
+    // exact string an author writes when documenting "auth happens elsewhere" —
+    // so the test goes RED against the pre-fix predicate and is only green
+    // because comments are blanked before the scan. See stripComments().
     const planted = [
-      "// No auth required — intentionally public on localhost.",
       'if (path === "/api/planted/pasted" && req.method === "POST") {',
+      "  // Auth is handled by requireAuth() upstream in the router.",
+      "  // No session check happens in this block.",
       "  writeJson(res, 200, { ok: true, watchlists: await listWatchlists() })",
       "  return",
       "}"
     ].join("\n")
     const site = discoverRouteSites(planted.split("\n"))[0]
     expect(site, "the pasted route must still be discovered").toBeDefined()
-    expect(isGated(site).ok, "a pasted justification comment must not excuse a route").toBe(false)
+    expect(isGated(site).ok, "a pasted comment naming requireAuth() must NOT read as a gate").toBe(false)
     expect(ALLOWLIST_BY_MARKER.has(site.marker), "and the pasted route is not in the allowlist").toBe(false)
+  })
+
+  it("a comment that merely NAMES a gate cannot make a route gated — the live defect", () => {
+    // THE C1 DEFECT, IN THE SHAPE THE REAL SOURCE USES. handlers.mjs:4364
+    // (`GET /api/auth/status`) carries a nine-line comment explaining that the
+    // `hasUsers()` inside it is a first-run SIGNUP HINT and authorises nothing,
+    // and that prose contains the literal `requireSessionOrFirstRun(`. Because
+    // `isGated` scanned the region's raw lines, that comment was read as the
+    // route's gate: the guard reported a route with NO gate as GATED, and the
+    // inventory marked it closed so the owner was never asked about it. It also
+    // made this slice's own two gates fragile — deleting the real `requireAuth`
+    // and keeping the comment would have left the build green.
+    //
+    // The line-pinned form below is the real one, verbatim in structure, and it
+    // must read as UNGATED. `why` is asserted too, so the test cannot pass by
+    // being rejected for an unrelated reason.
+    const planted = [
+      'if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {',
+      "  // NOT A GATE. hasUsers() here is the first-run SIGNUP HINT. It authorises",
+      "  // nothing — the bootstrap it hints at is enforced by",
+      "  // requireSessionOrFirstRun() / requireAuth on the routes that matter.",
+      "  writeJson(res, 200, { ok: true, hasUsers: await hasUsers(), authMode: 'local' })",
+      "  return",
+      "}"
+    ].join("\n")
+    const site = discoverRouteSites(planted.split("\n"))[0]
+    expect(site, "the route must still be discovered").toBeDefined()
+    const verdict = isGated(site)
+    expect(verdict.ok, "a comment naming requireSessionOrFirstRun() must not make an ungated route gated").toBe(false)
+    expect(verdict.why, "and it must be rejected for having no gate, not for some unrelated reason").toMatch(
+      /no gate/
+    )
+  })
+
+  it("a gate inside a conditional that covers only some actions is not a gate for the route", () => {
+    // THE C2 DEFECT, IN THE SHAPE THE REAL SOURCE USES. handlers.mjs:3687
+    // (`/api/trading/notifications`) gates only
+    // `if (req.method === "POST" && ["webhook-settings","webhook-test"].includes(action))`,
+    // then answers GET, `read`, `read-all`, `clear` (which DELETES stored
+    // notifications) and inject for an anonymous caller. `isGated` found the
+    // gate text, saw no answer in front of it, and called the whole route gated.
+    //
+    // The predicate being fixed is "is the gate on an UNCONDITIONAL path from the
+    // top of the region", not "does the text appear before the answer". This
+    // fixture is the minimal shape of the defect: the gate is real, it is before
+    // the disclosure, and the route is still not gated, because a GET reaches the
+    // writeJson without ever passing the gate.
+    const planted = [
+      'if (path === "/api/planted/conditional" && (req.method === "GET" || req.method === "POST")) {',
+      '  if (req.method === "POST" && body.action === "dangerous") {',
+      "    if (!(await requireAuth(req, res))) return true",
+      "    writeJson(res, 200, { ok: true })",
+      "    return true",
+      "  }",
+      "  writeJson(res, 200, { ok: true, notifications: await getNotifications() })",
+      "  return true",
+      "}"
+    ].join("\n")
+    const site = discoverRouteSites(planted.split("\n"))[0]
+    expect(site, "the route must still be discovered").toBeDefined()
+    const verdict = isGated(site)
+    expect(verdict.ok, "a gate reachable by only one action cannot gate the whole route").toBe(false)
+    expect(verdict.why, "and the reason must name the conditionality").toMatch(/conditional|unconditional/i)
+  })
+
+  it("a gate that is unconditional but preceded by work is still a gate", () => {
+    // THE CONTROL for the C2 fix, and the reason the predicate is nesting-based
+    // rather than "the gate must be the region's first statement". A dynamic
+    // import or a parsed parameter before the gate is ordinary and does NOT make
+    // the gate conditional. If this test fails, the fix over-corrected into a
+    // false positive that would have put every import-then-gate route on the
+    // offender list.
+    const planted = [
+      'if (path === "/api/planted/unconditional" && req.method === "GET") {',
+      '  const { getNotifications } = await import("./services/notificationCenter.mjs")',
+      "  if (!(await requireAuth(req, res))) return true",
+      "  writeJson(res, 200, { ok: true, notifications: getNotifications() })",
+      "  return true",
+      "}"
+    ].join("\n")
+    expect(isGated(discoverRouteSites(planted.split("\n"))[0]).ok).toBe(true)
+  })
+
+  it("the three 4xx carve-outs keep their gates after the conditional fix", () => {
+    // THE FALSE-POSITIVE GUARD FOR C2. /api/trading/realtime, /api/packs/ack
+    // and /api/webfetch/limits/reset all sit behind an `if` that writes a 4xx and
+    // returns. A predicate that counted "any enclosing `if`" as conditional
+    // would wrongly exonerate their real gates and put three genuinely-gated
+    // routes on the ungated list — the mirror image of the defect. The
+    // discriminator is that a block which has CLOSED before the gate cannot
+    // enclose it, so these three stay gated. Pinned by name against the real
+    // source so the fix cannot quietly reopen them.
+    for (const route of ["/api/trading/realtime", "/api/packs/ack", "/api/webfetch/limits/reset"]) {
+      const site = SITES.find((s) => s.route === route)
+      expect(site, `${route} must still be discovered — if it vanished, the carve-out is untested`).toBeDefined()
+      expect(isGated(site).ok, `${route} writes a 4xx and returns, so its gate is unconditional and must stand`).toBe(
+        true
+      )
+    }
   })
 
   it("demonstrates the blind spot a name-bound route literal creates", () => {
@@ -1713,6 +2339,37 @@ describe("WS-7 slice C — the guard's own teeth", () => {
  *    assembled at runtime from parts — which no static rule here can see.
  *    `switch (path)` is the other such door, and unlike the computed one it is
  *    refused outright rather than merely bounded.
+ *
+ * 5b. BOUND I1, ADDED IN FIX ROUND 1: A ROUTE TABLE KEYED FROM A VARIABLE IS A
+ *     SECOND, DISTINCT SILENT BLIND SPOT. The paragraph above named ONE door —
+ *     the name-bound literal — and this file claimed the bounds were stated.
+ *     They were not, and an undisclosed bound is worse than one nobody knows
+ *     about, because it reads as covered.
+ *
+ *     TABLE_DISPATCH requires the key to be a quoted literal at the START of the
+ *     trimmed line:
+ *
+ *         { "/api/x": async (req, res) => {…} }   discovered — the live shape
+ *         { ["/api/x"]: async (req, res) => {…} } NOT discovered — computed key
+ *         { KEY:     async (req, res) => {…} }   NOT discovered — name-bound
+ *
+ *     The second is genuinely new and the third is the limitation above wearing
+ *     different clothes: a `/api/…` string that exists in the file but is never a
+ *     dispatch OPERAND, so no site is created and no assertion is made about the
+ *     route behind it. The corpus is 0 today, asserted, by the two backstops in
+ *     the teeth block:
+ *
+ *       - every discovered TABLE site must have a leading string-literal key, so
+ *         the pattern cannot quietly start matching something unmodelled; and
+ *       - the STRONG form: every `/api/…` string literal in the code view must
+ *         belong to a discovered route or be part of a route expression. A
+ *         literal in neither is a path this guard cannot see, and the failure
+ *         message says so.
+ *
+ *     No such table exists today, so the bound costs nothing — and it is
+ *     disclosed rather than implied, which is the standard this file holds
+ *     itself to: a guard that claims more than it enforces is worse than one
+ *     that admits its edge.
  *
  * 6. A MARKER IS THE ROUTE'S OWN DISPATCH LINE, WHICH IS A WEAKER ANCHOR THAN A
  *    WRITTEN DECLARATION COMMENT. What the guard guarantees is that an exemption

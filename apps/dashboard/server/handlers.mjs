@@ -3685,12 +3685,23 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/notifications" && (req.method === "GET" || req.method === "POST")) {
+    // WS-7 slice C, fix round 1. This gate was CONDITIONAL: it covered only
+    // webhook-settings/webhook-test, so GET and POST read / read-all / clear /
+    // inject all ran with no session. `clear` calls clearOld(), which DELETES
+    // stored notifications, and inject writes an arbitrary title/body/level/meta
+    // into the registry that every other route and the UI read back. The comment
+    // that stood above the old gate said "mutating actions require auth. Reads
+    // stay open" — four of the five mutating actions were outside the gate it
+    // described, and the intent was not implemented.
+    //
+    // Gating the whole block is the same call the owner already accepted for
+    // /api/trading/brokers and for the two WS-7 deletes: a route that mutates
+    // shared state is not a public read whatever its verb says. Placed before
+    // the dynamic import so an unauthenticated request cannot even load the
+    // store module. The login page reads notifications through an
+    // authenticated session; there is no anonymous consumer of this route.
+    if (!(await requireAuth(req, res))) return true
     const { notify, getNotifications, markRead, markAllRead, clearOld, unreadCount, notificationStats, getWebhookSettings, saveWebhookSettings, emitEvent } = await import("./services/notificationCenter.mjs")
-    // Webhook settings/test are a stored-SSRF channel (server POSTs trading
-    // activity to any URL) — mutating actions require auth. Reads stay open.
-    if (req.method === "POST" && ["webhook-settings", "webhook-test"].includes(String(body?.action))) {
-      if (!(await requireAuth(req, res))) return true
-    }
     if (req.method === "GET") {
       const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit") ?? 50), 1), 200)
       const unreadOnly = parsed.searchParams.get("unread") === "true"
@@ -4866,7 +4877,17 @@ const creds = await getVenueCredentials()
     const raw = await readRawBody(req)
     const signature = req.headers["stripe-signature"]
     try {
-      const event = constructWebhookEvent(raw, signature)
+      // WS-7 slice C fix round 1. `await` ADDED. constructWebhookEvent is an
+      // `async function` (stripe.mjs:39) that THROWS when the secret is missing,
+      // and an async function that throws returns a REJECTED PROMISE rather than
+      // raising synchronously — so without `await` the surrounding try/catch never
+      // sees the failure, the rejection escapes as an unhandled rejection, and
+      // the error handling written on the next two lines is inert. Found by the
+      // slice C allowlist behaviour sweep, which fires this route anonymously and
+      // made the test FILE exit 1 on an unhandled `STRIPE_SECRET_KEY not
+      // configured`; the route still answered 400, which is exactly why a
+      // status-only assertion would never have found it.
+      const event = await constructWebhookEvent(raw, signature)
       await handleStripeWebhook(event)
       writeJson(res, 200, { received: true })
     } catch (err) {

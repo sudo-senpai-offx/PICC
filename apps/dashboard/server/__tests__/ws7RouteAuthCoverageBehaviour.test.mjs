@@ -132,12 +132,30 @@ const SEEDED_ALERT = {
 }
 const SEEDED_WATCHLIST = { id: WATCHLIST_ID, name: "Seeded", symbols: ["EURUSD"], createdAt: 1, updatedAt: 1 }
 
+// A notification old enough for `clear` to remove. The route's default cutoff is
+// 7 days (`Number(body.olderThanMs) || 7 * 24 * 60 * 60 * 1000`), and
+// `clearOld()` filters `createdAt >= cutoff`, so an entry created "now" would
+// SURVIVE a working clear — and the control test would then pass because nothing
+// was ever deletable, not because the gate refused.
+const NOTIFICATION_ID = "ntf_seed_slice_c_round1"
+const SEEDED_NOTIFICATION = {
+  id: NOTIFICATION_ID,
+  title: "seeded by the ws7 slice C fix-round-1 behaviour test",
+  body: "the control depends on this row being clearable",
+  level: "warn",
+  channel: "in-app",
+  read: false,
+  createdAt: 1,
+  meta: {}
+}
+
 const USER_ROW = { id: "u1", email: "e@example.test", name: "E", salt: "s", passwordHash: "h", createdAt: 1 }
 const TOKEN = "b".repeat(64)
 
 let authDir
 let alertsDir
 let watchDir
+let notifyDir
 
 function writeJson(dir, name, value) {
   mkdirSync(dir, { recursive: true })
@@ -159,19 +177,36 @@ function seedStores({ users = [USER_ROW], usersRaw = null } = {}) {
   authDir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-ws7c-auth" })
   alertsDir = useIsolatedStoreDir("PICC_ALERTS_DATA_DIR", { prefix: "picc-ws7c-alerts" })
   watchDir = useIsolatedStoreDir("PICC_WATCHLIST_DATA_DIR", { prefix: "picc-ws7c-watchlist" })
+  notifyDir = useIsolatedStoreDir("PICC_NOTIFICATION_DATA_DIR", { prefix: "picc-ws7c-notify" })
 
   writeJson(authDir, "sessions.json", { sessions: {} })
   writeJson(authDir, "users.json", usersRaw !== null ? usersRaw : { users })
   writeJson(alertsDir, "alerts.json", [SEEDED_ALERT])
   writeJson(watchlistsDir(), "watchlists.json", [SEEDED_WATCHLIST])
+  writeJson(notifyDir, "notification-center.json", { notifications: [SEEDED_NOTIFICATION] })
   vi.resetModules()
 }
 const watchlistsDir = () => watchDir
 
 const alertsFile = () => join(alertsDir, "alerts.json")
 const watchlistsFile = () => join(watchDir, "watchlists.json")
+const notificationsFile = () => join(notifyDir, "notification-center.json")
 const readAlerts = () => JSON.parse(readFileSync(alertsFile(), "utf8"))
 const readWatchlists = () => JSON.parse(readFileSync(watchlistsFile(), "utf8"))
+const readNotifications = () => JSON.parse(readFileSync(notificationsFile(), "utf8"))
+
+/**
+ * Let a FLOATING store write land before asserting that it did not.
+ *
+ * Needed because the notifications route does not `await` its store calls (see
+ * the CONTROL test below: `notify()`, `getNotifications()`, `unreadCount()`,
+ * `notificationStats()` and `clearOld()` are all called without `await`, so a
+ * 200 can be written while the write is still in flight). Without this, "the
+ * store is unchanged" would pass on a schedule rather than on a fact — a write
+ * that merely had not landed yet would look exactly like a write that was
+ * refused. Waiting first means the negative assertions are about the GATE.
+ */
+const settle = (ms = 250) => new Promise((resolve) => setTimeout(resolve, ms))
 
 beforeEach(() => {
   seedStores()
@@ -180,7 +215,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs()
   vi.resetModules()
-  for (const dir of [authDir, alertsDir, watchDir]) {
+  for (const dir of [authDir, alertsDir, watchDir, notifyDir]) {
     if (dir && existsSync(dir)) rmSync(dir, { recursive: true, force: true })
   }
 })
@@ -302,6 +337,162 @@ describe("WS-7 slice C — the delete assertions can actually detect a deletion"
       expect(dir.includes("server") && dir.includes("data"), `${dir} must not be the live store`).toBe(false)
       expect(existsSync(dir), `${dir} must exist`).toBe(true)
     }
+  })
+})
+
+describe("WS-7 slice C fix round 1 — /api/trading/notifications refuses an anonymous caller", () => {
+  // THE C2 LIVE DEFECT, AS WIRE BEHAVIOUR. The gate on this route covered only
+  // `webhook-settings` and `webhook-test`, so the reviewer's probe against the
+  // real handler with a healthy populated store answered, anonymously:
+  //
+  //     GET                     -> 200 {notifications, unread, stats, webhook}
+  //     POST action=read        -> 200 {ok:true}   markRead
+  //     POST action=read-all    -> 200 {ok:true}   markAllRead
+  //     POST action=clear       -> 200 {ok:true}   clearOld — DELETES
+  //     POST action=<t,b>       -> 200 {ok:true, notification}   inject
+  //
+  // `clear` is the serious one: clearOld() filters the registry and persists, so
+  // it is a destructive operation on shared state. The gate is now unconditional
+  // at the top of the block.
+
+  it("GET refuses an anonymous caller, with the registry absent from the body", async () => {
+    const res = await call("GET", "/api/trading/notifications", {})
+    expect(res.status, `must refuse, got ${JSON.stringify(res.body)}`).toBe(401)
+    // Not merely a status: the seeded title is a payload an anonymous caller must
+    // not receive, so a refusal that echoed the registry would be a disclosure
+    // wearing a 401.
+    expect(JSON.stringify(res.body ?? {})).not.toContain(NOTIFICATION_ID)
+    expect(JSON.stringify(res.body ?? {})).not.toContain("seeded by the ws7 slice C")
+    expect(res.body?.ok).not.toBe(true)
+    expect(readNotifications().notifications.map((n) => n.id)).toContain(NOTIFICATION_ID)
+  })
+
+  it("POST action=clear refuses, and the stored notification is STILL ON DISK", async () => {
+    // The on-disk assertion is the one that matters. clearOld() DELETES rows, so
+    // "it answered 401" is not the finding — "nothing was deleted" is.
+    const before = readNotifications().notifications.length
+    const res = await call("POST", "/api/trading/notifications", { body: { action: "clear" } })
+    expect(res.status, `clear must refuse, got ${JSON.stringify(res.body)}`).toBe(401)
+    expect(res.body?.ok).not.toBe(true)
+    await settle()
+    expect(
+      readNotifications().notifications.map((n) => n.id),
+      "an anonymous clear must not delete the seeded notification"
+    ).toContain(NOTIFICATION_ID)
+    expect(readNotifications().notifications.length, "and must not delete anything at all").toBe(before)
+  })
+
+  it("POST read / read-all / inject all refuse, and inject writes nothing", async () => {
+    const before = readNotifications().notifications
+    for (const body of [
+      { action: "read", id: NOTIFICATION_ID },
+      { action: "read-all" },
+      { title: "injected by an anonymous caller", body: "should never persist", level: "critical" }
+    ]) {
+      const res = await call("POST", "/api/trading/notifications", { body })
+      expect(res.status, `action ${body.action ?? "inject"} must refuse`).toBe(401)
+      expect(res.body?.ok).not.toBe(true)
+    }
+    // The wait matters here more than anywhere else: the route does not `await`
+    // its store calls, so a write that was merely in flight would look identical
+    // to a write that was refused. See settle().
+    await settle()
+    const after = readNotifications().notifications
+    expect(
+      after.some((n) => n.read),
+      "an anonymous read / read-all must not mark the stored notification read"
+    ).toBe(false)
+    expect(
+      after.length,
+      "an anonymous inject must not add a notification — it writes arbitrary title/body/level/meta into the registry"
+    ).toBe(before.length)
+    expect(after.map((n) => n.title)).not.toContain("injected by an anonymous caller")
+  })
+
+  it("the two webhook actions that WERE gated stay gated", async () => {
+    // The conditional gate covered these, so they were never part of the defect.
+    // Pinned anyway: the fix MOVED the gate rather than widening it, and a move
+    // that dropped the two would be a regression nobody would otherwise notice.
+    for (const action of ["webhook-settings", "webhook-test"]) {
+      const res = await call("POST", "/api/trading/notifications", {
+        body: { action, settings: { url: "http://127.0.0.1:1/x" }, event: "autopilot.start" }
+      })
+      expect(res.status, `${action} must still refuse`).toBe(401)
+    }
+  })
+
+  it("CONTROL — an AUTHENTICATED caller really can write and really can clear", async () => {
+    // THE CONTROL, and without it every "refuses" test above is worth nothing: a
+    // route that 401s because it is broken, or a store that was never writable,
+    // produces the same green. The gate must ADMIT a real session, an
+    // authenticated write must really PERSIST, and clearOld() must ACTUALLY
+    // delete — so that "the notification is still on disk" is a statement about
+    // the gate and not about an inert store.
+    //
+    // IT USES inject/clear RATHER THAN THE GET, and that is a finding, not a
+    // convenience. The route's GET branch builds its body as
+    // `{ notifications: getNotifications(…), unread: unreadCount(), stats: notificationStats() }`
+    // with NO `await` on any of the three, and all three are `async function`, so
+    // the 200 body is `{"ok":true,"notifications":{},"unread":{},"stats":{},…}` —
+    // Promises serialised as `{}`. Probed directly against the real handler with
+    // a valid session: status 200, every one of those three fields `{}`. That is
+    // a PRE-EXISTING defect, the same class as the /api/metrics ReferenceError
+    // below, and it is NOT caused by the gate — the gate change is a line added
+    // above the dispatch's own import. It is recorded rather than fixed here,
+    // because fixing it is a separate change and silently bundling it would make
+    // this diff unreadable. Asserting visibility through the GET would have
+    // required fixing it first, so this control uses the two paths that do work.
+    writeJson(authDir, "sessions.json", {
+      sessions: { [TOKEN]: { userId: "u1", createdAt: 1, expiresAt: Date.now() + 3_600_000 } }
+    })
+    vi.resetModules()
+    const auth = { authorization: `Bearer ${TOKEN}` }
+
+    const injected = await call("POST", "/api/trading/notifications", {
+      body: { title: "written by an authenticated caller", body: "the control depends on this persisting" },
+      ...auth
+    })
+    expect(injected.status, `the gate must admit a real session: ${JSON.stringify(injected.body)}`).toBe(200)
+    expect(injected.body?.ok).toBe(true)
+    // The route does not `await` notify(), so the persist is in flight when the
+    // 200 is written. Wait for it, or the control below would prove nothing.
+    await settle()
+    expect(
+      readNotifications().notifications.map((n) => n.title),
+      "an AUTHENTICATED inject MUST persist — if this fails, every 'wrote nothing' assertion above is vacuous"
+    ).toContain("written by an authenticated caller")
+
+    const cleared = await call("POST", "/api/trading/notifications", { body: { action: "clear" }, ...auth })
+    expect(cleared.status, `authenticated clear must work: ${JSON.stringify(cleared.body)}`).toBe(200)
+    expect(cleared.body?.ok).toBe(true)
+    await settle()
+    expect(
+      readNotifications().notifications.map((n) => n.id),
+      "an AUTHENTICATED clear MUST remove the row — if this fails, the refusal tests above prove nothing"
+    ).not.toContain(NOTIFICATION_ID)
+  })
+
+  it("the seeded notification was really on disk, and really is clearable", async () => {
+    // The other half of the control, and the reason the seed uses `createdAt: 1`.
+    // The route's cutoff is `Number(body.olderThanMs) || 7 * 24 * 60 * 60 * 1000`
+    // and clearOld() keeps `createdAt >= cutoff`, so a row created "now" would
+    // SURVIVE a working clear — and "the row is still on disk" would then be
+    // true for a store where nothing was ever deletable. Asserting the seed is
+    // old enough closes that door.
+    expect(readNotifications().notifications.map((n) => n.id)).toContain(NOTIFICATION_ID)
+    const seeded = readNotifications().notifications.find((n) => n.id === NOTIFICATION_ID)
+    expect(seeded.createdAt, "the seed must predate the 7-day cutoff or clearOld would keep it").toBeLessThan(
+      Date.now() - 7 * 24 * 60 * 60 * 1000
+    )
+  })
+
+  it("the notification store really was redirected away from the live server/data", async () => {
+    // Stated rather than assumed, for the same reason the round-4 auth incident
+    // was serious: a test writing a real store through a misspelled variable.
+    expect(notifyDir.includes("server") && notifyDir.includes("data"), `${notifyDir} must not be the live store`).toBe(
+      false
+    )
+    expect(existsSync(notificationsFile()), "the seeded notification store must exist").toBe(true)
   })
 })
 
@@ -488,6 +679,30 @@ describe("WS-7 slice C — every declared-public route still answers an anonymou
             "broken and needs fixing; both mean this entry changes."
         ).not.toContain(res.status)
       }
+
+      // ── THE ABSOLUTE-PATH DISCLOSURE CHECK, IN THE SAME SWEEP ──
+      // A status assertion says a route is reachable. It says NOTHING about what
+      // the reachable route hands out, and the review of round 1 found a
+      // declared-public `decision` route returning
+      //   "dir": "C:\\Users\\sharv\\Downloads\\freelance\\PICC\\infra\\n8n\\workflows"
+      // — the OS user name and the home directory — to an anonymous caller, on
+      // /api/opportunities/workflows. It is the same class the repo already
+      // removed from /api/auth/status, whose handler comment records the rule: an
+      // absolute path served over HTTP is a fingerprint of the machine.
+      //
+      // Checking it HERE, on every allowlisted route, rather than in a one-off
+      // test for the one route found, is the point: the finding was made by hand
+      // on two routes, and there are 99 allowlisted routes and no reviewer. This
+      // is the rule that would have caught it the first time.
+      const body = JSON.stringify(res.body ?? {})
+      const leaks = [...new Set(body.match(/[A-Za-z]:\\\\[^"'\s]*|\\\\Users\\\\[^"'\s]*/g) ?? [])]
+      expect(
+        leaks,
+        `${method} ${path} answered an anonymous caller with an ABSOLUTE FILESYSTEM PATH: ${leaks.join(", ")}.` +
+          " That discloses the OS user name and the home directory to a caller with no session. Serve a" +
+          " repo-relative label or a basename instead — the field can stay, its value must not be the" +
+          " resolved path. See opportunities.mjs WORKFLOWS_DIR_LABEL and the /api/auth/status note."
+      ).toEqual([])
     }, SWEEP_TIMEOUT_MS)
   }
 })

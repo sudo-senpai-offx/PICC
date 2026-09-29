@@ -83,6 +83,26 @@ export const AGENT_CATALOG = [
 // ---------------------------------------------------------------------------
 const DEFAULT_WORKFLOWS_DIR = fileURLToPath(new URL("../../../../infra/n8n/workflows", import.meta.url))
 
+// WS-7 slice C fix round 1. `listWorkflows()` used to return `dir` — the RESOLVED
+// absolute path — in a body served by /api/opportunities/workflows, which is a
+// declared-public `decision` route. That answered an anonymous caller with
+//
+//     "dir": "C:\\Users\\sharv\\Downloads\\freelance\\PICC\\infra\\n8n\\workflows"
+//
+// which discloses the OS user name and the home directory. It is the same class
+// the repo already removed from /api/auth/status, where the comment above that
+// route records the reasoning: an absolute path served over HTTP is a
+// fingerprint of the machine and the person running it.
+//
+// The FIELD is kept rather than deleted so the response shape and the
+// `WorkflowsResult.dir: string` type in src/lib/api.ts do not change, and
+// nothing in the UI reads it (Opportunities.tsx uses `dirFound` only). The
+// VALUE is the repo-relative location, which is what the field is actually for —
+// telling a user where to put a template — and it is still true on every
+// platform. `dirFound` continues to report whether the directory was really
+// read, so the honest-degradation signal is untouched.
+const WORKFLOWS_DIR_LABEL = "infra/n8n/workflows"
+
 const WORKFLOW_NOTES = {
   "picc-bounty-monitor.json": { description: "AIGEN bounty board → skill filter → assignment alert.", triggers: ["schedule"] },
   "picc-content-pipeline.json": { description: "Faceless video pipeline via MoneyPrinter-style generator.", triggers: ["schedule"] },
@@ -153,7 +173,13 @@ export async function listWorkflows() {
       install: "n8n → Workflows → Import from File",
       embedded: true
     }))
-  return { ok: true, dir, dirFound, count: merged.length + embedded.length, workflows: [...merged, ...embedded] }
+  return {
+    ok: true,
+    dir: WORKFLOWS_DIR_LABEL,
+    dirFound,
+    count: merged.length + embedded.length,
+    workflows: [...merged, ...embedded]
+  }
 }
 
 // ---------------------------------------------------------------------------

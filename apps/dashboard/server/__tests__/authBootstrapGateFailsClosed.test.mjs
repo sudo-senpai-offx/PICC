@@ -111,6 +111,7 @@ const USER_ROW = {
 
 let dir
 let ewalletDir
+let journalDir
 const openSockets = []
 
 function makeReq(method, url, { headers = {}, body, socket } = {}) {
@@ -343,6 +344,24 @@ beforeEach(() => {
   // real trading-watchlist.json during review of this work.
   dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR", { prefix: "picc-bootstrap-gate" })
   ewalletDir = useIsolatedStoreDir("PICC_EWALLET_DATA_DIR", { prefix: "picc-bootstrap-wallet" })
+  // WS-7 slice C fix round 1. THE THIRD STORE THIS FILE REACHES, AND THE ONE THAT
+  // WAS MISSING. `REFUSES the journal WRITE` below posts {symbol:"EURUSD",
+  // side:"long"} at /api/trading/journal, and tradeJournal.mjs reads
+  // PICC_JOURNAL_DATA_DIR || join(__dirname,"..","data") — with only the auth and
+  // ewallet stores redirected, that post wrote into the REAL server/data.
+  //
+  // It happened, and it is the `tradeJournal.json` row the slice C report could
+  // not explain: `jrnl_1790593014521_cghs` is `jrnl_${Date.now()}_…` from
+  // tradeJournal.mjs:43, decoded to 2026-09-28 18:56:54 +0800 — 45 minutes
+  // BEFORE commit 3b0fcf6 gated the journal route, and 3 hours BEFORE
+  // PICC_JOURNAL_DATA_DIR was added to the isolation contract in 5e73012. The
+  // entry is a field-for-field match for this post, `entryPrice: null` included
+  // (Number(undefined) -> NaN -> null). A test cannot write to a store the
+  // contract does not redirect, and the file's own comment two lines up says
+  // "redirecting only one of them is the exact shape that put EURUSD into the
+  // real trading-watchlist.json during review of this work". It did it again
+  // here, to a different store, from the same shape.
+  journalDir = useIsolatedStoreDir("PICC_JOURNAL_DATA_DIR", { prefix: "picc-bootstrap-journal" })
   vi.stubEnv("PICC_AGENTS_URL", "http://agents.invalid")
   // Never let a test reach a real agents service: a sentinel answer, so the
   // assertion below can prove the proxy was NOT driven.
@@ -387,6 +406,7 @@ afterEach(() => {
   vi.resetModules()
   rmSync(dir, { recursive: true, force: true })
   rmSync(ewalletDir, { recursive: true, force: true })
+  rmSync(journalDir, { recursive: true, force: true })
 })
 
 describe("WS-7 AUTH-FAILOPEN — a user-store fault never satisfies the bootstrap bypass", { timeout: TIMEOUT }, () => {

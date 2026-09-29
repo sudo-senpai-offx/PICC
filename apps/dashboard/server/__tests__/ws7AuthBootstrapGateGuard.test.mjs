@@ -1203,7 +1203,20 @@ function connectorsSiteIsGated(lines, index) {
     // the new true value so the next drift is still caught. Recorded here rather
     // than in a task report because the pin's own stated purpose is that a number
     // written only in prose rots silently — this is the prose.
-    expect(lines, "lines in handlers.mjs").toBe(5952)
+    //
+    // 5,952 -> 5,973 in WS-7 slice C FIX ROUND 1, the same protocol: +21 lines, and
+    // every one of them is accounted for rather than absorbed. Eleven are the
+    // unconditional requireAuth() gate and its reasoning on /api/trading/notifications,
+    // which had a gate covering only 2 of its 6 actions. Ten are the `await` and
+    // its reasoning on constructWebhookEvent() in /api/stripe/webhook, where a
+    // missing `await` left the surrounding try/catch inert. Nothing else in
+    // handlers.mjs moved — which the two import figures above confirm rather than
+    // assert on trust: 73 static and 84 comment-stripped dynamic imports are
+    // UNCHANGED by this round, so the growth is gates and comments, not structure.
+    // (The raw dynamic count is 85 because a new comment contains the word
+    // "import"; that is exactly why the figure is measured on the comment-stripped
+    // view, and it is a small demonstration that the view is doing its job.)
+    expect(lines, "lines in handlers.mjs").toBe(5973)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
