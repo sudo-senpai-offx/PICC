@@ -223,7 +223,55 @@ function publicUser(u) {
   return { id: u.id, email: u.email, name: u.name ?? "", createdAt: u.createdAt }
 }
 
-async function listUsers() {
+/**
+ * THE declared reasons a caller may read users.json WITHOUT the strict rule.
+ *
+ * A lenient read cannot tell a genuine empty store from an unreadable or corrupt
+ * one, so it is only legitimate for a caller that makes no authorisation decision
+ * and discloses no account data. There is exactly one such caller in this file
+ * today, and it is a UI hint on an UNAUTHENTICATED route.
+ *
+ * This is a SET OF REASONS rather than a comment, and that is the whole design
+ * of the exception. A comment saying "this is fine, it is a hint" sits eleven
+ * lines from the next edit and is re-read by nobody; a lenient read has to name
+ * which declared reason it is invoking, so a second one is countable and adding
+ * one is a visible act rather than a silent copy of the first.
+ *
+ * Pinned by ws7AuthUsersReaderGuard, which fails on a second entry, on a stale
+ * entry, and on a caller that reaches the lenient read by any other name.
+ */
+const LENIENT_USERS_READ_PURPOSES = new Set([
+  "first-run signup hint for an unauthenticated UI hint; authorises nothing"
+])
+
+/**
+ * The declared reason, named.
+ *
+ * A bare string literal at the call site would be one more place to retype, and a
+ * typo there would surface as a thrown Error rather than as a failed review. A
+ * named binding has exactly one definition, and ws7AuthUsersReaderGuard checks
+ * that it is one of the declared entries.
+ */
+const LENIENT_USERS_READ_PURPOSES_HINT =
+  "first-run signup hint for an unauthenticated UI hint; authorises nothing"
+
+/**
+ * The ONE lenient reader of users.json, and it is opt-in by argument.
+ *
+ * `purpose` is REQUIRED and is checked against the declared set above, so this
+ * cannot be reached without stating why. An undeclared purpose throws rather than
+ * falling back to a lenient read: a caller that cannot say why it may be lenient
+ * is exactly the caller that may not be.
+ *
+ * It is a reader and never a writer. The class of harm it participates in is a
+ * corrupt store being reported as empty, and handing that answer to anything
+ * that persists a list is how the store gets normalised — the defect that
+ * destroyed every account in the file, scrypt password hashes included.
+ */
+async function readUsersLenient(purpose) {
+  if (!LENIENT_USERS_READ_PURPOSES.has(purpose)) {
+    throw new Error(`readUsersLenient refused: undeclared purpose ${JSON.stringify(purpose)}`)
+  }
   const data = await readJSON(USERS_FILE, { users: [] })
   return Array.isArray(data.users) ? data.users : []
 }
@@ -239,9 +287,24 @@ async function saveUsers(users) {
   return writeJSON(USERS_FILE, { users })
 }
 
-/** True once at least one local account exists (first-run hint for the UI). */
+/**
+ * True once at least one local account exists (first-run hint for the UI).
+ *
+ * The ONE caller of the lenient reader, and the only entry point on this module
+ * that answers a degraded read as a plain `false`. Its one caller is the
+ * first-run SIGNUP HINT on /api/auth/status: an unauthenticated route that
+ * discloses no account data and authorises nothing, where "probably no accounts"
+ * is the right answer and the alternative failure — hiding the signup form from
+ * a genuinely fresh install — is the one that locks an owner out of their own
+ * deployment.
+ *
+ * It is deliberately a separate name from resolveHasUsers() below rather than an
+ * option on it. "Is the store populated" and "may an unauthenticated caller
+ * through" are different questions with opposite failure directions, and the
+ * second one is the gate's.
+ */
 export async function hasUsers() {
-  return (await listUsers()).length > 0
+  return (await readUsersLenient(LENIENT_USERS_READ_PURPOSES_HINT)).length > 0
 }
 
 /**
@@ -352,43 +415,81 @@ export async function createAccount({ email, password, name }) {
     return { error: "Password must be at least 8 characters." }
   }
 
-  // STRICT, and the refusal happens BEFORE anything is written. The lenient read
-  // is what made this the worst defect in this task: a corrupt users.json is
-  // precisely what makes every authenticated route answer 503, so the owner cannot
-  // reach the UI to diagnose it — and the one endpoint still reachable is this
-  // one, which normalised the file and destroyed every account in it, scrypt
-  // password hashes included. A lost session is re-obtainable by logging in; a
-  // lost password hash is not.
-  let users
-  try {
-    users = await readUsersStrict()
-  } catch (err) {
-    if (isAuthStoreUnavailable(err)) return storeFault("user")
-    throw err
-  }
-  if (users.some((u) => u.email === em)) return { error: "An account with this email already exists." }
-
+  // The salt and the scrypt hash are computed BEFORE the lock is taken, and that
+  // ordering is the point rather than an accident.
+  //
+  // `hashPassword` is `scryptSync` at N=16384 — tens of milliseconds of BLOCKED
+  // event loop, on the main thread, for every signup. Computing it inside
+  // `withLock` would hold the users-file lock across all of it, so N concurrent
+  // signups would cost N × that serially instead of overlapping: the lock would
+  // turn a deliberately-slow KDF into a global signup-throughput ceiling, and the
+  // only defence against that would be to weaken the KDF.
+  //
+  // Nothing is read to produce them — a random salt and a hash of (password,
+  // salt) depend on neither the store nor on each other's ordering — so moving
+  // the KDF out of the critical section costs the invariant nothing. The row is
+  // not built here either: it is built inside the lock, from the list that lock's
+  // own read produced, so a row can never carry a snapshot that is already stale.
   const id = randomBytes(12).toString("hex")
   const salt = randomBytes(16).toString("hex")
-  users.push({
-    id,
-    email: em,
-    name: String(name ?? "").trim().slice(0, 80),
-    salt,
-    passwordHash: hashPassword(password, salt),
-    createdAt: new Date().toISOString()
+  const passwordHash = hashPassword(password, salt)
+  const displayName = String(name ?? "").trim().slice(0, 80)
+  const createdAt = new Date().toISOString()
+
+  // READ, DECIDE and WRITE INSIDE ONE LOCK. This is the whole defect.
+  //
+  // The previous shape read users.json outside `withLock` and wrote the resulting
+  // list back inside it, so two signups that overlapped both loaded the SAME
+  // snapshot, each appended to its own copy, and the second writer's whole-file
+  // overwrite destroyed the first account — salt and scrypt password hash
+  // included. Measured on this file, six concurrent signups produced six live
+  // tokens and ONE account on disk; five of the six users were told they had
+  // signed up and could not log in, and a password hash is not re-obtainable the
+  // way a lost session is.
+  //
+  // The window was not narrow either. The read was separated from the locked
+  // write by `scryptSync`, so every signup starting in the same tick had already
+  // issued its read before any of them could finish hashing — a stale snapshot
+  // was the NORMAL case, not a race that needed bad luck.
+  //
+  // It is also the same read-modify-write rule the sessions store already follows
+  // in createSession(), so this is one invariant rather than two.
+  //
+  // The duplicate check moves inside for the same reason: outside the lock, two
+  // concurrent signups for one address both see an empty list, both pass the
+  // check, and both are answered 200 with a live token for the same email.
+  const outcome = await withLock(USERS_FILE, async () => {
+    // STRICT, and the refusal happens BEFORE anything is written. The lenient read
+    // is what made this the worst defect in this task: a corrupt users.json is
+    // precisely what makes every authenticated route answer 503, so the owner cannot
+    // reach the UI to diagnose it — and the one endpoint still reachable is this
+    // one, which normalised the file and destroyed every account in it, scrypt
+    // password hashes included.
+    let users
+    try {
+      users = await readUsersStrict()
+    } catch (err) {
+      if (isAuthStoreUnavailable(err)) return { store: "user" }
+      throw err
+    }
+    if (users.some((u) => u.email === em)) return { duplicate: true }
+    const row = { id, email: em, name: displayName, salt, passwordHash, createdAt }
+    users.push(row)
+    // The write result is CHECKED. A refused write leaves the store exactly as it
+    // was, so the honest answer is a store fault — not a token for an account that
+    // does not exist on disk.
+    const written = await saveUsers(users)
+    if (!written) return { store: "user" }
+    return { row }
   })
-  // The write result is CHECKED. A refused write leaves the store exactly as it
-  // was, so the honest answer is a store fault — not a token for an account that
-  // does not exist on disk.
-  const written = await withLock(USERS_FILE, () => saveUsers(users))
-  if (!written) return storeFault("user")
+  if (outcome.duplicate) return { error: "An account with this email already exists." }
+  if (!outcome.row) return storeFault(outcome.store)
 
   const token = await createSession(id)
   // The account now exists and is usable; only the session could not be issued.
   // That is still a store fault, and it is not the same thing as a rejected signup.
   if (!token) return storeFault("session")
-  return { user: publicUser(users[users.length - 1]), token }
+  return { user: publicUser(outcome.row), token }
 }
 
 export async function loginAccount({ email, password }) {
@@ -634,16 +735,21 @@ export async function revokeToken(token) {
   })
 }
 
-export async function getUserById(id) {
-  if (!id) return null
-  const users = await listUsers()
-  const user = users.find((u) => u.id === id)
-  return user ? publicUser(user) : null
-}
-
 /**
  * Validate a `Bearer <token>` header against the local session store and
  * return the authenticated user id (or null). Replaces the Supabase verifier.
+ *
+ * NOTE ON THE REMOVED `getUserById(id)`. It was exported from this module and
+ * called from NOWHERE in the repository — no route, no service, no test — and it
+ * read users.json through the lenient reader, so a corrupt store answered "no
+ * such user" instead of reporting a fault. That is the ungated, undisclosed
+ * reader this slice removes. Deleting it rather than re-pointing it at
+ * readUsersStrict() is deliberate: a strict reader raises where a lenient one
+ * returned null, so "fixing" an export with no caller would have changed a
+ * contract nobody holds, and the obvious future caller — resolve a user's own
+ * profile from an id out of a query string — is exactly the one that must go
+ * through resolveAuthUser() so the session is checked. Pinned by
+ * ws7AuthUsersReaderGuard.
  */
 export async function verifyUser(authorizationHeader) {
   if (!authorizationHeader?.startsWith("Bearer ")) return null
