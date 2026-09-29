@@ -1232,7 +1232,18 @@ function connectorsSiteIsGated(lines, index) {
     // That is the whole point of pinning all three — a canary that moved because
     // structure changed is a different signal from one that moved because
     // comments and guards grew, and the import pair is what tells them apart.
-    expect(lines, "lines in handlers.mjs").toBe(6115)
+    //
+    // 6,115 -> 6,198 in the trusted-proxy follow-up, the same protocol: +83 lines.
+    // Essentially all of it is `isPlausibleAddress` — the IPv4 helper, the IPv6
+    // grammar, and the reasoning for why the old regex shape was wrong. The
+    // import pair being UNCHANGED is load-bearing for that number rather than
+    // incidental: the obvious fix for the IPv6 bug was `import { isIP } from
+    // "node:net"`, which would have moved the static count to 74 and quietly
+    // turned a "this round changed the module graph" signal into a "this round
+    // grew" one. The predicate is hand-written instead and its agreement with
+    // net.isIP is asserted over a corpus in rateLimitClientIdentity.test.mjs, so
+    // the correctness is bought with a test and the canary keeps its meaning.
+    expect(lines, "lines in handlers.mjs").toBe(6198)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

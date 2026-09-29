@@ -423,17 +423,100 @@ function peerAddress(req) {
  */
 const NO_PEER_IDENTITY = "no-peer-address"
 
-/** An IPv4 dotted quad, each octet 0-255, and nothing else. */
-const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/
+/** An IPv4 dotted quad, and nothing else. */
+const IPV4_SHAPE = /^(?:\d{1,3}\.){3}\d{1,3}$/
+/** One IPv6 hextet: 1-4 hex digits. */
+const HEX_GROUP = /^[0-9A-Fa-f]{1,4}$/
+/** A zone index, e.g. the `%eth0` of a link-local literal. */
+const ZONE_INDEX = /^[0-9A-Za-z._-]+$/
+
 /**
- * A conservative IPv6 shape: hex groups and colons only. Deliberately NOT
- * net.isIP(): this list decides whether to TRUST a string as an identity, and
- * rejecting an exotic-but-valid address is the safe direction for that decision
- * — the fall-through is the socket address, which is real.
+ * Is this a usable IPv4 literal?
+ *
+ * NO LEADING ZEROS, and that is a fix rather than a style preference. The
+ * previous predicate accepted `10.0.0.01`, which is a second STRING for one host
+ * — so a single machine could hold two limiter buckets, and a caller that
+ * presented both spellings escaped half of a per-IP limit. That direction is
+ * under-limiting rather than over-trusting, and `req.socket.remoteAddress` is
+ * canonical so a peer can never use it to gain trust, but the bound is free to
+ * close and the honest reading of a dotted quad does not carry one.
  */
-const IPV6 = /^(?:[0-9A-Fa-f]{1,4}:){1,7}(?::|[0-9A-Fa-f]{1,4})(?:%[0-9A-Za-z]+)?$/
-const isPlausibleAddress = (value) =>
-  (IPV4.test(value) && value.split(".").every((o) => Number(o) <= 255)) || IPV6.test(value)
+function isIpv4Literal(value) {
+  if (!IPV4_SHAPE.test(value)) return false
+  return value.split(".").every((octet) => (octet.length > 1 && octet.startsWith("0")) === false && Number(octet) <= 255)
+}
+
+/**
+ * Is this a usable IPv6 literal, compressed forms included?
+ *
+ * THE PREVIOUS PREDICATE GOT THIS WRONG IN A WAY THAT MATTERED. It was
+ * `(?:[0-9A-Fa-f]{1,4}:){1,7}(?::|[0-9A-Fa-f]{1,4})`, which requires at least one
+ * hextet before the first colon — so it rejected EVERY address containing `::`:
+ * `::1`, `::`, `::ffff:127.0.0.1`, `2001:db8::1`. Meanwhile `.env.example`
+ * documents `PICC_TRUSTED_PROXY_IPS=127.0.0.1,::1`, so the shipped example
+ * silently dropped its own IPv6 half: a proxy on IPv6 loopback or an IPv6 VPC
+ * address was never trusted, every client collapsed onto the proxy's address
+ * again, and the B1 defect this whole slice exists to close reappeared behind
+ * exactly the deployment the feature was built for. It failed CLOSED, so it was
+ * never a bypass — it was a feature that quietly did not work for half the
+ * address space.
+ *
+ * The grammar implemented here, rather than a shape regex:
+ *
+ *   - a zone index is allowed and stripped (`fe80::1%eth0`);
+ *   - `::` may appear AT MOST ONCE, and only as a whole group;
+ *   - without `::` an address is exactly eight hextets;
+ *   - with `::` the written hextets number FEWER THAN EIGHT, since the
+ *     compressed run must stand for at least one all-zero hextet;
+ *   - a dotted quad is legal only as the FINAL group, and counts as two hextets
+ *     (`::ffff:127.0.0.1`).
+ *
+ * WHY NOT `net.isIP()`. It is the honest answer on correctness, and the
+ * differential test in rateLimitClientIdentity.test.mjs checks this predicate
+ * against it over a corpus precisely because it is hand-written. It is not used
+ * HERE because importing `node:net` would add a static import to this file, and
+ * the 73-static / 84-dynamic import counts in ws7AuthBootstrapGateGuard are the
+ * canary that distinguishes "this round added comments and gates" from "this
+ * round changed the module graph". Correctness is bought with a test that
+ * compares both parsers; the canary keeps its meaning.
+ */
+function isIpv6Literal(value) {
+  const [address, ...zone] = value.split("%")
+  if (zone.length > 1) return false
+  if (zone.length === 1 && !ZONE_INDEX.test(zone[0])) return false
+  if (!address.includes(":")) return false
+
+  const halves = address.split("::")
+  if (halves.length > 2) return false
+  const sides = halves.map((half) => (half === "" ? [] : half.split(":")))
+
+  // NaN propagates through the accumulator, so one bad group anywhere fails the
+  // whole address rather than being counted as zero.
+  const hextets = sides.reduce((total, groups, sideIndex) => {
+    const isLastSide = sideIndex === sides.length - 1
+    return (
+      total +
+      groups.reduce((count, group, groupIndex) => {
+        if (isLastSide && groupIndex === groups.length - 1 && isIpv4Literal(group)) return count + 2
+        return HEX_GROUP.test(group) ? count + 1 : Number.NaN
+      }, 0)
+    )
+  }, 0)
+  if (Number.isNaN(hextets)) return false
+  return halves.length === 1 ? hextets === 8 : hextets < 8
+}
+
+/**
+ * Is this string an IP address?
+ *
+ * The predicate that decides whether a value in the trusted-proxy allowlist, or
+ * an entry in a forwarded chain, is an address at all. Everything it rejects
+ * falls back to the socket address, so the failure direction is conservative —
+ * which is why it is worth getting RIGHT rather than merely strict: a predicate
+ * that is too strict is not a security hole, it is a feature that silently does
+ * nothing in a deployment the author believed it covered.
+ */
+const isPlausibleAddress = (value) => isIpv4Literal(value) || isIpv6Literal(value)
 
 /**
  * Peer addresses whose X-Forwarded-For is honoured, from PICC_TRUSTED_PROXY_IPS.

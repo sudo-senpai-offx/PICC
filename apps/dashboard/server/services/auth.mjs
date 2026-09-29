@@ -19,6 +19,23 @@ try {
 }
 
 // ── Write lock per file — prevents concurrent JSON writes from clobbering data
+//
+// PROCESS-SCOPED, and that is a real limit rather than a detail. This is an
+// in-memory `Map`, so it serialises concurrent writers inside ONE Node process
+// and nothing else. A second Node process pointed at the same PICC_AUTH_DATA_DIR
+// has its own Map, its own idea of who holds the lock, and its own read-modify-
+// write window — so the concurrent-signup race this lock exists to prevent
+// (createAccount losing an account, password hash included) returns in full
+// across two processes, and equally across two replicas sharing a data volume.
+//
+// PICC is a local, single-owner deployment: one `node server/index.mjs`, one
+// auth store, and a data directory nothing else writes. That is the assumption
+// this lock rests on and it is currently satisfied. If that ever stops being
+// true — a second server process, a container replica, a sidecar — the correct
+// fix is a lock the OPERATING SYSTEM arbitrates (an O_EXCL lockfile, or flock)
+// rather than a Map, and this comment is the note that says so. Do not read the
+// concurrency tests in this repository as covering the two-process case; they
+// cannot, and they do not claim to.
 const locks = new Map()
 async function withLock(file, fn) {
   while (locks.get(file)) await locks.get(file)
@@ -415,21 +432,33 @@ export async function createAccount({ email, password, name }) {
     return { error: "Password must be at least 8 characters." }
   }
 
-  // The salt and the scrypt hash are computed BEFORE the lock is taken, and that
-  // ordering is the point rather than an accident.
+  // The salt and the scrypt hash are computed BEFORE the lock is taken.
   //
-  // `hashPassword` is `scryptSync` at N=16384 — tens of milliseconds of BLOCKED
-  // event loop, on the main thread, for every signup. Computing it inside
-  // `withLock` would hold the users-file lock across all of it, so N concurrent
-  // signups would cost N × that serially instead of overlapping: the lock would
-  // turn a deliberately-slow KDF into a global signup-throughput ceiling, and the
-  // only defence against that would be to weaken the KDF.
+  // WHY, MEASURED RATHER THAN ASSERTED. `hashPassword` is `scryptSync` at
+  // N=16384, which BLOCKS the event loop, so there is no overlap between
+  // concurrent signups to preserve by moving it. On this machine, 40 sequential
+  // `scryptSync` calls take 1517 ms and 40 `createAccount` calls take 1955 ms: the
+  // KDF is ~78% of the total, so the wall-clock cost of a signup is the SAME
+  // whether the KDF runs inside or outside the lock. A previous version of this
+  // comment claimed the lock would "cost N × that serially instead of
+  // overlapping" — which is false, and false in the direction that matters,
+  // because it invites a future reader to move the KDF back inside the lock to
+  // "restore the overlap", making the critical section longer for no gain.
   //
-  // Nothing is read to produce them — a random salt and a hash of (password,
-  // salt) depend on neither the store nor on each other's ordering — so moving
-  // the KDF out of the critical section costs the invariant nothing. The row is
-  // not built here either: it is built inside the lock, from the list that lock's
-  // own read produced, so a row can never carry a snapshot that is already stale.
+  // So the placement rests on the two things that ARE true, and neither is about
+  // timing:
+  //
+  //   1. THE CRITICAL SECTION IS SHORT. Inside the lock there is a read, an array
+  //      `some`, a `push` and a write — all of it async I/O except two
+  //      microseconds of array work. Nothing that can be deferred is in there.
+  //   2. THERE IS NO TOCTOU. The salt and the hash depend on `randomBytes` and on
+  //      (password, salt) alone. Neither reads the store, so neither can be
+  //      invalidated by a concurrent writer between the hash and the write.
+  //
+  // The row is NOT built here either, and that is the part that is load-bearing
+  // for correctness: it is constructed INSIDE the lock, from the list that the
+  // lock's own read produced, so a row can never carry a snapshot that was
+  // already stale when it was written.
   const id = randomBytes(12).toString("hex")
   const salt = randomBytes(16).toString("hex")
   const passwordHash = hashPassword(password, salt)
@@ -486,8 +515,23 @@ export async function createAccount({ email, password, name }) {
   if (!outcome.row) return storeFault(outcome.store)
 
   const token = await createSession(id)
-  // The account now exists and is usable; only the session could not be issued.
-  // That is still a store fault, and it is not the same thing as a rejected signup.
+  // THE ACCOUNT SURVIVED. If the session could not be issued, the account is
+  // complete and usable on disk — its salt and scrypt hash are persisted, and
+  // `loginAccount` with the same email and password WILL authenticate it. Nothing
+  // is lost and nothing is corrupt; the only thing missing is the bearer token the
+  // caller was about to receive. That is still a store fault rather than a
+  // rejected signup, because 503 is the honest status when the server could not
+  // do what was asked, and a 400 would be a claim about the request that is not
+  // true.
+  //
+  // THE DELIBERATE CONSEQUENCE FOR THE CALLER: retrying the SIGNUP is the wrong
+  // move, because the account now exists and the retry is correctly answered
+  // "An account with this email already exists." The right client copy is "your
+  // account was created — try signing in", and the right client action is to call
+  // the login route. Rolling the account back to make the retry work would be a
+  // second whole-file write to the same store, with its own failure mode, to
+  // paper over a case that is already fail-closed. The residual is accepted and
+  // recorded rather than half-built around.
   if (!token) return storeFault("session")
   return { user: publicUser(outcome.row), token }
 }

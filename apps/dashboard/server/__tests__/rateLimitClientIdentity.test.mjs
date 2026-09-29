@@ -35,10 +35,46 @@
 // told; the limiter gets the resolved identity. That split is asserted below
 // ("a forwarded loopback address is not a localhost request"), because it is the
 // most damaging way this change could have been written.
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+//
+// WHAT NO TEST HERE CAN PROVE, stated up front so nobody reads the passing suite
+// as more than it is. A proxy that forwards the CLIENT'S OWN X-Forwarded-For,
+// rather than overwriting it or appending to it, is a universal per-IP bypass and
+// this code cannot detect it. With `PICC_TRUSTED_PROXY_IPS=10.0.0.1` and peer
+// 10.0.0.1, a header of `1.0.0.1, 10.0.0.1` resolves to 1.0.0.1 and
+// `2.0.0.1, 10.0.0.1` resolves to 2.0.0.1 — a caller appending a
+// trusted-looking entry to its own address gets a fresh limiter identity per
+// request. The walk is bounded by allowlist membership and the left-hand entries
+// are the client's to write, so a CORRECT chain and a PADDED forgery are
+// indistinguishable here by construction. It is the nginx
+// `proxy_set_header X-Forwarded-For $http_x_forwarded_for;` misconfiguration, and
+// the only thing that prevents it is the deployment contract documented in
+// .env.example. The test below pins that the server half is right; the proxy half
+// is an operator obligation, and this file is not evidence of it.
+import { readFileSync } from "node:fs"
+import { isIP } from "node:net"
+import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
+// WS-7 slice A: the store is redirected through the SHARED CONTRACT rather than
+// by hand. The previous version of this file hand-assigned the PICC_DATA_DIR
+// variable in its own beforeEach, which ws7TestStoreIsolation flags (DETECTOR
+// 2) for good reason: a hand-rolled redirect is a redirect nothing accounts for,
+// so a misspelling or a real-store value in one is silent. The helper mints the
+// directory, asserts it is not the real server/data, and REFUSES a name the
+// contract does not know.
+//
+// The wording above is deliberately not the assignment itself. DETECTOR 2 scans
+// raw source and does not strip comments, so writing the old expression out here
+// to explain it would make this file a finding again — the same
+// comment-vs-code trap ws7AuthBootstrapGateGuard documents at length.
+//
+// Minted ONCE at module scope, before any handler import, and the harness empties
+// helper-minted directories between tests — so each case still starts with an
+// empty store without this file owning a teardown. The return value is not bound:
+// the harness re-points PICC_DATA_DIR itself, and a local name for it here would
+// only suggest this file manages the store, which is exactly the thing it must
+// not do.
+useIsolatedStoreDir("PICC_DATA_DIR", { prefix: "picc-ratelimit-identity" })
 
 const PROXY_ENV = "PICC_TRUSTED_PROXY_IPS"
 
@@ -104,22 +140,21 @@ async function burst(handleApi, method, path, opts, n) {
 const from = (ip) => ({ remoteAddress: ip })
 const viaProxy = (peer, forwarded) => ({ remoteAddress: peer, headers: { "x-forwarded-for": forwarded } })
 
-let dir
 let handleApi
 
+// Re-import handlers.mjs per test, and delete the proxy variable rather than
+// setting it: the rate-limit bucket map is module-scope state, so a fresh module
+// graph is what gives each case an empty one. PICC_DATA_DIR is NOT touched here —
+// the harness owns it, and the helper's directory is emptied between tests.
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), "picc-ratelimit-identity-"))
-  process.env.PICC_DATA_DIR = dir
   delete process.env[PROXY_ENV]
   vi.resetModules()
   handleApi = (await import("../handlers.mjs")).handleApi
 })
 
 afterEach(() => {
-  delete process.env.PICC_DATA_DIR
   delete process.env[PROXY_ENV]
   vi.resetModules()
-  rmSync(dir, { recursive: true, force: true })
 })
 
 describe("WS-7 slice C — the four bare limiter keys are per-CLIENT, not per-process", () => {
@@ -356,5 +391,193 @@ describe("WS-7 slice C — X-Forwarded-For is honoured ONLY from a configured tr
       (await call(handleApi, "GET", PACKS, noPeer("198.51.100.51"))).status,
       "a request with no peer address must not be able to select its own limiter bucket with a header"
     ).toBe(429)
+  })
+})
+
+/**
+ * THE SHIPPED DOCUMENTATION IS PART OF THE INTERFACE.
+ *
+ * `.env.example` is the only place an operator learns how to configure this, and
+ * it is the file they copy from. So a predicate that silently rejects half of the
+ * value its own example ships is a defect with a distribution channel: the
+ * operator sets what the docs say, the entry is dropped without a word, and per-IP
+ * limits stay merged behind their proxy — which is the B1 defect, in the one
+ * deployment the feature exists to fix.
+ *
+ * That is exactly what happened. `isPlausibleAddress`'s old IPv6 shape required
+ * at least one hextet before the first colon, so every `::`-containing address
+ * was rejected while `.env.example` documented
+ * `PICC_TRUSTED_PROXY_IPS=127.0.0.1,::1`. The example's own IPv6 half was a
+ * silent no-op. Both tests below are the ones that would have caught it.
+ */
+describe("WS-7 slice C — the allowlist predicate agrees with the platform and with .env.example", () => {
+  /**
+   * The predicate, lifted out of handlers.mjs as SOURCE and evaluated here.
+   *
+   * Reading it as text rather than importing it, because handlers.mjs exports no
+   * address predicate and adding an export to reach a test would widen a
+   * production surface for test convenience. The slice is delimited by the two
+   * docstring anchors that bracket it, and the differential test below is what
+   * makes the extraction trustworthy: it compares the extracted source against
+   * `net.isIP` over a corpus, so a bad slice shows up as a corpus of false
+   * negatives rather than as a silently passing test.
+   */
+  const HANDLERS = fileURLToPath(new URL("../handlers.mjs", import.meta.url))
+  const ENV_EXAMPLE = fileURLToPath(new URL("../../.env.example", import.meta.url))
+  const SRC = readFileSync(HANDLERS, "utf8")
+
+  // Delimited by a PHRASE rather than by a whole line, deliberately. The
+  // predicate's own docstring is expected to change when the predicate changes,
+  // and an anchor pinned to its exact wording would make this test fail on
+  // reworded prose rather than on wrong behaviour — the trap
+  // ws7AuthBootstrapGateGuard documents. "An IPv4 dotted quad" is the phrase both
+  // the previous and the current implementations open with, so a slice taken
+  // against the old source compiles the OLD predicate and the assertions below
+  // fail for the reason they were written. That is what makes the red half of
+  // this file real rather than reconstructed.
+  const SLICE_START_PHRASE = "An IPv4 dotted quad"
+  const SLICE_END = "/**\n * Peer addresses whose X-Forwarded-For is honoured"
+
+  /** The predicate under test, compiled from handlers.mjs's own text. */
+  const predicateUnderTest = () => {
+    const phrase = SRC.indexOf(SLICE_START_PHRASE)
+    const end = SRC.indexOf(SLICE_END)
+    expect(phrase, "the address predicate's opening phrase must still exist in handlers.mjs").not.toBe(-1)
+    expect(end, "the address predicate's closing anchor must still exist in handlers.mjs").not.toBe(-1)
+    expect(end, "the anchors must bracket the predicate, in order").toBeGreaterThan(phrase)
+    // Walk back to the start of the docstring so the slice is the whole
+    // declaration, comments and all — a half-slice would silently drop a
+    // constant the predicate needs and fail as a ReferenceError instead.
+    const start = SRC.lastIndexOf("/**", phrase)
+    expect(start, "the predicate's opening docstring must precede its phrase").not.toBe(-1)
+    // eslint-disable-next-line no-new-func
+    return new Function(`${SRC.slice(start, end)}\nreturn isPlausibleAddress;`)()
+  }
+
+  it.each([
+    ["IPv4 loopback", "127.0.0.1", true],
+    ["IPv6 loopback", "::1", true],
+    ["an IPv4-mapped IPv6 address", "::ffff:127.0.0.1", true],
+    ["a compressed IPv6 address", "2001:db8::1", true],
+    ["the unspecified IPv6 address", "::", true],
+    ["a zone-scoped link-local address", "fe80::1%eth0", true],
+    ["a full eight-hextet IPv6 address", "2001:db8:0:0:0:0:0:1", true],
+    ["a trailing-compressed address", "1:2:3:4:5:6:7::", true],
+    ["a leading-compressed address", "::1:2:3:4:5:6:7", true],
+    ["a dotted quad as the final hextet pair", "::ffff:1.2.3.4", true],
+    ["an octet above 255", "256.1.1.1", false],
+    ["an octet with a leading zero", "10.0.0.01", false],
+    ["a hostname", "localhost", false],
+    ["free text", "not-an-ip", false],
+    ["an address with a port", "198.51.100.7:port", false],
+    ["whitespace", "   ", false],
+    ["the empty string", "", false],
+    ["seven hextets with no compression", "1:2:3:4:5:6:7", false],
+    ["nine hextets", "1:2:3:4:5:6:7:8:9", false],
+    ["two compressed runs", "1::2::3", false]
+  ])("%s is %s", (_label, value, expected) => {
+    // The differential half. Every row below agrees with `net.isIP` on this
+    // runtime — asserted separately — so what is being tested here is the
+    // PREDICATE, not the platform's opinion.
+    expect(
+      predicateUnderTest()(value),
+      `isPlausibleAddress(${JSON.stringify(value)}) must be ${expected}. A wrong answer here drops ` +
+        "a legitimate proxy from the allowlist with no diagnostic, which silently re-creates the " +
+        "server-wide bucket this slice removed."
+    ).toBe(expected)
+  })
+
+  it("agrees with net.isIP on the whole corpus, so the table above is a sample and not the claim", () => {
+    const CORPUS = [
+      "127.0.0.1",
+      "::1",
+      "::ffff:127.0.0.1",
+      "2001:db8::1",
+      "10.0.0.01",
+      "10.0.0.1",
+      "::",
+      "fe80::1%eth0",
+      "0.0.0.0",
+      "255.255.255.255",
+      "256.1.1.1",
+      "2001:db8:0:0:0:0:0:1",
+      "2001:db8:0:0:0:0:2:1",
+      "1:2:3:4:5:6:7:8",
+      "1:2:3:4:5:6:7",
+      "1:2:3:4:5:6:7:8:9",
+      "1::2::3",
+      "::ffff:0:0",
+      "1.2.3.4.5",
+      "not-an-ip",
+      "999.999.999.999",
+      "198.51.100.7:port",
+      "   ",
+      "",
+      "localhost",
+      "1.0.0.1, 10.0.0.1",
+      "01.2.3.4",
+      "1.2.3.04",
+      "0.0.0.00",
+      "::1%",
+      "::1%bad zone",
+      "1:2:3:4:5:6:1.2.3.4",
+      "1:2:3:4:5:6:7:1.2.3.4",
+      "::1.2.3.4",
+      "fe80::1%25eth0",
+      "1:2:3:4:5:6:7::",
+      "::1:2:3:4:5:6:7"
+    ]
+    const mismatches = CORPUS.filter((value) => predicateUnderTest()(value) !== (isIP(value) !== 0))
+    expect(
+      mismatches,
+      "the hand-written predicate in handlers.mjs must agree with net.isIP on every corpus entry. It is " +
+        "hand-written rather than imported so this file keeps its 73 static imports — correctness is bought " +
+        "with this comparison, so a disagreement is a defect, not a platform quirk."
+    ).toEqual([])
+  })
+
+  it("EVERY entry of the .env.example allowlist example is honoured as written", () => {
+    // The assertion that would have caught the compressed-IPv6 bug, and it is
+    // written against the DOCUMENT rather than a literal: if the example changes,
+    // this follows it, which is the point — the failure mode being guarded is
+    // documentation and code disagreeing.
+    const example = readFileSync(ENV_EXAMPLE, "utf8")
+    const line = example.split("\n").find((l) => /^#\s*PICC_TRUSTED_PROXY_IPS=/.test(l))
+    expect(line, ".env.example must still document PICC_TRUSTED_PROXY_IPS, or this test is vacuous").toBeDefined()
+
+    const value = line.replace(/^#\s*PICC_TRUSTED_PROXY_IPS=/, "").trim()
+    const entries = value.split(",").map((e) => e.trim()).filter(Boolean)
+    expect(entries.length, "the example must still carry more than one entry, or it proves nothing").toBeGreaterThan(1)
+
+    const rejected = entries.filter((entry) => !predicateUnderTest()(entry))
+    expect(
+      rejected,
+      `the .env.example allowlist example ${JSON.stringify(value)} contains entries the predicate ` +
+        "REJECTS. An operator who copies this value gets those proxies silently dropped, every client " +
+        "collapses onto the proxy address, and the per-IP limits this slice added stay server-wide — a " +
+        "failure with no diagnostic, in the exact deployment the setting exists for."
+    ).toEqual([])
+
+    // And the corpus the two forms above would break on, so a future narrowing of
+    // the predicate cannot pass by only re-testing loopback.
+    expect(
+      entries.some((e) => e.includes(":")),
+      "the example should include an IPv6 entry, which is the form the old predicate rejected"
+    ).toBe(true)
+  })
+
+  it("the deployment contract .env.example carries names the forwarding requirement", () => {
+    const example = readFileSync(ENV_EXAMPLE, "utf8")
+    const section = example.slice(
+      example.indexOf("# --- Trusted reverse proxies"),
+      example.indexOf("# --- Error logging")
+    )
+    expect(section, "the .env.example trusted-proxy section must exist").not.toBe("")
+    // The words that carry the contract, checked as separate assertions because
+    // each is a claim a reader could otherwise miss: MUST for the requirement,
+    // and a named failure for the consequence.
+    expect(section, "the contract must require the proxy to set the header itself").toMatch(/MUST/i)
+    expect(section, "the contract must forbid forwarding the client's own copy").toMatch(/not\s+forward|NEVER|do not/i)
+    expect(section, "the contract must name the bypass consequence").toMatch(/bypass/i)
   })
 })
