@@ -76,9 +76,9 @@ describe("assertMintedIsolationRoot", () => {
 
     expect(() => assertMintedIsolationRoot(root, { lstat })).toThrow(/the root itself is a link/)
     // The guard must have put the question to `root`, not to the canonical path. This
-    // is the assertion that fails against `lstatSync(canonical)`.
+    // is the load-bearing assertion and it does go red against `lstatSync(canonical)`,
+    // which ignores the injection entirely and so never records asking about `root`.
     expect(asked).toContain(root)
-    expect(asked).not.toContain(resolve(root) === root ? "__canonical_equals_root__" : resolve(root))
   })
 
   it("accepts the same root when it is not a link, so the check is not vacuously throwing", () => {

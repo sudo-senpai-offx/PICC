@@ -5,6 +5,26 @@ import { cpus } from "node:os"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import isolatedEnv, { assertIsolatedEnv, ISOLATION_TMP_ROOT } from "./helpers/isolatedEnv.mjs"
+// Fix round 3: the aggregation is extracted so it can be unit-tested — `vite.config.ts`
+// excludes `**/e2e/**` from vitest, which is why round 2's central fix shipped with no
+// gate. See e2e/helpers/transitionEvidence.mjs and
+// server/__tests__/transitionEvidenceAggregation.test.mjs. Only the pure transforms
+// live there; the Playwright plumbing stays below.
+import {
+  classify,
+  degradation,
+  endpointReport,
+  isFailed,
+  isRateLimited,
+  latencyMs,
+  openAtCloseByPanel,
+  ownedCalls,
+  panelReport,
+  panelsAcrossLoop,
+  reconcile,
+  recordClickFailure,
+  stats
+} from "./helpers/transitionEvidence.mjs"
 
 assertIsolatedEnv(isolatedEnv, ISOLATION_TMP_ROOT)
 
@@ -50,11 +70,10 @@ const THROTTLE_RATES = [1, 4, 6]
 
 type Sample = { rate: number; p50: number; p95: number; samples: number }
 
-function stats(values: number[]) {
-  const sorted = [...values].sort((a, b) => a - b)
-  const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]
-  return { p50: at(0.5), p95: at(0.95) }
-}
+// `stats()` now lives in e2e/helpers/transitionEvidence.mjs and is imported below, so
+// the spec's own comment that it "is the single source for the percentiles" is true
+// again: the instrumentation's percentile and the budget's percentile are one
+// function. Round 3 Minor 5.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WS-7 slice B fix round 1 — TRANSITION-LOOP INSTRUMENTATION.
@@ -162,81 +181,48 @@ type Iteration = {
   marketsClickAt: number | null
   marketsMarkerMs: number | null
   completed: boolean
-  /** Requests still open when the window closed. Filled in by endIteration(). */
-  openAtClose: number | null
-}
-
-type PanelReport = {
-  panel: string
-  endpoints: string[]
-  requests: number
-  responses: number
-  failures: number
   /**
-   * Requests issued in the window that were STILL OPEN when the window closed — the
-   * request the room was waiting on. Measured at `endIteration`, not at snapshot time:
-   * on the manifest path the snapshot is taken ~2.5 min later, so a request in flight
-   * at the abort has long since closed and a snapshot-time count structurally cannot
-   * see the one case this exists for. `openAtSnapshot` is kept separately, because on
-   * the `afterEach` path the two coincide and it is a useful second reading.
+   * Requests still open when the window closed, PER PANEL. Filled in by endIteration().
+   * A map, not a single number — see openAtCloseByPanel in the helpers module.
    */
-  stalled: number
-  openAtSnapshot: number
+  openByPanel: Record<string, number> | null
   /**
-   * Latency over responses that were NOT limiter rejections. A 429 returns in ~1 ms
-   * having done no app work, so averaging it in understates the app; it is counted
-   * separately as `rateLimited` instead of being silently mixed or silently dropped.
+   * The SWALLOWED CLICK, captured. Round 3.
+   *
+   * `page.click(...).catch(() => {})` is deliberately swallowing, so a flaky click
+   * cannot turn a green run red. But swallowing it also meant a click that never
+   * landed was indistinguishable from a slow commit: the following
+   * `waitForSelector(..., { timeout: 15_000 })` then burned its full 15 s waiting for
+   * a marker that was never going to appear, and the record said only "timed-out".
+   * That is precisely the recorded symptom — a 15 s selector timeout with no
+   * server-side explanation and nothing in the evidence file.
    */
-  slowestMs: number | null
-  /** Click -> this panel's first NON-rejected response. Null when it never had one. */
-  firstResponseMs: number | null
-  rateLimited: number
+  dashboardClickError: ClickFailure | null
+  marketsClickError: ClickFailure | null
 }
 
-/** One row of the per-endpoint breakdown, so a failing run says WHICH endpoint degraded. */
-type EndpointReport = {
-  method: string
-  path: string
-  requests: number
-  responses: number
-  /** Non-2xx and network failures, keyed by status code. `net:<text>` for transport. */
-  byStatus: Record<string, number>
-  /** How many of those were a 429 from one of the server's own rate limiters. */
-  rateLimited: number
-  /** Latency over non-429 responses only — see PanelReport.slowestMs. */
-  slowestMs: number | null
-  p95Ms: number | null
-  /** First iteration index at which this endpoint was rate limited, for correlation. */
-  firstRateLimitedIteration: number | null
+/** A captured `page.click()` rejection. Recorded, never thrown. */
+type ClickFailure = {
+  direction: "dashboard" | "markets"
+  message: string
+  /** How long the click itself took before rejecting. */
+  elapsedMs: number
 }
 
-/**
- * A 429 is the server's own rate limiter answering, not the app doing work.
- *
- * WHY THIS IS SEPARATE RATHER THAN FILTERED AWAY. A per-endpoint breakdown is what
- * makes the split possible, and the split is necessary because a 429's response time
- * says nothing about how fast the endpoint is. Both halves are kept: the endpoint row
- * carries `rateLimited` and a `byStatus` entry, and the latency distribution excludes
- * 429s. Filtering without recording is how round 1's failure happened — a clean
- * 5 078 ms headline with the degradation sitting in the file unremarked.
- */
-const RATE_LIMIT_STATUS = 429
-const isRateLimited = (c: ApiCall): boolean => c.status === RATE_LIMIT_STATUS
-const failureKey = (c: ApiCall): string =>
-  c.failure !== null ? `net:${c.failure}` : c.status !== null ? String(c.status) : "unanswered"
+// The `PanelReport` and `EndpointReport` shapes are OWNED BY
+// e2e/helpers/transitionEvidence.mjs, which is where they are built and
+// unit-tested. They used to be declared here as well — a second description of the
+// same record is a second thing to drift, which is the whole reason
+// `runbookIsolationContract.test.mjs` imports the harness instead of restating it.
+// Round 3 Minor 5 removed the parallel `percentile`/`stats` duplication for the same
+// reason; this is the same class of fix applied to the types.
 
-const latencyMs = (c: ApiCall): number => (c.endMs as number) - c.startMs
-
-function percentile(sorted: number[], p: number): number | null {
-  if (sorted.length === 0) return null
-  return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]
-}
-
-/** Classify a wait. Exactly one of the three words the brief asks for. */
-function classify(markerMs: number | null, issued: boolean): "found-immediately" | "waited" | "timed-out" | "not-reached" {
-  if (markerMs !== null) return markerMs < FOUND_IMMEDIATELY_MS ? "found-immediately" : "waited"
-  return issued ? "timed-out" : "not-reached"
-}
+  /**
+   * A 429 is the server's own rate limiter answering, not the app doing work. See
+   * e2e/helpers/transitionEvidence.mjs for why the two halves — latency distribution
+   * and rejection count — are both kept.
+   */
+  const RATE_LIMIT_STATUS = 429
 
 function createTransitionEvidence() {
   const calls: ApiCall[] = []
@@ -247,6 +233,8 @@ function createTransitionEvidence() {
   let current: Iteration | null = null
   let attempted = false
   let dropped = 0
+  /** The page `attach()` bound, so the loop can click through this recorder. */
+  let boundPage: any = null
 
   const pathOf = (url: string) => {
     const i = url.indexOf("/api/")
@@ -262,6 +250,7 @@ function createTransitionEvidence() {
   }
 
   function attach(page) {
+    boundPage = page
     page.on("console", (msg: { type: () => string; text: () => string }) => {
       const text = msg.text()
       // The client auth line is the one signal this run depends on and it can fire
@@ -309,7 +298,28 @@ function createTransitionEvidence() {
     rate = next
   }
 
-  /** Starts a window and returns the mutable record the loop fills in as it goes. */
+  /**
+   * Click, and CAPTURE a rejection instead of discarding it.
+   *
+   * The swallow is deliberate and stays: a click that misses because the DOM moved
+   * must not be able to fail the spec, because that would convert an intermittent
+   * harness annoyance into a red gate. What changes is that the rejection is no
+   * longer invisible. It is recorded with its message, its own elapsed time, and which
+   * direction it was, so a later `waitForSelector` timeout can be attributed to "the
+   * click never landed" rather than to the app being slow.
+   */
+  async function clickInto(record: Iteration, direction: "dashboard" | "markets", selector: string) {
+    if (!boundPage) throw new Error("attach(page) must run before clickInto()")
+    const startedAt = Date.now()
+    try {
+      await boundPage.click(selector)
+      return true
+    } catch (err) {
+      recordClickFailure(record, direction, err, Date.now() - startedAt)
+      return false
+    }
+  }
+
   function beginIteration(index: number, warmup: boolean): Iteration {
     attempted = true
     const record: Iteration = {
@@ -322,7 +332,9 @@ function createTransitionEvidence() {
       marketsClickAt: null,
       marketsMarkerMs: null,
       completed: false,
-      openAtClose: null
+      openByPanel: null,
+      dashboardClickError: null,
+      marketsClickError: null
     }
     current = record
     iterations.push(record)
@@ -332,161 +344,47 @@ function createTransitionEvidence() {
   function endIteration(record: Iteration) {
     record.completed = true
     // Capture "still open when the window closed" HERE, while the window is still the
-    // recent past, rather than at snapshot time ~2.5 minutes later. See PanelReport.
-    record.openAtClose = calls.filter(
-      (c) => c.rate === record.rate && c.iteration === record.index && c.endMs === null
-    ).length
+    // recent past, rather than at snapshot time ~2.5 minutes later — and PER PANEL, so
+    // two panels with different request counts are not given the same number.
+    record.openByPanel = openAtCloseByPanel(calls, record, MARKETS_PANELS)
     if (current === record) current = null
-  }
-
-  function panelReport(
-    fromMs: number,
-    toMs: number,
-    openAtClose: number | null,
-    scoped: ApiCall[] = calls
-  ): PanelReport[] {
-    const inWindow = scoped.filter((c) => c.startMs >= fromMs && c.startMs <= toMs)
-    return MARKETS_PANELS.map(({ panel, endpoints }) => {
-      const own = inWindow.filter((c) => endpoints.some((e) => c.path.startsWith(e)))
-      const served = own.filter((c) => c.endMs !== null && !isRateLimited(c))
-      return {
-        panel,
-        endpoints,
-        requests: own.length,
-        responses: own.filter((c) => c.endMs !== null).length,
-        failures: own.filter((c) => c.failure !== null || (c.status !== null && c.status >= 400)).length,
-        stalled: openAtClose ?? own.filter((c) => c.endMs === null).length,
-        openAtSnapshot: own.filter((c) => c.endMs === null).length,
-        slowestMs: served.reduce((a, c) => Math.max(a, latencyMs(c)), 0) || null,
-        // Round 1 documented "click -> first response" and measured the first REQUEST
-        // start. Off by the request's own duration, which is the number a reader wants.
-        firstResponseMs: served.length ? served[0].endMs - fromMs : null,
-        rateLimited: own.filter(isRateLimited).length
-      }
-    })
-  }
-
-  /**
-   * Per-endpoint, per-method, with failures keyed by status code.
-   *
-   * This is what round 1 lacked. `apiFailures` was a bare count, so establishing that
-   * every POST endpoint and only POST endpoints were failing meant reconstructing the
-   * correlation by hand from `panelsAcrossLoop` — which is exactly what fix round 2
-   * had to do, and it is why the degradation was read as a clean baseline.
-   */
-  function endpointReport(only?: Set<number>): EndpointReport[] {
-    const rows = new Map<string, EndpointReport & { latencies: number[] }>()
-    for (const c of calls) {
-      if (only && (c.iteration === null || !only.has(c.iteration))) continue
-      const key = `${c.method} ${c.path}`
-      if (!rows.has(key)) {
-        rows.set(key, {
-          method: c.method,
-          path: c.path,
-          requests: 0,
-          responses: 0,
-          byStatus: {},
-          rateLimited: 0,
-          slowestMs: null,
-          p95Ms: null,
-          firstRateLimitedIteration: null,
-          latencies: []
-        })
-      }
-      const row = rows.get(key) as EndpointReport & { latencies: number[] }
-      row.requests += 1
-      if (c.endMs !== null) row.responses += 1
-      if (c.failure !== null || (c.status !== null && c.status >= 400)) {
-        const k = failureKey(c)
-        row.byStatus[k] = (row.byStatus[k] ?? 0) + 1
-      }
-      if (isRateLimited(c)) {
-        row.rateLimited += 1
-        if (row.firstRateLimitedIteration === null && c.iteration !== null) {
-          row.firstRateLimitedIteration = c.iteration
-        }
-      } else if (c.endMs !== null) {
-        row.latencies.push(latencyMs(c))
-      }
-    }
-    return [...rows.values()]
-      .map(({ latencies, ...row }) => {
-        const sorted = [...latencies].sort((a, b) => a - b)
-        return {
-          ...row,
-          slowestMs: sorted.length ? sorted[sorted.length - 1] : null,
-          p95Ms: percentile(sorted, 0.95)
-        }
-      })
-      .sort((a, b) => b.rateLimited - a.rateLimited || b.requests - a.requests)
   }
 
   function snapshot() {
     const nowMs = Date.now()
-    // FIX ROUND 2 — A REAL BUG IN ROUND 1'S INSTRUMENTATION, FOUND HERE.
-    //
-    // Round 1 filtered per-iteration aggregates with `c.iteration === it.index` and
-    // nothing else. But `index` is the loop counter 0..15 and it RESTARTS for every
-    // rate, and a call carries no rate of its own. So every record with index N
-    // matched all three rates at once. The evidence proved it: `1x i0` and `6x i0`
-    // reported byte-identical apiCalls/apiFailures/slowestApiMs despite one being
-    // throttled six times harder, and the per-iteration `apiRateLimited` summed to
-    // 762 against a true total of 266 — a 2.9x over-count. The marker latencies were
-    // never affected (they are stored on the record, not derived by a filter), nor
-    // was `panelsAcrossLoop` (which filters on no iteration at all).
-    //
-    // The fix is the rate in the key. `iterationAggregatesReconcile` below is the
-    // standing proof that it took: it is a RECORDED field, not an assertion, so it
-    // cannot fail a run, and it reports false the moment the two disagree again.
-    const ownCalls = (it: Iteration) => calls.filter((c) => c.rate === it.rate && c.iteration === it.index)
+    // The per-iteration scoping key lives in the helpers module and is unit-tested
+    // there (server/__tests__/transitionEvidenceAggregation.test.mjs). Round 1 keyed
+    // on the loop counter alone, which restarts per rate, so every record with index N
+    // matched all three rates: 762 counted 429s against a true 266, and `1x i0` and
+    // `6x i0` reported byte-identical counts. The fix is the rate in the key.
     const perIteration = iterations.map((it) => {
-      const windowEnd = it.marketsMarkerMs !== null && it.marketsClickAt !== null ? it.marketsClickAt + it.marketsMarkerMs : nowMs
+      const windowEnd =
+        it.marketsMarkerMs !== null && it.marketsClickAt !== null ? it.marketsClickAt + it.marketsMarkerMs : nowMs
       const clickAt = it.marketsClickAt ?? it.startMs
-      const mine = ownCalls(it)
+      const mine = ownedCalls(calls, it)
       return {
         ...it,
-        dashboardSelector: classify(it.dashboardMarkerMs, it.dashboardClickAt !== null),
-        marketsSelector: classify(it.marketsMarkerMs, it.marketsClickAt !== null),
+        dashboardSelector: classify(it.dashboardMarkerMs, it.dashboardClickAt !== null, it.dashboardClickError !== null),
+        marketsSelector: classify(it.marketsMarkerMs, it.marketsClickAt !== null, it.marketsClickError !== null),
         apiCalls: mine.length,
-        apiFailures: mine.filter((c) => c.failure !== null || (c.status !== null && c.status >= 400)).length,
+        apiFailures: mine.filter(isFailed).length,
         apiRateLimited: mine.filter(isRateLimited).length,
         slowestApiMs: mine
           .filter((c) => c.endMs !== null && !isRateLimited(c))
           .reduce((a, c) => Math.max(a, latencyMs(c)), 0) || null,
-        marketsPanels: panelReport(clickAt, windowEnd, it.openAtClose, mine)
+        marketsPanels: panelReport(clickAt, windowEnd, it.openByPanel, mine, MARKETS_PANELS)
       }
     })
 
     // A cross-loop view, so a reader does not have to diff 16 iterations to find the
-    // panel that is always slow or always stalled.
-    const byPanel = MARKETS_PANELS.map(({ panel, endpoints }) => {
-      const own = calls.filter((c) => endpoints.some((e) => c.path.startsWith(e)))
-      const served = own.filter((c) => c.endMs !== null && !isRateLimited(c))
-      const sorted = served.map(latencyMs).sort((a, b) => a - b)
-      return {
-        panel,
-        endpoints,
-        requests: own.length,
-        responses: own.filter((c) => c.endMs !== null).length,
-        failures: own.filter((c) => c.failure !== null || (c.status !== null && c.status >= 400)).length,
-        rateLimited: own.filter(isRateLimited).length,
-        stalled: iterations.reduce((a, it) => a + (it.openAtClose ?? 0), 0),
-        openAtSnapshot: own.filter((c) => c.endMs === null).length,
-        slowestMs: sorted.length ? sorted[sorted.length - 1] : null,
-        p95Ms: percentile(sorted, 0.95)
-      }
-    })
-
-    const rateLimitedTotal = calls.filter(isRateLimited).length
-    const iterationSum = perIteration.reduce((a, it) => a + it.apiRateLimited, 0)
-    const callSum = perIteration.reduce((a, it) => a + it.apiCalls, 0)
-    // Only calls that happened INSIDE an iteration window belong to a per-iteration
-    // record. Requests issued between iterations (the spec calls /api/auth/me and
-    // /api/health around a navigation) carry `iteration: null`, so the reconciliation
-    // is against the inside-window subset — comparing against `calls.length` would be
-    // false for a benign reason and would train a reader to ignore the field.
-    const ownedKeys = new Set(perIteration.map((it) => `${it.rate}/${it.index}`))
-    const inWindowCalls = calls.filter((c) => c.iteration !== null && ownedKeys.has(`${c.rate}/${c.iteration}`))
+    // panel that is always slow or always stalled. `stalled` is summed from the
+    // PER-PANEL close maps, so the seven rows can differ.
+    const byPanel = panelsAcrossLoop(calls, iterations, MARKETS_PANELS)
+    const deg = degradation(calls)
+    const rec = reconcile(perIteration, calls)
+    const clickErrors = perIteration.filter(
+      (it) => it.dashboardClickError !== null || it.marketsClickError !== null
+    )
 
     return {
       note:
@@ -506,22 +404,58 @@ function createTransitionEvidence() {
         "renders the header as an unconditional first child, the panels fetch in effects " +
         "(SpreadPanel.tsx:30) and render unconditionally, and trading.ts:13-21 throws on 429 with " +
         "no retry — so limiter rejections do not inflate marker latency. They are recorded because " +
-        "they mean the app was degraded during the measurement, not because they caused the number.",
+        "the app's WRITE SURFACE was dead during the measurement, not because they caused the number.",
+      fixRound3:
+        "Round 3. (1) CLICK FAILURES ARE CAPTURED, not discarded. The loop's two " +
+        "`.catch(() => {})` swallows stay — a click that misses must not fail the spec — but the " +
+        "rejection is now recorded on the iteration with its message, its own elapsed ms and its " +
+        "direction, and `classify()` returns the new state `click-error` so a click that never " +
+        "landed is distinguishable from a click that landed and committed slowly. That is the " +
+        "leading remaining candidate for the recorded symptom: a missed click leaves the page on " +
+        "the old room, so the following waitForSelector burns its full 15s for a marker that was " +
+        "never coming, with nothing server-side to explain it. (2) `stalled` is now PER PANEL. " +
+        "Round 2 computed one iteration-wide `openAtClose` and handed it to all seven panels, so " +
+        "all seven `panelsAcrossLoop` rows read `stalled=67` and all seven rows inside one " +
+        "iteration read `stalled=2` despite request counts of 2/2/4/2/2/2/6; it is now summed from " +
+        "per-panel close maps. (3) `appDegraded` is GONE, replaced by a split: " +
+        "`rateLimitDegraded` (the limiter was rejecting — which in this harness means THE SPEC " +
+        "tripped it, roughly 353 POSTs/min against a 60/min budget, so a true here is ROUTINE and " +
+        "does NOT mean the app is broken) and `appMisbehaved` + `failuresOutsideRateLimit` (real " +
+        "non-429 failures, which is what would mean the app misbehaved). Round 2's single boolean " +
+        "overclaimed in both directions: a 500-storm with zero 429s read `appDegraded: false`, " +
+        "and a healthy run read `true`.",
       wallClockMs: nowMs - (iterations[0]?.startMs ?? nowMs),
       recordsDroppedAtCap: dropped,
-      rateLimitedTotal,
-      appDegraded: rateLimitedTotal > 0,
-      // The standing proof that the per-iteration breakdown is correctly scoped. It
-      // was false in round 1 (762 vs 266) because the per-iteration filter ignored
-      // the rate, and it is a RECORDED field rather than an assertion so it cannot
-      // fail a run. A reader who sees false knows not to trust `apiRateLimited`.
-      iterationAggregatesReconcile:
-        iterationSum === inWindowCalls.filter(isRateLimited).length &&
-        callSum === inWindowCalls.length,
-      // Requests issued outside every iteration window, so the delta above is
-      // accounted for rather than mysterious.
-      callsOutsideAnyIteration: calls.filter((c) => c.iteration === null).length,
-      endpointFailures: endpointReport(),
+      // `appDegraded` was `rateLimitedTotal > 0`, which overclaimed in BOTH directions.
+      // See degradation() in the helpers module and `fixRound3` above.
+      rateLimitedTotal: deg.rateLimitedTotal,
+      rateLimitDegraded: deg.rateLimitDegraded,
+      failuresOutsideRateLimit: deg.failuresOutsideRateLimit,
+      // Cross-document `goto` aborts — a harness artifact, not app misbehaviour, and
+      // the reason `appMisbehaved` below is scoped. Reported, not dropped.
+      harnessAborts: deg.harnessAborts,
+      appMisbehaved: deg.appMisbehaved,
+      unanswered: deg.unanswered,
+      // A reported count, not a gate: how many iterations had a click that never landed,
+      // and which direction. Non-zero here with a `click-error` selector outcome is the
+      // single most actionable thing in this file.
+      clickFailures: clickErrors.map((it) => ({
+        rate: it.rate,
+        index: it.index,
+        dashboard: it.dashboardClickError,
+        markets: it.marketsClickError,
+        dashboardSelector: it.dashboardSelector,
+        marketsSelector: it.marketsSelector
+      })),
+      clickFailureCount: clickErrors.length,
+      // The standing report that the per-iteration breakdown is correctly scoped. False in
+      // round 1 (762 counted 429s against a true 266) because the filter ignored the rate.
+      // It is a RECORDED field so it cannot fail a run; the gate on the keying itself is
+      // server/__tests__/transitionEvidenceAggregation.test.mjs.
+      iterationAggregatesReconcile: rec.iterationAggregatesReconcile,
+      // Calls issued outside every iteration window, so the delta above is accounted for.
+      callsOutsideAnyIteration: rec.callsOutsideAnyIteration,
+      endpointFailures: endpointReport(calls),
       iterations: perIteration,
       panelsAcrossLoop: byPanel,
       slowestApiCalls: [...calls]
@@ -540,7 +474,7 @@ function createTransitionEvidence() {
       // the three the spec itself calls around a navigation — and they are always
       // `iteration: null`, i.e. outside any transition window, which is the tell. A real
       // stall inside the loop has a non-null `iteration` and appears in the owning
-      // iteration's `stalled`/`openAtClose` instead.
+      // iteration's per-panel `stalled` (summed from `openByPanel`) instead.
       neverAnsweredAllOutsideIterations: calls
         .filter((c) => c.endMs === null)
         .every((c) => c.iteration === null),
@@ -549,7 +483,7 @@ function createTransitionEvidence() {
     }
   }
 
-  return { attach, beginRate, beginIteration, endIteration, snapshot, wasAttempted: () => attempted }
+  return { attach, beginRate, beginIteration, endIteration, clickInto, snapshot, wasAttempted: () => attempted }
 }
 
 const transitionEvidence = createTransitionEvidence()
@@ -666,13 +600,20 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
         const iteration = transitionEvidence.beginIteration(i, i >= WARMUP_SAMPLES)
         const t0 = Date.now()
         iteration.dashboardClickAt = Date.now()
-        await page.click("a[href='/suites/trading/dashboard']").catch(() => {})
+        // FIX ROUND 3: the swallow is preserved, but the rejection is now RECORDED
+        // rather than discarded, so a click that never landed is distinguishable from a
+        // slow commit. Still not allowed to fail the spec.
+        await transitionEvidence
+          .clickInto(iteration, "dashboard", "a[href='/suites/trading/dashboard']")
+          .catch(() => {})
         await page.waitForSelector("[data-room='dashboard']", { timeout: 15_000 })
         iteration.dashboardMarkerMs = Date.now() - (iteration.dashboardClickAt as number)
         const elapsed = Date.now() - t0
         if (i >= WARMUP_SAMPLES) transitionSamples.push(elapsed)
         iteration.marketsClickAt = Date.now()
-        await page.click("a[href='/suites/trading/markets']").catch(() => {})
+        await transitionEvidence
+          .clickInto(iteration, "markets", "a[href='/suites/trading/markets']")
+          .catch(() => {})
         await page.waitForSelector("[data-room='markets']", { timeout: 15_000 })
         iteration.marketsMarkerMs = Date.now() - (iteration.marketsClickAt as number)
         transitionEvidence.endIteration(iteration)
