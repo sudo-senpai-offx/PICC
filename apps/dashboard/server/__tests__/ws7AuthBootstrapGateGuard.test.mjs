@@ -1196,7 +1196,14 @@ function connectorsSiteIsGated(lines, index) {
 
     expect(statics, "static import statements in handlers.mjs").toBe(73)
     expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(84)
-    expect(lines, "lines in handlers.mjs").toBe(5938)
+    // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
+    // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
+    // the two unauthenticated destructive deletes. The pin is still EXACT, which is
+    // the point of it: it is not loosened to accommodate the change, it is moved to
+    // the new true value so the next drift is still caught. Recorded here rather
+    // than in a task report because the pin's own stated purpose is that a number
+    // written only in prose rots silently — this is the prose.
+    expect(lines, "lines in handlers.mjs").toBe(5952)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

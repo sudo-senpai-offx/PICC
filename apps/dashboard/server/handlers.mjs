@@ -3317,6 +3317,14 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
   if (path === "/api/trading/alerts/delete" && req.method === "POST") {
+    // WS-7 slice C. This route had NO auth check of any kind, so an anonymous
+    // POST could delete any alert by id — confirmed by execution, which returned
+    // 200 {"ok":false} only because the probe's id did not exist. Gated with
+    // requireAuth(), the same gate and the same spelling as its sibling
+    // /api/trading/journal/delete, which is the destructive-delete precedent in
+    // this file. Alerts are user-created (symbol/condition/value), so this
+    // mutates user-owned state and is not a "public read" judgement call.
+    if (!(await requireAuth(req, res))) return
     const { deleteAlert } = await import("./services/alertEngine.mjs")
     const id = String(body?.id ?? "")
     if (!id) return writeJson(res, 400, { error: "id required" })
@@ -3413,6 +3421,12 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
   if (path === "/api/trading/watchlists/delete" && req.method === "POST") {
+    // WS-7 slice C. Same defect and the same fix as /api/trading/alerts/delete
+    // above: no auth check of any kind, so an anonymous POST could delete any
+    // named watchlist by id — confirmed by execution, which returned 200
+    // {"ok":false} only because the probe's id did not exist. A watchlist is
+    // user-created (name + symbols), so this mutates user-owned state.
+    if (!(await requireAuth(req, res))) return
     const { deleteWatchlist } = await import("./services/watchlist.mjs")
     const id = String(body?.id ?? "")
     if (!id) return writeJson(res, 400, { error: "id required" })

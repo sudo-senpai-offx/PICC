@@ -1,0 +1,1823 @@
+// WS-7 slice C — the WHOLE-TABLE route-auth invariant.
+//
+// WHY THIS FILE IS THE ANSWER TO THE FINDING, IN THE OWNER'S OWN FRAMING. The
+// owner was shown ~40 /api/* routes answering anonymously, including two
+// unauthenticated destructive deletes, and chose: "Gate everything,
+// declared-public allowlist." This file is that choice made into a
+// machine-enforced invariant rather than a one-time sweep.
+//
+// THE STRUCTURAL DEFECT THIS REPLACES. `ws7AuthBootstrapGateGuard` already holds
+// 114 gate call sites in the repo, and its route predicate is scoped to the
+// connectors FAMILY plus a hand-listed seed of one more route
+// (`/api/trading/brokers`). Its own KNOWN LIMITATIONS section says the
+// predicate recognises exactly three dispatch spellings — `path === "…"`,
+// `path.startsWith("…")`, `path.match(/…/)` — and that a `switch` or a
+// lookup-table dispatch "is INVISIBLE to it, and silently so: no site is
+// discovered, so no assertion is made about it at all." That is the exact hole
+// the executed probes fell through, and it is not a connectors-shaped hole: it
+// is a hole in the PREDICATE. The connectors siblings were invisible for the
+// same reason these ~40 were.
+//
+// SO THE DISCOVERY IS STRUCTURAL, AND IT COVERS FOUR FORMS. `path ===`,
+// `path.startsWith`, `path.match` + its owning `if`, and the lookup-table
+// object-literal entry (`"/api/browser/status": async (req, res, parsed) => {`).
+// The fourth form is not hypothetical: `BROWSER_ROUTES` is 33 real routes at
+// handlers.mjs:5211-5612, and under the three-spelling predicate not one of
+// them would be checked. A `switch (path)` is DETECTED AND REFUSED rather than
+// ignored, so a future author who introduces one gets a red build instead of
+// silent coverage.
+//
+// WHY THE ALLOWLIST IS SELF-POLICING. A bare list of route names is a comment.
+// Four ways it rots are each a failure here: an entry with no reason, an entry
+// whose reason is a placeholder, the same route allowlisted twice, and an entry
+// whose route the guard can no longer find in the dispatch (stale — the route
+// was renamed and the entry is now excusing a different one, or nothing at all).
+//
+// WHY A MARKER IS BOUND TO ITS ROUTE, NOT FOUND NEAR ONE. The earlier rounds of
+// the sibling guard learned this the expensive way: a 12-line proximity window
+// and unbound markers let a real gate pass as "not a gate". This file does not
+// use a proximity window anywhere, and an allowlist entry's `marker` IS its
+// route's own dispatch line, matched verbatim against the discovered site. A
+// marker lifted off one route cannot excuse another, because the other route's
+// dispatch line is a different string. Where an entry's justification genuinely
+// lives in the source as a comment, `sourceComment` may be supplied and the
+// guard then REQUIRES that comment inside that route's own handler block —
+// again, region-bound, never window-bound.
+//
+// AND, MORE FUNDAMENTALLY: this guard NEVER READS A COMMENT TO REACH A VERDICT.
+// `isGated` consults the route's own code and nothing else. A comment saying
+// "public by design" cannot excuse a gate, cannot excuse a missing gate, and
+// cannot be pasted anywhere to change an outcome. That closes the class
+// structurally rather than by a cleverer proximity rule.
+import { describe, expect, it } from "vitest"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+
+const HANDLERS = fileURLToPath(new URL("../handlers.mjs", import.meta.url))
+const SRC = readFileSync(HANDLERS, "utf8")
+const LINES = SRC.split("\n")
+
+/** The shared gates. A site is gated by appearing in its OWN block, before it answers. */
+const GATES = ["requireAuth(", "requireSessionOrFirstRun(", "requireAuthStrict("]
+
+// ---------------------------------------------------------------------------
+// DISCOVERY — four dispatch forms, all structural
+// ---------------------------------------------------------------------------
+
+// Form A/B. `if (path === "/api/…" …)` and `if (path.startsWith("/api/…") …)`.
+// The OPERAND `path` is required, deliberately: `isApiRequest` uses
+// `url.startsWith("/api/")` at handlers.mjs:995 and the OAuth callback builds
+// `http://localhost:…/api/profile/github/callback` at :4566, and neither is a
+// route dispatch.
+const IF_DISPATCH = /path\s*===\s*["'`](\/api\/[^"'`]*)["'`]|path\.startsWith\(\s*["'`](\/api\/[^"'`]*)["'`]/
+// Form C. The matcher line, whose handler is the `if (<name> …)` block after it.
+const MATCHER_DISPATCH = /^const\s+(\w+)\s*=\s*path\.match\(/
+// Form D. A lookup-table entry. `BROWSER_ROUTES` is the live instance: 33 routes,
+// every one gated, and every one invisible to the three-spelling predicate.
+const TABLE_DISPATCH = /^\s*"(?<route>\/api\/[^"]*)"\s*:\s*(?<handler>async\s*\(|function\b|\()/
+// The UNSUPPORTED form. Present only so a new one is a red build.
+const SWITCH_DISPATCH = /switch\s*\(\s*(?:path|parsed\.pathname)\s*\)/
+
+/**
+ * Every /api route the dispatcher recognises, with the block that handles it.
+ *
+ * `line` is the line the DISPATCH is written on, because that is what an
+ * allowlist marker quotes. `region` is the route's own handler block, found by
+ * indentation and terminated by the block's own closing brace — a gate in the
+ * NEXT route cannot vouch for this one.
+ */
+function routeHandlerRegion(lines, index) {
+  const line = lines[index]
+  const trimmed = line.trim()
+  // A SINGLE-LINE route ends on its own line, so its region is that line. Without
+  // this the walk runs on into the next route, finds its gate, and reports an
+  // ungated route as gated — the exact failure the sibling guard was bitten by.
+  if (/^if\s*\(/.test(trimmed) && !/\{$/.test(trimmed)) return [line]
+  const baseIndent = (line.match(/^\s*/) ?? [""])[0].length
+  const region = [line]
+  for (let k = index + 1; k < lines.length; k += 1) {
+    const next = lines[k]
+    if (next.trim() === "") {
+      region.push(next)
+      continue
+    }
+    const indent = (next.match(/^\s*/) ?? [""])[0].length
+    const nt = next.trim()
+    if (indent === baseIndent && /^\}/.test(nt)) break
+    if (indent > baseIndent) {
+      region.push(next)
+      continue
+    }
+    // The `if (<matcherName> …)` that follows a matcher line is the same dispatch.
+    if (indent === baseIndent && /^if\s*\(/.test(nt)) {
+      region.push(next)
+      continue
+    }
+    break
+  }
+  return region
+}
+
+const isCommentish = (text) => {
+  const t = text.trim()
+  return t === "" || t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+}
+
+/**
+ * The CONTIGUOUS run of comment/blank lines immediately above `index`.
+ *
+ * This is the route's OWN comment block and nothing else: the walk stops at the
+ * first line of real code, so a comment belonging to the PREVIOUS route cannot
+ * be reached. That is the difference from the 12-line window the earlier rounds
+ * of the sibling guard used, where a marker pasted anywhere nearby excused a real
+ * gate. A window is a neighbourhood; this is an attachment.
+ *
+ * Declared BEFORE discoverRouteSites, which calls it at module-evaluation time, so
+ * it cannot sit below as a `const` arrow: that is a temporal-dead-zone
+ * ReferenceError on the first site, not on some later one.
+ */
+function ownCommentBlock(lines, index) {
+  let top = index
+  while (top - 1 >= 0 && isCommentish(lines[top - 1])) top -= 1
+  return lines.slice(top, index).join("\n")
+}
+
+function discoverRouteSites(lines) {
+  const sites = []
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    const text = line.trim()
+    if (text === "" || text.startsWith("//") || text.startsWith("*") || text.startsWith("/*")) continue
+
+    // Form D. The table entry owns its own arrow-function body, so its region is
+    // the block that follows it.
+    const table = text.match(TABLE_DISPATCH)
+    if (table) {
+      sites.push({
+        route: table.groups.route,
+        line: i + 1,
+        index: i,
+        form: "table",
+        marker: text,
+        ownComment: ownCommentBlock(lines, i),
+        region: routeHandlerRegion(lines, i)
+      })
+      continue
+    }
+
+    // Form C. The matcher owns the `if (<name> …)` block that follows it.
+    const matcher = text.match(MATCHER_DISPATCH)
+    if (matcher) {
+      const re = /path\.match\(\s*\/([^\n]*?)\/([a-z]*)/.exec(line)
+      const pattern = re ? re[1] : "?"
+      let j = i + 1
+      while (j < lines.length && !new RegExp(`^\\s*if\\s*\\(\\s*${matcher[1]}\\b`).test(lines[j])) j += 1
+      if (j < lines.length) {
+        sites.push({
+          route: `match:/${pattern}/`,
+          line: i + 1,
+          index: j,
+          form: "path.match",
+          marker: text,
+          ownComment: ownCommentBlock(lines, i),
+          region: routeHandlerRegion(lines, j)
+        })
+      }
+      continue
+    }
+
+    // Form A/B. The dispatch must be the line's own code, not trailing prose, so
+    // the match is required to sit BEFORE any `//`.
+    const offset = line.search(IF_DISPATCH)
+    if (offset === -1) continue
+    const commentAt = line.indexOf("//")
+    if (commentAt !== -1 && commentAt < offset) continue
+    if (!/^if\s*\(/.test(text)) continue
+    const m = IF_DISPATCH.exec(text)
+    sites.push({
+      route: m[1] ?? m[2],
+      line: i + 1,
+      index: i,
+      form: text.includes("path.startsWith") ? "path.startsWith" : "path ===",
+      marker: text,
+      ownComment: ownCommentBlock(lines, i),
+      region: routeHandlerRegion(lines, i)
+    })
+  }
+  return sites
+}
+
+const SITES = discoverRouteSites(LINES)
+
+/** `switch (path)` is a dispatch form this guard does not model. It must be loud. */
+const SWITCH_SITES = LINES.map((l, i) => ({ l, i }))
+  .filter((r) => SWITCH_DISPATCH.test(r.l))
+  .map((r) => `handlers.mjs:${r.i + 1}  ${r.l.trim()}`)
+
+// ---------------------------------------------------------------------------
+// "ANSWERS THE REQUEST" — and the two pre-gate responses that do not count
+// ---------------------------------------------------------------------------
+
+/** The part of the line that is STATEMENT rather than an `if (…)` head. */
+function statementBody(line) {
+  const lead = (line.match(/^\s*/) ?? [""])[0].length
+  if (!/^if\s*\(/.test(line.slice(lead))) return { text: line, shift: 0 }
+  let i = lead + 2
+  let depth = 0
+  for (; i < line.length; i += 1) {
+    if (line[i] === "(") depth += 1
+    else if (line[i] === ")") {
+      depth -= 1
+      if (depth === 0) {
+        i += 1
+        break
+      }
+    }
+  }
+  return { text: line.slice(i), shift: i }
+}
+
+/**
+ * Does this writeJson body carry DATA, or is it a static precondition?
+ *
+ * A response that discloses nothing cannot be the disclosure this guard protects
+ * against, and this codebase uses cheap preconditions liberally. Two forms are
+ * exempt:
+ *   (a) any 4xx — by convention here a 4xx body is an error message, and the
+ *       rate-limit and origin guards are all 4xx.
+ *   (b) any status, when the body object is a STATIC literal: after string
+ *       literals and `key:` labels are removed, no identifier survives. This form
+ *       exists because two real sites (handlers.mjs:4755, :4786) answer
+ *       `503 { error: "agents service not configured (set PICC_AGENTS_URL)" }`
+ *       before their gate, and a 4xx-only rule calls those "gate too late".
+ *
+ * A body carrying `err.message`, a store read, or a template expression is NOT
+ * static and is not exempt.
+ */
+function staticBody(rest) {
+  const open = rest.indexOf("{")
+  if (open === -1) return /^\s*res\s*,\s*4\d\d/.test(rest)
+  let depth = 0
+  let close = -1
+  for (let i = open; i < rest.length; i += 1) {
+    if (rest[i] === "{") depth += 1
+    else if (rest[i] === "}") {
+      depth -= 1
+      if (depth === 0) {
+        close = i
+        break
+      }
+    }
+  }
+  if (close === -1) return false
+  const obj = rest.slice(open, close + 1)
+  if (/\$\{|\bawait\b|\bnew\b|`/.test(obj)) return false
+  let rest2 = obj.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, '""')
+  rest2 = rest2.replace(/[A-Za-z_$][\w$]*\s*:/g, "_:")
+  rest2 = rest2.replace(/\b(?:true|false|null)\b/g, "_")
+  return !/[A-Za-z_$]/.test(rest2.replace(/_/g, ""))
+}
+
+/**
+ * The offset of the first thing on this line that ANSWERS, or -1.
+ *
+ * `return true` / `return false` are this codebase's "handled" sentinels, not
+ * responses. Counting them put six genuinely-gated routes on the ungated list —
+ * `/api/trading/realtime`, `/api/packs/ack`, `/api/webfetch/limits/reset`, both
+ * `/api/agents/*` routes and `/api/browser/stream` all write a 403/429 first
+ * and then `return true`, and every one of them gates correctly. The sentinel
+ * is excluded here, and only here; a `return <call>` still counts, which errs
+ * toward a false failure.
+ */
+function firstAnswerOffset(line, before = Number.POSITIVE_INFINITY) {
+  const { text, shift } = statementBody(line)
+  const fourxxArgs = /^\s*res\s*,\s*4\d\d/
+  const offsets = []
+  const ret = /^\s*return\s/.exec(text)
+  if (ret) {
+    const rest = text.slice(ret.index + ret[0].length)
+    if (/^\s*(?:true|false)\s*;?\s*$/.test(rest)) {
+      // a control-flow sentinel, not a response
+    } else {
+      const write = /writeJson\s*\(/.exec(rest)
+      const inner = write ? rest.slice(write.index + write[0].length) : rest
+      if (!write || (!fourxxArgs.test(inner) && !staticBody(inner))) offsets.push(ret.index + shift)
+    }
+  }
+  const write = /\bwriteJson\s*\(/.exec(text)
+  if (write) {
+    const inner = text.slice(write.index + write[0].length)
+    if (!fourxxArgs.test(inner) && !staticBody(inner)) offsets.push(write.index + shift)
+  }
+  const res = /\bres\.(?:end|write|send|writeHead)\b/.exec(text)
+  if (res) offsets.push(res.index + shift)
+  const kept = offsets.filter((idx) => idx < before)
+  return kept.length ? Math.min(...kept) : -1
+}
+
+const answersRequest = (line) => firstAnswerOffset(line) !== -1
+
+/**
+ * THE INLINE GATE IDIOM, in its two spellings.
+ *
+ *     const userId = await verifyUser(auth)
+ *     if (!userId) return writeJson(res, 401, { error: "authentication required" })
+ *
+ * and
+ *
+ *     if (!(await verifyUser(auth))) {
+ *       return writeJson(res, 401, { error: "authentication required" })
+ *     }
+ *
+ * Seven routes gate the first way (`/api/income/overview`, `/api/data/*`,
+ * `/api/stripe/checkout`, `/api/stripe/portal`, `/api/btcpay/invoice`,
+ * `/api/btcpay/check`, `/api/collectors/cashpilot`) and one the second. A guard
+ * that only knew the three shared-gate names would report all eight as ungated,
+ * and the fix an author would reach for — bolt a `requireAuth` onto each — would
+ * throw away the per-user `userId` the first six need. So both are recognised.
+ *
+ * The refusal may sit on the `if` line or on the line after it, because the second
+ * spelling opens a block. The gate is the `if` line either way, so the refusal is
+ * never counted as a pre-gate disclosure.
+ *
+ * ITS KNOWN WEAKNESS, which is not this file's to fix and is stated rather than
+ * claimed away: `verifyUser()` answers null when the SESSIONS store faults, so
+ * these eight fail CLOSED with the wrong status (401 where the shared gate
+ * answers 503). No access is granted, which is why it is a gap and not a hole.
+ */
+const INLINE_ASSIGNED = /await\s+verifyUser\s*\(/
+const INLINE_DIRECT = /if\s*\(\s*!\s*\(\s*await\s+verifyUser\s*\(|if\s*\(\s*!\s*await\s+verifyUser\s*\(/
+const REFUSAL = /writeJson\s*\(\s*res\s*,\s*40[13]/
+
+function inlineGateOffset(region) {
+  const verifyAt = region.findIndex((l) => INLINE_ASSIGNED.test(l))
+  if (verifyAt === -1) return -1
+  for (let i = verifyAt; i < region.length; i += 1) {
+    const l = region[i]
+    const refuses =
+      (/if\s*\(\s*!\s*(?:userId|uid)\s*\)/.test(l) && REFUSAL.test(l)) || INLINE_DIRECT.test(l)
+    if (!refuses) continue
+    // The refusal may be the `if` line itself or the first line of the block it
+    // opens. Anything further away is a different statement, not this gate.
+    const tail = i + 1 < region.length ? region[i + 1] : ""
+    if (REFUSAL.test(l) || REFUSAL.test(tail)) return i
+  }
+  return -1
+}
+
+/**
+ * THE VERDICT. A site is GATED when a gate sits in its OWN block, BEFORE the
+ * route answers. Both halves matter: a gate after the response is dead code,
+ * and a presence-only check calls dead code safety.
+ */
+function isGated(site) {
+  const region = site.region
+  let gateAt = -1
+  let inline = false
+  for (let i = 0; i < region.length; i += 1) {
+    if (GATES.some((g) => region[i].includes(g))) {
+      gateAt = i
+      break
+    }
+  }
+  if (gateAt === -1) {
+    const at = inlineGateOffset(region)
+    if (at !== -1) {
+      gateAt = at
+      inline = true
+    }
+  }
+  if (gateAt === -1) return { ok: false, why: "no gate in this route's own block" }
+
+  for (let i = 0; i < gateAt; i += 1) {
+    if (answersRequest(region[i])) return { ok: false, why: "the route answers BEFORE its gate" }
+  }
+  // On the gate's own line, only what sits IN FRONT of the gate call counts, so
+  // the gate's trailing `return true` is not mistaken for an answer.
+  const line = region[gateAt]
+  if (!inline) {
+    const offsets = GATES.map((g) => line.indexOf(g)).filter((o) => o !== -1)
+    const gateOffset = offsets.length ? Math.min(...offsets) : -1
+    if (gateOffset !== -1 && firstAnswerOffset(line, gateOffset) !== -1) {
+      return { ok: false, why: "the route answers BEFORE its gate" }
+    }
+  }
+  return { ok: true, how: inline ? "inline verifyUser idiom" : "shared gate" }
+}
+
+// ---------------------------------------------------------------------------
+// THE DECLARED-PUBLIC ALLOWLIST
+// ---------------------------------------------------------------------------
+//
+// `marker`  the route's OWN dispatch line, verbatim. Bound by exact match to a
+//            discovered site, so it cannot be lifted onto another route.
+// `reason`  a written justification, not a marker. The guard fails on a short
+//            one and on a placeholder one.
+// `sourceComment` OPTIONAL, and where present REQUIRED to be inside this route's
+//            own handler block. Used only where the justification genuinely
+//            lives in the source already; never searched by proximity.
+// `owner`   "declared" = the source itself states the public intent, or the route
+//            is structurally public (you cannot require a session to log in).
+//            "decision" = NOT YET RULED ON BY THE OWNER. This is the population
+//            the owner is being asked to decide; see the task report's inventory
+//            table for the per-route recommendation.
+// ---------------------------------------------------------------------------
+const PLACEHOLDER_REASONS = [
+  "todo",
+  "tbd",
+  "fixme",
+  "n/a",
+  "na",
+  "public",
+  "ok",
+  "fine",
+  "safe",
+  "same as above",
+  "see above",
+  "no reason",
+  "because",
+  "later",
+  "xxx",
+  "wip"
+]
+
+/** @type {{marker: string, reason: string, owner: "declared" | "decision", sourceComment?: string}[]} */
+const DECLARED_PUBLIC = [
+  // ── Health / liveness / status ───────────────────────────────────────────
+  {
+    marker: 'if (path === "/api/health" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Liveness surface. Discloses app version, which provider integrations are compiled in, a serper " +
+      "verdict and the agents-service health probe. No user data, no store read. A health check that " +
+      "required a session could not report health for an unauthenticated instance. DECISION ITEM: the " +
+      "provider/serper verdicts are environment reconnaissance; the owner may want them behind a gate " +
+      "on non-loopback. RECOMMENDATION: leave public.",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/trading/status" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Advisory engine status: feed mode, leg health, freshness ages. Machine-level, no user data, and " +
+      "the dashboard polls it before a session exists. DECISION ITEM: it does reveal which market-data " +
+      "legs are live, which is a small reconnaissance surface. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/health" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Deep trading health snapshot: liveEO freshness, autopilot status, calibration summary. " +
+      "Machine-level. DECISION ITEM: the calibration and autopilot sections describe how this instance " +
+      "is configured. RECOMMENDATION: leave public; it carries no per-user rows.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/scheduler/status" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Scheduler registry: which jobs are registered, last run, next run. Machine-level, no user data. " +
+      "DECISION ITEM: job names disclose the deployment's enabled features. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/signals/status" && req.method === "GET") {',
+    reason:
+      "Advisory signal-window countdown state, which the in-app chip polls. Shared engine state, not " +
+      "user state. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/btcpay/status" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "BTCPay node health probe. Reports whether the node is configured and reachable; it carries no " +
+      "invoice, amount or user data. DECISION ITEM: node URL reachability is environment " +
+      "reconnaissance. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/metrics" && req.method === "GET") {',
+    reason:
+      "Prometheus scrape endpoint: request counters, duration histograms, route labels. No user data, " +
+      "but it is an operational telemetry surface intended for a scraper. DECISION ITEM: a scrape " +
+      "endpoint is conventionally unauthenticated because the scraper holds no session. " +
+      "RECOMMENDATION: leave public, and treat network-level access control as the control here.",
+    owner: "decision"
+  },
+
+  // ── Market data / analytics (no user data) ───────────────────────────────
+  {
+    marker: 'if (path === "/api/finance/quote" && req.method === "POST") {',
+    reason:
+      "Public equity/ETF quotes for caller-supplied tickers. Pure third-party market data keyed by the " +
+      "caller's own input. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/finance/forecast" && req.method === "POST") {',
+    reason:
+      "Price-history forecast for a caller-supplied ticker. Derived from public market data. " +
+      "DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/crypto/market" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Public crypto market snapshot from a third-party aggregator: prices, market caps and 24h " +
+      "moves for the caller's coin list. No store read and no user data; every value comes from an " +
+      "upstream public API keyed by the caller's own request. DECISION ITEM. RECOMMENDATION: leave " +
+      "public — gating it would add nothing an upstream API does not already give away, and its " +
+      "siblings /api/crypto/price and /api/yields are on the same footing.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/crypto/price" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Public crypto price for a caller-supplied coin id: price, market cap and 24h move, straight " +
+      "from an upstream public aggregator. No store read, no user data, and the coin id comes from the " +
+      "caller's own request body. DECISION ITEM. RECOMMENDATION: leave public — its sibling " +
+      "/api/crypto/market is on exactly the same footing and is also ungated.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/yields" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Public treasury and DEX yield snapshot for the caller's instruments. Every value is upstream " +
+      "public data keyed by the caller's own request; there is no store read. DECISION ITEM. " +
+      "RECOMMENDATION: leave public, on the same footing as /api/crypto/market and /api/crypto/price.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/twin/run" && req.method === "POST") {',
+    reason:
+      "Stateless 'twin' simulation over caller-supplied inputs. No store read, no user data. " +
+      "DECISION ITEM: it is a compute-cost surface, and the general rate limit is the only control. " +
+      "RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/predict" && req.method === "POST") {',
+    reason:
+      "Model prediction for a caller-supplied symbol and horizon. Reads market data, not user state. " +
+      "DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/analyze" && req.method === "POST") {',
+    reason:
+      "Single-asset analysis over caller-supplied assetId. Reads market data, not user state. " +
+      "DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/pro/analyze" && req.method === "POST") {',
+    reason:
+      "Pro-tier asset analysis over caller-supplied symbol. Reads market data, not user state. " +
+      "DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/pro/expertoption" && req.method === "POST") {',
+    reason:
+      "ExpertOption bridged analysis for a caller-supplied asset. Reads market data, not user state. " +
+      "DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/pro/narrative" && req.method === "POST") {',
+    reason:
+      "Narrative summary of a pro-analysis report the CALLER supplied in the body. It reads the " +
+      "request, not a store. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/feed-mode" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Feed preference read AND write: GET returns the mode plus live leg health, POST switches the " +
+      "mode between auto and studio. The POST is a persistent, instance-wide setting change with no " +
+      "gate. DECISION ITEM — and the strongest ungated case outside the two deletes, because it MUTATES " +
+      "shared state an anonymous caller can flip. RECOMMENDATION: gate the POST; the GET can stay.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/news" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "News digest for a caller-supplied symbol or topic. Third-party content, no store read, no user " +
+      "data. DECISION ITEM — it is an outbound-fetch surface whose only control is the general rate " +
+      "limit. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/scan" && req.method === "POST") {',
+    reason:
+      "Opportunity scan over caller-supplied symbols. Reads market data only; no store read and no user " +
+      "data crosses. DECISION ITEM. RECOMMENDATION: leave public, and bound the symbol count as the " +
+      "screener sibling already is.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/candles" && req.method === "POST") {',
+    reason:
+      "OHLCV candles for a caller-supplied asset and timeframe, with honest source/timeframe tagging. " +
+      "Reads the liveEO buffer and Yahoo, not a user store. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (req.method === "GET" && path === "/api/trading/indicators") {',
+    reason:
+      "Computed technical indicators for a caller-supplied asset and timeframe. Reads market data. " +
+      "DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/calendar" && req.method === "GET") {',
+    reason:
+      "Economic calendar with a per-event impact summary. Third-party macro data, no store read, no " +
+      "user data. DECISION ITEM. RECOMMENDATION: leave public; it is reference data the dashboard " +
+      "cannot render without.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/portfolio" && req.method === "POST") {',
+    reason:
+      "Portfolio ANALYTICS over caller-supplied symbols and weights. It does not read the user's own " +
+      "portfolio store; it computes hypotheticals from market data. DECISION ITEM. " +
+      "RECOMMENDATION: leave public, and confirm with the owner that no store read hides behind " +
+      "/api/trading/portfolio/aggregate, which is a separate site below.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/portfolio/aggregate" && req.method === "POST") {',
+    reason:
+      "Cross-platform aggregate exposure plus a risk check. DECISION ITEM — this one needs a closer " +
+      "look than the others, because 'aggregate' and the returned todayPnl/riskCheck fields suggest it " +
+      "may fold in the user's own positions. RECOMMENDATION: owner should confirm whether it reads " +
+      "any per-user position store; if it does, gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/stress-test" && req.method === "POST") {',
+    reason:
+      "Hypothetical stress test over caller-supplied symbols and weights. It computes from market " +
+      "data, not from the user's own portfolio store. DECISION ITEM. RECOMMENDATION: leave public, " +
+      "and confirm with the owner that the sibling /api/trading/portfolio/aggregate is genuinely " +
+      "separate — that one is a separate decision below.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/screener" && req.method === "POST") {',
+    reason:
+      "Screener run over caller-supplied filters, bounded to 50 rows by the handler itself. Reads " +
+      "market data only; no store read and no user data crosses. DECISION ITEM. RECOMMENDATION: leave " +
+      "public — the row bound is the control that matters here, not a session.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/patterns" && req.method === "POST") {',
+    reason:
+      "Chart-pattern detection for a caller-supplied symbol, over historical candles. Reads market " +
+      "data only; no store read and no user data crosses. DECISION ITEM. RECOMMENDATION: leave public, " +
+      "as with its /api/trading/indicators sibling.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/backtest" && req.method === "POST") {',
+    reason:
+      "Strategy backtester: walk-forward hit rates, equity curve, drawdown over historical candles. " +
+      "Reads market data, not user state. DECISION ITEM — it is an unbounded compute surface whose only " +
+      "control is the general rate limit. RECOMMENDATION: leave public, but bound the window.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/levels" && req.method === "POST") {',
+    reason: "Ideal buy/sell levels for a caller-supplied asset and timeframe. Reads market data. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/spread" && req.method === "POST") {',
+    reason:
+      "Cross-venue price spread with a fee-adjusted edge, for a caller-supplied asset. Reads live " +
+      "quotes and feed config, not user state. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/models" && req.method === "POST") {',
+    reason:
+      "Model matrix over a caller-supplied asset and timeframe, multiplexing multi-model consensus " +
+      "over historical candles. Reads market data only. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/risk-of-ruin" && req.method === "POST") {',
+    reason:
+      "Risk-of-ruin maths over caller-supplied win rate, payout, risk percent and balance, falling " +
+      "back to aggregate signal accuracy. It echoes the CALLER's balance back as an input echo, and " +
+      "reads the shared accuracy ledger for the defaults. DECISION ITEM. RECOMMENDATION: leave public; " +
+      "the accuracy default is aggregate, not per-user.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/sessions" && req.method === "GET") {',
+    reason:
+      "Current and scheduled trading sessions. Pure calendar data: which market windows are open and " +
+      "when the next ones start. No store read and no user data. DECISION ITEM. RECOMMENDATION: leave " +
+      "public — the dashboard cannot render session state without it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/sessions/asset" && req.method === "POST") {',
+    reason:
+      "Session lookup for a caller-supplied symbol: which windows that instrument trades in. Pure " +
+      "calendar data keyed by the caller's own request, no store read. DECISION ITEM. " +
+      "RECOMMENDATION: leave public, as with its /api/trading/sessions sibling.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/venues" && req.method === "GET") {',
+    reason:
+      "Venue list and deep-link metadata for an asset. The source comment above the site says " +
+      "'public redirect metadata (no execution, R5)'. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/catalog" && req.method === "GET") {',
+    reason:
+      "Grouped asset catalog for the symbol selector: every symbol the instance will resolve, " +
+      "server-side filtered to the resolvable ones. Static reference data, no store read, no user " +
+      "data. DECISION ITEM. RECOMMENDATION: leave public — the Live Chart cannot populate without it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/integrations" && req.method === "GET") {',
+    reason:
+      "Per-ministry integration catalog: a static seed with honest boundary metadata, every entry " +
+      "'unconfigured' until a probe says otherwise. The source comment says so. DECISION ITEM: the " +
+      "boundary metadata is a map of what this deployment could reach. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path.startsWith("/api/integrations/") && req.method === "GET") {',
+    reason:
+      "One ministry's integration entries. Same static seed as the sibling above; the ministry name " +
+      "comes from the caller's own path. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+
+  // ── Opportunities / listings / content / agents ──────────────────────────
+  {
+    marker: 'if (path === "/api/opportunities" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Opportunity catalog. Read-only, no store read, no user data. DECISION ITEM. RECOMMENDATION: " +
+      "leave public; it is reference data the Opportunities view cannot render without.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/opportunities/workflows" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Opportunity workflow definitions: the named steps an opportunity moves through. Read-only, no " +
+      "store read, no user data. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/opportunities/bounties" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Bounty-board monitor: reads public bounty boards and reports what is open. Read-only, no store " +
+      "read, no user data. DECISION ITEM — it is an outbound-fetch surface an anonymous caller can " +
+      "drive on a schedule. RECOMMENDATION: leave public, and treat the rate limit as the control.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/listing/analyze" && req.method === "POST") {',
+    reason:
+      "Listing analysis over caller-supplied marketplace data. No store read. DECISION ITEM: an " +
+      "unauthenticated compute surface. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/listing/keywords" && req.method === "POST") {',
+    reason:
+      "Keyword extraction over caller-supplied listing text. No store read and no user data; the input " +
+      "is the caller's own request body. DECISION ITEM — an unauthenticated compute surface. " +
+      "RECOMMENDATION: leave public, on the same footing as /api/listing/analyze.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/listing/rewrite" && req.method === "POST") {',
+    reason:
+      "Listing rewrite over caller-supplied text. No store read and no user data; the input is the " +
+      "caller's own request body. DECISION ITEM — it may spend LLM budget, which its /api/listing/* " +
+      "siblings do not. RECOMMENDATION: confirm whether this path reaches a paid model, and gate it if " +
+      "it does.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/listing/competitors" && req.method === "POST") {',
+    reason:
+      "Competitor lookup for caller-supplied keywords or an ASIN, returning public marketplace " +
+      "listings. No store read and no user data. DECISION ITEM — it is an outbound-fetch surface whose " +
+      "only control is the general rate limit. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/content/generate" && req.method === "POST") {',
+    reason:
+      "Content generation over caller-supplied inputs. No store read, but it spends LLM budget, so it " +
+      "is a cost surface an anonymous caller can drive. DECISION ITEM. RECOMMENDATION: gate it — its " +
+      "sibling /api/settings/llm/test, which also spends budget, is already gated.",
+    owner: "decision"
+  },
+
+  // ── NOTIFICATIONS ───────────────────────────────────────────────────────
+  // The family wrapper. Its inner sites are enumerated separately below, so this
+  // entry covers the wrapper only; the wrapper itself answers nothing on its own.
+  {
+    marker: 'if (path.startsWith("/api/notifications")) {',
+    reason:
+      "Family wrapper for the notification sub-routes. It contains no gate because each sub-route is " +
+      "enumerated and ruled on in its own right below; this entry exists so the wrapper is a decision " +
+      "rather than an omission. DECISION ITEM. RECOMMENDATION: keep the wrapper, rule on the children.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/notifications/status" && req.method === "GET") {',
+    reason:
+      "Notifier channel status: which channels are configured and reachable. Machine-level, no user " +
+      "data. DECISION ITEM. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/notifications/prefs" && req.method === "POST") {',
+    reason:
+      "WRITES the operator's notification preferences with no gate, and echoes the whole prefs object " +
+      "back. DECISION ITEM — a persistent instance-wide mutation an anonymous caller can make. " +
+      "RECOMMENDATION: gate it. The sibling /api/webfetch/limits/reset, which is the same kind of " +
+      "administrative mutation, IS gated.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/notifications/vapid-public-key" && req.method === "GET") {',
+    reason:
+      "The web-push VAPID PUBLIC key. The source comment states the reason: the browser needs it " +
+      "BEFORE it can subscribe, so no auth header exists on first load. The private key is never " +
+      "served. This is the clearest 'public by protocol necessity' case in the file.",
+    sourceComment: "Public by design: the browser needs the VAPID key *before* it can",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/notifications/subscribe-push" && req.method === "POST") {',
+    reason:
+      "Registers a push endpoint and returns the FULL subscription list. DECISION ITEM — that list is " +
+      "every registered push endpoint, i.e. every browser profile that has subscribed, and it is " +
+      "readable and writable by an anonymous caller. RECOMMENDATION: gate it, and do not return the " +
+      "full list even after gating.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/notifications/unsubscribe-push" && req.method === "POST") {',
+    reason:
+      "Removes a push endpoint and returns the full remaining subscription list. Same disclosure as " +
+      "the subscribe sibling, plus an unauthenticated deletion. DECISION ITEM. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/notifications/snooze" && req.method === "POST") {',
+    reason:
+      "Service-worker snooze for a caller-supplied notification tag. It mutates per-tag alert state " +
+      "for whoever's browser sent it. DECISION ITEM. RECOMMENDATION: leave public; the blast radius is " +
+      "one tag in one browser.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/notifications/test" && req.method === "POST") {',
+    reason:
+      "Dispatches a TEST alert through every live channel. An unauthenticated caller can therefore " +
+      "pound the operator's phone and email. DECISION ITEM — a notification-abuse surface. " +
+      "RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+
+  // ── SETTINGS / configuration reads ──────────────────────────────────────
+  {
+    marker: 'if (path === "/api/settings/llm" && req.method === "GET") {',
+    reason:
+      "Masked LLM provider view: which providers are configured, which model and base URL each uses, " +
+      "and booleans for key/service-account presence. No key material crosses (llmSettingsView masks by " +
+      "construction). The POST sibling, one block below, IS gated, with a comment saying these routes " +
+      "'configure and echo provider credentials — never public' — so the omission here reads as an " +
+      "oversight rather than a decision. DECISION ITEM. RECOMMENDATION: gate it, for consistency with " +
+      "its own sibling.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/settings/session-capture" && req.method === "GET") {',
+    reason:
+      "Session-capture kill-switch READ: {enabled, configured} only, default-ON when untouched. The " +
+      "source comment above says the GET 'stays public like sibling settings GET views (no secret " +
+      "material)' and that the POST is the gated one. That is a stated decision, so this is the " +
+      "declaring case. RECOMMENDATION: keep public, as the source says.",
+    sourceComment: "GET stays public like sibling settings GET views (no secret material",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/settings/llm/resource" && req.method === "GET") {',
+    reason:
+      "Resource-governor view: whether the governor is on, its budgets, aggregate stats, and the 50 " +
+      "most recent ledger rows. The source comment claims prompt content is stripped at write time. " +
+      "DECISION ITEM — the claim is about prompt CONTENT, and the rows still disclose timing and token " +
+      "counts for work this instance did. RECOMMENDATION: gate it; the sibling /api/settings/llm read " +
+      "it mirrors is ungated too, and both should move together.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/packs/registry" && req.method === "GET") {',
+    reason:
+      "Pack registry: per-step status, envelope and evidence, with presence flags only and the §8.5 " +
+      "server-env caps. The source comment states the masking and the read-only intent. DECISION ITEM — " +
+      "the §8.5 caps are disclosed verbatim, which is deliberate per the comment, and the evidence " +
+      "field's contents are not enumerated there. RECOMMENDATION: leave public, as stated.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/webfetch/limits" && req.method === "GET") {',
+    reason:
+      "Global webfetch fair-use surface: current per-host sliding windows plus observed stats. " +
+      "Read-only, rate limited, and the source comment says so. DECISION ITEM: the per-host limits " +
+      "disclose the operator's configured budget. RECOMMENDATION: leave public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/system/capabilities" && req.method === "POST") {',
+    reason:
+      "Machine-level capability probe: what this instance can reach and which channels are live. The " +
+      "source comment above it states the decision in as many words: 'No auth required — " +
+      "intentionally public on localhost.' This is the route the sibling /api/trading/brokers comment " +
+      "points at as the contrast case, and it must be left alone.",
+    sourceComment: "No auth required — intentionally public on localhost.",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/streams/snapshot" && req.method === "POST") {',
+    reason:
+      "Overwrites the income snapshot shown on the dashboard. It carries its OWN gate, `if " +
+      "(!isLocalhostRequest(req)) { writeJson(res, 403, …); return true }`, which this guard does not " +
+      "model as one of the three shared gates — so it is declared here with that fact written down. " +
+      "DECISION ITEM: the control is loopback-only, which is unsound behind a reverse proxy. " +
+      "RECOMMENDATION: keep the loopback control for now and record the proxy caveat.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/streams/snapshot" && req.method === "GET") {',
+    reason:
+      "Reads the same income snapshot the POST writes. It has no gate at all, not even the loopback one " +
+      "the POST carries, so an anonymous remote caller can read the dashboard's income snapshot. " +
+      "DECISION ITEM. RECOMMENDATION: gate it with the same loopback control the POST uses, at minimum.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/client-logs" && req.method === "POST") {',
+    reason:
+      "Client error reports. Rate limited per IP and gated by PICC_ERROR_LOG, after which reports are " +
+      "dropped. It is an unauthenticated WRITE into the error log. DECISION ITEM: log-forging surface. " +
+      "RECOMMENDATION: leave public — the operator opts in via PICC_ERROR_LOG and the rate limit is the " +
+      "control — but the owner should know the write is anonymous.",
+    owner: "decision"
+  },
+
+  // ── PAPER / DEMO / AUTOPILOT (user-shaped state, ungated) ────────────────
+  {
+    marker: 'if (path === "/api/trading/paper/trade" && req.method === "POST") {',
+    reason:
+      "OPENS A PAPER POSITION, unauthenticated, and returns the position. DECISION ITEM — this is a " +
+      "persistent user-shaped mutation and the executed probe confirmed it WRITES. RECOMMENDATION: gate " +
+      "it, together with the rest of the paper family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/paper/close" && req.method === "POST") {',
+    reason:
+      "CLOSES a paper position, unauthenticated, by position id. DECISION ITEM — a persistent, " +
+      "destructive-by-effect mutation of user-shaped state. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/paper/positions" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Real open paper positions: symbol, side, entry, amount, openedAt. DECISION ITEM — the executed " +
+      "probe named this one specifically. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/paper/overview" && req.method === "GET") {',
+    reason:
+      "Paper account overview: cash, equity, unrealised and realised P&L. DECISION ITEM — the executed " +
+      "probe confirmed 200 with cash and P&L to an anonymous caller. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/paper/history" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Closed paper trades: symbol, side, entry, exit, P&L and timestamps. DECISION ITEM — this is the " +
+      "user's own trading record, and the sibling /api/trading/journal, which carries the same class of " +
+      "data, IS gated. RECOMMENDATION: gate it with the rest of the paper family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/paper/analytics" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Paper-trading analytics over the user's own paper positions. DECISION ITEM — derived from " +
+      "user-shaped state, and the sibling /api/trading/journal is gated. RECOMMENDATION: gate it with " +
+      "the rest of the paper family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/signals" && req.method === "GET") {',
+    reason:
+      "Recent advisory signals for the assets the engine is watching. DECISION ITEM — it is engine " +
+      "state rather than a per-user record, but the sibling /api/trading/journal is gated and this " +
+      "feeds the same view. RECOMMENDATION: gate it with the rest of the paper family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/signals" && req.method === "POST") {',
+    reason:
+      "RECORDS a signal, unauthenticated — a persistent write into the signal store that the " +
+      "accuracy ledger is computed from. DECISION ITEM: an anonymous caller can therefore move the " +
+      "aggregate accuracy number. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/signals/resolve" && req.method === "POST") {',
+    reason:
+      "RESOLVES a signal by id, unauthenticated — marking a recorded signal as hit or miss, which " +
+      "feeds the accuracy ledger. DECISION ITEM. RECOMMENDATION: gate it, on the same reasoning as " +
+      "its create sibling.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/accuracy" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Signal accuracy ledger, and POST re-baselines it. DECISION ITEM — it is computed from the " +
+      "signal store, which is itself ungated, so gating this alone would not stop the write path. " +
+      "RECOMMENDATION: gate it together with /api/trading/signals.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/assist" && req.method === "POST") {',
+    reason:
+      "Free-text trading assistant over caller-supplied question and context. No store read, but it " +
+      "spends LLM budget and its sibling /api/content/generate does too. DECISION ITEM. " +
+      "RECOMMENDATION: gate it, on the same cost-surface reasoning as /api/content/generate.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/demo" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "ExpertOption demo-account status: whether the account is marked demo and whether the bridged " +
+      "feed is live. DECISION ITEM — it discloses the demo/live rail, which is the same class of " +
+      "reconnaissance the sibling /api/trading/brokers route was gated for. RECOMMENDATION: gate it " +
+      "with the demo family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/demo/place" && req.method === "POST") {',
+    reason:
+      "Removed order execution. Answers a static 410 with a fixed body and touches no store, so it " +
+      "discloses nothing. DECISION ITEM, low stakes. RECOMMENDATION: leave public, or delete the route.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/demo/analytics" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Demo-account analytics over the operator's own demo trades. DECISION ITEM — the same class of " +
+      "user-shaped record as the paper family, and none of it is gated. RECOMMENDATION: gate it with " +
+      "the demo family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/demo/deals" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Demo-account deal history, bounded to 500 rows by the handler. DECISION ITEM — the operator's " +
+      "own trade record, ungated. RECOMMENDATION: gate it with the demo family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/autopilot/start" && req.method === "POST") {',
+    reason:
+      "Removed autopilot start. Answers a static 410 with a fixed body, no store read. DECISION ITEM, " +
+      "low stakes. RECOMMENDATION: leave public, or delete the route.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/autopilot/stop" && req.method === "POST") {',
+    reason: "Removed autopilot stop. Answers a static 410, no store read. DECISION ITEM. RECOMMENDATION: leave public, or delete the route.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/export" && req.method === "GET") {',
+    reason:
+      "Full export of the decision log plus resolved trade history, with a per-asset breakdown. " +
+      "DECISION ITEM — the executed probe confirmed 200 with decisions and ledger to an anonymous " +
+      "caller. This is the whole trading record in one response. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+
+  // ── WATCHLISTS / ALERTS (the two deletes are gated; the rest are not) ───
+  {
+    marker: 'if (path === "/api/trading/watchlist" && req.method === "GET") {',
+    reason:
+      "The default watchlist with live quotes attached. DECISION ITEM — it is the operator's own saved " +
+      "symbol list, and the sibling named-watchlist read is the reconnaissance step for a destructive " +
+      "delete. RECOMMENDATION: gate it with the watchlist family.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/watchlist" && req.method === "POST") {',
+    reason:
+      "ADDS a symbol to the default watchlist, unauthenticated. The executed probe confirmed it " +
+      "WROTE. DECISION ITEM. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/watchlist" && req.method === "DELETE") {',
+    reason:
+      "REMOVES a symbol from the default watchlist, unauthenticated. A destructive mutation. " +
+      "DECISION ITEM. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/watchlists" && req.method === "GET") {',
+    reason:
+      "Every named watchlist with attached prices, and each entry carries its id. DECISION ITEM — and " +
+      "the ids are exactly what the sibling delete takes, so this is the reconnaissance step for a " +
+      "destructive call. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/watchlists" && req.method === "POST") {',
+    reason:
+      "Creates a named watchlist, or adds/removes a symbol in one by id, unauthenticated. Persistent " +
+      "mutations. DECISION ITEM. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/alerts" && req.method === "GET") {',
+    reason:
+      "The alert registry with per-alert statistics. The executed probe confirmed it returns 200 with " +
+      "the registry, and that the registry rows carry a userId field. DECISION ITEM. " +
+      "RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/alerts/history" && req.method === "GET") {',
+    reason:
+      "Fired alert history, filtered by limit and symbol. The executed probe confirmed 200 to an " +
+      "anonymous caller. DECISION ITEM. RECOMMENDATION: gate it with the alert family — it is the read " +
+      "half of the store whose delete half this slice gates.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/alerts" && req.method === "POST") {',
+    reason:
+      "CREATES an alert, unauthenticated. The executed probe confirmed the write. DECISION ITEM — it is " +
+      "the create half of the store whose delete half this slice gates, and an unauthenticated caller " +
+      "can also make the engine page them. RECOMMENDATION: gate it.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/trading/alerts/toggle" && req.method === "POST") {',
+    reason:
+      "ENABLES OR DISABLES an alert by id, unauthenticated. The executed probe confirmed 200. " +
+      "DECISION ITEM. RECOMMENDATION: gate it, as the same family as the gated delete.",
+    owner: "decision"
+  },
+
+  // ── AUTH (structurally public) ──────────────────────────────────────────
+  {
+    marker: 'if (path === "/api/auth/signup" && req.method === "POST") {',
+    reason:
+      "Account creation. Structurally public: requiring a session to create the first account is " +
+      "impossible. Rate limited per IP and distinguished from a store fault by status (503 vs 400). " +
+      "RECOMMENDATION: keep public — this is what the bootstrap exists for.",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/auth/login" && req.method === "POST") {',
+    reason:
+      "Credential exchange. Structurally public for the same reason as signup, and the 401-vs-503 " +
+      "distinction is deliberate so a store fault is not reported as bad credentials. " +
+      "RECOMMENDATION: keep public.",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/auth/signout" && req.method === "POST") {',
+    reason:
+      "Revokes the caller's own token. A session is not required to end one, and requiring one would " +
+      "make a stolen token un-revocable by its holder. It reports 503 rather than a fake success when " +
+      "the store cannot be written. RECOMMENDATION: keep public.",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/auth/me" && (req.method === "GET" || req.method === "POST")) {',
+    reason:
+      "Resolves the caller's own token to a user, and answers 401 or 503 otherwise. It is gated by " +
+      "the token being presented — a session requirement is what it IS. The user store fault path is " +
+      "503, not 401, so the client does not delete a still-valid session. RECOMMENDATION: keep public.",
+    owner: "declared"
+  },
+  {
+    marker: 'if (path === "/api/stripe/webhook" && req.method === "POST") {',
+    reason:
+      "Stripe webhook. Authenticated by signature verification inside the handler, not by a session — " +
+      "Stripe cannot present one. DECISION ITEM: the owner should confirm the signature check is " +
+      "unconditional and runs before any store read. RECOMMENDATION: keep public.",
+    owner: "decision"
+  },
+  {
+    marker: 'if (path === "/api/profile/github/callback" && req.method === "GET") {',
+    reason:
+      "GitHub OAuth redirect target. GitHub's browser redirect cannot carry an Authorization header, " +
+      "so a session requirement is impossible; the route is protected by the OAuth `state` parameter " +
+      "instead. DECISION ITEM: whether `completeGithubOauth` validates state strictly, and whether a " +
+      "failure page can leak a code or username, is the owner's call to confirm. " +
+      "RECOMMENDATION: keep public, contingent on that confirmation.",
+    owner: "decision"
+  }
+]
+
+/** Marker -> entry, and the duplicate report. */
+function indexAllowlist(entries) {
+  const byMarker = new Map()
+  const duplicates = []
+  for (const entry of entries) {
+    if (byMarker.has(entry.marker)) duplicates.push(entry.marker)
+    else byMarker.set(entry.marker, entry)
+  }
+  return { byMarker, duplicates }
+}
+
+const { byMarker: ALLOWLIST_BY_MARKER, duplicates: ALLOWLIST_DUPLICATES } = indexAllowlist(DECLARED_PUBLIC)
+
+/** Is this site's own contiguous comment block (and body) carrying the given text? */
+function regionCarries(site, needle) {
+  return site.region.some((l) => l.includes(needle)) || site.ownComment.includes(needle)
+}
+
+describe("WS-7 slice C — every /api route is gated or declared public with a reason", () => {
+  it("discovers the real dispatch surface, and none of the four forms is blind", () => {
+    // A guard that silently finds nothing is the exact failure this file exists
+    // to prevent, so the scan is proved against known ground truth rather than
+    // asserted with a bare count.
+    expect(SITES.length, "the dispatch scan must still find the /api surface").toBeGreaterThan(150)
+    const byForm = (f) => SITES.filter((s) => s.form === f).length
+    expect(byForm("path ==="), "the path === form must be discovered").toBeGreaterThan(100)
+    expect(byForm("path.match"), "the path.match form must be discovered").toBeGreaterThanOrEqual(5)
+    expect(byForm("path.startsWith"), "the path.startsWith form must be discovered").toBeGreaterThanOrEqual(2)
+    // THE ONE THE SIBLING GUARD NAMED AS INVISIBLE. BROWSER_ROUTES is 33 real
+    // routes; under a three-spelling predicate every one of them is unchecked.
+    expect(
+      byForm("table"),
+      "the lookup-table form must be discovered — BROWSER_ROUTES is 33 gated routes that the sibling " +
+        "guard's predicate cannot see at all"
+    ).toBeGreaterThanOrEqual(30)
+  })
+
+  it("refuses a switch(path) dispatch rather than ignoring it", () => {
+    // The bound, enforced. A `switch (path)` today would be discovered by NOTHING
+    // in this file, and the correct behaviour is a red build naming the line, not
+    // silence. If a future author adds one, this fails and the guard is extended
+    // deliberately rather than the coverage quietly becoming false.
+    expect(
+      SWITCH_SITES,
+      "a switch(path) route dispatch is not modelled by this guard. Extend findRouteSites() to read it " +
+        "before merging, or the switch's routes arrive ungated AND unchecked"
+    ).toEqual([])
+  })
+
+  it("refuses a table entry spelled in a handler shape the guard does not model", () => {
+    // The anti-drift half of the table claim. BROWSER_ROUTES entries are all
+    // `async (`. A table written `"/api/x": (req, res) => {…}` or with a
+    // non-`async` function must still be discovered — so the pattern accepts
+    // them, and this test fails if that is ever narrowed back to one shape while
+    // a differently-shaped entry exists in the source.
+    const unmodelled = LINES.map((l, i) => ({ l, i }))
+      .filter((r) => /^\s*"\/api\/[^"]*"\s*:/.test(r.l.trim()))
+      .filter((r) => !TABLE_DISPATCH.test(r.l.trim()))
+      .map((r) => `handlers.mjs:${r.i + 1}  ${r.l.trim()}`)
+    expect(
+      unmodelled,
+      "a /api key in a route-table object whose handler shape TABLE_DISPATCH does not match would be " +
+        "discovered as no site at all, so no assertion would be made about it. Widen TABLE_DISPATCH."
+    ).toEqual([])
+  })
+
+  // ── THE INVARIANT ────────────────────────────────────────────────────────
+  it("every discovered route is gated in its own block, or declared public with a reason", () => {
+    const offenders = SITES.map((s) => ({ s, verdict: isGated(s) }))
+      .filter((r) => !r.verdict.ok && !ALLOWLIST_BY_MARKER.has(r.s.marker))
+      .map((r) => `handlers.mjs:${r.s.line}  ${r.s.marker}  — ${r.verdict.why}`)
+    expect(
+      offenders,
+      "EVERY /api route must pass through a gate inside its OWN block and BEFORE it answers, or appear " +
+        "in DECLARED_PUBLIC above with a written reason. There is no third state: a route that is " +
+        "neither gated nor declared is an omission, and an omission is how ~40 routes answered " +
+        "anonymously in the first place. If this route should be public, add it to DECLARED_PUBLIC with " +
+        "what it discloses and a recommendation; if it should not be, add the gate."
+    ).toEqual([])
+  })
+
+  it("no route is BOTH gated and allowlisted — the allowlist cannot rot into a fiction", () => {
+    // The anti-staleness direction. Once a route is gated, its allowlist entry is
+    // a lie: it claims a decision that no longer describes the code, and it would
+    // keep excusing the route if the gate were later removed. Requiring the
+    // deletion means the two can never disagree.
+    const both = SITES.filter((s) => isGated(s).ok && ALLOWLIST_BY_MARKER.has(s.marker)).map(
+      (s) => `handlers.mjs:${s.line}  ${s.marker}`
+    )
+    expect(
+      both,
+      "these routes are gated in their own block AND still declared public. Delete the DECLARED_PUBLIC " +
+        "entry: a gate is the honest state, and leaving the entry means it would go on excusing the " +
+        "route if the gate were ever lost."
+    ).toEqual([])
+  })
+})
+
+describe("WS-7 slice C — the allowlist is self-policing", () => {
+  it("has no duplicate marker", () => {
+    expect(
+      ALLOWLIST_DUPLICATES,
+      "the same route is allowlisted twice. Two entries for one route means two justifications and no " +
+        "way to tell which one is the decision."
+    ).toEqual([])
+  })
+
+  it("gives every entry a written reason, not a placeholder", () => {
+    for (const entry of DECLARED_PUBLIC) {
+      expect(typeof entry.reason, "an allowlist entry must carry a written reason").toBe("string")
+      expect(
+        entry.reason.trim().length,
+        `a bare marker is not an allowance: ${entry.marker}`
+      ).toBeGreaterThan(120)
+      const bare = entry.reason.trim().toLowerCase()
+      for (const phrase of PLACEHOLDER_REASONS) {
+        expect(
+          bare,
+          `"${phrase}" is a placeholder, not a reason: ${entry.marker}`
+        ).not.toBe(phrase)
+      }
+      expect(
+        ["declared", "decision"],
+        `every entry must be classified as "declared" (the source says so) or "decision" (an open ` +
+          `question for the owner): ${entry.marker}`
+      ).toContain(entry.owner)
+    }
+  })
+
+  it("has no stale entry — every marker resolves to a live route", () => {
+    // The rot direction. A renamed or deleted route leaves its entry behind, and
+    // a stale entry is worse than none: it looks like coverage in this file while
+    // excusing nothing.
+    const stale = DECLARED_PUBLIC.filter((e) => !SITES.some((s) => s.marker === e.marker)).map((e) => e.marker)
+    expect(
+      stale,
+      "these allowlist entries name a dispatch line the guard cannot find. The route was renamed, " +
+        "re-spelled or removed — update the marker to the route's CURRENT dispatch line, or delete " +
+        "the entry. A stale entry is worse than a missing one: it reads as coverage and excuses nothing."
+    ).toEqual([])
+  })
+
+  it("binds every entry to its OWN route, so a marker cannot be lifted", () => {
+    // THE ANTI-PASTING TEST, and the property the earlier rounds of the sibling
+    // guard lacked. There, an allowlist entry's MARKER was a comment string found
+    // in a 12-line WINDOW, so copying that comment onto a real gate excused it.
+    // Here the marker is the route's own dispatch line and the match is EXACT and
+    // per-site, so:
+    //   - a marker that exists in the file but not at this route is rejected, and
+    //   - two routes that share a path but differ by method have different markers,
+    //     which is why the entries are keyed by dispatch line and not by path.
+    const lifted = DECLARED_PUBLIC.filter((e) => {
+      const inSource = SRC.includes(e.marker)
+      const onItsOwnRoute = SITES.some((s) => s.marker === e.marker)
+      // In the source but not as ANY discovered dispatch is the unbound case.
+      return inSource && !onItsOwnRoute
+    }).map((e) => e.marker)
+    expect(lifted, "an allowlist marker that appears in the source but is not a discovered dispatch line").toEqual([])
+
+    // And the property, stated as a fixture: a marker copied onto a different
+    // route does not transfer, because the match is the whole dispatch line.
+    const other = SITES.find((s) => s.marker !== DECLARED_PUBLIC[0].marker)
+    expect(
+      ALLOWLIST_BY_MARKER.has(other.marker),
+      "a marker is bound to its own dispatch line, so it cannot excuse a different route"
+    ).toBe(false)
+  })
+
+  it("requires every sourceComment to sit inside that route's OWN block", () => {
+    // Region-bound, never window-bound. A sourceComment is the ONE place a source
+    // comment reaches this file's verdict, and it is worth being precise about
+    // that: it is an ADDITIONAL requirement, never an exemption. The comment
+    // must be inside the route's own handler block; if it has drifted elsewhere,
+    // or been deleted, the entry fails.
+    const unbound = DECLARED_PUBLIC.filter((e) => e.sourceComment && !SITES.some((s) => s.marker === e.marker && regionCarries(s, e.sourceComment)))
+      .map((e) => e.marker)
+    expect(
+      unbound,
+      "these entries cite a sourceComment that is no longer inside their own route's block. Move the " +
+        "justification onto the route, or drop the sourceComment field — a comment in a 12-line window " +
+        "is the escape the earlier rounds were bitten by, and this is the region-bound replacement."
+    ).toEqual([])
+    expect(
+      DECLARED_PUBLIC.filter((e) => e.sourceComment).length,
+      "at least one entry must cite a source-side justification, or the region-bound sourceComment rule " +
+        "is never exercised"
+    ).toBeGreaterThan(0)
+  })
+})
+
+describe("WS-7 slice C — the guard's own teeth", () => {
+  const GATE_LINE = "if (!(await requireAuth(req, res))) return true"
+
+  it("catches an ungated route planted in a real dispatch shape", () => {
+    // The 15th route, planted. This is the exact shape the executed probes found:
+    // a `path ===` dispatch, a `path.match` dispatch, and a lookup-table entry,
+    // none of them gated. The invariant must report every one.
+    const planted = [
+      'if (path === "/api/planted/plain" && req.method === "POST") {',
+      "  writeJson(res, 200, { ok: true })",
+      "  return",
+      "}",
+      "const m = path.match(/^\\/api\\/planted\\/([a-z]+)$/)",
+      "if (m) {",
+      "  writeJson(res, 200, { ok: true, id: m[1] })",
+      "  return",
+      "}",
+      '"/api/planted/table": async (req, res, parsed) => {',
+      "  writeJson(res, 200, { ok: true })",
+      "  return true",
+      "}"
+    ].join("\n")
+    const sites = discoverRouteSites(planted.split("\n"))
+    expect(
+      sites.map((s) => s.form).sort(),
+      "all three planted dispatch forms must be discovered, or this test proves nothing"
+    ).toEqual(["path ===", "path.match", "table"])
+    const caught = sites.filter((s) => !isGated(s).ok && !ALLOWLIST_BY_MARKER.has(s.marker))
+    expect(
+      caught.length,
+      "every planted ungated route must be reported by the invariant"
+    ).toBe(3)
+  })
+
+  it("accepts the same three shapes once each carries its own gate", () => {
+    // The mirror, so the rejection above is not just a rule that rejects
+    // everything — including the table form, which the sibling guard cannot see
+    // even when it IS gated.
+    const planted = [
+      'if (path === "/api/planted/plain" && req.method === "POST") {',
+      `  ${GATE_LINE}`,
+      "  writeJson(res, 200, { ok: true })",
+      "  return",
+      "}",
+      '"/api/planted/table": async (req, res, parsed) => {',
+      `  ${GATE_LINE}`,
+      "  writeJson(res, 200, { ok: true })",
+      "  return true",
+      "}"
+    ].join("\n")
+    const sites = discoverRouteSites(planted.split("\n"))
+    expect(sites.map((s) => isGated(s).ok)).toEqual([true, true])
+  })
+
+  it("still rejects a gate that runs AFTER the route has answered", () => {
+    // Ordering, not presence. A dead gate is what a presence-only check calls
+    // safety.
+    const planted = [
+      'if (path === "/api/planted/late" && req.method === "POST") {',
+      "  writeJson(res, 200, { ok: true, secret: await readStore() })",
+      `  ${GATE_LINE}`,
+      "  return",
+      "}"
+    ].join("\n")
+    const sites = discoverRouteSites(planted.split("\n"))
+    expect(isGated(sites[0]).ok, "a gate that cannot run before the response is not a gate").toBe(false)
+    expect(isGated(sites[0]).why).toMatch(/BEFORE/)
+  })
+
+  it("does not mistake a static pre-gate response for a disclosure", () => {
+    // The carve-out, pinned in both directions so it cannot widen or vanish. A
+    // 429 rate limit and a static 503 "not configured" precede real gates at
+    // handlers.mjs:2739, :2763, :2776, :4755, :4786 and :5558.
+    const rateLimited = [
+      'if (path === "/api/planted/rl" && req.method === "POST") {',
+      "  if (rateLimited(k, 10, 60_000)) {",
+      '    writeJson(res, 429, { error: "rate limited" })',
+      "    return true",
+      "  }",
+      `  ${GATE_LINE}`,
+      '  writeJson(res, 200, { ok: true })',
+      "  return",
+      "}"
+    ].join("\n")
+    const notConfigured = [
+      'if (path === "/api/planted/nc" && req.method === "POST") {',
+      '  if (!env.thing) return writeJson(res, 503, { error: "thing not configured" })',
+      `  ${GATE_LINE}`,
+      '  writeJson(res, 200, { ok: true })',
+      "  return",
+      "}"
+    ].join("\n")
+    expect(isGated(discoverRouteSites(rateLimited.split("\n"))[0]).ok, "a 429 is not a disclosure").toBe(true)
+    expect(isGated(discoverRouteSites(notConfigured.split("\n"))[0]).ok, "a static 503 is not a disclosure").toBe(
+      true
+    )
+    // And a DYNAMIC body before the gate is still a disclosure.
+    const dynamic = [
+      'if (path === "/api/planted/dyn" && req.method === "POST") {',
+      "  try {",
+      '    writeJson(res, 200, { positions: await paperPositions() })',
+      "  } catch (err) {",
+      '    writeJson(res, 500, { ok: false, error: err.message })',
+      "  }",
+      "  return",
+      "}"
+    ].join("\n")
+    expect(isGated(discoverRouteSites(dynamic.split("\n"))[0]).ok).toBe(false)
+  })
+
+  it("does not mistake a `return true` sentinel for a response", () => {
+    // The false positive that put six genuinely-gated routes on the ungated list
+    // when this rule was first written: /api/trading/realtime, /api/packs/ack,
+    // /api/webfetch/limits/reset, /api/agents/run, /api/agents/settings and
+    // /api/browser/stream all write a 4xx and then `return true` before their
+    // gate. Pinned so the sentinel cannot be dropped by accident and re-open
+    // six false failures, and cannot be widened to excuse a real response.
+    const planted = [
+      'if (path === "/api/planted/sentinel" && req.method === "GET") {',
+      "  if (badOrigin) {",
+      '    writeJson(res, 403, { error: "origin not allowed" })',
+      "    return true",
+      "  }",
+      `  ${GATE_LINE}`,
+      "  writeJson(res, 200, { ok: true })",
+      "  return true",
+      "}"
+    ].join("\n")
+    expect(isGated(discoverRouteSites(planted.split("\n"))[0]).ok, "a sentinel is control flow, not a response").toBe(
+      true
+    )
+  })
+
+  it("a comment pasted onto an ungated route does not excuse it", () => {
+    // THE COMMENT-BYPASS ATTACK, on the surface where it previously worked. The
+    // source comment that justifies a declared-public route is copied verbatim
+    // onto a DIFFERENT, ungated route — exactly what defeated a window-based
+    // marker check in the earlier rounds. It must change nothing here, because
+    // this guard never reads a comment to reach a verdict.
+    const planted = [
+      "// No auth required — intentionally public on localhost.",
+      'if (path === "/api/planted/pasted" && req.method === "POST") {',
+      "  writeJson(res, 200, { ok: true, watchlists: await listWatchlists() })",
+      "  return",
+      "}"
+    ].join("\n")
+    const site = discoverRouteSites(planted.split("\n"))[0]
+    expect(site, "the pasted route must still be discovered").toBeDefined()
+    expect(isGated(site).ok, "a pasted justification comment must not excuse a route").toBe(false)
+    expect(ALLOWLIST_BY_MARKER.has(site.marker), "and the pasted route is not in the allowlist").toBe(false)
+  })
+
+  it("demonstrates the blind spot a name-bound route literal creates", () => {
+    // PLANTED IN THE REAL SOURCE AND DEMONSTRATED, NOT DESCRIBED. This exact
+    // three-line shape was added to handlers.mjs and the whole guard run: 17 of
+    // 17 tests stayed GREEN and the route appeared nowhere in the output. A
+    // dispatch that compares `path` against a NAME rather than a literal is
+    // discovered by no form in findRouteSites, so no site is found and no
+    // assertion is made about it — the same failure mode the sibling guard
+    // recorded for `switch` and a route map, and the reason this file does not
+    // simply claim the dispatch surface is covered.
+    //
+    // It is asserted here so the blindness is a machine-checked fact about this
+    // file rather than a sentence in a comment, and so the backstop below can be
+    // pointed at a demonstrated gap rather than a hypothetical one.
+    const planted = [
+      '  const PLANTED_COMPUTED_ROUTE = "/api/teeth/computed"',
+      '  if (path === PLANTED_COMPUTED_ROUTE && req.method === "GET") {',
+      "    if (!(await requireAuth(req, res))) return true",
+      "    writeJson(res, 200, { ok: true, watchlists: await listWatchlists() })",
+      "    return true",
+      "  }"
+    ].join("\n")
+    expect(
+      discoverRouteSites(planted.split("\n")),
+      "THIS IS THE BOUND, SHOWN: a name-bound route literal is invisible to every dispatch form, so a " +
+        "route written this way arrives unchecked. The backstop test below is what keeps it loud."
+    ).toEqual([])
+  })
+
+  it("no route literal is bound to a NAME, so the blind spot above stays loud", () => {
+    // THE BACKSTOP for the bound just demonstrated. Resolving a name to its
+    // literal needs scope analysis, which is a parser rather than a scan, and a
+    // half-measure that looked like coverage is the failure mode this file exists
+    // to prevent — the same reasoning the sibling guard gave for not chasing its
+    // own limitation #1.
+    //
+    // What IS available is turning the silence into a red build. `path === X`
+    // where X is a name is the only way a route literal gets out of this file's
+    // reach, so the rule is: no `const NAME = "/api/…"` in handlers.mjs. The
+    // corpus is 0 today — verified, not assumed — so the rule costs nothing and
+    // catches the door rather than the room.
+    const offenders = LINES.map((text, i) => ({ text: text.trim(), line: i + 1 }))
+      .filter((r) => !r.text.startsWith("//") && /^(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*["'`]\/api\//.test(r.text))
+      .map((r) => `handlers.mjs:${r.line}  ${r.text}`)
+    expect(
+      offenders,
+      "a route literal is bound to a name, so a dispatch comparing `path` against that name is " +
+        "invisible to every form in findRouteSites() and the route would arrive UNCHECKED — demonstrated " +
+        "green in this file's own 'blind spot' test above. Either dispatch the literal directly, or " +
+        "extend findRouteSites() to resolve the binding before merging."
+    ).toEqual([])
+  })
+
+  it("the two destructive deletes are the sites this slice gated", () => {
+    // The finding, pinned at the structural level. Both were confirmed by
+    // execution to answer 200 to an anonymous caller and to mutate by id; both
+    // are now gated, and neither may appear in the allowlist.
+    for (const marker of [
+      'if (path === "/api/trading/alerts/delete" && req.method === "POST") {',
+      'if (path === "/api/trading/watchlists/delete" && req.method === "POST") {'
+    ]) {
+      const site = SITES.find((s) => s.marker === marker)
+      expect(site, `${marker} must still be routed`).toBeDefined()
+      expect(isGated(site).ok, `${marker} must be gated`).toBe(true)
+      expect(ALLOWLIST_BY_MARKER.has(marker), `${marker} must NOT be declared public`).toBe(false)
+    }
+  })
+})
+
+/**
+ * KNOWN LIMITATIONS — what this guard does NOT close. Stated rather than
+ * claimed away, because a guard that claims more than it enforces is worse than
+ * one that admits its edge: the false claim is what let ~40 routes through.
+ *
+ * 1. THE REGION WALK IS INDENTATION-BASED. A route whose body is written at an
+ *    unexpected indent is not followed into, and a single-line `if (...) return x`
+ *    has no block to walk. Both shapes are covered by fixtures for the
+ *    single-line case; an unusual indent is not detected, it is simply not
+ *    followed. This is inherited from the sibling guard, which was bitten by the
+ *    single-line case and failed UNSAFE; the fix there was the same one used here.
+ *
+ * 2. THE GATE VOCABULARY IS THREE NAMES PLUS ONE IDIOM. A gate written as
+ *    `ensureAuthenticated()`, or hoisted into a helper that calls one of the three
+ *    but is not itself one of the three, is not seen as a gate and the route is
+ *    reported ungated. That errs toward a FALSE FAILURE, which is the safe
+ *    direction, and adding a fourth name is a one-line change. The reverse — a
+ *    function that merely MENTIONS one of the three names in its own block — is
+ *    not possible from this position.
+ *
+ * 3. THE INLINE IDIOM IS RECOGNISED BY SHAPE, NOT BY SEMANTICS.
+ *    `await verifyUser(auth)` followed by `if (!userId) … writeJson(res, 401)`
+ *    anywhere in the block counts as a gate even if the two are unrelated
+ *    statements. A route that calls verifyUser for a logging line and refuses
+ *    for some other reason would be accepted. Seven routes use the idiom
+ *    genuinely today.
+ *
+ * 4. THE INLINE IDIOM FAILS CLOSED WITH THE WRONG STATUS. verifyUser() answers
+ *    null when the SESSIONS store faults, so those seven routes answer 401
+ *    where the shared gate answers 503 — 401 being the session-destroying
+ *    status client-side. No access is granted, which is why this is a gap and
+ *    not a hole. Migrating a site is `verifyTokenStrict()` + `strictOrRefuse()`,
+ *    exactly as the shared gate does it, and the sibling guard pins the
+ *    verifyUser call-site count for that migration.
+ *
+ * 5. DISCOVERY IS LINE-BASED AND SEES FOUR SPELLINGS. A dispatch assembled across
+ *    lines by a template literal, a computed property key, or a regex built at
+ *    runtime is not discovered, and therefore is not asserted about.
+ *
+ *    THE ONE THAT WAS DEMONSTRATED AGAINST THIS FILE, not hypothesised. A
+ *    three-line dispatch planted in the REAL handlers.mjs —
+ *
+ *        const PLANTED_COMPUTED_ROUTE = "/api/teeth/computed"
+ *        if (path === PLANTED_COMPUTED_ROUTE && req.method === "GET") {
+ *          if (!(await requireAuth(req, res))) return true
+ *
+ *    — left this file 17/17 GREEN with the route appearing nowhere in the output.
+ *    The plant was then removed. It is asserted, not narrated: the test
+ *    "demonstrates the blind spot a name-bound route literal creates" runs that
+ *    shape and requires `discoverRouteSites` to return `[]`, so the blindness is
+ *    a machine-checked fact about this file.
+ *
+ *    Closing it needs scope analysis — resolving every binding a dispatch
+ *    expression reaches — which is a parser, not a scan, and the same reasoning
+ *    the sibling guard gave for not closing its limitation #1. What IS available
+ *    is making the silence loud instead, and that is done: the `no route literal
+ *    is bound to a NAME` test fails on any `const NAME = "/api/…"` in the file.
+ *    The corpus is 0 today, verified, so the rule costs nothing. The remaining
+ *    residual is a route literal that never appears as a `/api/…` string at all —
+ *    assembled at runtime from parts — which no static rule here can see.
+ *    `switch (path)` is the other such door, and unlike the computed one it is
+ *    refused outright rather than merely bounded.
+ *
+ * 6. A MARKER IS THE ROUTE'S OWN DISPATCH LINE, WHICH IS A WEAKER ANCHOR THAN A
+ *    WRITTEN DECLARATION COMMENT. What the guard guarantees is that an exemption
+ *    is bound to ONE exact dispatch site, cannot drift to another route, and
+ *    cannot be duplicated. What it does NOT guarantee is that the exemption was
+ *    argued at the call site — the argument lives in this file. An entry whose
+ *    justification the owner wants visible next to the route should carry a
+ *    `sourceComment`, and the guard then requires that comment inside the
+ *    route's own block. Three entries do.
+ *
+ * 7. THE ALLOWLIST IS A RECORD OF THE OWNER'S PENDING DECISION, NOT OF A
+ *    DECISION. Ninety-nine routes are listed with what each discloses and a
+ *    recommendation, and the great majority are marked owner:"decision". The
+  *    invariant they satisfy is "every route is either gated or DECLARED", not
+  *    "every route is correctly classified". The second claim is the owner's to
+  *    make and is not something a test can make for them.
+ */
+
+// ---------------------------------------------------------------------------
+// INVENTORY EMITTER
+//
+// The report's route table must not be a hand-typed second opinion. This block
+// runs the SAME discoverRouteSites/isGated/DECLARED_PUBLIC the tests above assert
+// on, so the table in
+// .superpowers/sdd/PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1/
+//   task-route-auth-inventory-report.md
+// cannot disagree with the guard by construction.
+//
+// It is inert unless WS7_WRITE_ROUTE_INVENTORY names an output file, so it adds
+// no I/O to a normal `npm test`. Regenerate with:
+//   WS7_WRITE_ROUTE_INVENTORY=<abs path> npx vitest run ws7RouteAuthCoverageGuard
+// ---------------------------------------------------------------------------
+if (process.env.WS7_WRITE_ROUTE_INVENTORY) {
+  const { writeFileSync: writeInventoryFile } = await import("node:fs")
+
+  /** The first non-precondition answer in a region, described for a human. */
+  function describeDisclosure(site) {
+    const found = []
+    for (const raw of site.region) {
+      const { text } = statementBody(raw)
+      if (!/writeJson\s*\(|\bres\.(?:write|end|writeHead)\b/.test(text)) continue
+      const w = /writeJson\s*\(/.exec(text)
+      if (!w) continue
+      const inner = text.slice(w.index + w[0].length)
+      // 4xx refusals and static bodies carry nothing worth calling disclosure.
+      if (/^\s*res\s*,\s*4\d\d/.test(inner) && !staticBody(inner)) continue
+      const payload = inner.replace(/^\s*res\s*,\s*\d+\s*,\s*/, "").replace(/\)\s*$/, "").trim()
+      if (/^(?:\(\)|\{\}|"\{\}"|\{\s*\})$/.test(payload)) continue
+      found.push((payload || "(helper call)").replace(/\s+/g, " "))
+      if (found.length >= 2) break
+    }
+    return found.length ? found.join(" ; ") : "(answers via a helper)"
+  }
+
+  const inventoryRows = SITES.map((site) => {
+    const verdict = isGated(site)
+    const entry = ALLOWLIST_BY_MARKER.get(site.marker)
+    const method = site.region
+      .map((l) => /req\.method\s*===\s*["'`]([A-Z]+)["'`]/.exec(l)?.[1])
+      .find(Boolean)
+    return {
+      route: site.route,
+      method: method ?? null,
+      line: site.line,
+      form: site.form,
+      marker: site.marker,
+      gated: verdict.ok === true,
+      how: verdict.ok === true ? verdict.how : null,
+      why: verdict.ok === true ? null : verdict.why,
+      allowlisted: Boolean(entry),
+      owner: entry?.owner ?? null,
+      reason: entry?.reason ?? null,
+      sourceComment: entry?.sourceComment ?? null,
+      discloses: describeDisclosure(site)
+    }
+  })
+
+  const tally = {
+    sites: SITES.length,
+    gated: inventoryRows.filter((r) => r.gated).length,
+    allowlisted: inventoryRows.filter((r) => !r.gated && r.allowlisted).length,
+    offenders: inventoryRows.filter((r) => !r.gated && !r.allowlisted).length,
+    byForm: Object.fromEntries(
+      ["path ===", "path.startsWith", "path.match", "table"].map((f) => [
+        f,
+        inventoryRows.filter((r) => r.form === f).length
+      ])
+    ),
+    allowlistEntries: DECLARED_PUBLIC.length,
+    allowlistDeclared: DECLARED_PUBLIC.filter((e) => e.owner === "declared").length,
+    allowlistDecisionItems: DECLARED_PUBLIC.filter((e) => e.owner === "decision").length,
+    allowlistWithSourceComment: DECLARED_PUBLIC.filter((e) => e.sourceComment).length,
+    handlersSha: (await import("node:crypto"))
+      .createHash("sha256")
+      .update(SRC)
+      .digest("hex")
+      .slice(0, 16),
+    switchSites: SWITCH_SITES.length
+  }
+
+  writeInventoryFile(process.env.WS7_WRITE_ROUTE_INVENTORY, JSON.stringify({ tally, rows: inventoryRows }, null, 2))
+  // Readable enough to eyeball in a terminal when regenerating by hand.
+  console.log(
+    `WS7 route inventory: ${tally.sites} sites = ${tally.gated} gated + ${tally.allowlisted} allowlisted ` +
+      `(${tally.offenders} offenders); allowlist ${tally.allowlistEntries} entries ` +
+      `(${tally.allowlistDeclared} declared / ${tally.allowlistDecisionItems} decision items)`
+  )
+}
