@@ -289,11 +289,16 @@ millisecond timestamp, and 24 random bytes. The root and created directories use
 the platform supports it. The helper does not delete the root after the run; retain it for test
 artifacts or remove that exact hashed directory after inspection.
 
-### 4.3 Full 20-variable contract
+### 4.3 Full 23-variable contract
 
-The isolation map is exactly 18 path variables plus two scalar variables. The order below matches
-`ISOLATION_PATH_VARIABLES` and the environment map in
-`apps/dashboard/e2e/helpers/isolatedEnv.mjs`.
+The isolation map is exactly 19 path variables plus 4 scalar variables. The order below matches
+`REQUIRED_ISOLATION_VARIABLES` in
+`apps/dashboard/e2e/helpers/isolatedEnv.mjs`, which is itself composed from
+`ISOLATION_PATH_VARIABLES` in `apps/dashboard/testSupport/storeIsolation.mjs`.
+
+`server/__tests__/runbookIsolationContract.test.mjs` asserts this table against that array —
+element by element and in order — so this section cannot drift from the harness again without
+turning the build red.
 
 | # | Variable | Isolated value |
 |---:|---|---|
@@ -315,20 +320,42 @@ The isolation map is exactly 18 path variables plus two scalar variables. The or
 | 16 | `PICC_DATA_DIR` | `<root>/data` |
 | 17 | `PICC_SESSION_CAPTURE_SETTINGS_FILE` | `<root>/settings/session-capture-settings.json` |
 | 18 | `PICC_LLM_SETTINGS_FILE` | `<root>/settings/llm-settings.json` |
-| 19 | `PICC_VAULT_KEY` | Fresh 32 random bytes encoded as 64 lowercase hexadecimal characters |
-| 20 | `PICC_ERROR_LOG` | Exactly `0` |
+| 19 | `PICC_ERROR_LOG_FILE` | `<root>/settings/picc-errors.log` |
+| 20 | `PICC_VAULT_KEY` | Fresh 32 random bytes encoded as 64 lowercase hexadecimal characters |
+| 21 | `PICC_ERROR_LOG` | Exactly `0` |
+| 22 | `PICC_ENV_LOADED` | Exactly `1` |
+| 23 | `PICC_E2E_RUN_ID` | The isolation root's 20-character hex leaf name |
+
+Three of these were added after this section was first written and are worth calling out, because
+each one is load-bearing in a way the others are not:
+
+- **`PICC_ERROR_LOG_FILE` (#19)** decides where the error log is written. `server/errorLog.mjs`
+  defaults it to `<repo>/picc-errors.log` and truncates that file on every launch, so a harness that
+  enables the logger without redirecting this variable writes at the repository root.
+- **`PICC_ENV_LOADED` (#22)** is what actually blocks credential loading. Playwright *merges* the
+  parent environment into the web server, so redirecting the data directories alone does not make a
+  run credential-free; `server/config.mjs` calls `process.loadEnvFile()` unless this is already set,
+  and `apps/dashboard/.env` holds real provider and CCXT credentials.
+- **`PICC_E2E_RUN_ID` (#23)** is the arming signal for the `/api/auth/me` branch trace. The e2e run
+  marker is what makes `writeAuthMeTrace` write at all; without it the trace is silent in every
+  environment, which is the failure mode that made the WS-6 T10 instrumentation useless when it was
+  first written. See §4.6.
 
 ### 4.4 Containment assertion
 
 Both `playwright.config.ts` and the helper call `assertIsolatedEnv`. The helper refuses to start the
 run when any of these conditions is false:
 
-- The environment map does not contain exactly the 20 required keys.
+- The environment map does not contain exactly the 23 required keys.
 - A required key is missing or an unexpected key is present.
-- Any of the 18 path values is empty, resolves outside `<root>`, or escapes after canonical parent
+- Any of the 19 path values is empty, resolves outside `<root>`, or escapes after canonical parent
   resolution.
 - `PICC_ERROR_LOG` is not exactly `0`.
+- `PICC_ENV_LOADED` is not exactly `1`.
 - `PICC_VAULT_KEY` does not match the required 64-character lowercase hexadecimal format.
+- `PICC_E2E_RUN_ID` is not 1–64 characters drawn from `[A-Za-z0-9._-]`. The value is used as a
+  directory-name component by the shared-session cache and as the `run` field on every `/me` trace
+  line, so a separator or an unbounded value would be a filename-traversal and log-bloat surface.
 - A pre-existing `picc-vault.key` is present under the isolation root.
 
 The configured persistence and vault-backed credential stores are therefore redirected under the
@@ -340,7 +367,7 @@ decrypt their real vault-backed credentials through those mapped variables.
 The current code does not implement a general secret-scrubbing sandbox. Playwright merges the
 configured `webServer.env` values over its inherited process environment, and
 `apps/dashboard/server/config.mjs` can load `apps/dashboard/.env` when the dev server imports the API
-handlers. The 20-key assertion proves the mapped paths and vault key are isolated; it does not prove
+handlers. The 23-key assertion proves the mapped paths and vault key are isolated; it does not prove
 that unrelated `PICC_CCXT_*`, LLM, payment, broker, or provider secrets are absent from the child
 process.
 
@@ -349,6 +376,43 @@ operator environment when external calls could cause harm. A blanket claim that 
 real secret from the shell or `.env` is not established by the current code.
 
 CI adoption is a later follow-up. WS-5 does not change the CI workflow.
+
+### 4.6 Reading what a run leaves behind, and the bound on what it can tell you
+
+Three artifacts, all under the run's own isolation root, are what a failing `terminal-perf` run has
+to be diagnosed from. `<root>` is §4.2's hashed directory.
+
+| Artifact | Written | Survives a FAILING run? |
+| --- | --- | --- |
+| `<root>/settings/picc-errors.log` | Continuously, one JSON line per `/api/auth/me` answer | **Yes** |
+| `apps/dashboard/perf/terminal-perf-manifest.json` | Once, at the end of the test body | **No** — the body throws first |
+| `apps/dashboard/test-results/terminal-perf-transition-evidence.json` | In an `afterEach`, so after pass *or* fail | **Yes** |
+
+**`picc-errors.log`.** Filter to lines with `"src":"auth-me"` and match on the `run` field, which is
+`PICC_E2E_RUN_ID` (the `<root>` leaf name). `branch` is one of:
+
+| `branch` | Meaning | Next question |
+| --- | --- | --- |
+| `confirmed` | 200, the token was really vouched for | the store and `/me` are exonerated |
+| `rejected` | 401, the token really was refused | look at session lookup/pruning |
+| `store-fault` | 503, nothing was examined | read the counters carried on the same line |
+| `unhandled` | an unexpected throw escaped `/me` | read `reason` |
+
+A `store-fault` line also carries `storeWriteFailures` and `storeReadFaults` as snapshots, so the
+counters survive the run. They are process-scoped and are gone once the dev server exits, which is
+why they are written onto the line rather than left to be polled: **do not plan to read
+`/api/auth/status` after the run — by then it is answering from a fresh process with empty
+counters.**
+
+**The bound, stated plainly.** The `/me` trace covers a failure on the *cold navigation* at
+`terminal-perf.spec.ts:89` (the two `page.goto` calls that precede it are full page loads). It does
+**not** cover the 16-iteration transition loop at `:125-133`: those clicks are react-router
+client-side navigations between two already-mounted rooms, so they issue zero `/api/auth/me`
+requests and the `useAuth` effect — keyed on `[inconclusive]` — never re-runs. For a failure at
+`:128`/`:132` the evidence is the transition evidence file, not `picc-errors.log`.
+
+`terminal-perf` is **UNROOTED**. No failing run has been captured. What these artifacts buy is that
+the *next* one can be read.
 
 ---
 

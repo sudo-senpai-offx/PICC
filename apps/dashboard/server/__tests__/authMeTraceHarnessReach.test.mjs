@@ -39,7 +39,10 @@ import { existsSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
-import harness, { REQUIRED_ISOLATION_VARIABLES } from "../../e2e/helpers/isolatedEnv.mjs"
+// WS-7 slice B fix round 1: the harness is imported through the shared helper rather
+// than directly, because importing it at all mints a `.playwright-tmp/<hash>/` tree at
+// module scope and the helper is what removes it again. Same import, no leak.
+import { harnessEnv as harness, REQUIRED_ISOLATION_VARIABLES } from "../../testSupport/isoHarnessEnv.mjs"
 
 const RUN_MARKER = "PICC_E2E_RUN_ID"
 
@@ -267,6 +270,46 @@ describe("WS-6 T10 anti-rot: the /me trace is REACHABLE from a harness-shaped en
     expect(existsSync(harness.PICC_ERROR_LOG_FILE)).toBe(false)
   })
 
+  it("the store-fault branch carries NO filesystem path in its reason", async () => {
+    // The one branch that WASN'T covered by a shape assertion. The other three carry
+    // a boolean or a user id; this one carries `err.message`, and
+    // `AuthStoreUnavailable` interpolates the store's absolute path into that message
+    // (auth.mjs). So this is the one line where a Windows path, a user name and the
+    // data layout reach a file.
+    //
+    // NOT attacker-reachable: the destination is `PICC_ERROR_LOG_FILE`, already
+    // redirected inside the run's own scratch, and `writeAuthMeTrace` is armed only
+    // by PICC_E2E_RUN_ID, which nothing but the e2e harness sets. It is still a
+    // disclosure to fix, and the fix belongs at the WRITER rather than at this one
+    // call site — `unhandled` forwards an arbitrary `err.message` through the same
+    // door, and so would any future field.
+    const auth = await import("../services/auth.mjs")
+    const created = await auth.createAccount({ email: "reason@picc.test", password: "reason-password-9" })
+    expect(created.token).toBeTruthy()
+    const { writeFileSync } = await import("node:fs")
+    writeFileSync(join(harness.PICC_AUTH_DATA_DIR, "users.json"), "{ not json", "utf8")
+    rmSync(harness.PICC_ERROR_LOG_FILE, { force: true })
+
+    const res = await callMe(handleApi, { authorization: `Bearer ${created.token}` })
+    expect(res.status, "a store fault is inconclusive, not a 401").toBe(503)
+
+    const lines = harnessAuthMeLines(harness.PICC_ERROR_LOG_FILE)
+    expect(lines).toHaveLength(1)
+    expect(lines[0].branch).toBe("store-fault")
+    // The diagnosis must survive: the file name and the shape verdict are the whole
+    // value of the line, so the redaction has to keep them.
+    expect(lines[0].reason, "the reason must still name the file and the fault").toContain("users.json")
+    expect(lines[0].reason, "the reason must still say it was a parse failure").toMatch(/parse failed/i)
+    expect(
+      lines[0].reason,
+      `the reason must not carry a filesystem path: ${lines[0].reason}`
+    ).not.toMatch(/[A-Za-z]:\\/)
+    expect(
+      JSON.stringify(lines),
+      "no field on any branch may carry a filesystem path"
+    ).not.toMatch(/[A-Za-z]:\\/)
+  })
+
   it("leaks no credential: no token, no authorization header, no user payload", async () => {
     const auth = await import("../services/auth.mjs")
     const created = await auth.createAccount({ email: "leak@picc.test", password: "leak-password-9" })
@@ -292,5 +335,46 @@ describe("WS-6 T10 anti-rot: the /me trace is REACHABLE from a harness-shaped en
     expect(lines[0]).not.toHaveProperty("authorization")
     expect(lines[0]).not.toHaveProperty("user")
     expect(lines[0]).not.toHaveProperty("email")
+  })
+
+  it("a store-fault line carries the store counters, because they are gone once the run ends", async () => {
+    // The counters are process-scoped and memory-only. An operator told to GET
+    // /api/auth/status after the run is reading a FRESH process's zeros, and would
+    // conclude "the store was healthy" from a counter that was never set. Carrying
+    // them on the line is what makes that conclusion obtainable at all.
+    const auth = await import("../services/auth.mjs")
+    const created = await auth.createAccount({ email: "counters@picc.test", password: "counters-password-9" })
+    expect(created.token).toBeTruthy()
+    const { writeFileSync } = await import("node:fs")
+    writeFileSync(join(harness.PICC_AUTH_DATA_DIR, "users.json"), "{ not json", "utf8")
+    rmSync(harness.PICC_ERROR_LOG_FILE, { force: true })
+
+    const res = await callMe(handleApi, { authorization: `Bearer ${created.token}` })
+    expect(res.status).toBe(503)
+
+    const line = harnessAuthMeLines(harness.PICC_ERROR_LOG_FILE)[0]
+    expect(line.storeWriteFailures, "the write counter must be on the line, even when empty").toEqual({})
+    expect(
+      Object.values(line.storeReadFaults ?? {}).reduce((a, b) => a + b, 0),
+      "the read fault that just happened must be on the line — this is the whole discriminator"
+    ).toBeGreaterThan(0)
+  })
+
+  it("the redactor strips an absolute path without mangling ordinary text", async () => {
+    // The properties an earlier, broader draft of this scrubber broke. A diagnostic
+    // that corrupts its own text is its own disclosure bug, so these are pinned
+    // rather than assumed: a lookbehind on the POSIX branch is the only reason
+    // `and/or` and `http://host/x` survive.
+    const { redactAbsolutePaths } = await import("../errorLog.mjs")
+
+    expect(redactAbsolutePaths("auth store parse failed (C:\\Users\\sharv\\app\\auth\\users.json): bad")).toBe(
+      "auth store parse failed (users.json): bad"
+    )
+    expect(redactAbsolutePaths("read failed (\\\\host\\share\\sessions.json)")).toBe("read failed (sessions.json)")
+    expect(redactAbsolutePaths("read failed (/var/folders/ab/picc-store/sessions.json)")).toBe("read failed (sessions.json)")
+    // The non-mangling half.
+    expect(redactAbsolutePaths("expected and/or got a string")).toBe("expected and/or got a string")
+    expect(redactAbsolutePaths("see http://localhost:5173/api/auth/me")).toBe("see http://localhost:5173/api/auth/me")
+    expect(redactAbsolutePaths("users.json and sessions.json")).toBe("users.json and sessions.json")
   })
 })

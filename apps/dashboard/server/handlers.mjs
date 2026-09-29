@@ -14,9 +14,9 @@ import { errorLogEnabled, recordClientReport, writeAuthMeTrace, writeErrorEntry 
  * away from every other entry in the same file, and `run` is the e2e run id so a
  * failing run's lines can be isolated from a noisy shared log.
  *
- * GATED ON PICC_E2E_RUN_ID, NOT ON PICC_ERROR_LOG. Round 4 gated this on the master
- * error-log switch, which the e2e harness pins to "0" — so no compliant e2e run could
- * produce a line and the file stayed green while unreachable. See errorLog.mjs. */
+ * GATED ON PICC_E2E_RUN_ID, NOT ON PICC_ERROR_LOG: round 4 gated this on the master
+ * error-log switch, which the e2e harness pins to "0", so no compliant e2e run could
+ * produce a line while the file stayed green. See errorLog.mjs. */
 function traceAuthMe(branch, extra = {}) {
   try {
     writeAuthMeTrace({ branch, ...extra })
@@ -4340,13 +4340,13 @@ const creds = await getVenueCredentials()
   // -------------------------------------------------------------------
   // WS-6 T10 INSTRUMENTATION: the status body carries the two store counters, so a
   // failing run can say WHICH mechanism fired: write>0 -> write fault; read>0 with
-  // write===0 -> read/shape fault; both 0 -> the store was healthy, look elsewhere.
-  // One counter could not, because a read or shape fault returns before writeJSON is
-  // called. Both are keyed on the FILE NAME (auth.mjs): this route is UNAUTHENTICATED
-  // and the absolute path disclosed the home directory and OS user name. They live
-  // HERE and not inside the block below because that block's comment is the allowlist
-  // marker for its hasUsers() call, which the guard requires to be CONTIGUOUS with the
-  // call site - a comment wedged between them breaks the allowlist, as it is designed to.
+  // write===0 -> read/shape fault; both 0 -> the store was healthy, look elsewhere. One
+  // counter could not, because a read or shape fault returns before writeJSON is called.
+  // Both are keyed on the FILE NAME (auth.mjs): this route is UNAUTHENTICATED and the
+  // absolute path disclosed the home directory and OS user name. Read the counters off
+  // a `store-fault` or `rejected` auth-me line instead — process-scoped, so this
+  // endpoint cannot report a dead process. They live HERE and not inside the block
+  // below: that comment is the allowlist marker for its hasUsers() call, and must stay CONTIGUOUS with it.
   if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {
     // NOT A GATE. hasUsers() here is the first-run SIGNUP HINT: it tells the
     // login page whether to offer "create the first account" instead of "sign
@@ -4438,14 +4438,14 @@ const creds = await getVenueCredentials()
       user = await resolveAuthUser(auth)
     } catch (err) {
       if (isAuthStoreUnavailable(err)) {
-        traceAuthMe("store-fault", { reason: err?.message ?? "unknown" })
+        traceAuthMe("store-fault", { reason: err?.message ?? "unknown", storeWriteFailures: storeWriteFailures(), storeReadFaults: storeReadFaults() })
         return writeJson(res, 503, { error: "auth store unavailable" })
       }
-      traceAuthMe("unhandled", { reason: err?.message ?? "unknown" })
+      traceAuthMe("unhandled", { reason: err?.message ?? "unknown", storeWriteFailures: storeWriteFailures(), storeReadFaults: storeReadFaults() })
       throw err
     }
     if (!user) {
-      traceAuthMe("rejected", { hadToken: Boolean(auth) })
+      traceAuthMe("rejected", { hadToken: Boolean(auth), storeWriteFailures: storeWriteFailures(), storeReadFaults: storeReadFaults() })
       return writeJson(res, 401, { error: "not authenticated" })
     }
     traceAuthMe("confirmed", { userId: user.id })

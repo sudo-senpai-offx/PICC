@@ -30,6 +30,10 @@ assertIsolatedEnv(isolatedEnv, ISOLATION_TMP_ROOT)
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MANIFEST = resolve(HERE, "../perf/terminal-perf-manifest.json")
+// The failure-path twin of MANIFEST. `test-results/` is gitignored, so this never
+// shows up as a working-tree change, and it is written from an afterEach so it
+// survives the throw a failing selector produces.
+const EVIDENCE_FILE = resolve(HERE, "../test-results/terminal-perf-transition-evidence.json")
 
 /** Proposed release thresholds from spec 4.6, in ms unless stated. */
 const BUDGETS = {
@@ -52,6 +56,297 @@ function stats(values: number[]) {
   return { p50: at(0.5), p95: at(0.95) }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// WS-7 slice B fix round 1 — TRANSITION-LOOP INSTRUMENTATION.
+//
+// WHY THIS EXISTS: IT CORRECTS MY OWN EARLIER CLAIM.
+//
+// The recorded symptom is `waitForSelector("[data-room='markets']")` at :89 AND at
+// :128/:132. The :89 case is covered by the auth-me trace, because :83 and :88 are
+// `page.goto` full page loads. The 16-iteration loop at :125-133 is NOT covered, and
+// cannot be:
+//
+//   - the clicks land on `MinistryShell`'s INNER_NAV `NavLink`s (MinistryShell.tsx:54-60),
+//     which are react-router CLIENT-SIDE navigations, not page loads;
+//   - `useExternalLinkRouter` (AppShell.tsx:18-47) only intercepts `target="_blank`,
+//     so it does not convert them;
+//   - `RequireAuth` and `AppShell` stay mounted across a transition, so the `useAuth`
+//     effect — keyed on `[inconclusive]` — does not re-run;
+//   - and `useUser()` is the only other `/me` caller, and it is off the room path.
+//
+// So the loop issues ZERO /api/auth/me requests and all three round-4 signals are
+// STRUCTURALLY BLIND to a failure at :128/:132, which is where the recorded symptom
+// lives. The loop is also AUTH-FREE: client-side navigation between two already-mounted
+// rooms — no `/me`, no sign-out, no session destruction. The only things that can delay
+// the room marker are inside MarketsRoom's own mount path: its panels' data fetches and
+// the lazy MinistryRoom chunk.
+//
+// (The room-mount guard at App.tsx:29 tests the SESSION, not `session.user`, and
+// useAuth.ts:144-146 sets a non-null session with `loading=false` on the FIRST
+// inconclusive answer — so the 503 / retained-session path cannot produce a 30s timeout
+// either. That is what makes "something in the room's own mount" the surviving
+// possibility rather than merely the last one standing.)
+//
+// WHAT THIS DOES NOT TOUCH. No existing assertion, budget, sample count or timeout is
+// weakened, relaxed, re-timed or reordered. The two `waitForSelector` lines are
+// byte-identical; the two timestamp reads around them are NEW lines, so `elapsed` still
+// measures exactly what it measured before, and a failing selector still throws the same
+// error out of the same place.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SELECTOR_TIMEOUT_MS = 15_000
+/** Under this many ms the marker was already present when the wait began. */
+const FOUND_IMMEDIATELY_MS = 50
+/** Hard cap, so a pathological run cannot produce an unbounded evidence file. */
+const MAX_RECORDS = 4000
+
+/**
+ * The components MarketsRoom renders, and the endpoints each fetches on mount.
+ *
+ * DERIVED FROM THE NETWORK, NOT FROM THE DOM. These components carry no stable root
+ * hook — only PackRegistryStrip's inner `li[data-step]` does — so "when did panel X
+ * mount" is not observable from the page without adding production attributes, which is
+ * out of scope for instrumentation. What IS observable, and is what a 15 s selector
+ * timeout needs, is that a waiting panel shows a request in flight across the
+ * click->marker window. `stalled` is exactly that.
+ *
+ * Seven, not six: MarketsRoom.tsx:19-36 renders PackRegistryStrip in addition to the
+ * six panels named in the brief, and it fetches on mount, so it is in scope.
+ */
+const MARKETS_PANELS: { panel: string; endpoints: string[] }[] = [
+  { panel: "PackRegistryStrip", endpoints: ["/api/packs/registry"] },
+  { panel: "SpreadPanel", endpoints: ["/api/trading/spread"] },
+  { panel: "WatchlistPanel", endpoints: ["/api/trading/watchlists"] },
+  { panel: "MarketIntelPanel", endpoints: ["/api/trading/intel"] },
+  { panel: "CalendarPanel", endpoints: ["/api/trading/calendar"] },
+  { panel: "SessionPanel", endpoints: ["/api/trading/sessions"] },
+  { panel: "ScreenerPanel", endpoints: ["/api/trading/screener", "/api/trading/watchlists"] }
+]
+
+type ApiCall = {
+  iteration: number | null
+  rate: number
+  method: string
+  path: string
+  startMs: number
+  endMs: number | null
+  status: number | null
+  failure: string | null
+}
+
+type Iteration = {
+  index: number
+  rate: number
+  warmup: boolean
+  startMs: number
+  dashboardClickAt: number | null
+  dashboardMarkerMs: number | null
+  marketsClickAt: number | null
+  marketsMarkerMs: number | null
+  completed: boolean
+}
+
+type PanelReport = {
+  panel: string
+  endpoints: string[]
+  requests: number
+  responses: number
+  failures: number
+  /** Requests issued in the window that produced no response AND no failure. */
+  stalled: number
+  slowestMs: number | null
+  /** Click -> this panel's first response. Null when it never responded. */
+  firstResponseMs: number | null
+}
+
+/** Classify a wait. Exactly one of the three words the brief asks for. */
+function classify(markerMs: number | null, issued: boolean): "found-immediately" | "waited" | "timed-out" | "not-reached" {
+  if (markerMs !== null) return markerMs < FOUND_IMMEDIATELY_MS ? "found-immediately" : "waited"
+  return issued ? "timed-out" : "not-reached"
+}
+
+function createTransitionEvidence() {
+  const calls: ApiCall[] = []
+  const byRequest = new Map<object, ApiCall>()
+  const consoleLines: { iteration: number | null; rate: number; type: string; text: string }[] = []
+  const iterations: Iteration[] = []
+  let rate = 0
+  let current: Iteration | null = null
+  let attempted = false
+  let dropped = 0
+
+  const pathOf = (url: string) => {
+    const i = url.indexOf("/api/")
+    return i === -1 ? url : url.slice(i)
+  }
+  const push = <T>(list: T[], value: T): boolean => {
+    if (list.length >= MAX_RECORDS) {
+      dropped += 1
+      return false
+    }
+    list.push(value)
+    return true
+  }
+
+  function attach(page) {
+    page.on("console", (msg: { type: () => string; text: () => string }) => {
+      const text = msg.text()
+      // The client auth line is the one signal this run depends on and it can fire
+      // OUTSIDE a transition window (it fires on a sign-out), so it is always
+      // recorded. Everything else is window-scoped, so a healthy run's file stays
+      // about the loop.
+      if (!current && !text.includes("[auth] sign-out")) return
+      push(consoleLines, {
+        iteration: current ? current.index : null,
+        rate,
+        type: msg.type(),
+        text: text.slice(0, 2000)
+      })
+    })
+    page.on("request", (req) => {
+      const url = req.url()
+      if (!url.includes("/api/")) return
+      const call: ApiCall = {
+        iteration: current ? current.index : null,
+        rate,
+        method: req.method(),
+        path: pathOf(url),
+        startMs: Date.now(),
+        endMs: null,
+        status: null,
+        failure: null
+      }
+      if (push(calls, call)) byRequest.set(req, call)
+    })
+    page.on("response", (res) => {
+      const call = byRequest.get(res.request())
+      if (!call) return
+      call.endMs = Date.now()
+      call.status = res.status()
+    })
+    page.on("requestfailed", (req) => {
+      const call = byRequest.get(req)
+      if (!call) return
+      call.endMs = Date.now()
+      call.failure = req.failure()?.errorText ?? "request failed"
+    })
+  }
+
+  function beginRate(next: number) {
+    rate = next
+  }
+
+  /** Starts a window and returns the mutable record the loop fills in as it goes. */
+  function beginIteration(index: number, warmup: boolean): Iteration {
+    attempted = true
+    const record: Iteration = {
+      index,
+      rate,
+      warmup,
+      startMs: Date.now(),
+      dashboardClickAt: null,
+      dashboardMarkerMs: null,
+      marketsClickAt: null,
+      marketsMarkerMs: null,
+      completed: false
+    }
+    current = record
+    iterations.push(record)
+    return record
+  }
+
+  function endIteration(record: Iteration) {
+    record.completed = true
+    if (current === record) current = null
+  }
+
+  function panelReport(fromMs: number, toMs: number): PanelReport[] {
+    const inWindow = calls.filter((c) => c.startMs >= fromMs && c.startMs <= toMs)
+    return MARKETS_PANELS.map(({ panel, endpoints }) => {
+      const own = inWindow.filter((c) => endpoints.some((e) => c.path.startsWith(e)))
+      const responded = own.filter((c) => c.endMs !== null)
+      return {
+        panel,
+        endpoints,
+        requests: own.length,
+        responses: responded.length,
+        failures: own.filter((c) => c.failure !== null || (c.status !== null && c.status >= 400)).length,
+        // STILL OPEN when the window closed: the request the room was waiting on.
+        stalled: own.filter((c) => c.endMs === null).length,
+        slowestMs: responded.reduce((a, c) => Math.max(a, (c.endMs as number) - c.startMs), 0) || null,
+        firstResponseMs: responded.length ? responded[0].startMs - fromMs : null
+      }
+    })
+  }
+
+  function snapshot() {
+    const nowMs = Date.now()
+    const perIteration = iterations.map((it) => {
+      const windowEnd = it.marketsMarkerMs !== null && it.marketsClickAt !== null ? it.marketsClickAt + it.marketsMarkerMs : nowMs
+      const clickAt = it.marketsClickAt ?? it.startMs
+      return {
+        ...it,
+        dashboardSelector: classify(it.dashboardMarkerMs, it.dashboardClickAt !== null),
+        marketsSelector: classify(it.marketsMarkerMs, it.marketsClickAt !== null),
+        apiCalls: calls.filter((c) => c.iteration === it.index).length,
+        apiFailures: calls.filter(
+          (c) => c.iteration === it.index && (c.failure !== null || (c.status !== null && c.status >= 400))
+        ).length,
+        slowestApiMs: calls
+          .filter((c) => c.iteration === it.index && c.endMs !== null)
+          .reduce((a, c) => Math.max(a, (c.endMs as number) - c.startMs), 0) || null,
+        marketsPanels: panelReport(clickAt, windowEnd)
+      }
+    })
+
+    // A cross-loop view, so a reader does not have to diff 16 iterations to find the
+    // panel that is always slow or always stalled.
+    const byPanel = MARKETS_PANELS.map(({ panel, endpoints }) => {
+      const own = calls.filter((c) => endpoints.some((e) => c.path.startsWith(e)))
+      const responded = own.filter((c) => c.endMs !== null)
+      return {
+        panel,
+        endpoints,
+        requests: own.length,
+        responses: responded.length,
+        failures: own.filter((c) => c.failure !== null || (c.status !== null && c.status >= 400)).length,
+        stalled: own.filter((c) => c.endMs === null).length,
+        slowestMs: responded.reduce((a, c) => Math.max(a, (c.endMs as number) - c.startMs), 0) || null,
+        p95Ms: responded.length
+          ? [...responded].map((c) => (c.endMs as number) - c.startMs).sort((a, b) => a - b)[
+              Math.min(responded.length - 1, Math.floor(0.95 * responded.length))
+            ]
+          : null
+      }
+    })
+
+    return {
+      note:
+        "Instrumentation only. Adds no assertion, changes no budget, and changes no sample count. " +
+        "Recorded because the 16-iteration transition loop is client-side navigation and therefore " +
+        "issues zero /api/auth/me requests: the auth-me trace cannot see a failure in it.",
+      wallClockMs: nowMs - (iterations[0]?.startMs ?? nowMs),
+      recordsDroppedAtCap: dropped,
+      iterations: perIteration,
+      panelsAcrossLoop: byPanel,
+      slowestApiCalls: [...calls]
+        .filter((c) => c.endMs !== null)
+        .sort((a, b) => (b.endMs as number) - b.startMs - ((a.endMs as number) - a.startMs))
+        .slice(0, 20)
+        .map((c) => ({ ...c, durationMs: (c.endMs as number) - c.startMs })),
+      neverAnswered: calls
+        .filter((c) => c.endMs === null)
+        .map((c) => ({ iteration: c.iteration, rate: c.rate, method: c.method, path: c.path, startMs: c.startMs })),
+      authMeConsoleLines: consoleLines.filter((l) => l.text.includes("[auth] sign-out")),
+      otherConsoleLines: consoleLines.filter((l) => !l.text.includes("[auth] sign-out")).slice(-200)
+    }
+  }
+
+  return { attach, beginRate, beginIteration, endIteration, snapshot, wasAttempted: () => attempted }
+}
+
+const transitionEvidence = createTransitionEvidence()
+
 // This spec only READS the terminal, so it shares one authenticated account
 // across the whole e2e run instead of spending the auth rate limiter's budget on
 async function signupAndLogin(page, request) {
@@ -59,6 +354,17 @@ async function signupAndLogin(page, request) {
   await page.goto("/markets")
   await expect(page).not.toHaveURL(/\/login(?:$|\?)/)
 }
+
+test.afterEach(() => {
+  // The manifest the test body writes does NOT survive a failing run: a throw at
+  // :128/:132 aborts before `writeFileSync(MANIFEST, ...)` is ever reached. So the
+  // same evidence is also written here, which runs on pass AND on fail (including on
+  // the 300 s timeout), into gitignored `test-results/`. On the success path both
+  // copies exist and carry identical content.
+  if (!transitionEvidence.wasAttempted()) return
+  mkdirSync(dirname(EVIDENCE_FILE), { recursive: true })
+  writeFileSync(EVIDENCE_FILE, JSON.stringify(transitionEvidence.snapshot(), null, 2), "utf8")
+})
 
 test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
   // Three throttle rates x (2 navigations + 25 domain samples + 10 route
@@ -71,12 +377,17 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
   test.use({ viewport: { width: 1280, height: 800 } })
 
   test("records throttled-proxy evidence and asserts the proposed budgets", async ({ page, request }) => {
+    // Before anything else, so a sign-out during login is captured too. Listeners
+    // only RECORD inside a transition window (plus any `[auth] sign-out` line), so a
+    // healthy run's evidence file is about the loop and nothing else.
+    transitionEvidence.attach(page)
     await signupAndLogin(page, request)
 
     const hostCpu = cpus()[0]?.model?.trim() ?? "unknown"
     const records: Record<string, unknown>[] = []
 
     for (const rate of THROTTLE_RATES) {
+      transitionEvidence.beginRate(rate)
       const pageErrors: string[] = []
       page.on("pageerror", (e) => pageErrors.push(String(e)))
 
@@ -123,13 +434,30 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
       const STEADY_SAMPLES = 12
       const transitionSamples: number[] = []
       for (let i = 0; i < WARMUP_SAMPLES + STEADY_SAMPLES; i++) {
+        // ── instrumentation, insertions ONLY ───────────────────────────────────
+        // The five statements below are the ONLY additions in this loop, and each one
+        // sits BETWEEN existing lines without displacing any of them. The seven
+        // original statements keep their exact order, so `t0`, the two waits, the
+        // `elapsed` computation, the warm-up discard and the push mean precisely what
+        // they meant before: a run that passed passes for the same reason, and one
+        // that failed still fails at the same line with the same error.
+        //
+        // Note what `elapsed` is NOT: it is t0 -> the DASHBOARD marker only, because
+        // that is where the push sits in the original. The markets half is timed
+        // separately below, and is recorded as its own number rather than folded in.
+        const iteration = transitionEvidence.beginIteration(i, i >= WARMUP_SAMPLES)
         const t0 = Date.now()
+        iteration.dashboardClickAt = Date.now()
         await page.click("a[href='/suites/trading/dashboard']").catch(() => {})
         await page.waitForSelector("[data-room='dashboard']", { timeout: 15_000 })
+        iteration.dashboardMarkerMs = Date.now() - (iteration.dashboardClickAt as number)
         const elapsed = Date.now() - t0
         if (i >= WARMUP_SAMPLES) transitionSamples.push(elapsed)
+        iteration.marketsClickAt = Date.now()
         await page.click("a[href='/suites/trading/markets']").catch(() => {})
         await page.waitForSelector("[data-room='markets']", { timeout: 15_000 })
+        iteration.marketsMarkerMs = Date.now() - (iteration.marketsClickAt as number)
+        transitionEvidence.endIteration(iteration)
       }
       // stats() below is the single source for the percentiles; with 12
       // steady-state samples its p95 is a real nearest-rank percentile rather
@@ -173,19 +501,25 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
         throttle: { mechanism: "cdp:Emulation.setCPUThrottlingRate", rate },
         hostCpu,
         route: "/suites/trading/markets",
-        viewport: page.viewportSize(),
-        paintMs: paint,
-        layout,
-        deterministicDomainMs: { ...domain, samples: domainSamples.length },
-        roomTransitionMs: {
-          ...transition,
-          samples: transitionSamples.length,
-          warmupDiscarded: WARMUP_SAMPLES
-        },
-        reducedMotionHonoured: reducedMotion,
-        jsHeapMb: heapMb,
-        pageErrors
-      })
+          viewport: page.viewportSize(),
+          paintMs: paint,
+          layout,
+          deterministicDomainMs: { ...domain, samples: domainSamples.length },
+          roomTransitionMs: {
+            ...transition,
+            samples: transitionSamples.length,
+            warmupDiscarded: WARMUP_SAMPLES
+          },
+          // The per-iteration selector outcomes and the panel/network picture for
+          // THIS rate. Additive: nothing above this line is read, changed or
+          // re-derived from it.
+          transitionIterations: transitionEvidence
+            .snapshot()
+            .iterations.filter((i) => i.rate === rate),
+          reducedMotionHonoured: reducedMotion,
+          jsHeapMb: heapMb,
+          pageErrors
+        })
 
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
       await cdp.detach()
@@ -267,6 +601,10 @@ test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
           unmeasuredBudgets,
           breaches: budgetVerdicts.filter((v) => v.verdict === "BREACH"),
           hostCpu,
+          // The whole run's transition evidence, in one place. The same object is
+          // written to test-results/terminal-perf-transition-evidence.json from an
+          // afterEach, which is the copy that survives a FAILING run.
+          transitionEvidence: transitionEvidence.snapshot(),
           records
         },
         null,

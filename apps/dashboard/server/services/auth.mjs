@@ -128,7 +128,7 @@ async function writeJSON(file, value) {
         } catch {
           /* ignore cleanup failure */
         }
-        console.warn(`[picc-auth] write failed ${file}:`, retryErr.message)
+        console.warn(`[picc-auth] write failed ${basename(file)}:`, retryErr.message)
         recordStoreWriteFailure(file, retryErr)
         return false
       }
@@ -138,7 +138,9 @@ async function writeJSON(file, value) {
     } catch {
       /* ignore cleanup failure */
     }
-    console.warn(`[picc-auth] write failed ${file}:`, err.message)
+    // basename(), never the absolute path: this line goes to the server log, which
+    // is collected and shipped, and the file NAME is the whole diagnostic value.
+    console.warn(`[picc-auth] write failed ${basename(file)}:`, err.message)
     recordStoreWriteFailure(file, err)
     return false
   }

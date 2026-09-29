@@ -55,7 +55,7 @@ export const INCONCLUSIVE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000]
  *
  * ── WHY `startedAt` IS REBASED, AND WHY IT HAD TO BE ────────────────────────
  * Round 4 set `startedAt` once, in a `useRef` at mount, and nothing ever reset
- * it: `setInconclusive(0)` clears the counter at :118 and :127 but not the ref.
+ * it: `setInconclusive(0)` clears the counter at :145 and :156 but not the ref.
  * So `elapsedMs` was time-since-MOUNT, and the discriminator above is unsound
  * for any sign-out that does not happen immediately after mount — a 401 arriving
  * on the seventh attempt after a 23-second outage reported the outage's length,

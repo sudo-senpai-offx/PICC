@@ -70,10 +70,15 @@ export function writeErrorEntry(entry) {
 // So the /me trace is ARMED BY A DIFFERENT SIGNAL, not by relaxing that pin:
 //
 //   - It is armed by PICC_E2E_RUN_ID, which `e2e/helpers/isolatedEnv.mjs` builds
-//     into every e2e run (and which `e2e/sharedAuth.ts:41` already uses as a run
-//     scope). It is set nowhere else — not in dev, not in production — so this
-//     is an ALWAYS-ON-in-e2e / DEFAULT-OFF-elsewhere switch, not a diagnostic
-//     mode that had to be approved or gated.
+//     into every e2e run. It is set nowhere else — not in dev, not in production —
+//     so this is an ALWAYS-ON-in-e2e / DEFAULT-OFF-elsewhere switch, not a
+//     diagnostic mode that had to be approved or gated.
+//
+//     It is NOT what scopes the shared-session cache. `e2e/sharedAuth.ts:40-41`
+//     reads PICC_COMMAND_CENTRE_DATA_DIR first, and the Playwright harness always
+//     sets that, so the PICC_E2E_RUN_ID branch below it is DEAD in the only harness
+//     that sets the variable; it is reachable only from an ad-hoc run that exports
+//     neither. The two are unrelated mechanisms that happen to share an env var.
 //
 //   - It writes to logFilePath() — the SAME PICC_ERROR_LOG_FILE every harness
 //     already redirects, because that variable is on the isolation contract and
@@ -90,6 +95,48 @@ const authMeRunId = () => {
   return typeof run === "string" && run.length > 0 ? run : null
 }
 
+// ── Path redaction, for the auth-me trace only ──────────────────────────────
+// WHY THIS EXISTS. The store-fault branch forwards `err.message`, and
+// `AuthStoreUnavailable` interpolates the store's ABSOLUTE path into that message
+// (auth.mjs), so the line carried `C:\Users\<name>\...` — a home directory, an OS
+// user name and the data layout. The `unhandled` branch forwards an arbitrary
+// `err.message` through the same door, and so would any field added later.
+//
+// The fix is HERE rather than at the two call sites in handlers.mjs for three
+// reasons: it is one place, so it cannot be forgotten by the next branch; it covers
+// the branches that do not exist yet; and it does not require handlers.mjs to keep
+// a line count stable, which a comment beside a call site would.
+//
+// NOT attacker-reachable — the destination is `PICC_ERROR_LOG_FILE`, already
+// redirected inside the run's own scratch, and this writer is armed only by
+// PICC_E2E_RUN_ID, which nothing but the e2e harness sets. It is a disclosure to
+// fix, not a vulnerability, and the fix is cheap.
+//
+// THE DIAGNOSIS SURVIVES. `auth store parse failed (C:\...\users.json): …` becomes
+// `auth store parse failed (users.json): …`: the file name is the whole value of the
+// line, and only the directory goes.
+// BOTH lookbehinds are load-bearing, and BOTH were real bugs found by the test that
+// pins them. The first: without it, `http://host/x` matches the DRIVE branch at `p:/`
+// and comes back mangled. The second: the predecessor set must exclude `/` as well as
+// `:`, or the SECOND slash of `//` starts a "path" and eats `localhost`. Without the
+// `:` and word characters, `and/or` is an absolute path too. A diagnostic that mangles
+// its own text is its own disclosure bug.
+const DRIVE_OR_UNC_PATH = /(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`,;:()[\]{}]*/g
+const POSIX_ABSOLUTE_PATH = /(?<![A-Za-z0-9_:/])(?:\/(?:[^\s"'`,;:()[\]{}\\]*[\\/])*[^\s"'`,;:()[\]{}\\/]+)/g
+
+const lastPathSegment = (match) => match.split(/[\\/]/).filter(Boolean).pop() ?? match
+
+/**
+ * Reduce every absolute path in `text` to its final segment.
+ *
+ * Exported for the test that pins the "and/or" and URL non-mangling properties, which
+ * are the ones a narrower-looking regex silently breaks.
+ */
+export function redactAbsolutePaths(text) {
+  if (typeof text !== "string") return text
+  return text.replace(DRIVE_OR_UNC_PATH, lastPathSegment).replace(POSIX_ABSOLUTE_PATH, lastPathSegment)
+}
+
 /**
  * Write ONE `src: "auth-me"` line naming the branch that answered /api/auth/me.
  *
@@ -97,22 +144,22 @@ const authMeRunId = () => {
  * writeErrorEntry() — that function's contract is "off unless the master switch
  * says 1", and reusing it is precisely what made round 4's trace unreachable.
  *
- * Never throws. Returns whether a line was written, so a caller can tell a
- * silent run from a broken sink without either of them being fatal.
+ * Every string in the entry is path-redacted before it is written. Never throws.
+ * Returns whether a line was written, so a caller can tell a silent run from a
+ * broken sink without either of them being fatal.
  */
 export function writeAuthMeTrace(entry) {
   try {
     const run = authMeRunId()
     if (run === null) return false
-    const line =
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        pid: process.pid,
-        src: "auth-me",
-        run,
-        ...entry
-      }) + "\n"
-    appendFileSync(logFilePath(), line, { encoding: "utf8" })
+    const serialised = JSON.stringify({
+      ts: new Date().toISOString(),
+      pid: process.pid,
+      src: "auth-me",
+      run,
+      ...entry
+    })
+    appendFileSync(logFilePath(), redactAbsolutePaths(serialised) + "\n", { encoding: "utf8" })
     return true
   } catch {
     return false
