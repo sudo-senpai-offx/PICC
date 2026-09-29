@@ -938,6 +938,28 @@ const MUTATING_FS_WIDE =
 // reader does not go looking for a rule that is no longer running.
 
 /**
+ * `PICC_TRUSTED_PROXY_IPS` is a new `PICC_*` READ added by the rate-limiter
+ * slice, so it is the fourth kind of entry this file can be asked about, and the
+ * existing machinery does not classify it: it is neither a store (nothing is
+ * written through it), a non-store PICC path variable (it is not a path), nor a
+ * non-`PICC_` name (it carries the prefix).
+ *
+ * So it is accounted for HERE, in the prefix-keyed contract, rather than left to
+ * be noticed by hand. The claim is the one that matters: it is a comma-separated
+ * allowlist of peer addresses, an empty or absent value trusts NOTHING, and no
+ * code path resolves it into a filesystem location.
+ */
+export const NON_STORE_PICC_VALUE_VARIABLES = Object.freeze({
+  PICC_TRUSTED_PROXY_IPS:
+    "handlers.mjs reads PICC_TRUSTED_PROXY_IPS as the TRUSTED PROXY allowlist that gates whether " +
+    "X-Forwarded-For is honoured for rate-limit keying. It is a comma-separated list of peer " +
+    "addresses, not a path, and nothing is written through it. An absent or empty value must resolve " +
+    "to trusting nothing, so an unconfigured deployment behaves exactly as it did before the header " +
+    "was read at all — which is the reason it is a value variable and not an isolation variable: " +
+    "redirecting it in a test would not isolate a store, it would only change which peers are trusted."
+})
+
+/**
  * Is this hardcoded data path guarded IN ITS OWN EXPRESSION?
  *
  * True when the expression that defines it is guarded by a `PICC_` variable:

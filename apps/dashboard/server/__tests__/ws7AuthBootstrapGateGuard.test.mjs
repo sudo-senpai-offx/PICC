@@ -1216,7 +1216,23 @@ function connectorsSiteIsGated(lines, index) {
     // (The raw dynamic count is 85 because a new comment contains the word
     // "import"; that is exactly why the figure is measured on the comment-stripped
     // view, and it is a small demonstration that the view is doing its job.)
-    expect(lines, "lines in handlers.mjs").toBe(5973)
+    //
+    // 5,973 -> 6,115 in the rate-limiter slice, the same protocol: +142 lines, and
+    // the growth is accounted for rather than absorbed. Roughly 118 are the
+    // client-identity resolution in handlers.mjs — `peerAddress()`, the
+    // `isPlausibleAddress` shape tests, the `PICC_TRUSTED_PROXY_IPS` allowlist
+    // with its fail-closed parsing, and `clientIp()`'s documented right-to-left
+    // walk — plus its reasoning, which is the majority of it. The remaining ~24
+    // are the four per-client limiter keys and the comments recording WHY a bare
+    // key was a server-wide budget.
+    //
+    // The two import figures above are UNCHANGED by that round, which is the
+    // check that matters here: 73 static and 84 comment-stripped dynamic imports
+    // are the same numbers, so none of those 142 lines is a new module binding.
+    // That is the whole point of pinning all three — a canary that moved because
+    // structure changed is a different signal from one that moved because
+    // comments and guards grew, and the import pair is what tells them apart.
+    expect(lines, "lines in handlers.mjs").toBe(6115)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

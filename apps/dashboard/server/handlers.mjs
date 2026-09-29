@@ -391,8 +391,132 @@ setInterval(() => {
   }
 }, 300_000).unref()
 
+/**
+ * The address of the socket this request arrived on — the ONE thing the server
+ * observed rather than was told.
+ *
+ * Nothing may consult a header to answer this, because it feeds
+ * isLocalhostRequest(), and that function is an AUTH BYPASS. A
+ * `X-Forwarded-For: 127.0.0.1` from any peer the server can be tricked into
+ * trusting a header from would then walk straight through requireAuth(). So the
+ * loopback check and the forwarded-identity check are deliberately two functions.
+ */
+function peerAddress(req) {
+  return req.socket?.remoteAddress ?? null
+}
+
+/**
+ * THE ONE key-namespace hole: a request with no observable peer address.
+ *
+ * The previous value was the literal string "unknown", which is a bucket like any
+ * other — so every such caller shared ONE server-wide budget, a server-wide
+ * bucket by another name and easy to miss precisely because the code reads as
+ * though it had handled the missing-address case.
+ *
+ * Why it stays a single shared bucket rather than becoming a per-request key: a
+ * limiter with no identity cannot be attributed, and the two available answers
+ * are "limit them together" and "do not limit them". The second is the fail-OPEN
+ * one — it hands the caller who can suppress their own address an unlimited
+ * budget — so this is conservative. What changed is that the value is now (a) not
+ * reachable from a header, so nobody can choose to hide in it, and (b) marked as
+ * a sentinel, so it can never be confused with an address a header could produce.
+ */
+const NO_PEER_IDENTITY = "no-peer-address"
+
+/** An IPv4 dotted quad, each octet 0-255, and nothing else. */
+const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/
+/**
+ * A conservative IPv6 shape: hex groups and colons only. Deliberately NOT
+ * net.isIP(): this list decides whether to TRUST a string as an identity, and
+ * rejecting an exotic-but-valid address is the safe direction for that decision
+ * — the fall-through is the socket address, which is real.
+ */
+const IPV6 = /^(?:[0-9A-Fa-f]{1,4}:){1,7}(?::|[0-9A-Fa-f]{1,4})(?:%[0-9A-Za-z]+)?$/
+const isPlausibleAddress = (value) =>
+  (IPV4.test(value) && value.split(".").every((o) => Number(o) <= 255)) || IPV6.test(value)
+
+/**
+ * Peer addresses whose X-Forwarded-For is honoured, from PICC_TRUSTED_PROXY_IPS.
+ *
+ * DEFAULT IS TRUST NOTHING, and the default is the load-bearing part. Reading
+ * the header from any peer without a configured allowlist is not a rate limiter
+ * at all: a caller varies one header and gets a fresh budget per value, so every
+ * per-IP limiter in this file becomes decoration. An unconfigured deployment must
+ * therefore behave EXACTLY as it did before this existed, and it does — an unset
+ * variable produces an empty set, and an empty set matches no peer.
+ *
+ * FAIL-CLOSED ON A MALFORMED VALUE, in two senses. An entry that is not a
+ * plausible address is DROPPED rather than treated as a wildcard, so a typo in a
+ * deployment variable costs that deployment its per-IP accuracy instead of
+ * handing every caller a fresh identity. And the parsed set is cached, because
+ * this runs once per request on every limited route and re-parsing an environment
+ * variable per request is work a request handler should not do.
+ *
+ * No CIDR support, stated rather than implied. A prefix match is the obvious next
+ * request, and it is also the next way to over-trust: a /8 inside a cloud VPC is a
+ * large set of addresses the operator may not control. Exact addresses only, so
+ * the allowlist can be read as literally as it is written.
+ */
+let TRUSTED_PROXY_CACHE = { raw: undefined, set: new Set() }
+function trustedProxyPeers() {
+  const raw = process.env.PICC_TRUSTED_PROXY_IPS
+  if (TRUSTED_PROXY_CACHE.raw === raw) return TRUSTED_PROXY_CACHE.set
+  const set = new Set(
+    String(raw ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => isPlausibleAddress(entry))
+  )
+  TRUSTED_PROXY_CACHE = { raw, set }
+  return set
+}
+
+/**
+ * The client identity a request should be rate-limited under.
+ *
+ * The resolution order, and why each step sits where it does:
+ *
+ *   1. No observable peer address -> NO_PEER_IDENTITY. Not a header lookup: there
+ *      is no peer to have vouched for a header, and a header must never be able to
+ *      place a caller in the address-less bucket.
+ *   2. Peer is not a trusted proxy -> the peer address. This is the step that
+ *      makes the whole feature safe: an untrusted caller sending
+ *      X-Forwarded-For changes nothing, so it cannot escape a per-IP limiter by
+ *      spoofing one.
+ *   3. Peer is trusted -> walk X-Forwarded-For RIGHT TO LEFT and take the first
+ *      entry that is not itself a trusted proxy. Right-to-left is the direction
+ *      that matters: a proxy APPENDS its own view to the right, so everything to
+ *      the right of the client is vouched for by a peer already trusted, and the
+ *      first untrusted entry from the right is the furthest the chain vouches
+ *      for. Taking the leftmost entry instead would hand a client an unlimited
+ *      supply of identities by prepending garbage.
+ *   4. No untrusted entry in the list -> the peer address. A list made entirely of
+ *      proxies names no client, and guessing which entry to believe is a guess
+ *      about identity, which feeds a security control.
+ *   5. Malformed or absent header -> the peer address.
+ *
+ * NOT trusted: an arbitrarily long list, because the walk is bounded by which
+ * entries are actually trusted proxies rather than by the header's length.
+ */
 function clientIp(req) {
-  return req.socket?.remoteAddress ?? "unknown"
+  const peer = peerAddress(req)
+  if (!peer) return NO_PEER_IDENTITY
+  const trusted = trustedProxyPeers()
+  if (!trusted.has(peer)) return peer
+
+  const raw = req.headers?.["x-forwarded-for"]
+  if (typeof raw !== "string" || raw.trim() === "") return peer
+  const chain = raw.split(",").map((entry) => entry.trim())
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    const candidate = chain[i]
+    // A malformed entry is not evidence for anything, so the walk STOPS rather
+    // than skipping past it. Skipping would mean an attacker who injects a junk
+    // entry to the left of their own address is handled by a rule that keeps
+    // reading past the evidence it just failed to parse.
+    if (!isPlausibleAddress(candidate)) return peer
+    if (!trusted.has(candidate)) return candidate
+  }
+  return peer
 }
 
 // Throttle repeated identical warnings (per-poll candle fallbacks used to
@@ -405,9 +529,17 @@ function throttledWarn(message, cooldownMs = 60_000) {
   console.warn(message)
 }
 
-/** True when the TCP connection originates from localhost (studio + dev-loopback routes). */
+/**
+ * True when the TCP connection originates from localhost (studio + dev-loopback routes).
+ *
+ * peerAddress(), NEVER clientIp(). This is an auth bypass: requireAuth() admits
+ * the request outright when it is true. A forwarded loopback address is a claim
+ * made by a header, and a claim is not an observation — routing this through the
+ * header-resolved identity would let any client whose traffic a trusted proxy
+ * forwards as `X-Forwarded-For: 127.0.0.1` skip authentication entirely.
+ */
 function isLocalhostRequest(req) {
-  const ip = clientIp(req).replace(/^::ffff:/, "")
+  const ip = (peerAddress(req) ?? "").replace(/^::ffff:/, "")
   return ip === "127.0.0.1" || ip === "::1" || ip === "localhost"
 }
 
@@ -2717,7 +2849,12 @@ async function _handleApiInner(req, res, url, reqId) {
   // Rate limited like sibling read surfaces. The §8.5 caps ride along:
   // server env truth, read-only — a browser client must never guess them.
   if (path === "/api/packs/registry" && req.method === "GET") {
-    if (rateLimited("packs", 30, 60_000)) {
+    // clientIp() in the key, like the seven sibling limiters. The bare "packs"
+    // key was ONE budget for the whole process, and `PackRegistryStrip` polls
+    // this route every 30s (PackRegistryStrip.tsx:27,127) — so a handful of
+    // concurrent users on one host spent 30 requests/minute among themselves with
+    // no abuse anywhere, and each saw the others' polls as their own throttle.
+    if (rateLimited(`packs:${clientIp(req)}`, 30, 60_000)) {
       writeJson(res, 429, { error: "rate limited" })
       return true
     }
@@ -2735,7 +2872,10 @@ async function _handleApiInner(req, res, url, reqId) {
   // next observation tick may move it to running. Auth-gated (acknowledging a
   // human handoff is administrative, like limiter resets) and rate limited.
   if (path === "/api/packs/ack" && req.method === "POST") {
-    if (rateLimited("packs-ack", 10, 60_000)) {
+    // Per-client, and this one matters most of the four: the limiter runs BEFORE
+    // requireAuth, so on a bare key a single anonymous caller could spend a
+    // 10/minute budget that every other user of the process then shares.
+    if (rateLimited(`packs-ack:${clientIp(req)}`, 10, 60_000)) {
       writeJson(res, 429, { error: "rate limited" })
       return true
     }
@@ -2759,7 +2899,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // routes); POST resets the in-memory windows (auth-gated — clearing a
   // limiter is an administrative action).
   if (path === "/api/webfetch/limits" && req.method === "GET") {
-    if (rateLimited("webfetch-limits", 30, 60_000)) {
+    if (rateLimited(`webfetch-limits:${clientIp(req)}`, 30, 60_000)) {
       writeJson(res, 429, { error: "rate limited" })
       return true
     }
@@ -2772,7 +2912,9 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/webfetch/limits/reset" && req.method === "POST") {
-    if (rateLimited("webfetch-limits-reset", 10, 60_000)) {
+    // Per-client like its GET sibling. An administrative action with a bare key
+    // means one caller spending 10/minute locks every other operator out of it.
+    if (rateLimited(`webfetch-limits-reset:${clientIp(req)}`, 10, 60_000)) {
       writeJson(res, 429, { error: "rate limited" })
       return true
     }
