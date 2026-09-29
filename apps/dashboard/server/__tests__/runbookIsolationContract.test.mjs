@@ -32,7 +32,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import { REQUIRED_ISOLATION_VARIABLES } from "../../testSupport/isoHarnessEnv.mjs"
+import { REQUIRED_ISOLATION_VARIABLES, REQUIRED_SCALAR_VARIABLES } from "../../testSupport/isoHarnessEnv.mjs"
 
 const RUNBOOK = fileURLToPath(new URL("../../../../docs/runbooks/PICC_OPERABILITY_RUNBOOK.md", import.meta.url))
 
@@ -81,9 +81,16 @@ describe("the operability runbook states the harness's real isolation contract",
       REQUIRED_ISOLATION_VARIABLES.length
     )
     // The prose sentence under the heading quotes it a second time.
+    //
+    // FIX ROUND 2 MINOR: the split used to be `length - 4` and a hardcoded `4`. That
+    // makes a FIFTH scalar variable fail this test for the wrong reason — a test edit
+    // rather than a runbook edit — which is over-constrained. The composition is now
+    // DERIVED from the harness: `REQUIRED_SCALAR_VARIABLES` is the harness's own answer,
+    // so a new scalar flows through to the runbook and to this test together.
     const prose = sectionOf(readFileSync(RUNBOOK, "utf8"), "### 4.3")
     expect(prose, "§4.3 must not describe the map as anything but the harness's own composition").toContain(
-      `${REQUIRED_ISOLATION_VARIABLES.length - 4} path variables plus ${4} scalar variables`
+      `${REQUIRED_ISOLATION_VARIABLES.length - REQUIRED_SCALAR_VARIABLES.length} path variables plus ` +
+        `${REQUIRED_SCALAR_VARIABLES.length} scalar variables`
     )
   })
 
@@ -97,8 +104,10 @@ describe("the operability runbook states the harness's real isolation contract",
     expect(
       s44,
       `§4.4 must say how many path values are contained, and that number is the path-variable count ` +
-        `(${REQUIRED_ISOLATION_VARIABLES.length - 4})`
-    ).toMatch(new RegExp(`\\b${REQUIRED_ISOLATION_VARIABLES.length - 4} path values`))
+        `(${REQUIRED_ISOLATION_VARIABLES.length - REQUIRED_SCALAR_VARIABLES.length})`
+    ).toMatch(
+      new RegExp(`\\b${REQUIRED_ISOLATION_VARIABLES.length - REQUIRED_SCALAR_VARIABLES.length} path values`)
+    )
   })
 
   it("§4.4 documents every refusal condition the harness actually enforces", () => {

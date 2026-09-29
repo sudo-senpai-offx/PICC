@@ -40,9 +40,26 @@ import { afterAll, expect } from "vitest"
 import { basename, join, resolve } from "node:path"
 import { existsSync, lstatSync, readdirSync, rmdirSync, statSync, unlinkSync } from "node:fs"
 import { canonicalizePath, dashboardRoot, isStrictlyInside } from "./storeIsolation.mjs"
-import harnessEnv, { ISOLATION_TMP_ROOT, REQUIRED_ISOLATION_VARIABLES } from "../e2e/helpers/isolatedEnv.mjs"
+import harnessEnv, {
+  ISOLATION_PATH_VARIABLES,
+  ISOLATION_TMP_ROOT,
+  REQUIRED_ISOLATION_VARIABLES
+} from "../e2e/helpers/isolatedEnv.mjs"
 
-export { harnessEnv, ISOLATION_TMP_ROOT, REQUIRED_ISOLATION_VARIABLES }
+export { harnessEnv, ISOLATION_PATH_VARIABLES, ISOLATION_TMP_ROOT, REQUIRED_ISOLATION_VARIABLES }
+
+/**
+ * The non-path half of the contract, derived rather than counted.
+ *
+ * The harness builds `REQUIRED_ISOLATION_VARIABLES` as `[...ISOLATION_PATH_VARIABLES,
+ * <scalars>]`, so the split is knowable without a hand-maintained number. A caller
+ * that hardcodes the scalar count has to be edited whenever a scalar is added, which
+ * is how a test ends up failing for a reason that has nothing to do with what it
+ * checks.
+ */
+export const REQUIRED_SCALAR_VARIABLES = Object.freeze(
+  REQUIRED_ISOLATION_VARIABLES.filter((name) => !ISOLATION_PATH_VARIABLES.includes(name))
+)
 
 const PLAYWRIGHT_TMP_ROOT = resolve(dashboardRoot(), ".playwright-tmp")
 
@@ -52,7 +69,16 @@ const PLAYWRIGHT_TMP_ROOT = resolve(dashboardRoot(), ".playwright-tmp")
  * Throws rather than returning a fallback: a cleanup that gives up quietly is a
  * cleanup that silently stops running, which is the bug this file exists to remove.
  */
-export function assertMintedIsolationRoot(root) {
+/**
+ * Lstat INJECTION EXISTS SO THE LINK CHECK CAN BE TESTED WITHOUT CREATING A LINK.
+ * Creating a symlink or junction in a test is how a previous review of this work put
+ * a real repository's `node_modules` inside a delete path, so no test here makes one.
+ * The guard is asked the question with a stub `lstat` that reports the unresolved
+ * root as a link and its canonical form as not-a-link, which is exactly the state the
+ * real code would be in with a junction at the root — and the old
+ * `lstatSync(canonical)` form cannot answer it, so the test goes red against it.
+ */
+export function assertMintedIsolationRoot(root, { lstat = lstatSync } = {}) {
   if (typeof root !== "string" || root.length === 0) {
     throw new Error("the harness isolation root must be a non-empty path")
   }
@@ -76,8 +102,14 @@ export function assertMintedIsolationRoot(root) {
         `${PLAYWRIGHT_TMP_ROOT}`
     )
   }
-  if (lstatSync(canonical).isSymbolicLink()) {
-    throw new Error(`refusing to remove ${canonical}: the root itself is a link, not a directory`)
+  // Lstat the path AS GIVEN, never its canonical form. `canonicalizePath()` resolves
+  // THROUGH links, so `lstatSync(canonical).isSymbolicLink()` is structurally always
+  // false and this check could never fire: a junction planted at the root would sail
+  // past it. The containment check above is what stops the dangerous case, but a check
+  // that advertises a guarantee it cannot provide is the same class of defect as the
+  // comment it contradicts, so it now asks the question of the unresolved path.
+  if (lstat(root).isSymbolicLink()) {
+    throw new Error(`refusing to remove ${root}: the root itself is a link, not a directory`)
   }
   if (!statSync(canonical).isDirectory()) {
     throw new Error(`refusing to remove ${canonical}: it is not a directory`)

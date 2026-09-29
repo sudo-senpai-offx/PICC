@@ -377,4 +377,56 @@ describe("WS-6 T10 anti-rot: the /me trace is REACHABLE from a harness-shaped en
     expect(redactAbsolutePaths("see http://localhost:5173/api/auth/me")).toBe("see http://localhost:5173/api/auth/me")
     expect(redactAbsolutePaths("users.json and sessions.json")).toBe("users.json and sessions.json")
   })
+
+  it("the redactor's KNOWN LOSSY cases are pinned, and none of them discloses anything", async () => {
+    // FIX ROUND 2 MINOR. Three further inputs were checked and none was pinned, so
+    // the scrubber's behaviour on them was undocumented. Two of the three mangle the
+    // text. That is a real loss — a `?next=` target or a `../` prefix carries diagnostic
+    // value — and it is pinned HERE so it is a known, reviewed property rather than
+    // something a reader discovers by accident.
+    //
+    // WHAT I DELIBERATELY DID NOT DO. The obvious response is to loosen the regex so
+    // these survive. That regex is the thing standing between an `err.message` and a
+    // `C:\Users\<name>\...` in a log, and the two lookbehinds that keep `http://host/x`
+    // intact exist precisely because loosening it previously broke that. Making the
+    // scrubber lossless on query strings and relative paths is a real change with a
+    // disclosure risk, so it is left for a separate decision with its own redactor
+    // suite rather than smuggled into an instrumentation round.
+    //
+    // The safety property is what actually matters and it is asserted for every case:
+    // whatever the scrubber does to the text, no absolute path survives it.
+    const { redactAbsolutePaths } = await import("../errorLog.mjs")
+
+    const KNOWN_LOSSY = [
+      // A query-string target: the POSIX branch eats the path after the second slash.
+      { input: "auth bounced to ?next=/suites/trading/markets", current: "auth bounced to ?next=markets" },
+      // A bare-scheme URL with no host: the first slash is left, the rest is a "path".
+      { input: "//host/api/auth/me refused", current: "me refused" },
+      // A relative path: leading dots and the separator are absorbed.
+      { input: "read failed (../store/users.json)", current: "read failed (..users.json)" }
+    ]
+
+    for (const { input, current } of KNOWN_LOSSY) {
+      const out = redactAbsolutePaths(input)
+      expect(out, `behaviour changed for a pinned lossy case: ${input}`).toBe(current)
+      // The property that must hold whatever the mangling: nothing that names a real
+      // filesystem location or a user directory comes out.
+      expect(out, `a pinned lossy case must still not disclose an absolute path: ${out}`).not.toMatch(
+        /[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|var|etc)/
+      )
+    }
+
+    // The clean cases, pinned in the same place so the two groups read together.
+    const CLEAN = [
+      "connect ECONNREFUSED 127.0.0.1:5173",
+      "port 5173 already in use",
+      "data:application/json,{\"a\":1}",
+      "malformed: ((((",
+      "",
+      "a/b and c/d are not absolute"
+    ]
+    for (const input of CLEAN) {
+      expect(redactAbsolutePaths(input), `a clean case must be untouched: ${input}`).toBe(input)
+    }
+  })
 })
