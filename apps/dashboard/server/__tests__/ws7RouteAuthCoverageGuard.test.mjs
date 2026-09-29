@@ -558,7 +558,22 @@ function inlineGateOffset(region) {
  * requests.
  */
 const CONDITIONAL_OPENERS = /^(?:if|else|for|while|do|switch|catch)\b/
+// A CLOSING BRACE CAN LEAD THE LINE, and then the opener keyword is not at the
+// start. `} else {`, `} else if (x) {` and `} catch (err) {` are ordinary control
+// flow — which is exactly why this went unnoticed for a round. The stack was
+// already correct (braceRoles returns ["close","open"] for such a line, so the `}`
+// popped and the `{` pushed); the `conditional` flag was computed from the LINE
+// TEXT, which does not begin with `else` or `catch`, so it pushed `false` and a
+// gate inside was reported UNCONDITIONAL — the unsafe direction, a false pass.
+// A second anchored pattern would have been the fix; this one is a second
+// pattern because a `}`-led line is a distinct shape, not a variant of the first.
+const CONDITIONAL_CLOSER_OPENERS = /^\}\s*(?:else|catch)\b/
 const NEUTRAL_OPENERS = /^(?:try|finally)\b/
+// The neutral neighbour of the rule above, and the reason the fix cannot be
+// written as "a `}` at the start of the line means conditional": a `finally`
+// block ALWAYS runs when reached, so a gate after one is still unconditional.
+// Asserted by the `} finally {` control test.
+const NEUTRAL_CLOSER_OPENERS = /^\}\s*finally\b/
 // The words after which a `{` is a BLOCK rather than an object literal. `const`
 // is deliberately absent: `const { notify, getNotifications } = await import(…)`
 // opens a destructuring pattern, and reading it as a block made every
@@ -657,8 +672,43 @@ function conditionalReason(region, gateAt, gateOffsetOnLine = null) {
       // the gate inside it, exactly as a block would. The region's own dispatch
       // `if` is excluded because statementBody() has already consumed it.
       if (gateOffsetOnLine !== null) {
-        const head = statementBody(line).text.slice(0, Math.max(0, gateOffsetOnLine))
-        if (/\bif\s*\(|\bfor\s*\(|\bwhile\s*\(|\bswitch\s*\(|\bcatch\s*\(/.test(head)) {
+        const { text, shift } = statementBody(line)
+        const before = text.slice(0, Math.max(0, gateOffsetOnLine - shift))
+        // THE GATE'S OWN `if` IS NOT A CONTAINER. All three shared-gate idioms
+        // in this file are spelled `if (!(await <gate>(`, so the text immediately
+        // before the gate ALWAYS ends in `if (!(await ` — and a naive scan for
+        // `if (` reports every one of those 123 gates as nested, which is the
+        // false positive round 2 flagged: `const h = 1; if (!(await requireAuth(…))`
+        // came back as "the gate is inside a conditional opened on the dispatch
+        // line". Stripping that exact tail removes the false positive without
+        // blinding the check, because a real container is a DIFFERENT opener that
+        // appears EARLIER on the line.
+        const withoutOwnHead = before.replace(/\s*if\s*\(\s*!\s*\(\s*await\s*$/, "")
+        // Only the statement the gate is actually in matters, so a FINISHED
+        // statement ahead of it is ignored. The boundary is `;` or `}` — and
+        // deliberately NOT `{`, because a `{` is where a container's BODY
+        // begins: cutting at it would throw away the very opener under test.
+        const boundary = Math.max(withoutOwnHead.lastIndexOf(";"), withoutOwnHead.lastIndexOf("}"))
+        const statement = boundary === -1 ? withoutOwnHead : withoutOwnHead.slice(boundary + 1)
+        // A conditional whose `(` is still open on this line, e.g. `if (limit > 0) { …`.
+        if (/\b(?:if|for|while|switch|catch)\s*\([^)]*$/.test(statement)) {
+          return "the gate is inside a conditional opened on the dispatch line"
+        }
+        // Or a `{` still open, whose opener text names a conditional. This is the
+        // `const limit = 5; if (limit > 0) { if (!(await GATE(…)) … }` shape, and
+        // it is why the boundary above stops at `;` and `}`.
+        let depth = 0
+        let unclosedAt = -1
+        for (let z = 0; z < statement.length; z += 1) {
+          if (statement[z] === "{") {
+            depth += 1
+            unclosedAt = z
+          } else if (statement[z] === "}") {
+            depth -= 1
+            if (depth === 0) unclosedAt = -1
+          }
+        }
+        if (unclosedAt !== -1 && /\b(?:if|else|for|while|do|switch|catch)\b/.test(statement.slice(0, unclosedAt))) {
           return "the gate is inside a conditional opened on the dispatch line"
         }
       }
@@ -671,10 +721,100 @@ function conditionalReason(region, gateAt, gateOffsetOnLine = null) {
     // always executes — otherwise every route would be "conditional" in itself.
     const isRoot = i === 0
     const enclosing = stack.some(Boolean)
-    const conditional = isRoot ? false : NEUTRAL_OPENERS.test(text) ? enclosing : enclosing || CONDITIONAL_OPENERS.test(text)
+    const neutral = NEUTRAL_OPENERS.test(text) || NEUTRAL_CLOSER_OPENERS.test(text)
+    const conditionalOpen = CONDITIONAL_OPENERS.test(text) || CONDITIONAL_CLOSER_OPENERS.test(text)
+    const conditional = isRoot ? false : neutral ? enclosing : enclosing || conditionalOpen
     for (const role of roles) if (role === "open" || role === "object") stack.push(conditional && role === "open")
   }
   return null
+}
+
+/**
+ * Every gate name that appears inside STRING CONTENT, as `handlers.mjs:<line>  <gate>`.
+ *
+ * The backstop for the second half of C1. `stripComments` blanks comment content
+ * but deliberately PRESERVES string contents, because the dispatch predicates need
+ * to see route literals in the code view. That is only safe while no string holds
+ * something that looks like a gate call:
+ *
+ *     const note = "remember to call requireAuth() here"
+ *
+ * is a comment in all but spelling, and `isGated` would read it as the route's
+ * gate. So this scans the CODE view and reports any gate name inside a literal.
+ *
+ * STATEFUL ACROSS LINES, and that is the whole point — see the fix in the teeth
+ * block. The first version iterated LINES and reset `quote` per line, so a
+ * backtick that opened on one line and closed on a later one was never entered
+ * as a string at all, and a gate name inside such a template was MISSED while
+ * `isGated` still returned `true` for it. A single-line string was caught; only
+ * the multi-line template escaped, and it escaped into a false PASS.
+ */
+function stringGateNames(src) {
+  const offenders = []
+  // ONE pass over the whole CODE view, with the literal state CARRIED ACROSS
+  // LINES. The first version iterated lines and reset `quote` per line, which is
+  // what let a multi-line template literal through: the backtick that opened on
+  // one line was never matched to its closer, so nothing in between was ever
+  // recognised as string content, and a gate name inside it was MISSED while
+  // `isGated` still returned true for the same text.
+  //
+  // The newline rule mirrors the one `stripComments` itself applies: a `'` or `"`
+  // cannot span lines in JavaScript, so a newline closes them, but a backtick CAN
+  // and does — a template literal with `${…}` interpolation is ordinary. Getting
+  // this backwards in either direction is a bug: closing a template at the
+  // newline would flag the rest of the file, and carrying a `'` across the newline
+  // would blind the scan to the next line's real literals.
+  const code = stripComments(src)
+  let quote = null
+  let buf = ""
+  let line = 1
+  const flush = (at) => {
+    for (const g of GATES) if (buf.includes(g)) offenders.push(`handlers.mjs:${at}  ${g}`)
+    buf = ""
+  }
+  for (let k = 0; k < code.length; k += 1) {
+    const c = code[k]
+    if (quote) {
+      if (c === "\\") {
+        buf += code[k + 1] ?? ""
+        k += 1
+        continue
+      }
+      if (c === quote) {
+        flush(line)
+        quote = null
+        continue
+      }
+      if (c === "\n") {
+        if (quote === "`") {
+          // A template literal CONTINUES onto the next line.
+          line += 1
+          buf += "\n"
+          continue
+        }
+        // An unterminated `'` or `"` cannot span lines: end it here rather than
+        // swallowing the rest of the file.
+        flush(line)
+        quote = null
+        line += 1
+        continue
+      }
+      buf += c
+      continue
+    }
+    if (c === "\n") {
+      line += 1
+      continue
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c
+      buf = ""
+    }
+  }
+  // A file ending inside a template still has to be reported, or an unterminated
+  // backtick would be a way to hide the corpus.
+  if (quote) flush(line)
+  return offenders
 }
 
 /**
@@ -1996,6 +2136,232 @@ describe("WS-7 slice C — the guard's own teeth", () => {
     ).toEqual([])
   })
 
+  it("a gate name inside a MULTI-LINE template literal is found, not missed", () => {
+    // IMPORTANT 1, PLANTED. The backstop scanned LINE BY LINE and reset `quote`
+    // per line, so a backtick opening on one line and closing on a later one was
+    // never entered as a string. The review planted exactly this and it PASSED:
+    // the scan reported [] while `isGated` returned true for the same text, which
+    // is a false pass — the backstop was blind to precisely the case where the
+    // scan's premise (string contents are visible) stops being checkable.
+    //
+    // The planted fixture asserts BOTH halves, because either alone can pass for
+    // the wrong reason: the scanner must FIND the gate name, and `isGated` must
+    // then treat the text as a string and NOT as a gate.
+    const planted = [
+      'if (path === "/api/planted/tmpl" && req.method === "GET") {',
+      "  const banner = `",
+      "    heads up: this route is protected by",
+      "    requireAuth() and friends",
+      "  `",
+      "  writeJson(res, 200, { ok: true, items: await listItems() })",
+      "  return true",
+      "}"
+    ].join("\n")
+    const found = stringGateNames(planted)
+    expect(
+      found,
+      "THIS IS THE PLANT, SHOWN: a gate name inside a template literal that SPANS LINES was invisible to the " +
+        "backstop, so the corpus check reported [] and isGated still read the string as a gate. The scan must " +
+        "carry its template state across the newline."
+    ).toHaveLength(1)
+    expect(found[0], "and it must name the gate that leaked").toContain("requireAuth(")
+    // And the reason the backstop exists at all: the same text IS read as a gate
+    // by the verdict, which is the false pass the corpus check must prevent.
+    const site = discoverRouteSites(planted.split("\n"))[0]
+    expect(site, "the planted route must still be discovered").toBeDefined()
+    expect(
+      isGated(site).ok,
+      "while the string is NOT blanked, isGated reads the template as a real gate — which is exactly why a " +
+        "multi-line gate name must be caught by the corpus check"
+    ).toBe(true)
+  })
+
+  it("a single-line string gate name is still found, and both string forms are scanned", () => {
+    // The control for the plant above, and it must keep working: a fix that made
+    // the scanner stateful must not have broken the case it already handled.
+    for (const [label, planted] of [
+      ["double-quoted", ['const n = "call requireAuth() first"', "const m = 1"].join("\n")],
+      ["single-quoted", ["const n = 'call requireSessionOrFirstRun() first'", "const m = 1"].join("\n")],
+      ["multi-line template", ["const n = `call", "requireAuthStrict() now`", "const m = 1"].join("\n")]
+    ]) {
+      expect(stringGateNames(planted), `${label} string must be scanned`).toHaveLength(1)
+    }
+    // A quote inside a string must not end it early, or the scan would report
+    // half a literal and miss the rest.
+    const tricky = ['const n = "he said \\" requireAuth() \\" loudly"', "const m = 1"].join("\n")
+    expect(stringGateNames(tricky), "an escaped quote must not terminate the literal early").toHaveLength(1)
+    // And a gate name that is REAL CODE is not a string leak and must not be
+    // reported, or the corpus check would demand the impossible.
+    const real = ["if (!(await requireAuth(req, res))) return true", "const m = 1"].join("\n")
+    expect(stringGateNames(real), "a real gate call is code, not a string, and must not be reported").toEqual([])
+  })
+
+  it("a conditional block opened on a CLOSING-BRACE line is conditional", () => {
+    // IMPORTANT 2, PLANTED TWICE. `CONDITIONAL_OPENERS` was anchored with `^`, so
+    // a line whose text is `} else {` or `} catch (err) {` never matched it. The
+    // stack was still correct — `braceRoles` returns ["close","open"] for such a
+    // line, so the `}` popped and the `{` pushed — but the `conditional` flag was
+    // computed from the LINE TEXT, which does not start with `else` or `catch`,
+    // so it pushed `false`. Both shapes therefore reported a gate as
+    // UNCONDITIONAL: the unsafe direction, a false pass.
+    //
+    // The seeds for both plants are ordinary control flow, which is why this went
+    // unnoticed: `else` and `catch` almost always follow a closing brace.
+    const elseShape = [
+      'if (path === "/api/planted/else" && req.method === "GET") {',
+      "  if (badOrigin) {",
+      '    writeJson(res, 403, { error: "origin not allowed" })',
+      "    return true",
+      "  } else {",
+      "    if (!(await requireAuth(req, res))) return true",
+      "    writeJson(res, 200, { ok: true, items: await listItems() })",
+      "    return true",
+      "  }",
+      "  return false",
+      "}"
+    ].join("\n")
+    const catchShape = [
+      'if (path === "/api/planted/catch" && req.method === "GET") {',
+      "  try {",
+      "    loadRegistry()",
+      "  } catch (err) {",
+      "    if (!(await requireAuth(req, res))) return true",
+      "    writeJson(res, 200, { ok: true, items: await listItems() })",
+      "    return true",
+      "  }",
+      "  return false",
+      "}"
+    ].join("\n")
+    for (const [label, planted] of [
+      ["} else {", elseShape],
+      ["} catch (err) {", catchShape]
+    ]) {
+      const site = discoverRouteSites(planted.split("\n"))[0]
+      expect(site, `${label}: the planted route must be discovered`).toBeDefined()
+      const verdict = isGated(site)
+      expect(
+        verdict.ok,
+        `${label}: a gate in that block runs only on some requests, so it must NOT gate the route. ` +
+          `Got ok=true. A closing brace leads the line, so the opener keyword is not at the start.`
+      ).toBe(false)
+      expect(verdict.why, `${label}: and the reason must name the conditionality`).toMatch(/conditional/i)
+    }
+  })
+
+  it("a neutral block opened on a closing-brace line is NOT conditional", () => {
+    // THE CONTROL for IMPORTANT 2, and it is the false-positive risk the fix
+    // carries. `} finally {` and `} catch` are the neighbours of `} else {`: if
+    // the fix is written as "a `}` at the start of the line means conditional",
+    // then a `finally` block — which ALWAYS runs when reached — would be reported
+    // conditional, and a real gate inside one would be wrongly exonerated. The
+    // reviewer measured the corpus of `} else {` and `} catch (err) {` as 0; this
+    // is the case that keeps the fix from being lazy.
+    const finallyShape = [
+      'if (path === "/api/planted/finally" && req.method === "GET") {',
+      "  try {",
+      "    loadRegistry()",
+      "  } finally {",
+      "    closeRegistry()",
+      "  }",
+      "  if (!(await requireAuth(req, res))) return true",
+      "  writeJson(res, 200, { ok: true, items: await listItems() })",
+      "  return true",
+      "}"
+    ].join("\n")
+    const site = discoverRouteSites(finallyShape.split("\n"))[0]
+    expect(site, "the planted route must be discovered").toBeDefined()
+    expect(
+      isGated(site).ok,
+      "a finally block always runs when reached, and the gate is after it, so it must still count as a gate"
+    ).toBe(true)
+  })
+
+  it("a statement ahead of the gate on the same line is not a conditional", () => {
+    // THE MINOR FROM ROUND 2. `const h = 1; if (!(await requireAuth(req, res))) return true`
+    // was reported as "the gate is inside a conditional opened on the dispatch
+    // line" — a false POSITIVE, in the safe direction, with a corpus of 0. The
+    // cause is the same `if (` as the gate's OWN head: the head text before the
+    // gate is `const h = 1; if (!(await `, which contains `if (`.
+    //
+    // The discriminator is that the gate's own spelling in all three of this
+    // file's idioms is `if (!(await <gate>(`, so that trailing `if (` belongs to
+    // the GATE and not to a container. Stripping it, and scanning only the text
+    // after the last statement boundary, keeps a genuine container detectable —
+    // asserted by the second half of this test.
+    const sameLine = [
+      'if (path === "/api/planted/sameline" && req.method === "GET") {',
+      "  const h = 1; if (!(await requireAuth(req, res))) return true",
+      "  writeJson(res, 200, { ok: true, items: await listItems() })",
+      "  return true",
+      "}"
+    ].join("\n")
+    const site = discoverRouteSites(sameLine.split("\n"))[0]
+    expect(site, "the planted route must be discovered").toBeDefined()
+    const verdict = isGated(site)
+    expect(
+      verdict.ok,
+      "a plain statement before the gate does not make the gate conditional: " + JSON.stringify(verdict)
+    ).toBe(true)
+    // And a REAL container on the same line must still be caught, or the fix is
+    // just "stop looking".
+    const realContainer = [
+      'if (path === "/api/planted/sameline2" && req.method === "GET") {',
+      "  const limit = 5; if (limit > 0) { if (!(await requireAuth(req, res))) return true }",
+      "  writeJson(res, 200, { ok: true, items: await listItems() })",
+      "  return true",
+      "}"
+    ].join("\n")
+    expect(
+      isGated(discoverRouteSites(realContainer.split("\n"))[0]).ok,
+      "a gate inside a same-line `if (limit > 0) { … }` is conditional and must be refused"
+    ).toBe(false)
+  })
+
+  it("the nesting discriminator is load-bearing: the over-strict mutant is far worse", () => {
+    // ROUND 2's MEASUREMENT, MADE MACHINE-CHECKED. The fix for IMPORTANT 2 could
+    // have been "any enclosing block counts as conditional", which is simpler and
+    // looks safer. It is not safe: it exonerates every real gate that sits behind
+    // a `try`, a 4xx carve-out, or a destructuring line, and the review measured
+    // that mutant at 108 offenders across the 222 sites. Only 7 are genuine.
+    //
+    // So the discriminator — a block that has CLOSED before the gate cannot
+    // enclose it — is load-bearing, and this test is what would catch its loss.
+    // The number is asserted as a FLOOR, not an exact figure, so ordinary churn
+    // does not make it brittle; what must never happen is the mutant's count
+    // collapsing toward zero, which is what "any enclosing block counts" gives.
+    const overStrict = SITES.filter((s) => {
+      // The naive mutant: every line before the gate that opens ANY block is
+      // treated as a conditional container, with no notion of it having closed.
+      let enclosing = false
+      for (let i = 0; i < s.region.length; i += 1) {
+        const roles = braceRoles(s.region[i])
+        for (const role of roles) if (role === "close") enclosing = false
+        if (CONDITIONAL_OPENERS.test(s.region[i].trim())) enclosing = true
+        if (GATES.some((g) => s.region[i].includes(g))) break
+      }
+      return enclosing
+    }).length
+    expect(
+      overStrict,
+      "the over-strict mutant is the wrong predicate: it condemns real gates that sit behind a closed `try`, a " +
+        "4xx carve-out, or a destructuring line. If this number has collapsed toward the ~7 genuine offenders, " +
+        "the nesting discriminator has been lost and the guard is reporting routes as gated that are not."
+    ).toBeGreaterThan(90)
+    // And the real predicate, for contrast, must leave only the routes that are
+    // genuinely conditional. Zero here, because the two live ones are now gated
+    // or allowlisted.
+    const genuinelyConditional = SITES.filter((s) => {
+      const verdict = isGated(s)
+      return !verdict.ok && /conditional/i.test(verdict.why ?? "")
+    }).length
+    expect(
+      genuinelyConditional,
+      "after fixing IMPORTANT 1 and 2, no route in handlers.mjs has a gate nested in a conditional — the two " +
+        "that did (/api/trading/notifications, /api/agents/run's neighbours) are resolved. A non-zero count " +
+        "means a new conditional gate landed and was not dealt with."
+    ).toBe(0)
+  })
+
   it("no string literal in handlers.mjs contains a gate call, so preserving strings is safe", () => {
     // THE OTHER HALF OF C1, and the reason it needed two assertions rather than
     // one. `stripComments` blanks comment CONTENT but deliberately PRESERVES
@@ -2011,33 +2377,8 @@ describe("WS-7 slice C — the guard's own teeth", () => {
     // reason. The corpus is 0 today — verified, not assumed — so the rule costs
     // nothing, and if it ever becomes non-zero the guard says why it is unsafe
     // instead of quietly reading the string as a gate.
-    const offenders = []
-    LINES.forEach((raw, i) => {
-      const code = stripComments(raw)
-      let quote = null
-      let buf = ""
-      for (let k = 0; k < code.length; k += 1) {
-        const c = code[k]
-        if (quote) {
-          if (c === "\\") {
-            buf += code[k + 1] ?? ""
-            k += 1
-            continue
-          }
-          if (c === quote) {
-            for (const g of GATES) if (buf.includes(g)) offenders.push(`handlers.mjs:${i + 1}  ${g}`)
-            quote = null
-            buf = ""
-            continue
-          }
-          buf += c
-          continue
-        }
-        if (c === '"' || c === "'" || c === "`") quote = c
-      }
-    })
     expect(
-      offenders,
+      stringGateNames(SRC),
       "a string literal containing a gate call would be read as a gate, because stripComments preserves string " +
         "contents so the dispatch predicates can see route literals. Either reword the string or extend the lexer — " +
         "do not leave a comment-in-a-string able to satisfy a gate"
@@ -2370,6 +2711,29 @@ describe("WS-7 slice C — the guard's own teeth", () => {
  *     disclosed rather than implied, which is the standard this file holds
  *     itself to: a guard that claims more than it enforces is worse than one
  *     that admits its edge.
+ *
+ * 5c. BOUND I2, ADDED IN FIX ROUND 2: A CONDITIONAL BLOCK WHOSE OPENING BRACE
+ *     SITS ON THE DISPATCH'S OWN LINE IS NOT ATTRIBUTED TO ITS KEYWORD.
+ *
+ *     `conditionalReason` decides a line's blocks from the line's own TEXT, and a
+ *     gate sitting on the same line as its container's `{` is reached before that
+ *     brace is pushed. The one-line shape
+ *
+ *         if (cond) { if (!(await requireAuth(req, res))) return true … }
+ *
+ *     would therefore be read as an unconditional gate. The multi-line form of the
+ *     same code is handled correctly — the opener gets its own line, is
+ *     classified, and is on the stack when the gate is reached — and the same-line
+ *     case is covered when the opener's `(` is still unclosed at the gate. The
+ *     corpus is 0, asserted by the same-line tests, and the direction is a FALSE
+ *     PASS, which is the direction that matters: it is stated here rather than
+ *     left to be discovered.
+ *
+ *     It was NOT this file's round-2 finding. Round 2's finding was the opposite
+ *     polarity — a gate on its own line preceded by a finished statement was
+ *     wrongly reported conditional, a false NEGATIVE in effect — and that is
+ *     fixed. This is the residue of that fix, and it is named because the fix
+ *     moved the boundary from `{;}` to `;` and the movement is what created it.
  *
  * 6. A MARKER IS THE ROUTE'S OWN DISPATCH LINE, WHICH IS A WEAKER ANCHOR THAN A
  *    WRITTEN DECLARATION COMMENT. What the guard guarantees is that an exemption
