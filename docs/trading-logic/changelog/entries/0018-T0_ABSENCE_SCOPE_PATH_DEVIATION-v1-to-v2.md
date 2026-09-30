@@ -27,6 +27,27 @@ The two permitted resolutions were (a) extract the discovery into
 amend `:581` and `:1168` to match reality. (b) was chosen. Both spec locations
 are amended in this change.
 
+reason: >-
+  The spec's file list names `scripts/absence-scope.mjs`, but the module as built
+  and as consumed is `apps/dashboard/server/scripts/absence-scope.mjs`. Only the
+  directory differs. The discovery was already extracted into its own exported
+  module, and `executionAbsenceScope.test.mjs:21-26` already imports all four of
+  its exports, so option (a)'s purpose - a reusable module that the test consumes
+  - is already satisfied, and re-extracting it would change nothing.
+  The file is deliberately NOT moved, because relocating it would be a regression
+  rather than a tidiness win. `perpsSeamGuard.test.mjs:118-129` walks the entire
+  server tree recursively and pins `createOrder`-family call sites to exactly
+  two. A scanner that declares the patterns it scans for must not sit inside that
+  walk, or it fails the guard on its own existence instead of on a real venue
+  change; that is why `absence-scope.mjs:27-43` stores bare method names and
+  compiles the regexes at module load. Moving the file to root `scripts/` would
+  silently drop the scanner out of that walk and strand its `SELF_MODULE`
+  self-exclusion as dead code. The current location is the stricter of the two,
+  and `PICC.md:556` already records it.
+  Correcting the spec is therefore the honest resolution: the deviation is
+  recorded, the two file-list locations are amended to the real path, and no
+  test, assertion, or guard is touched.
+
 ## The premise being corrected: the discovery was never test-internal
 
 The framing behind option (a) — that the discovery logic "appears to have been

@@ -87,3 +87,129 @@ three were real, and none were introduced by WS-7.
 
 Documentation-only. This record cannot change runtime behaviour, so it is safe to
 revert in isolation.
+
+---
+
+## Re-measurement — 2026-09-29 (appended, prior section left intact)
+
+The section above is the **2026-09-26** baseline and is deliberately **not
+overwritten**: it is the historical record of what was true at T1, and rewriting
+it would falsify that. T2 then removed the ExpertOption venue, which removed
+tests whose subject no longer exists, so the floor legitimately moved. This
+appended section is a **separate, later observation**.
+
+Every value below was **measured fresh in this session**. Nothing is inherited
+from `PICC.md:477`, from the 2026-09-26 section above, or from any other document.
+`PICC.md:477` is a *runbook ladder* (a list of commands to run), not a set of
+observed values, so there was nothing numeric there to inherit in the first
+place; it is named here only because AC-046 forbids treating it as a measurement.
+
+| # | Gate | Command | Observed now | Verdict |
+| --- | --- | --- | --- | --- |
+| 1 | Unit/integration | `npm run test --workspace @picc/dashboard` | **327 files, 3947 total, 3946 passed, 1 pending, 0 failed**, exit 0 — run **twice**, byte-identical counts | PASS |
+| 2 | Typecheck | `npm run typecheck` | exit 0, **0** occurrences of `error TS` | PASS |
+| 3 | Audit chain | `verifyAudit()` | `{"ok":true,"brokenAt":null,"reason":null}` | PASS |
+| 4 | E2E | `npm run test:e2e --workspace @picc/dashboard` | **6 passed** — run 1: 2.8m, run 2: 2.6m, both exit 0 | PASS |
+| 5 | Security review | diff-scoped scan of `d01debd..HEAD` | **0 executable source files touched, 0 pattern hits**; see the audit finding below | PASS (with finding) |
+| 6 | Whitespace | `git diff --check` | clean, exit 0 | PASS |
+
+All six AC-046 items are present and each carries an observed value. **No item is
+`UNMEASURED`, and no item is inherited.**
+
+### Notes on individual items
+
+**(1) Unit floor.** 3947 total / 3946 passed / 1 pending is the honest reading;
+the "3946 floor" figure is the passed count. The single pending test is a
+pre-existing honest skip, not a failure. 327 files carry at least one test. The
+global `testTimeout` was **not** raised; no timeout was touched. Both runs were
+captured with the JSON reporter so a failure would be nameable rather than
+inferred. The 2026-09-26 figure was 303 files / 3392 passed; the rise is WS-7 test
+additions net of T2's removals.
+
+**(3) Audit chain — verified non-vacuously.** `verifyAudit()` is a module export,
+not a CLI, so it was invoked by importing `auditTrail.mjs` and calling it against
+the **real persisted trail** at `apps/dashboard/server/services/data/
+command-centre-audit.jsonl`. That file holds **75 entries / 30072 bytes**
+(seq 1 `kill-switch` through seq 75 `audit:startup-health`), and `verifyAudit()`
+walked all 75 and returned `ok: true`. The entry count is recorded deliberately:
+an `ok: true` over an *empty* chain is trivially true and would be worthless as
+evidence. This is not that.
+
+One correction worth recording, because it nearly produced a false negative: the
+module's default `DATA_DIR` is `new URL("../data", import.meta.url)`, which from
+`services/commandCentre/` resolves to `server/services/data/`, **not**
+`server/data/`. A first measurement resolved `server/data/` and reported "trail
+file absent" while 75 entries were in fact hydrated. The path in the table above
+is the resolved one.
+
+**(4) E2E.** 6 passed on both runs, with no flake. `e2e/terminal-perf.spec.ts`
+(the known-unrooted flake) **passed on both runs** (1.9m, 1.8m) and did not fire.
+The e2e run rewrites the tracked `apps/dashboard/perf/terminal-perf-manifest.json`
+(+14969 lines); it was restored with `git checkout --` and is not part of any
+commit. `terminal-perf.spec.ts` itself was not modified.
+
+**(5) Security review — scope, and one pre-existing finding.** Diff-scoped
+pattern review of `d01debd..HEAD` (the three commits of this session), using the
+same pattern table this record documents above so the two reviews are comparable:
+`PICC_*` env assignment, `PRIVATE_KEY =`, `sk-<20+>`, `Bearer <20+>`,
+`child_process`/`execSync`/`spawn(`, `gh[pousr]_`, `AKIA…`, and PEM private-key
+blocks. **Zero hits in added lines.** The diff touches **no executable source
+file at all** — two deleted pnpm config files, one spec file (comments and
+file-list text only), and two new Markdown records. Same scope limit as above:
+this is a diff-scoped pattern review, not an application penetration test.
+
+**Finding, not caused by this session and deliberately not fixed here:**
+`npm audit --audit-level=high` exits **1** against the now-authoritative root
+lockfile — **1 high, 4 moderate, 0 critical**. The high is **`undici@7.29.0`**
+(DoS via unhandled error in WebSocket `permessage-deflate` decompression), pulled
+in transitively by **`ccxt`**, one of the three dependencies AC-018 names.
+
+It is **pre-existing and provably so**: the `package-lock.json` blob is
+**byte-identical** between the branch base `c407964` and HEAD
+(`4c9826a038261807b44e0844ca8a617db96d9b1b`), so the advisory has been in the
+authoritative lockfile since before this branch and neither this session nor the
+pnpm-lockfile deletion could have introduced or removed it.
+
+Two consequences, stated rather than papered over:
+
+- `ci.yml:72` runs `npm audit --audit-level=high` as a gate, so **that gate is
+  currently red** — and was red before T6.
+- Fixing it means bumping `undici`/`ccxt`, i.e. a real dependency change. That is
+  **out of scope here and was not performed**: T6's bisect note is explicit that
+  the lockfile decision must be closed *before* any new dependency install, and
+  `npm audit fix --force` would additionally pull `vitest@5.0.2`, which npm itself
+  flags as a breaking change. Now that D24 is closed, a targeted bump is
+  permissible — it is a separate, deliberately-not-taken task.
+
+This is also the first time the finding is *visible against a single graph*.
+Before D24 a reader could have audited the pnpm lockfile and seen a different
+answer; that ambiguity was the defect. One source of truth means one audit result,
+including this one.
+
+### Still `UNMEASURED` at this re-measurement
+
+Not attempted in this session, and **not** claimed:
+
+| Item | Status | Why |
+| --- | --- | --- |
+| Direct on-device ARM room-transition sample | **UNMEASURED** | Needs promoted terminal rooms and real ARM64 hardware; no such surface or device here. Unchanged from 2026-09-26. |
+| PICC application peak RSS vs the 2 GB ceiling | **UNMEASURED** | Not attempted; the RAM gate script does not exist. Unchanged. |
+| Perps production `cancel` path | **UNMEASURED** | T3's work; not in this session's scope. Unchanged. |
+| AC-4c two-real-tab lock matrix | **UNMEASURED** | Needs two isolated real browser profiles. Unchanged. |
+| `npm audit` remediation for `undici` | **UNMEASURED / NOT ATTEMPTED** | Deliberately not run; see the finding above. |
+
+### T6 observation appended for the record
+
+This session also executed **T6** (one lockfile, npm only). Its effect on the
+figures above: **none**. The two pnpm files deleted were not read by any test, no
+dependency changed, and the floor is identical before and after — the unit and
+E2E counts here are measured **after** the T6 commit. Recorded in
+`docs/trading-logic/changelog/entries/0017-ONE_LOCKFILE_NPM_ONLY-v1-to-v2.md`.
+
+A second defect this session introduced and fixed is recorded in
+`0018-T0_ABSENCE_SCOPE_PATH_DEVIATION-v1-to-v2.md`: that entry initially omitted
+the `reason` field required by the D20 schema guard
+(`ws7RegulatoryClaimGuard.test.mjs:627`), which failed one test. The **entry** was
+corrected, not the guard. The fix is included in the T1 commit so the history
+shows the defect and its repair together.
+
