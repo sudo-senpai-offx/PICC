@@ -38,10 +38,6 @@ vi.mock("../services/marketConvergence.mjs", () => ({
     planes: []
   }))
 }))
-vi.mock("../services/liveEO.mjs", () => ({
-  liveEOStats: vi.fn(() => ({ status: "idle" })),
-  liveEOData: vi.fn(async () => ({ status: "idle", mode: null, account: null, viewed: null, assets: [] }))
-}))
 vi.mock("../services/v32Section.mjs", () => ({
   v32Section: vi.fn(async () => ({
     ok: true,
@@ -77,7 +73,6 @@ vi.mock("../services/brokers/index.mjs", () => ({
 const trading = await import("../services/trading.mjs")
 const ledger = await import("../services/accuracyLedger.mjs")
 const autopilot = await import("../services/autopilot.mjs")
-const liveEO = await import("../services/liveEO.mjs")
 const marketConvergence = await import("../services/marketConvergence.mjs")
 const v32SectionMock = await import("../services/v32Section.mjs")
 

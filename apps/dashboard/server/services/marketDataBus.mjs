@@ -26,7 +26,7 @@
 // who won and why.
 
 import { canonicalAssetId } from "./assetCatalog.mjs"
-import { resolveTimeframeFor } from "./brokers/index.mjs"
+import { resolveTimeframeFor } from "./brokers/index.mjs" // still used by resolveTimeframe() below
 
 // ── Broker registry (loaded once, lazy) ────────────────────────────────────
 let _registry = null
@@ -82,29 +82,11 @@ async function timed(source, fn) {
   }
 }
 
-// ── Fallback: direct EO import for ensureWatchingAsset (Phase H bridge) ────
-// During the transition, getBestCandles still supports ensureWatch for the
-// EO-specific watch-and-fetch pattern. This will be replaced by a generic
-// broker.ensureWatch(assetId) in Phase I. The bridge honors EO's own
-// capability curve: a 5s request fetches real 1m bars tagged 60, and an
-// above-1h request is skipped entirely (declined — never relabeled).
-const EO_BRIDGE_TIMEFRAMES = [60, 300, 900, 3600]
-async function eoWatchAndFetch(assetId, tf, n) {
-  const servedTf = resolveTimeframeFor(tf, EO_BRIDGE_TIMEFRAMES)
-  if (servedTf === null) return { ohlc: [], servedTf: null, alive: false, staleFlag: false }
-  try {
-    const { ensureWatchingAsset, fetchAssetCandles, liveEOStats } = await import("./liveEO.mjs")
-    await ensureWatchingAsset(assetId).catch(() => null)
-    const result = await timed("eo-fetch", () =>
-      fetchAssetCandles(assetId, servedTf, n).catch(() => ({ ohlc: [], source: null })))
-    // T6 — the bridge tags staleness from liveEO's own liveness + stale flag
-    // (stopLiveEO/transport give-up preserve buffers — data stays visible but
-    // is never labeled "EO live").
-    let st = null
-    try { st = liveEOStats() } catch { st = null }
-    return { ohlc: result.ohlc ?? [], servedTf, alive: st?.status === "connected", staleFlag: Boolean(st?.stale) }
-  } catch { return { ohlc: [], servedTf: null, alive: false, staleFlag: false } }
-}
+// D2/AC-005: the ExpertOption watch-and-fetch bridge is removed with
+// liveEO.mjs. The `ensureWatch` option stays accepted (callers may still pass
+// it) but is inert here — there is no EO on-demand fetch to delegate to, so
+// `getBestCandles` resolves from the registered brokers and, failing those,
+// returns its honest emptiness (`source: "none"`) rather than a relabeled one.
 
 /**
  * T3 — deep history merge. After the primary source wins (≥30 bars at its
@@ -349,19 +331,9 @@ export async function getBestCandles(assetId, { timeframe = 60, count = 200, ens
     } catch { /* broker unavailable — fall through */ }
   }
 
-  // ── EO watch-and-fetch bridge (Phase H transitional) ─────────────────────
-  // If ensureWatch is provided and no broker had good data, try EO's
-  // on-demand fetch. This preserves existing behavior during the transition.
-  if (typeof ensureWatch === "function" && !thinData) {
-    try {
-      const { ohlc: eoCandles, servedTf, alive: eoAlive, staleFlag: eoStaleFlag } = await eoWatchAndFetch(id, tf, n)
-      if (servedTf !== null && eoCandles.length >= 30) {
-        const withHistory = await withHistoryBackfill({ brokers, id, primary: eoCandles.slice(-n), servedTf, n, primarySlug: "live" })
-        return { ...withHistory, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: !eoAlive || eoStaleFlag, timeframe: servedTf, resolved: servedTf !== tf }
-      }
-      if (servedTf !== null && eoCandles.length) thinData = { candles: eoCandles, source: "live", sourceMode: mode("live"), sources: markWinner("live"), stale: !eoAlive || eoStaleFlag, timeframe: servedTf, resolved: servedTf !== tf, historyDepth: eoCandles.length, backfilled: 0, historySpanMs: spanMs(eoCandles), historySource: null }
-    } catch { /* EO fetch failed — last resort stands or honest emptiness */ }
-  }
+  // D2/AC-005: the EO bridge branch is gone (see the note above the deleted
+  // helper). `ensureWatch` is no longer consulted here.
+  void ensureWatch
 
   // Last resort: thin data from any broker, else honest emptiness.
   if (thinData) return thinData

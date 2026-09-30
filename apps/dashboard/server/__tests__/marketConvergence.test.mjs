@@ -1,15 +1,18 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { resetRegimeLatches } from "../services/regimeEngine.mjs"
 
-// marketConvergence — the realtime-suite loader that turns live ExpertOption
-// buffers (and M1 aggregation) into a ConvergenceResult. These tests pin the
-// honest-absence paths: no connected session, empty buffers, or a throwing
-// liveEOData must yield NO TRADE with "—" values (R10), never fabricated reads.
-vi.mock("../services/liveEO.mjs", () => ({
-  liveEOData: vi.fn()
-}))
-
-const liveEO = await import("../services/liveEO.mjs")
+// marketConvergence — the realtime-suite loader that turns live buffers (and M1
+// aggregation) into a ConvergenceResult. These tests pin the honest-absence
+// path: with no live plane every timeframe must yield NO TRADE with "—" values
+// (R10), never fabricated reads.
+//
+// D2/AC-005: the `vi.mock("../services/liveEO.mjs", …)` and the buffer fixtures
+// are removed with liveEO.mjs. `convergenceSection` now holds `data = null`
+// unconditionally (there is no live buffer to read), so `source` is "none" and
+// every plane is inactive/stale/absent. The tests that asserted a POPULATED
+// read from an injected liveEO buffer are removed with the injection point they
+// used; the R10 honest-absence guarantee they also asserted is retained below and
+// is now the only reachable outcome.
 
 const M1 = (n) =>
   Array.from({ length: n }, (_, i) => ({
@@ -93,34 +96,13 @@ afterEach(() => {
 })
 
 describe("convergenceSection", () => {
-  it("uses in-buffer TFs directly and aggregates 30m/4h from M1 for the viewed asset", async () => {
-    vi.mocked(liveEO.liveEOData).mockReturnValue(viewedData(1000))
-    const r = await m.convergenceSection({ now: 1234 })
-    expect(r.assetId).toBe("EURUSD")
-    expect(r.ts).toBe(1234)
-    expect(r.source).toBe("liveEO-buffers")
-    // 1000 M1 bars -> ceil(1000/30)=34 x 30m bars -> ACTIVE plane from M1
-    const m30 = r.planes.find((p) => p.tf === 1800)
-    expect(m30.source).toBe("aggregate")
-    expect(m30.active).toBe(true)
-    expect(m30.score).not.toBeNull()
-    // in-buffer timeframes carry their own labels
-    expect(r.planes.find((p) => p.tf === 60).source).toBe("live")
-    expect(r.planes.find((p) => p.tf === 300).source).toBe("live")
-    // the viewed asset rides through
-    expect(r.state).not.toBe("NO TRADE")
-  })
-
-  it("selects the first asset when nothing is viewed", async () => {
-    const data = viewedData(1000)
-    data.viewed = null
-    vi.mocked(liveEO.liveEOData).mockReturnValue(data)
-    const r = await m.convergenceSection()
-    expect(r.assetId).toBe("EURUSD")
-  })
+  // D2/AC-005: the two buffer-fed tests are removed with the buffer. The first
+  // asserted a POPULATED read sourced from "liveEO-buffers"; the second
+  // asserted viewed-asset SELECTION, which only existed to choose which live
+  // buffer to read. With `data = null` there is no asset to select and no plane
+  // to populate, so neither has a reachable assertion left.
 
   it("reports NO TRADE with --- values when no buffers exist (R10)", async () => {
-    vi.mocked(liveEO.liveEOData).mockReturnValue({ status: "idle", mode: null, account: null, viewed: null, assets: [], ts: 0 })
     const r = await m.convergenceSection({ now: 1 })
     expect(r.assetId).toBeNull()
     expect(r.ok).toBe(true) // the ladder was requested...
@@ -135,12 +117,14 @@ describe("convergenceSection", () => {
     expect(r.planes.every((p) => p.source === "none")).toBe(true)
   })
 
-  it("a throwing liveEOData degrades to the same honest absent read", async () => {
-    vi.mocked(liveEO.liveEOData).mockImplementationOnce(() => { throw new Error("liveEO not started") })
-    const r = await m.convergenceSection()
-    expect(r.state).toBe("NO TRADE")
-    expect(r.score5).toBeNull()
-    expect(r.planes).toHaveLength(m.CONVERGENCE_TIMEFRAMES.length)
+  it("reports source 'none' and echoes the requested clock, not a live plane", async () => {
+    // D2/AC-005: `source` moved from "liveEO-buffers" to "none" with the buffer.
+    // This pins the NEW TRUE value: no buffer can serve, so the section says so
+    // rather than naming a source it can no longer read.
+    const r = await m.convergenceSection({ now: 1234 })
+    expect(r.source).toBe("none")
+    expect(r.ts).toBe(1234)
+    expect(r.assetId).toBeNull()
   })
 
   it("exposes the exact ladder constants the panel renders against", () => {
@@ -150,48 +134,16 @@ describe("convergenceSection", () => {
 })
 
 describe("convergenceSection regime wiring (B-REG-3)", () => {
+  // D2/AC-005: the three buffer-fed regime tests are removed with the buffer.
+  // Each injected an `uncertainData()` / `allTrendData()` liveEO payload to drive
+  // the regime ladder from real candles. With `data = null` the regime read is
+  // always "unknown" and the ladder has nothing to modulate, so the mode-off /
+  // soft-latch / all-trend branches are unreachable from production. They are
+  // NOT rewritten to pass trivially: an assertion that always holds teaches
+  // nothing. The honest-unknown case is asserted below and that is now the only
+  // reachable regime outcome.
 
-  it("mode off leaves the engine payload unmodulated even for a UNCERTAIN regime", async () => {
-    m.setRegimeMode("EURUSD", "off")
-    vi.mocked(liveEO.liveEOData).mockReturnValue(uncertainData())
-    const r = await m.convergenceSection({ now: 20 })
-    // the conservative knob that WOULD fire in soft mode did not:
-    expect(r.meta.conservative).toBe(false)
-    expect(r.regime.applied).toBe(false)
-    expect(r.regime.mode).toBe("off")
-    expect(r.regime.labels).toBeNull()
-    // the regime read itself is still honest and visible:
-    expect(r.regime.regime).toBe("UNCERTAIN")
-    expect(r.regime.unsettled).toBe(true)
-  })
-
-  it("latched UNCERTAIN applies conservative + regime suffix in the state block", async () => {
-    vi.mocked(liveEO.liveEOData).mockReturnValue(uncertainData())
-    const first = await m.convergenceSection({ now: 30 })
-    expect(first.regime.regime).toBe("UNCERTAIN")
-    expect(first.regime.unsettled).toBe(true) // first read: not yet latched
-    expect(first.regime.mode).toBe("soft")
-    expect(first.regime.applied).toBe(true)
-    expect(first.meta.conservative).toBe(true)
-    expect(first.regime.labels.suffix).toMatch(/^regime:uncertain/)
-    const second = await m.convergenceSection({ now: 31 })
-    expect(second.regime.unsettled).toBe(false) // committed after two agreeing reads
-    expect(second.regime.confirmCount).toBe(2)
-    expect(second.meta.conservative).toBe(true)
-  })
-
-  it("all-trend soft read applies the confidence-scaled ladder with a trending suffix", async () => {
-    vi.mocked(liveEO.liveEOData).mockReturnValue(allTrendData())
-    const r = await m.convergenceSection({ now: 40 })
-    expect(r.regime.regime).toBe("TRENDING")
-    expect(r.regime.confidence).toBe(100)
-    expect(r.regime.applied).toBe(true)
-    expect(r.regime.labels.suffix).toContain("trending")
-    expect(r.meta.conservative).toBe(false)
-  })
-
-  it("absent liveEO yields source:none + an honest unknown regime block, no crash", async () => {
-    vi.mocked(liveEO.liveEOData).mockReturnValue({ status: "idle", mode: null, account: null, viewed: null, assets: [], ts: 0 })
+  it("absent live plane yields source:none + an honest unknown regime block, no crash", async () => {
     const r = await m.convergenceSection({ now: 50 })
     expect(r.regime.regime).toBe("unknown")
     expect(r.regime.confidence).toBe(0)

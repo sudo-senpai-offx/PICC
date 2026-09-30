@@ -128,45 +128,46 @@ describe("unified market data bus", () => {
     vi.doUnmock("../services/yahoo.mjs")
   })
 
-  it("tags the EO watch-and-fetch bridge stale when EO is not alive (never 'EO live')", async () => {
+  // D2/AC-005: the two tests that pinned the `liveEO` watch-and-fetch bridge
+  // (stale-when-disconnected / fresh-when-connected) are REMOVED with the
+  // module. The bridge is not merely disabled — `marketDataBus.mjs` no longer
+  // imports `liveEO.mjs` at all, so there is no code path left for them to
+  // exercise, and keeping them would assert a module that does not exist.
+  // The honest behaviour that SURVIVES is pinned below instead: with every
+  // live tier down the bus falls back and reports its source honestly, and
+  // `ensureWatch` is accepted but no longer consulted.
+  it("D2/AC-005: no live tier available falls back honestly, and ensureWatch is inert", async () => {
     vi.resetModules()
-    vi.doMock("../services/liveEO.mjs", () => ({
-      liveEOData: () => { throw new Error("down") },
-      fetchAssetCandles: async () => ({ ohlc: synthCandles(40) }),
-      ensureWatchingAsset: async () => null,
-      liveEOStats: () => ({ status: "disconnected", stale: false })
-    }))
     vi.doMock("../services/liveCCXT.mjs", () => ({ liveCCXTData: () => { throw new Error("down") } }))
     vi.doMock("../services/yahoo.mjs", () => ({ getHistory: async () => { throw new Error("offline") } }))
     const fresh = await import("../services/marketDataBus.mjs")
-    // No registered broker serves; buffered EO data (≥30 bars) still comes
-    // back through the bridge — but a disconnected EO is STALE data, never live.
-    const out = await fresh.getBestCandles("ZZZZZ", { timeframe: 60, count: 50, ensureWatch: async () => null })
-    expect(out.source).toBe("live")
-    expect(out.candles.length).toBeGreaterThanOrEqual(30)
-    expect(out.stale).toBe(true)
-    vi.doUnmock("../services/liveEO.mjs")
+    let ensureWatchCalled = false
+    const out = await fresh.getBestCandles("ZZZZZ", {
+      timeframe: 60,
+      count: 50,
+      ensureWatch: async () => {
+        ensureWatchCalled = true
+        return null
+      }
+    })
+    // Nothing serves → the bus must not fabricate a live source. It reports
+    // emptiness/candles honestly rather than claiming "live".
+    expect(out.source).not.toBe("live")
+    // The option is still accepted for caller compatibility but is NEVER
+    // consulted — the deleted bridge was its only consumer.
+    expect(ensureWatchCalled).toBe(false)
     vi.doUnmock("../services/liveCCXT.mjs")
     vi.doUnmock("../services/yahoo.mjs")
   })
 
-  it("tags the EO bridge fresh when EO is connected and healthy", async () => {
-    vi.resetModules()
-    vi.doMock("../services/liveEO.mjs", () => ({
-      liveEOData: () => { throw new Error("down") },
-      fetchAssetCandles: async () => ({ ohlc: synthCandles(40) }),
-      ensureWatchingAsset: async () => null,
-      liveEOStats: () => ({ status: "connected", stale: false })
-    }))
-    vi.doMock("../services/liveCCXT.mjs", () => ({ liveCCXTData: () => { throw new Error("down") } }))
-    vi.doMock("../services/yahoo.mjs", () => ({ getHistory: async () => { throw new Error("offline") } }))
-    const fresh = await import("../services/marketDataBus.mjs")
-    const out = await fresh.getBestCandles("ZZZZZ", { timeframe: 60, count: 50, ensureWatch: async () => null })
-    expect(out.source).toBe("live")
-    expect(out.stale).toBe(false)
-    vi.doUnmock("../services/liveEO.mjs")
-    vi.doUnmock("../services/liveCCXT.mjs")
-    vi.doUnmock("../services/yahoo.mjs")
+  it("D2/AC-005: the market-data bus no longer references the removed liveEO module", async () => {
+    // The absence is asserted, not assumed: a re-added import would be a new
+    // live-tier capability with no venue behind it.
+    const { readFileSync } = await import("node:fs")
+    const { fileURLToPath } = await import("node:url")
+    const src = readFileSync(fileURLToPath(new URL("../services/marketDataBus.mjs", import.meta.url)), "utf8")
+    expect(src).not.toMatch(/from\s+["'][^"']*liveEO\.mjs["']/)
+    expect(src).not.toMatch(/import\(\s*["'][^"']*liveEO\.mjs["']/)
   })
 
   it("tracks per-source latency once a tier answers", async () => {
@@ -228,8 +229,10 @@ describe("cross-platform position manager + portfolio risk", () => {
     expect(pnl.paper.trades).toBe(2)
     // Settled demo deal from the FILE feeds realized PnL history (unlike open
     // exposure, which requires a live session).
-    expect(pnl.expertoption.pnl).toBe(82)
-    expect(pnl.expertoption.trades).toBe(1)
+    // D2/AC-005: this bucket was keyed `expertoption`; the venue is removed and
+    // the data is venue-agnostic, so the key is `demo`.
+    expect(pnl.demo.pnl).toBe(82)
+    expect(pnl.demo.trades).toBe(1)
     // B-PAP-2: no merged total — paper and venue-demo stay separate buckets.
     expect(pnl).not.toHaveProperty("total")
   })

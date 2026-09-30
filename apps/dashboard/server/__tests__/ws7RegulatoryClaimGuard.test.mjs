@@ -503,13 +503,44 @@ const VOCAB_BY_ID = new Map(CLAIM_VOCABULARY.map((v) => [v.id, v]))
 const TEXT_CACHE = new Map()
 const HAYSTACK_CACHE = new Map()
 
+// DELETION-TOLERANT READ (D26 hardening, WS-7 T2).
+//
+// WHY THIS GUARD EXISTS. `textFor` is the single read chokepoint for every
+// REPO_ROOT-relative path the guard scans: the discovered `TRACKED` corpus and
+// every hand-pinned list (e.g. INDEX_SENSE_FILES) both funnel through it. Those
+// two sets have different lifetimes. TRACKED is derived from `git ls-files`, so
+// a path in it exists by construction. A hand-pinned list is a set of CLAIMS
+// ABOUT FILES, and a file can be deleted while the claim about it stays
+// recorded - which is the normal outcome of a venue removal, not a defect.
+//
+// The previous unguarded `readFileSync` conflated the two: deleting any one
+// file from any pinned list threw ENOENT and aborted the whole guard, so a
+// single deletion silently disarmed all 29 tests across the entire corpus. That
+// is a guard that gets weaker as the codebase changes - the opposite of what a
+// regulatory claim guard is for.
+//
+// The fix is a skip, never a silent pass: a missing entry is reported in the
+// returned sentinel and the caller asserts on it explicitly where absence is
+// itself a claim. Reading a file that is not there cannot conceal a claim
+// inside it, so skipping is the complete scan for that path - there is no
+// residual to miss. `MISSING` is a distinct value rather than `""` so a caller
+// can never confuse "file absent" with "file present and empty".
+const MISSING = Symbol("d26.read.missing")
+
 function textFor(file) {
   let t = TEXT_CACHE.get(file)
   if (t === undefined) {
-    t = readFileSync(join(REPO_ROOT, file), "utf8")
+    const abs = join(REPO_ROOT, file)
+    // existsSync BEFORE readFileSync: the only way to tell a deleted file from
+    // an unreadable one without an exception escaping the guard.
+    t = existsSync(abs) ? readFileSync(abs, "utf8") : MISSING
     TEXT_CACHE.set(file, t)
   }
   return t
+}
+
+function isMissing(t) {
+  return t === MISSING
 }
 
 function haystacksFor(file, mode) {
@@ -517,7 +548,12 @@ function haystacksFor(file, mode) {
   let h = HAYSTACK_CACHE.get(key)
   if (h === undefined) {
     const text = textFor(file)
-    if (mode === "squeezed") h = [squeezed(text)]
+    // A file that does not exist yields ZERO haystacks, so every rule counts 0
+    // matches against it. That is the complete result, not a suppressed one: a
+    // deleted file cannot contain a surviving claim, and the alternative (the
+    // old unguarded read) aborted the entire corpus scan instead of scanning it.
+    if (isMissing(text)) h = []
+    else if (mode === "squeezed") h = [squeezed(text)]
     else if (mode === "spaced") h = [spaced(text)]
     else if (mode === "clause") h = clauses(text)
     else throw new Error(`unknown vocabulary mode ${mode}`)
@@ -575,11 +611,14 @@ for (const file of SCANNABLE) {
 // Files that use DAX / KYC / "unregulated" in senses that are NOT licensing
 // claims. Pinned so the scoping decisions in the vocabulary comments cannot be
 // "simplified" away into a guard that fails on honest text.
+// Every path here is a CLAIM ABOUT A FILE, so a deleted one is skipped, not
+// fatal - see `textFor`. `scripts/list-watch-assets.mjs` was removed by the
+// WS-7 T2 venue removal and its entry dropped here; the remaining three are the
+// index-sense files that still exist and are still scanned.
 const INDEX_SENSE_FILES = [
   "apps/dashboard/server/services/assetCatalog.mjs",
   "apps/dashboard/server/services/tradingCatalog.mjs",
-  "apps/dashboard/server/services/u4faConfig.mjs",
-  "scripts/list-watch-assets.mjs"
+  "apps/dashboard/server/services/u4faConfig.mjs"
 ]
 
 // ---------------------------------------------------------------------------

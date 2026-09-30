@@ -11,19 +11,19 @@
 //                                   existing indicator/decision pipeline. Read-only.
 //   paper-mark        every 15 min  marks paper positions to market and auto-closes
 //                                   take-profit/stop-loss hits.
-//   eo-staleness      every 30 sec  flags a connected-but-stale ExpertOption stream
-//                                   honestly (never a silent OK).
 //   eo-liveness       every 30 sec  re-checks the live browser session behind the
-//                                   token + samples the 24h uptime ring.
+//                                   token + samples the 24h uptime ring. D2/AC-005
+//                                   removed the EO stream, so this no longer ages
+//                                   a market-data transport; it samples browser
+//                                   session liveness and uptime only.
 //   headless-session-refresh  every 60 sec  iterates the enabled venues of the
 //                                   headless-session capture engine (captureProfiles)
 //                                   whose token-refresh cadence is due, re-capturing
 //                                   the broker session token through the studio
-//                                   browser and reviving a dead EO session when the
-//                                   token actually changed. No enabled venue / no
-//                                   cadence due ⇒ exits in one loop over the profile
-//                                   table. Read-only vs the broker (session reads);
-//                                   token strings never reach logs or responses.
+//                                   browser. No enabled venue / no cadence due ⇒ exits
+//                                   in one loop over the profile table. Read-only vs
+//                                   the broker (session reads); token strings never
+//                                   reach logs or responses.
 //   ccxt-equity-refresh  every 4 min  keeps the overview's trading:ccxt feed fresh
 //                                   by observing equity (read-only fetchBalance +
 //                                   tickers) on every exchange with ordering
@@ -153,36 +153,11 @@ every(
   { staggerMs: 60_000 }
 )
 
-// Honest "connected but stale" signal: the session claims to be connected but
-// no frame has been consumed for over a minute. Flags the liveEO state so the
-// health endpoint and UI can show it instead of trusting a silent socket.
-every(
-  "eo-staleness",
-  30 * 1000,
-  async () => {
-    const st = getBrokerStats() ?? {}
-    if (st.status !== "connected" || !Number(st.lastSeen)) {
-      // Only clear the flag when the stream is genuinely healthy. A
-      // disconnected/reconnecting session with old buffers is still stale —
-      // clearing here hid the staleness from the UI during reconnect gaps.
-      if (st.status === "idle") setBrokerStale(false)
-      return
-    }
-    const tickAgeSec = Math.round((Date.now() - Number(st.lastSeen)) / 1000)
-    const wasStale = Boolean(st.stale)
-    const stale = tickAgeSec > 60
-    setBrokerStale(stale)
-    if (stale) {
-      log.warn("ExpertOption stream is connected but stale", { lastTickAgeSec: tickAgeSec, viewed: st.viewed ?? null })
-      if (!wasStale) {
-        import("./notificationCenter.mjs")
-          .then((m) => m.emitEvent("connector.stale", { connector: "expertoption", lastTickAgeSec: tickAgeSec, viewed: st.viewed ?? null }))
-          .catch(() => {})
-      }
-    }
-  },
-  { staggerMs: 15_000 }
-)
+// D2/AC-005: the "eo-staleness" job is removed. It watched the ExpertOption
+// stream specifically (a `connector.stale` event naming "expertoption"), and
+// with the EO transport gone there is no such stream to age. The other brokers
+// keep their own liveness reporting; this job was never a generic staleness
+// monitor despite reading through the shared broker-stats helper.
 
 // ── Phase 13/15 — session liveness re-check + uptime sampling ───────────────
 // Independent of autopilot ticking: the dashboard should honestly reflect
@@ -355,8 +330,15 @@ every(
   "pack-observation",
   60 * 1000,
   async () => {
-    const [{ liveEOStats }, { getCredentials }, { headlessSessionStatus }, { observeEoCapture, t0ExtractionSubStep, observeCcxtPoll, observeNewsDigest, observeSignalNotifications, coerceObservationForStoppedStep }, { runStep }, { resourceCaps, packOneDefinition, getStep }, { ccxtStats, ccxtStatus }, { digestState, newsFeedsConfig }, { notifierStatus }, { sessionCaptureEnabled }] = await Promise.all([
-      import("./liveEO.mjs"),
+    // D2/AC-005: the `liveEO.mjs` import is removed — the ExpertOption realtime
+    // transport it wrapped no longer exists. `liveStats` is therefore absent
+    // (not fabricated): `observeEoCapture` reads it defensively, so the p1-1
+    // survey reports against no live transport instead of a deleted module.
+    // The p1-1 registry step itself is retained — see the report: whether
+    // "EO session capture" should leave the Pack-1 step list is a product
+    // decision the owner did not authorise, and the step still surfaces an
+    // honest unconfigured state rather than a fabricated running one.
+    const [{ getCredentials }, { headlessSessionStatus }, { observeEoCapture, t0ExtractionSubStep, observeCcxtPoll, observeNewsDigest, observeSignalNotifications, coerceObservationForStoppedStep }, { runStep }, { resourceCaps, packOneDefinition, getStep }, { ccxtStats, ccxtStatus }, { digestState, newsFeedsConfig }, { notifierStatus }, { sessionCaptureEnabled }] = await Promise.all([
       import("./trading.mjs"),
       import("./captureProfiles.mjs"),
       import("./packObservers.mjs"),
@@ -367,7 +349,8 @@ every(
       import("./notifier.mjs"),
       import("./sessionCaptureSettings.mjs")
     ])
-    const [headlessRows, liveStats, creds] = await Promise.all([headlessSessionStatus(), liveEOStats(), getCredentials()])
+    const liveStats = {}
+    const [headlessRows, creds] = await Promise.all([headlessSessionStatus(), getCredentials()])
 
     const survey = observeEoCapture({
       headless: headlessRows.expertoption ?? {},

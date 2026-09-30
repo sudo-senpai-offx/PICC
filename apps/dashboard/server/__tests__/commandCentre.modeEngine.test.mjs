@@ -24,10 +24,14 @@ function greenInputs(overrides = {}) {
 }
 
 const ccxt = () => templateForSite("trading:ccxt")
-const expertoption = () => templateForSite("expertoption")
 /** The gray truth-table row left the shipped catalog with the bandwidth suite;
  * the mode engine still guards gray venues — pinned via a synthetic template. */
 const gray = () => ({ ...ccxt(), site: "test:gray", automationPermission: "gray", demoOnly: false })
+/** D2/AC-005: the `forbidden` row WAS the removed `expertoption` entry. The mode
+ * engine still guards the `forbidden` permission — it is the strongest rail in
+ * the vocabulary — so it is pinned via a synthetic template for the same reason
+ * as `gray`. The live catalog now ships only sanctioned rows. */
+const forbidden = () => ({ ...ccxt(), site: "test:forbidden", automationPermission: "forbidden", demoOnly: true })
 
 describe("Command Centre — Mode Engine vocabulary", () => {
   test("mode set and rank order are fixed (BLOCKED < HOLD < COPILOT < AUTOPILOT_DEMO < AUTOPILOT)", () => {
@@ -102,12 +106,16 @@ describe("Command Centre — Mode Engine verdict matrix (gate × mode)", () => {
     expect(v.mode).toBe("AUTOPILOT")
   })
 
-  test("forbidden venue (expertoption truth table) → BLOCKED even fully green; demo allowed", () => {
-    const v = renderVerdict(expertoption(), greenInputs())
+  test("forbidden venue (synthetic row) → BLOCKED even fully green; demo allowed", () => {
+    const v = renderVerdict(forbidden(), greenInputs())
     expect(v.mode).toBe("BLOCKED")
     expect(v.reason.some((r) => r.includes("5C"))).toBe(true)
     expect(v.demoAllowed).toBe(true)
     expect(v.executionPower).toBe("none")
+  })
+
+  test("D2/AC-005: the removed venue has no row, so the engine never sees it", () => {
+    expect(templateForSite("expertoption")).toBeUndefined()
   })
 
   test("gray venue can never autopilot — COPILOT even with opt-in and full workability", () => {
@@ -140,8 +148,9 @@ describe("Command Centre — Mode Engine verdict matrix (gate × mode)", () => {
     expect(v.executionPower).toBe("liveDemo")
   })
 
-  test("demo active on expertoption: live layer stays BLOCKED, demo surface flagged allowed", () => {
-    const v = renderVerdict(expertoption(), greenInputs({ demoActive: true }))
+  test("demo active on a forbidden row: live layer stays BLOCKED, demo surface flagged allowed", () => {
+    // D2/AC-005: was the `expertoption` row; now the synthetic forbidden row.
+    const v = renderVerdict(forbidden(), greenInputs({ demoActive: true }))
     expect(v.mode).toBe("BLOCKED")
     expect(v.demoAllowed).toBe(true)
   })

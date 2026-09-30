@@ -26,18 +26,23 @@ describe("Command Centre — shipped catalog (L2)", () => {
   })
 
   test("shipped sites are the two truth-table rows", () => {
+    // D2/AC-005: the `expertoption` row is removed with the venue, so the
+    // catalog is the two sanctioned trading sites. This is the new TRUE list.
     expect(policyGraphSites()).toEqual([
       "trading:ccxt",
-      "expertoption",
       "trading:perps"
     ])
   })
 
-  test("ExpertOption truth-table row: forbidden permission + demo mode only", () => {
-    const t = templateForSite("expertoption")
-    expect(t.automationPermission).toBe("forbidden")
-    expect(t.demoOnly).toBe(true)
-    expect(t.envelope.mode).toBe("demo")
+  test("D2/AC-005: the removed venue has no policy-graph row, forbidden-flag or demo envelope", () => {
+    // The EO row was the only `forbidden` / `demoOnly` entry — it existed to say
+    // "this unregulated venue may never hold live money". With the venue gone
+    // that row is deleted, not left as a disabled template: a re-added EO row
+    // would be a new control-surface entry for a venue that does not exist.
+    // `templateForSite` returns undefined for a site with no row.
+    expect(templateForSite("expertoption")).toBeUndefined()
+    expect(policyGraphSites()).not.toContain("expertoption")
+    expect(JSON.stringify(POLICY_GRAPH_CATALOG)).not.toMatch(/expertoption/i)
   })
 
   test("trading envelope declares the ccxt authority ceiling ($10 / 2 concurrent / −5%)", () => {
@@ -363,37 +368,18 @@ describe("Command Centre — T7 M2 trading:perps catalog row", () => {
     ]
   }
 
-  const EXPERTOPTION_FIXTURE = {
-    site: "expertoption",
-    stream: "trading",
-    venue: "expertoption (unregulated — demo only today)",
-    automationPermission: "forbidden",
-    demoOnly: true,
-    roster: ["news_sentiment", "technical", "volatility", "risk_manager", "model_matrix"],
-    edges: [
-      { from: "news_sentiment", to: "model_matrix", topology: "1:1", purpose: "sentiment refines demo matrix conviction" },
-      { from: "technical", to: "model_matrix", topology: "1:1", purpose: "technical read feeds demo matrix confidence" },
-      { from: "volatility", to: "risk_manager", topology: "1:1", purpose: "volatility feeds demo risk sizing" },
-      { from: "model_matrix", to: "risk_manager", topology: "1:1", purpose: "matrix output feeds demo risk sizing" }
-    ],
-    loops: [{ node: "model_matrix", maxRounds: 2, convergenceDelta: 0.05 }],
-    envelope: { mode: "demo", maxExposureUsd: null, maxConcurrent: 1, maxDailyLossPct: 5 },
-    protocols: [
-      "P-SPECIFICITY",
-      "P-GROUNDING",
-      "P-ANTI-HALLUCINATION",
-      "P-PURPOSE",
-      "P-BOUNDED-LOOPS",
-      "P-EVOLUTION",
-      "P-SELF-IMPROVEMENT",
-      "P-METALEARNING"
-    ]
-  }
+  // D2/AC-005: the `EXPERTOPTION_FIXTURE` and its byte-identical assertion are
+  // REMOVED with the catalog row they pinned. The test's actual purpose —
+  // "an existing row is appended to, never silently edited" — survives intact
+  // through the ccxt row, which is still compared byte-for-byte, and the perps
+  // row's own shape is pinned by the test below.
 
   test("existing catalog rows serialize byte-identical — the perps row is an append, not an edit", () => {
     expect(JSON.stringify(POLICY_GRAPH_CATALOG[0])).toBe(JSON.stringify(TRADING_CCXT_FIXTURE))
-    expect(JSON.stringify(POLICY_GRAPH_CATALOG[1])).toBe(JSON.stringify(EXPERTOPTION_FIXTURE))
-    expect(policyGraphSites()).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
+    // D2/AC-005: TWO rows now. The perps row is appended AFTER ccxt, so index 0
+    // must still be the untouched ccxt row — that is the anti-regression claim.
+    expect(POLICY_GRAPH_CATALOG).toHaveLength(2)
+    expect(policyGraphSites()).toEqual(["trading:ccxt", "trading:perps"])
   })
 
   test("the perps template is a US-28 catalog row: staffing + topology identical to the sanctioned trading stream", () => {

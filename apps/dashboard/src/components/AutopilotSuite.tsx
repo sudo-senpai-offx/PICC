@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ElementType } from "react"
 import {
   getAutopilotConfig,
-  getBrokerDemoStatus,
   getBrokers,
   getDemoAnalytics,
   getTradingCredentials,
@@ -64,6 +63,15 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
   const [cfg, setCfg] = useState<AutopilotConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // D2/AC-005: `getBrokerDemoStatus()` is no longer called here. It fetched
+  // `/api/trading/demo`, which the venue removal deleted because at HEAD it
+  // returned `expertOptionDemoStatus()` — an ExpertOption-only payload. The
+  // `demo` state itself STAYS: it has a second, live source in the realtime
+  // snapshot (`if (snapshot.demo) setDemo(snapshot.demo)`), every render already
+  // optional-chains it, and removing the state would have rippled through the
+  // PnL, balance, open-deals and scope-health panels for no benefit. This is the
+  // minimum edit that stops a live 404 against a route that no longer exists.
+
   const [demo, setDemo] = useState<BrokerDemoStatus | null>(null)
   const [analytics, setAnalytics] = useState<DemoAnalyticsResult | null>(null)
   const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number; ccxtJson: string }>({
@@ -81,9 +89,8 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
 
   const load = async () => {
     try {
-      const [c, d, a, cr, br] = await Promise.allSettled([
+      const [c, a, cr, br] = await Promise.allSettled([
         getAutopilotConfig(),
-        getBrokerDemoStatus(),
         getDemoAnalytics().catch(() => null),
         getTradingCredentials(),
         getBrokers().catch(() => null)
@@ -93,7 +100,6 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
         setCfg(c.value.config)
         if (!scopeAsset) setScopeAsset(c.value.config.assetId)
       }
-      if (d.status === "fulfilled") setDemo(d.value)
       if (a.status === "fulfilled" && a.value) setAnalytics(a.value)
       if (br.status === "fulfilled" && br.value?.ok) setBrokers(br.value)
       if (cr.status === "fulfilled") {

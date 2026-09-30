@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 // B-PAP-2/B-PAP-4 component twin: the portfolio aggregate renders the two
-// money buckets (paper vs EO demo) as SEPARATELY-labeled rows — never one
+// money buckets (paper vs demo) as SEPARATELY-labeled rows — never one
 // merged "Today P&L (+$N)" chip. Paper exposure renders per-venue too, so a
 // summed notional is never the only exposure number on screen.
+//
+// D2/AC-005: the second bucket was keyed `expertoption` and labelled "EO demo
+// P&L". The venue is removed and the underlying data is venue-agnostic settled
+// demo deals, so the key is `demo`. The LABEL is deliberately left as the
+// client-facing string it always was — the B-PAP-2 contract under test is the
+// SEPARATION of the two buckets, not the venue's name.
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
@@ -25,12 +31,13 @@ function aggregateFixture(over: Record<string, unknown> = {}) {
     },
     venues: [
       { venue: "paper", totalSize: 100, positions: 1 },
-      { venue: "expertoption", totalSize: 250, positions: 1 }
+      { venue: "iqoption", totalSize: 250, positions: 1 }
     ],
     totals: { openPositions: 2, notional: 350, instruments: 1 },
     todayPnl: {
       paper: { pnl: 12.5, trades: 2 },
-      expertoption: { pnl: -4.5, trades: 1 }
+      // D2/AC-005: was `expertoption`.
+      demo: { pnl: -4.5, trades: 1 }
     },
     riskCheck: null,
     ...over
@@ -84,7 +91,7 @@ describe("PortfolioAggregatePanel bucket separation (B-PAP-2)", () => {
     const text = host.textContent ?? ""
     expect(text).toContain("paper exposure")
     expect(text).toContain("$100")
-    expect(text).toContain("expertoption exposure")
+    expect(text).toContain("iqoption exposure")
     expect(text).toContain("$250")
     // A bare "Notional $350" merged chip is gone (350 = 100 + 250).
     expect(text).not.toMatch(/Notional\s*\$350/)
@@ -97,7 +104,7 @@ describe("PortfolioAggregatePanel bucket separation (B-PAP-2)", () => {
       positions: [],
       byInstrument: {},
       totals: { openPositions: 0, notional: 0, instruments: 0 },
-      todayPnl: { paper: { pnl: 0, trades: 0 }, expertoption: null }
+      todayPnl: { paper: { pnl: 0, trades: 0 }, demo: null }
     })
     vi.mocked(getPortfolioAggregate).mockResolvedValue(agg as never)
     const { host, unmount } = mount()

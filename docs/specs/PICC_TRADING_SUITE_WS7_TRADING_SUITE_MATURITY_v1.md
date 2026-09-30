@@ -1191,6 +1191,22 @@ Owners are deliberately non-overlapping within a task. `WS-7+` is the literal ow
 
 **Bisect:** Deleting the file plus its test entry is one atomic change — a half-applied removal is worse than none, because the suite would fail for a reason unrelated to the venue.
 
+**Seam-guard decision record (AC-7a amendment, owner decision 2026-09-29).** This is the only change T2 makes to guard *semantics*, and it is recorded here because `ws5SeamGuard.test.mjs`'s own comment requires "a new spec decision AND a deliberate edit there" for any change to the venue freeze.
+
+The T2 removal touches **three** of the six frozen venue paths, not one: `services/expertoption.mjs` (deleted), `services/liveEO.mjs` (deleted), and `services/captureProfiles.mjs` (modified, −89/+54). The freeze therefore needed amending, but **not** by widening its value:
+
+- **Rejected (option 2):** pin all touched paths into `WS7_T3_AUTHORIZED_VENUE_PATHS`. This permanently authorises *write* access to `captureProfiles.mjs` — a silent erosion of a WS-5 freeze, which is the failure mode this workstream exists to prevent. The owner rejected it.
+- **Adopted (option 3):** amend the freeze's **semantics** to distinguish *deletion* from *capability addition*, since AC-7a freezes capability and a removal is its opposite.
+
+Two rules, both in `ws5SeamGuard.test.mjs` at the `isUnauthorizedVenueChange` predicate:
+
+1. **A deleted frozen path is exempt by existence.** Its presence in the authorisation set would grant permission to edit a file that no longer exists. Checked on disk, so re-creating either file re-freezes it immediately.
+2. **A surviving frozen path may be edited only if its capability surface does not grow** relative to the WS-5 baseline (`d400c70`). The surface is the union of three comment-stripped signals — registry row `id`s, exported bindings, import specifiers — and **any** growth is a violation. It fails closed: no readable baseline, or an unreadable file, is a violation.
+
+The authorisation set is pinned to its exact true two-entry value and asserted, so it cannot be widened to make the suite green. The other three frozen paths (`ccxtOrdering.mjs`, `commandCentre/policyGraphCatalog.mjs`, `venues/venueAdapterContract.mjs`) are unchanged and still frozen; the owner did **not** authorise ongoing edits to `captureProfiles.mjs`. Known limits of the discriminator are documented in the guard itself rather than left implicit: it does not compare function bodies, so a capability change hidden inside an existing export is allowed, and it does not detect an id reused under a new name or a capability reached by a computed specifier. A reviewer, not this guard, must catch those.
+
+Approval artifact: `docs/trading-logic/changelog/entries/0016-EXPERTOPTION_VENUE_REMOVAL-v1-to-v2.md` (approval 2026-09-26, execution 2026-09-29, measured blast radius, destruction evidence).
+
 ### T3 — Make the perps cancel path real (Owner: WS-7+ · P0 · **correctness requirement**, owner-confirmed 2026-09-26)
 **Scope:** Close the test-outruns-production gap and amend the contract. An open perps position is currently **un-exitable through the production path**; this task is a correctness fix, not a cleanup (D23).
 

@@ -78,14 +78,11 @@ export const TRADING_ROSTER = Object.freeze([
   "model_matrix"
 ])
 
-/** Ordered roster for the ExpertOption demo template (ExpertBot pattern subset). */
-export const EXPERTOPTION_ROSTER = Object.freeze([
-  "news_sentiment",
-  "technical",
-  "volatility",
-  "risk_manager",
-  "model_matrix"
-])
+// D2/AC-005: `EXPERTOPTION_ROSTER` (the ExpertOption demo template subset) is
+// REMOVED with the venue. Its only consumer was the `expertoption` row in
+// policyGraphCatalog.mjs. The shared `AGENT_REGISTRY` above is untouched, so
+// every named agent is still declared and still surfaced by `readyAgents()` /
+// `plannedAgents()`; only the venue-specific ordering constant is gone.
 
 /** Single-task agents that are actually wired to code, keyed by id. */
 export function readyAgents() {

@@ -26,7 +26,7 @@ Implemented-record and research docs stay for traceability; archived docs (`docs
 
 1. **Sequence**: execute everything one workstream at a time, WS-1 → WS-5, each independently achievable.
 2. **First live venue**: Hyperliquid (perps). Architecture must remain venue-agnostic (more platforms coming).
-3. **Second live venue**: iqoption (per user, 2026-09-21). **Third live venue**: ExpertOption, after re-engineering + ADR (EO stays blocked meanwhile per `executionAbsence` doctrine).
+3. **Second live venue**: iqoption (per user, 2026-09-21). ~~**Third live venue**: ExpertOption, after re-engineering + ADR (EO stays blocked meanwhile per `executionAbsence` doctrine).~~ **SUPERSEDED 2026-09-29 by WS-7 decision D2** (owner removal APPROVED 2026-09-26): ExpertOption is REMOVED, not re-engineered. The third live venue is unassigned. Rationale: the EO execution paths were already dead code — `ensureSession` and `getDemoSession` had 4 call sites and 0 definitions — so the removal deletes dead execution plus a live capture surface, and no working order capability is lost. `executionAbsence` still governs the remaining venues.
 4. **HL margin model**: small account, isolated margin per position, leverage cap 3–5x, margin-per-position cap (the spot-era flat `$10` notional is replaced by margin-per-position for perps).
 5. **Day-loss truth**: single UTC-aggregated barrier, enforced at propose-time AND execution-time, restart-persistent, all venues aggregated. Retire autopilot local-midnight 10% and per-site envelope −5% as authoritative sources.
 6. **MDD anchor**: peak-anchored wallet equity. −15% hard breaker from running peak; −50% size step at −10% from peak; one-way until a new peak forms.
@@ -34,7 +34,7 @@ Implemented-record and research docs stay for traceability; archived docs (`docs
 8. **Soak data**: hybrid — deterministic sims for debugging/regression only; real-feed resolves are the only ones spendable toward the gates.
 9. **Condition stack**: codify 5-of-7 ORTHOGONAL gate in v3.2 (HTF bias, key level/VWAP, 9/21 EMA, volume delta, CVD/no-divergence, ADX regime, external-clear). Redundancy guard counts RSI/Stoch/CCI-family as one. Default N=5, config-tunable, explained per-row.
 10. **Copytrading**: pluggable leader-feed client; first adapter = HIP-verified feeds; manual/CSV import fallback. Idea-sourcing ONLY, never auto-mirror. Qualification: 300+ verified trades, <15% MDD, positive expectancy after costs. Auto-unfollow after 21 days no positions; 5% rolling-7-day account stop.
-11. **Venue picture**: HL live first; iqoption gains market-data path (not execution) for FX breadth; EO live blocked until re-engineered + ADR. Venue-adapter contract (cap/risk-model/sandbox/config) plus ADR-driven "venue earns live" process.
+11. **Venue picture**: HL live first; iqoption gains market-data path (not execution) for FX breadth; ~~EO live blocked until re-engineered + ADR~~ → **EO removed entirely (WS-7 D2, 2026-09-29)**, so no third live venue is pending. Venue-adapter contract (cap/risk-model/sandbox/config) plus ADR-driven "venue earns live" process — unchanged, and still the bar any future venue must clear.
 
 ## Workstreams (sequential)
 

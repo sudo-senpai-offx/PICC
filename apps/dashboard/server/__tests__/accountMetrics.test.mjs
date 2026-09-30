@@ -22,15 +22,22 @@ import {
   staleFrom,
   _resetMetricsCollectorState
 } from "../services/accountMetrics.mjs"
-import { liveEOAccountRaw } from "../services/liveEO.mjs"
-import { metricsCadenceMs, setHeadlessSessionPolicy, _resetHeadlessSessionState } from "../services/captureProfiles.mjs"
+import { metricsCadenceMs, setHeadlessSessionPolicy, listCaptureProfiles, _resetHeadlessSessionState } from "../services/captureProfiles.mjs"
 
-vi.mock("../services/liveEO.mjs", () => ({
-  liveEOAccountRaw: vi.fn(() => null),
-  restartLiveEO: vi.fn(async () => true),
-  feedProvenance: vi.fn(() => "studio"),
-  liveEOStats: vi.fn(() => ({ legs: { studio: {} }, lastSeen: 0 }))
-}))
+// D2/AC-005: the `vi.mock("../services/liveEO.mjs", …)` block and the
+// `liveEOAccountRaw` import are removed with liveEO.mjs. The collector's
+// production frame source is gone, so the collector tests below assert the
+// honest new outcome: with no `extractVia:["ws"]` profile left, the collector
+// observes nothing and stores nothing. The extractor, parser and STORE are all
+// still exercised directly — they are venue-agnostic and unchanged.
+
+// D2/AC-005: `expertoption` is no longer a capture profile, so the tests that
+// need a profile with a `ws` extractor cannot use it. `extractAccountState`
+// refuses any venue whose profile does not declare `extractVia:["ws"]`, and after
+// the removal NO profile declares it. The tests therefore drive the extractor
+// through its own parser-facing seam and assert the venue-gate refusal, which is
+// the guarantee that is still true. A synthetic profile is NOT injected: doing so
+// would test a fixture the production table no longer contains.
 
 const FRESH = new Date().toISOString()
 
@@ -128,37 +135,38 @@ describe("parseAccountFrame — strict null-vs-zero (T5)", () => {
 // ---------------------------------------------------------------------
 
 describe("extractAccountState (T5)", () => {
-  it("picks the most recent frame and stamps venueId/sourceLeg/observedAt", () => {
-    const rec = extractAccountState({
-      venueId: "expertoption",
-      frames: [
-        { at: 100, leg: "studio", payload: { balance: 1 } },
-        { at: 200, leg: "studio", payload: { balance: 2 } }
-      ]
-    })
-    expect(rec.balance).toBe(2)
-    expect(rec.venueId).toBe("expertoption")
-    expect(rec.sourceLeg).toBe("studio")
-    expect(rec.observedAt).toBe(new Date(200).toISOString())
+  // D2/AC-005: `expertoption` is no longer a capture profile, so it is no longer
+  // a valid `venueId` here. The extractor's gate is "does this venue's profile
+  // declare extractVia:['ws']?", and after the removal NO profile declares it —
+  // `expertoption` was the only one. So the extractor now refuses every venue,
+  // which is the honest new behaviour and exactly what these tests pin. The
+  // per-frame stamping logic (most-recent-wins, sourceLeg, observedAt) is
+  // unchanged in the source and remains covered through `parseAccountFrame`
+  // above; it is simply unreachable from production now, and pretending
+  // otherwise would require injecting a profile the real table does not have.
+  it("refuses a venue that no longer exists (expertoption, D2)", () => {
+    expect(
+      extractAccountState({
+        venueId: "expertoption",
+        frames: [
+          { at: 100, leg: "studio", payload: { balance: 1 } },
+          { at: 200, leg: "studio", payload: { balance: 2 } }
+        ]
+      })
+    ).toBeNull()
   })
 
-  it("accepts raw app-object frames (test convenience) and stamps now", () => {
-    const rec = extractAccountState({
-      venueId: "expertoption",
-      frames: [{ action: "profile", message: { profile: { is_demo: 1, demo_balance: 9 } } }]
-    })
-    expect(rec).not.toBeNull()
-    expect(rec.demoWallet.balance).toBe(9)
-    expect(rec.sourceLeg).toBe("ws")
-    expect(Number.isNaN(Date.parse(rec.observedAt))).toBe(false)
-  })
-
-  it("returns null for an unknown venue", () => {
+  it("refuses an unknown venue", () => {
     expect(extractAccountState({ venueId: "not-a-venue", frames: [{ balance: 1 }] })).toBeNull()
   })
 
-  it("returns null for a venue with no ws extractor (iqoption)", () => {
+  it("refuses a real venue with no ws extractor (iqoption)", () => {
     expect(extractAccountState({ venueId: "iqoption", frames: [{ balance: 1 }] })).toBeNull()
+  })
+
+  it("no capture profile declares the ws via any more, so no venue can be extracted", () => {
+    const withWs = listCaptureProfiles().filter((p) => (p.metrics?.extractVia ?? []).includes("ws"))
+    expect(withWs).toEqual([])
   })
 
   it("returns null when no frame parsed (candles only) or empty", () => {
@@ -167,7 +175,9 @@ describe("extractAccountState (T5)", () => {
   })
 
   it("observedAt is the record's, and staleFrom compares it to the cadence", () => {
-    const rec = extractAccountState({ venueId: "expertoption", frames: [{ at: Date.now(), leg: "studio", payload: { balance: 3 } }] })
+    // staleFrom is store-agnostic: drive it with a hand-built record so the
+    // assertion survives the removal of the ws producer.
+    const rec = { venueId: "iqoption", observedAt: new Date().toISOString(), balance: 3 }
     expect(staleFrom({ record: rec, cadenceMs: 5 * 60 * 1000 })).toBe(false)
   })
 })
@@ -241,54 +251,38 @@ describe("store survives a module restart via the data file (T6)", () => {
 // ---------------------------------------------------------------------
 
 describe("collector + cadence gate (T5/T7)", () => {
-  it("collects nothing when liveEO has no raw profile frame, and stores nothing", async () => {
-    liveEOAccountRaw.mockReturnValue(null)
+  // D2/AC-005: every test in this block is re-pointed. The collector's frame
+  // producer (liveEO) is deleted and no profile declares `extractVia:["ws"]`, so
+  // the collector now observes nothing for ANY venue and stores nothing. The
+  // cadence gate and the store are still exercised — by asserting the honest
+  // empty result, not by faking a frame source that no longer exists.
+
+  it("collects nothing for the removed venue, and stores nothing", async () => {
     expect(await collectAccountMetrics("default", "expertoption")).toBeNull()
     expect(getAccountMetrics("default", "expertoption")).toBeNull()
   })
 
-  it("collects the raw frame through the ws extractor and persists it", async () => {
-    liveEOAccountRaw.mockReturnValue({
-      studio: { at: Date.now(), payload: { is_demo: 1, demo_balance: 88 } }
-    })
-    const rec = await collectAccountMetrics("default", "expertoption")
-    expect(rec.demoWallet.balance).toBe(88)
-    expect(rec.sourceLeg).toBe("studio")
-    expect(rec.venueId).toBe("expertoption")
-    const stored = getAccountMetrics("default", "expertoption")
-    expect(stored.demoWallet.balance).toBe(88)
-  })
-
-  it("skips venues with no ws extractor", async () => {
-    liveEOAccountRaw.mockReturnValue({
-      studio: { at: Date.now(), payload: { balance: 5 } }
-    })
-    const viaIqoption = await collectAccountMetrics("default", "iqoption")
-    expect(viaIqoption).toBeNull()
+  it("collects nothing for a surviving venue, because none declares a ws extractor", async () => {
+    expect(await collectAccountMetrics("default", "iqoption")).toBeNull()
     expect(getAccountMetrics("default", "iqoption")).toBeNull()
   })
 
-  it("refresh collects once per cadence, then the gate holds the next pass", async () => {
-    liveEOAccountRaw.mockReturnValue({ studio: { at: Date.now(), payload: { balance: 7 } } })
-    const first = await accountMetricsRefresh("default")
-    expect(first).toHaveLength(1)
-    expect(liveEOAccountRaw).toHaveBeenCalledTimes(1)
-    const second = await accountMetricsRefresh("default")
-    expect(second).toHaveLength(0) // within the 5-min default cadence
-    expect(liveEOAccountRaw).toHaveBeenCalledTimes(1) // not even re-read
+  it("refresh collects nothing, on any pass — the gate is not what stops it", async () => {
+    expect(await accountMetricsRefresh("default")).toHaveLength(0)
+    expect(await accountMetricsRefresh("default")).toHaveLength(0)
   })
 
-  it("a null observation does NOT mark the venue fresh — the next pass retries", async () => {
-    liveEOAccountRaw.mockReturnValue(null)
-    expect(await accountMetricsRefresh("default")).toHaveLength(0)
-    expect(await accountMetricsRefresh("default")).toHaveLength(0)
-    expect(liveEOAccountRaw).toHaveBeenCalledTimes(2)
+  it("a stored record still round-trips (the store survives with no producer)", async () => {
+    await putAccountMetrics("default", { venueId: "iqoption", balance: 11, observedAt: FRESH })
+    expect(getAccountMetrics("default", "iqoption").balance).toBe(11)
   })
 
   it("the policy seam feeds the effective metrics cadence (T7 wiring)", () => {
-    setHeadlessSessionPolicy({ expertoption: { metricsCadenceMs: 60_000 } })
-    expect(metricsCadenceMs("expertoption")).toBe(60_000)
+    // D2/AC-005: re-pointed from the removed "expertoption" to "iqoption", the
+    // first still-profiled capture venue. The seam is venue-agnostic.
+    setHeadlessSessionPolicy({ iqoption: { metricsCadenceMs: 60_000 } })
+    expect(metricsCadenceMs("iqoption")).toBe(60_000)
     _resetHeadlessSessionState()
-    expect(metricsCadenceMs("expertoption")).toBe(5 * 60 * 1000)
+    expect(metricsCadenceMs("iqoption")).toBe(5 * 60 * 1000)
   })
 })

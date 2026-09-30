@@ -1194,8 +1194,8 @@ function connectorsSiteIsGated(lines, index) {
     const dynamics = (CODE.match(/\bimport\s*\(/g) ?? []).length
     const lines = SRC.split("\n").length
 
-    expect(statics, "static import statements in handlers.mjs").toBe(73)
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(84)
+    expect(statics, "static import statements in handlers.mjs").toBe(72)
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(80)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1243,7 +1243,27 @@ function connectorsSiteIsGated(lines, index) {
     // grew" one. The predicate is hand-written instead and its agreement with
     // net.isIP is asserted over a corpus in rateLimitClientIdentity.test.mjs, so
     // the correctness is bought with a test and the canary keeps its meaning.
-    expect(lines, "lines in handlers.mjs").toBe(6198)
+    //
+    // WS-7 T2 (D2, ExpertOption removal), the same protocol: 6,198 -> 6,088,
+    // -110 lines, and every one is accounted for rather than absorbed. Roughly
+    // -95 are the removed ExpertOption route bodies (the two analysis routes,
+    // /api/trading/demo, /api/trading/feed-mode, /api/browser/capture-session,
+    // the realtime EO subscription and its stats/snapshot frames, the EO health
+    // block, the EO mid leg in /api/trading/spread, and the liveEO buffer reads
+    // in the indicators/levels/model-matrix paths), each replaced by a short
+    // D2 note naming what was removed and why. The rest is the `liveEO.mjs` and
+    // `expertoption.mjs` import lines plus the EO credential masking and the
+    // `analyzeExpertOptionAsset` / `proAnalyzeExpertOption` / `demoStatus` /
+    // `captureExpertOptionSession` named imports.
+    //
+    // The import pair MOVES here, unlike every previous round, and that is the
+    // honest signal: 73 -> 72 static (the `liveEO.mjs` module graph edge is
+    // gone) and 84 -> 80 dynamic (eight `liveEO.mjs` dynamic imports removed,
+    // four non-EO fan-in/broker imports added in their place, net -4). This is
+    // the "structure changed" signal the canary is designed to distinguish from
+    // "grew", and it is why the figure is moved to the new true value rather
+    // than loosened.
+    expect(lines, "lines in handlers.mjs").toBe(6088)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

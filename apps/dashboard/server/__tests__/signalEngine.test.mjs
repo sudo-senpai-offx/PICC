@@ -69,21 +69,27 @@ describe("windowLabel (T5 / REQ-7)", () => {
 })
 
 describe("resolveAlertVenue (T5 / Decision D)", () => {
-  it("wins the exactly-one-non-none branch for an EO-resolvable asset (REAL instrumentUrl)", async () => {
-    // A liveEO candidate pool with a single resolvable venue (ExpertOption —
-    // live via liveEO today) resolves to an honest {venueId, tradeUrl}, never
-    // fabricated.
-    const candidateConfigs = [{ venueId: "expertoption", name: "ExpertOption", via: "liveEO" }]
+  it("wins the exactly-one-non-none branch for a resolvable liveEO asset (REAL instrumentUrl)", async () => {
+    // The resolver narrows the pool to `via === "liveEO"` and requires EXACTLY
+    // ONE non-"none" survivor. D2/AC-005 removed the only venue that carried
+    // `via: "liveEO"`, so the REAL catalog now has an EMPTY liveEO pool and
+    // this branch is exercised through an injected candidate instead — the
+    // branch logic is generic and unchanged, and `instrumentUrl` is the REAL
+    // resolver, so a genuine deep link is still proven rather than stubbed.
+    const candidateConfigs = [{ venueId: "olymptrade", name: "Olymp Trade", via: "liveEO" }]
     const out = await resolveAlertVenue({ assetId: "EURUSD", candidateConfigs })
-    expect(out).toEqual({ venueId: "expertoption", tradeUrl: "https://app.expertoption.finance/" })
+    expect(out).toEqual({ venueId: "olymptrade", tradeUrl: "https://olymptrade.com" })
   })
 
-  it("wins the exactly-one-non-none branch under the REAL catalog (EO wins, IS excluded)", async () => {
-    // Ground truth (PICC_SIGNAL_VENUE_POOL_DECISION.md, 2026-09-02): the pool
-    // narrows to liveEO-verified venues, so iqoption (storageScan) is excluded
-    // and ExpertOption (liveEO) is the sole non-"none" survivor → it wins.
-    const out = await resolveAlertVenue({ assetId: "EURUSD" })
-    expect(out).toEqual({ venueId: "expertoption", tradeUrl: "https://app.expertoption.finance/" })
+  it("D2/AC-005: the REAL catalog has no liveEO venue, so no deep link is emitted", async () => {
+    // Ground truth after the removal: the only capture-capable venue is
+    // `iqoption`, and its `via` is `storageScan` — an IS-mode venue with no
+    // verified live-session path. The pool therefore narrows to nothing and the
+    // resolver omits the venue. This is the conservative outcome the seam exists
+    // to produce: never fabricate a deep link into a venue PICC cannot open.
+    const catalog = (await import("../services/captureProfiles.mjs")).studioCaptureCatalog()
+    expect(catalog.filter((c) => c.via === "liveEO")).toEqual([])
+    expect(await resolveAlertVenue({ assetId: "EURUSD" })).toBeUndefined()
   })
 
   it("omits the venue when every candidate resolves mode 'none' (catalog-only asset)", async () => {
@@ -95,14 +101,14 @@ describe("resolveAlertVenue (T5 / Decision D)", () => {
   it("omits the venue for a storageScan-only pool — IS-mode venues never produce a deep link", async () => {
     // PICC_SIGNAL_VENUE_POOL_DECISION.md: IQ Option (storageScan) has no
     // verified live-session path, so even a single resolvable IS venue must
-    // NOT emit a venue. A pure storageScan pool → undefined, never EO-style.
+    // NOT emit a venue. A pure storageScan pool → undefined.
     const candidateConfigs = [{ venueId: "iqoption", name: "IQ Option", via: "storageScan" }]
     const out = await resolveAlertVenue({ assetId: "EURUSD", candidateConfigs })
     expect(out).toBeUndefined()
   })
 
   it("omits the venue when several candidates resolve non-'none' (no pick between venues)", async () => {
-    const candidateConfigs = [{ venueId: "expertoption", name: "Expert Option", via: "liveEO" }, { venueId: "binance", name: "Binance", via: "liveEO" }]
+    const candidateConfigs = [{ venueId: "olymptrade", name: "Olymp Trade", via: "liveEO" }, { venueId: "binance", name: "Binance", via: "liveEO" }]
     const out = await resolveAlertVenue({ assetId: "BTCUSD", candidateConfigs })
     expect(out).toBeUndefined()
   })
@@ -117,9 +123,10 @@ describe("signal engine PRE_TRADE dispatch (T5)", () => {
     expect(call.kind).toBe("PRE_TRADE")
     expect(call.body).toMatch(/Window: \d{2}:\d{2}–\d{2}:\d{2} .+/)
     expect(call.windowText).toMatch(/^Window: \d{2}:\d{2}–\d{2}:\d{2} .+$/)
-    // Under the narrowed liveEO pool (PICC_SIGNAL_VENUE_POOL_DECISION.md),
-    // ExpertOption is the sole survivor → `venue` resolves to EO's tradeUrl.
-    expect(call.venue).toEqual({ venueId: "expertoption", tradeUrl: "https://app.expertoption.finance/" })
+    // D2/AC-005: with the only `via: "liveEO"` venue removed, the pool narrows to
+    // nothing and NO venue is attached to the alert — the honest outcome, and
+    // strictly safer than the pre-removal behaviour of deep-linking EO.
+    expect(call.venue).toBeUndefined()
   })
 })
 

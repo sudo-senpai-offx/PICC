@@ -127,23 +127,23 @@ describe("interventions — review queue (human in the loop)", () => {
 
 describe("interventions — capture-login gate (Phase 5 T9)", () => {
   it("proposeCaptureLogin raises a pending queue proposal and approve resolves the gate", async () => {
-    const g = m.proposeCaptureLogin({ venueId: "expertoption", venueName: "ExpertOption" })
+    const g = m.proposeCaptureLogin({ venueId: "olymptrade", venueName: "Olymp Trade" })
     expect(g.status).toBe("pending")
     const s = m.listInterventions()
     expect(s.proposals).toHaveLength(1)
     expect(s.proposals[0].source).toBe("capture")
     expect(s.proposals[0].action).toBe("login")
     expect(s.proposals[0].status).toBe("pending")
-    expect(m.captureLoginApproval("expertoption").status).toBe("pending")
+    expect(m.captureLoginApproval("olymptrade").status).toBe("pending")
 
     await m.respondIntervention({ id: g.id, decision: "approve" })
-    expect(m.captureLoginApproval("expertoption").status).toBe("approved")
+    expect(m.captureLoginApproval("olymptrade").status).toBe("approved")
     expect(m.listInterventions().proposals[0].status).toBe("approved")
   })
 
   it("re-proposing while pending is idempotent (one queue entry, same id)", () => {
-    const a = m.proposeCaptureLogin({ venueId: "expertoption", venueName: "ExpertOption" })
-    const b = m.proposeCaptureLogin({ venueId: "expertoption", venueName: "ExpertOption" })
+    const a = m.proposeCaptureLogin({ venueId: "olymptrade", venueName: "Olymp Trade" })
+    const b = m.proposeCaptureLogin({ venueId: "olymptrade", venueName: "Olymp Trade" })
     expect(b.id).toBe(a.id)
     expect(m.listInterventions().proposals).toHaveLength(1)
   })

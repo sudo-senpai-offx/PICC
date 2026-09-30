@@ -56,7 +56,9 @@ function source(rel) {
 
 function fixtureStore(enablement) {
   return JSON.stringify(
-    { version: 1, classes: {}, enablement, platformVerification: { expertoption: null }, assetClasses: {} },
+    // D2/AC-005: the default platformVerification map is EMPTY — it no longer
+    // seeds a record for the removed venue class.
+    { version: 1, classes: {}, enablement, platformVerification: {}, assetClasses: {} },
     null,
     2
   )
@@ -113,7 +115,7 @@ function makeRow(over = {}) {
   }
 }
 
-function creditBalance(store, venueClass = "expertoption") {
+function creditBalance(store, venueClass = "hyperliquid-perps") {
   store.setAssetClasses({ "142": venueClass })
   const list = []
   let id = 1
@@ -300,8 +302,8 @@ describe("WS-3 validation & unlock ceremony seam guard (T8 no-regression)", () =
   it("(d) MS-3 floor sanity — a passing binary class yields the four core ids + the platform id EXACTLY once each, in order", async () => {
     const store = await import("../services/commandCentre/ceremonyState.mjs")
     const gates = await import("../services/commandCentre/ceremonyGates.mjs")
-    creditBalance(store, "expertoption")
-    store.setPlatformVerification("expertoption", {
+    creditBalance(store, "hyperliquid-perps")
+    store.setPlatformVerification("hyperliquid-perps", {
       verified: true,
       by: "op",
       regulator: "reg",
@@ -309,7 +311,7 @@ describe("WS-3 validation & unlock ceremony seam guard (T8 no-regression)", () =
       withdrawalTested: true
     })
 
-    const res = gates.evaluateCeremony("expertoption")
+    const res = gates.evaluateCeremony("hyperliquid-perps")
     const expected = [
       "gate1-constitution-300",
       "gate-platform-verification-85",

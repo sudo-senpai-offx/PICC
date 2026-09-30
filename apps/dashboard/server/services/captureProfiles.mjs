@@ -12,20 +12,19 @@ import { fileURLToPath } from "node:url"
 //     full" is a row flip (T11 landed the storageScan hook the row points at),
 //     never an engine change — captureVenue and the scheduler read
 //     status/capture/via through the accessors on every call.
-//   • captureVenue(venueId) is the headless login runner seam. It wires the
-//     built capture hooks: ExpertOption — the reference implementation
-//     (browserStudio.captureExpertOptionSession, browserStudio.mjs:3579-3655),
-//     and IQ Option via the generic fixture-driven storage-scan hook
-//     (browserStudio.captureViaStorageScan, browserStudio.mjs:3657+). For EO
-//     the browser is already the integrated studio browser: the runner reads
-//     the ACTIVE EO tab, it does not re-drive open→fill→submit. Other rows
+//   • captureVenue(venueId) is the headless login runner seam. D2/AC-005 removed
+//     the ExpertOption reference implementation; the built capture hook is now
+//     IQ Option's generic fixture-driven storage-scan hook
+//     (browserStudio.captureViaStorageScan). The runner reads the user's open,
+//     logged-in venue tab; it does not re-drive open→fill→submit. Other rows
 //     report honestly instead of fabricating a login.
 //
 // ── Coverage matrix (v2, spec Mechanism C) ───────────────────────────────────
-//   full          = login + token capture + metrics ... expertoption (reference,
-//                   liveEO) / iqoption (storageScan). v2: iqoption slots in
-//                   with the generic hook; a metrics extractor still needs
-//                   building (extractVia:[] — absent balance stays null).
+//   full          = login + token capture + metrics ... iqoption (storageScan).
+//                   A metrics extractor still needs building (extractVia:[] —
+//                   absent balance stays null). D2/AC-005: expertoption was the
+//                   other "full" row and is gone, so NO profile declares
+//                   extractVia:["ws"] and the metrics collector stores nothing.
 //   capture-only  = declared capability; capture hook NOT built yet. Until the
 //                   row names capture.storageScan keys (live fixture required),
 //                   the runner reports { state:"not-enabled" } — never a
@@ -41,37 +40,23 @@ import { fileURLToPath } from "node:url"
 //   reported as such and never saved over a good token.
 //
 // ── Test seams ───────────────────────────────────────────────────────────────
-//   browserStudio/trading/liveEO are imported DYNAMICALLY inside captureVenue,
+//   browserStudio/trading are imported DYNAMICALLY inside captureVenue,
 //   so tests can drive the real reference implementation with the fake-page
 //   harness (browserBridge mocked, PICC_BROWSER_DATA_DIR + PICC_TRADING_DATA_DIR
 //   pointed at a tmp dir) or vi.mock a single seam. No module-load side effects.
 
 // ---------------------------------------------------------------------
-// The matrix — ten venues, kinds mirror PLATFORM_KINDS (browserStudio.mjs:541).
+// The matrix — nine venues, kinds mirror PLATFORM_KINDS (browserStudio.mjs:541).
 // demoReal stays demo-first everywhere (spec REQ-E): real wallet values may be
 // OBSERVED, never selected for trading.
+//
+// D2/AC-005: the count is NINE, not ten. The `expertoption` profile is REMOVED
+// with the venue: its capture `via` was "liveEO" (the deleted transport) and it
+// was the only profile declaring `extractVia:["ws"]`, so nothing could drive or
+// consume it any more. Its removal is a row count change, not a silent
+// redefinition — the remaining eight capture-capable venues are untouched.
 // ---------------------------------------------------------------------
 export const CAPTURE_PROFILES = [
-  {
-    id: "expertoption",
-    name: "ExpertOption",
-    kind: "binary",
-    status: "full",
-    demoReal: "demo-first",
-    capture: {
-      via: "liveEO",
-      ref: "browserStudio.captureExpertOptionSession (browserStudio.mjs:3579-3655)",
-      hostRe: "expertoption\\.(com|finance)",
-      loginPage: "https://app.expertoption.com/",
-      note: "Reference implementation, shipped and tested. Reads the venue's OWN EO studio tab (host-matched, never the active tab) session token (cookie/localStorage/sessionStorage scan + 32-hex rank), saves non-guest tokens via trading.saveCredentials, reports guest honestly. No vault username/password needed — the logged-in tab is the credential."
-    },
-    cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
-    // T5: which heads consume this venue's metrics. ["ws"] = liveEO's
-    // accumulated WS profile frames (accountMetrics.mjs parses them strictly —
-    // absent balance stays null, never a fabricated 0). Other venues have no
-    // extractor built, so the collector honestly skips them.
-    metrics: { extractVia: ["ws"] }
-  },
   {
     id: "iqoption",
     name: "IQ Option",
@@ -89,7 +74,7 @@ export const CAPTURE_PROFILES = [
       storageScan: [{ type: "cookie", key: "ssid", verified: false }],
       hostRe: "iqoption\\.com",
       loginPage: "https://iqoption.com/en/login",
-      note: "T11: promoted to full via the generic storageScan hook (fixture-driven, exact keys only). Token saved under trading.venueTokens in its OWN file (separate from creds — see trading.mjs) with NO live leg yet: reconnectTriggered stays false. Same T9 first-login gate as EO. HttpOnly keys cannot be read by document.cookie — CDP cookie API needed if ssid proves HttpOnly."
+      note: "T11: promoted to full via the generic storageScan hook (fixture-driven, exact keys only). Token saved under trading.venueTokens in its OWN file (separate from creds — see trading.mjs) with NO live leg yet. Same T9 first-login gate as the venues that had one. HttpOnly keys cannot be read by document.cookie — CDP cookie API needed if ssid proves HttpOnly."
     },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }
@@ -342,7 +327,7 @@ export async function saveCaptureConfigForUser(userId, rows = {}) {
 
 /**
  * Boot-time load of persisted per-user capture config. Guarded by the same
- * env/VITEST rule as feed-mode prefs (liveEO.mjs:76-116): under vitest the file
+ * env/VITEST rule as the other JSON preference stores: under vitest the file
  * is only read when a test pointed PICC_CAPTURE_CONFIG_DATA_DIR at its own tmp
  * dir — a test run can never mutate the real server's schedule. The "default"
  * user's block (or the only block present) is applied to the live policy right
@@ -556,15 +541,13 @@ async function finalizeCapturedToken({ venue, profile, at, before, after, source
   const nextToken = after ?? ""
   const tokenChanged = Boolean(nextToken) && nextToken !== (before ?? "")
   if (tokenChanged) lastTokenChange.set(venue, at) // T8: status surface exposes WHEN (never the value)
-  let reconnectTriggered = false
-  if (profile.capture.via === "liveEO" && tokenChanged) {
-    try {
-      const { restartLiveEO } = await import("./liveEO.mjs")
-      reconnectTriggered = await restartLiveEO({ force: true })
-    } catch (err) {
-      return { state: "error", venue, at, reason: `token saved but session revive failed: ${String(err?.message ?? err)}` }
-    }
-  }
+  // D2/AC-005: the "liveEO" revive branch is removed with the deleted transport.
+  // It was the only `via` that could trigger it, and no remaining venue has a
+  // live leg, so the two report fields that existed only to describe a revive
+  // (`reconnectTriggered` and `liveLeg`) are REMOVED rather than pinned to a
+  // constant false. Pinning them would have been a lie about a live leg that
+  // cannot exist, and it would have added code to a file whose WS-7 T2 change is
+  // required to be subtractive - which the ws5 seam guard correctly refused.
   const report = {
     state: "ok",
     venue,
@@ -573,11 +556,9 @@ async function finalizeCapturedToken({ venue, profile, at, before, after, source
     source: source ?? null,
     sourceLeg: sourceLeg ?? null,
     tokenChanged,
-    reconnectTriggered,
     loginApproved: true, // T9: the human approved this venue's first login
     account: account ?? null
   }
-  if (profile.capture.via !== "liveEO") report.liveLeg = false // honest: storage-scan venues have no live bridge yet
   return report
 }
 
@@ -595,7 +576,8 @@ export function studioCaptureCatalog() {
 /**
  * Headless token capture for one venue.
  *
- * Gate order (token-capture venues — EO liveEO + storageScan):
+ * Gate order (token-capture venues — storageScan, the only built hook now
+ * that D2/AC-005 removed the EO liveEO hook):
  *   profile status → [vault gate, ONLY when capture.requiresVaultCreds —
  *   no current row form-fills] → T9 first-login approval (human decides in
  *   the dashboard; browser never touched before that) → host-matched tab
@@ -604,12 +586,11 @@ export function studioCaptureCatalog() {
  *
  * Hook outcomes mapped by the runner:
  *   - guest (logged-out session)  → { state:"guest" }, token not saved
- *   - saved token                → compare before/after creds; when the
- *     token string CHANGED call restartLiveEO({force:true}) (soft reconnect
- *     preserves buffers — T4 flap guard, mirroring handlers.mjs:1292-1302);
- *     unchanged → NO restart.
- *   - storageScan venues have NO live leg: reconnectTriggered stays false
- *     and the report says liveLeg:false instead of pretending a restart.
+ *   - saved token                → compare before/after creds for the
+ *     T8 "when did it last change" timestamp.
+ *   - storageScan venues have NO live leg, so the report carries no revive or
+ *     live-bridge field at all rather than pretending a restart. This
+ *     is now true of EVERY remaining venue (D2): there is no live bridge.
  *
  * @returns {{ state: "ok"|"guest"|"needs-credentials"|"not-enabled"|"no-tab"|"error",
  *             venue: string, at: string, ... }} — token value NEVER present,
@@ -632,12 +613,12 @@ export async function captureVenue(venueId, { page: explicitPage = null } = {}) 
 
   // Vault gate — ONLY for venues whose capture hook form-fills a login
   // (profile.capture.requiresVaultCreds; no current row works that way). The
-  // EO (liveEO) and storageScan hooks OBSERVE a session the human already
-  // opened in the PICC browser: their real gates are the T9 approval below
-  // plus host-matched tab presence, and the hooks themselves refuse guests and
-  // token-less pages. The blanket vault gate historically stopped EO cold
-  // ("login needed · stale" forever after a manual relog) because no
-  // username/password vault entry exists for a venue nobody form-fills.
+  // storageScan hook OBSERVES a session the human already opened in the PICC
+  // browser: its real gates are the T9 approval below plus host-matched tab
+  // presence, and the hook itself refuses guests and token-less pages. A blanket
+  // vault gate would stop every such venue cold ("login needed · stale" forever
+  // after a manual relog), because no username/password vault entry exists for
+  // a venue nobody form-fills.
   if (profile.capture?.requiresVaultCreds) {
     const { getSiteCredentials } = await import("./browserStudio.mjs")
     const creds = await getSiteCredentials(venue)
@@ -674,33 +655,12 @@ export async function captureVenue(venueId, { page: explicitPage = null } = {}) 
     }
   }
 
-  if (profile.capture.via === "liveEO") {
-    const { getCredentials: readTradingCredentials } = await import("./trading.mjs")
-    const before = await readTradingCredentials()
-    const { captureExpertOptionSession } = await import("./browserStudio.mjs")
-    let captured
-    try {
-      captured = await captureExpertOptionSession(targetPage)
-    } catch (err) {
-      return { state: "error", venue, at, reason: String(err?.message ?? err) }
-    }
-    if (captured?.guest) {
-      // Logged-out session: the reference implementation already refuses to
-      // save it. Report honestly; the existing good token (if any) stays.
-      return { state: "guest", venue, at, account: captured.account ?? null }
-    }
-    const after = await readTradingCredentials()
-    return finalizeCapturedToken({
-      venue,
-      profile,
-      at,
-      before: before?.expertoptionToken ?? null,
-      after: after?.expertoptionToken ?? null,
-      source: captured?.source ?? null,
-      sourceLeg: "studio",
-      account: captured?.account ?? null
-    })
-  }
+  // D2/AC-005: the "liveEO" capture branch is removed with the venue. It was the
+  // only branch that read/wrote `expertoptionToken` in the trading credential
+  // store and the only caller of `captureExpertOptionSession`. No remaining
+  // profile declares `via: "liveEO"`, so `storageScan` below is now the only
+  // capture path. If a future profile declares a removed `via`, the switch
+  // below falls through to an honest `unsupported` rather than silently no-op.
 
   if (profile.capture.via === "storageScan") {
     // T11 — generic fixture-driven capture: browserStudio.captureViaStorageScan
@@ -708,8 +668,9 @@ export async function captureVenue(venueId, { page: explicitPage = null } = {}) 
     // without them errors honestly (nothing invented). Tokens land in the
     // dedicated venueTokens store (trading.saveVenueToken) — never in an API
     // response. There is NO live leg for storage-scan venues yet (no WS
-    // extractor / bridge built): reconnectTriggered stays false and the report
-    // says so explicitly instead of pretending a restart happened.
+     // extractor / bridge built): the report carries no revive or live-bridge
+     // field, and the capture status says so explicitly instead of pretending a
+     // restart happened.
     const { getVenueToken } = await import("./trading.mjs")
     const before = await getVenueToken(venue)
     const { captureViaStorageScan } = await import("./browserStudio.mjs")
@@ -743,10 +704,10 @@ export async function captureVenue(venueId, { page: explicitPage = null } = {}) 
 /**
  * Pick the page a capture hook should read. An explicit live page (tests /
  * direct callers) wins and is trusted as-is — the hook validates its host.
- * Otherwise the venue's host pattern (capture.hostRe, e.g. EO
- * "expertoption\\.(com|finance)", IQ "iqoption\\.com") is matched against
- * every tracked live studio tab: the user's open, logged-in venue tab,
- * regardless of which tab is focused. Null → no matching tab exists.
+ * Otherwise the venue's host pattern (capture.hostRe, e.g. IQ
+ * "iqoption\\.com") is matched against every tracked live studio tab: the
+ * user's open, logged-in venue tab, regardless of which tab is focused.
+ * Null → no matching tab exists.
  */
 async function resolveCapturePage(profile, page) {
   if (page && typeof page.isClosed === "function" && !page.isClosed()) return page
@@ -816,8 +777,11 @@ export async function _resetHeadlessSessionState() {
  * uses. Not used by the runtime; exported for the engine's unit tests only
  * (same rule as _resetHeadlessSessionState).
  */
-export async function _approveFirstLogin(venueId = "expertoption") {
-  const venue = String(venueId || "expertoption").toLowerCase()
+// D2/AC-005: the default venue argument moves from "expertoption" (removed) to
+// the first still-profiled capture venue, "iqoption", so the test seam keeps a
+// valid default instead of naming a venue that no longer exists.
+export async function _approveFirstLogin(venueId = "iqoption") {
+  const venue = String(venueId || "iqoption").toLowerCase()
   if (firstLoginApproved.has(venue)) return
   const { proposeCaptureLogin, respondIntervention } = await import("./interventions.mjs")
   const gate = proposeCaptureLogin({ venueId: venue, venueName: byId.get(venue)?.name ?? venue })

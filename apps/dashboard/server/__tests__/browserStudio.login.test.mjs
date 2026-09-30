@@ -240,34 +240,66 @@ describe("detectLoginState — heuristics", () => {
     expect(status.currentAuth).toBeTruthy()
   })
 
+  // D2/AC-005: `captureExpertOptionSession` is deleted with the venue. The
+  // surviving capture hook is the generic `captureViaStorageScan`, which is
+  // CONFIG-driven: the profile supplies the exact keys and host to look for. The
+  // guarantees below (full token, never the masked form; the highest-scoring
+  // configured key wins; guest tagging; honest host refusal) are properties of
+  // the hook, so they are re-asserted against it with the iqoption profile's
+  // real config rather than dropped.
+  const IQ_CFG = {
+    name: "IQ Option",
+    hostRe: "iqoption\\.com",
+    storageScan: [{ type: "cookie", key: "ssid", verified: false }]
+  }
+
   it("captures the FULL session token (never the masked display form)", async () => {
     const p = page()
-    p.setUrl("https://app.expertoption.com/")
-    p.setEval([
-      { source: "cookie", key: "token", value: "0123456789abcdef0123456789abcdef", score: 3 },
-      { source: "cookie", key: "other", value: "1", score: 3 }
-    ])
-    const r = await m.captureExpertOptionSession(p)
+    p.setUrl("https://iqoption.com/en/login")
+    p.setEval([{ source: "cookie", key: "ssid", value: "0123456789abcdef0123456789abcdef", score: 0 }])
+    const r = await m.captureViaStorageScan(p, IQ_CFG)
     expect(r.ok).toBe(true)
     expect(r.token).toBe("0123456789abcdef0123456789abcdef")
-    expect(r.source).toBe("cookie:token")
+    expect(r.source).toBe("cookie:ssid")
     expect(m.maskToken(r.token)).toBe("0123456789abcdef…")
   })
 
-  it("prefers the live `token` cookie over a stale tokenDemo/storage mirror", async () => {
+  it("captures only the CONFIGURED key — an unconfigured cookie is ignored", async () => {
     const p = page()
-    p.setUrl("https://app.expertoption.com/")
-    const live = "8b36ae2b603b5975c9695d801f8fa543"
-    const stale = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // fake stale mirror for fixture
+    p.setUrl("https://iqoption.com/en/login")
     p.setEval([
-      { source: "cookie", key: "token", value: live, score: 5 },
-      { source: "cookie", key: "tokenDemo", value: stale, score: 5 },
-      { source: "localStorage", key: "token", value: stale, score: 2 }
+      { source: "cookie", key: "ssid", value: "0123456789abcdef0123456789abcdef", score: 0 },
+      { source: "cookie", key: "other", value: "1", score: 0 }
     ])
-    const r = await m.captureExpertOptionSession(p)
+    const r = await m.captureViaStorageScan(p, IQ_CFG)
     expect(r.ok).toBe(true)
-    expect(r.token).toBe(live)
-    expect(r.source).toBe("cookie:token")
+    expect(r.token).toBe("0123456789abcdef0123456789abcdef")
+    expect(r.source).toBe("cookie:ssid")
+  })
+
+  it("prefers the highest-scoring configured hit over a stale web-storage mirror", async () => {
+    // The scoring rule: score is the position in the CONFIGURED key list, so the
+    // first configured key wins and a web-storage mirror cannot outrank it. This
+    // is the surviving form of the old "prefer the live cookie over a stale
+    // tokenDemo/storage mirror" guarantee.
+    const p = page()
+    p.setUrl("https://iqoption.com/en/login")
+    const live = "8b36ae2b603b5975c9695d801f8fa543"
+    const stale = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    p.setEval([
+      { source: "cookie", key: "ssid", value: live, score: 0 },
+      { source: "localStorage", key: "ssid", value: stale, score: 0 }
+    ])
+    const r = await m.captureViaStorageScan(p, {
+      ...IQ_CFG,
+      storageScan: [
+        { type: "cookie", key: "ssid", verified: false },
+        { type: "localStorage", key: "ssid", verified: false }
+      ]
+    })
+    expect(r.ok).toBe(true)
+    expect(r.token).toBe(live) // cookie (first configured) beats the localStorage mirror
+    expect(r.source).toBe("cookie:ssid")
   })
 
   it("maskToken passes through short or empty values untouched", () => {
@@ -278,22 +310,28 @@ describe("detectLoginState — heuristics", () => {
 
   it("tags a captured session as guest when the page shows only a Log in header", async () => {
     const p = page()
-    p.setUrl("https://app.expertoption.com/")
-    const hits = [{ source: "cookie", key: "token", value: "0123456789abcdef0123456789abcdef", score: 3 }]
+    p.setUrl("https://iqoption.com/en/login")
+    const hits = [{ source: "cookie", key: "ssid", value: "0123456789abcdef0123456789abcdef", score: 0 }]
     hits.loginButton = true
     hits.guest = true
     hits.active = false
     p.setEval(hits)
-    const r = await m.captureExpertOptionSession(p)
+    const r = await m.captureViaStorageScan(p, IQ_CFG)
     expect(r.ok).toBe(true)
     expect(r.guest).toBe(true)
     expect(r.saved).toBe(false)
     expect(r.account).toMatchObject({ type: "guest", guest: true })
   })
 
-  it("refuses to capture from a non-ExpertOption page", async () => {
+  it("refuses to capture from a page outside the configured host", async () => {
     const p = page()
     p.setUrl("https://example.com/")
-    await expect(m.captureExpertOptionSession(p)).rejects.toThrow(/app\.expertoption\.(com|finance)/)
+    await expect(m.captureViaStorageScan(p, IQ_CFG)).rejects.toThrow(/IQ Option/i)
+  })
+
+  it("D2/AC-005: the removed captureExpertOptionSession is gone from the module", () => {
+    // The absence is pinned, not assumed: a resurrected EO hook would be a new
+    // capability with no caller and no profile row.
+    expect(m.captureExpertOptionSession).toBeUndefined()
   })
 })

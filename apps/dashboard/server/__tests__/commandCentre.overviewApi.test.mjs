@@ -89,11 +89,12 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
     expect(res.body.killSwitch).toEqual({ global: false, sites: {} })
-    expect(res.body.sites.map((s) => s.site)).toEqual([
-      "trading:ccxt",
-      "expertoption",
-      "trading:perps"
-    ])
+    // D2/AC-005: the `expertoption` policy-graph row is removed with the venue,
+    // so the catalog is now the two sanctioned trading sites. This is the new
+    // TRUE list, not a loosened one — and `iqoption` is deliberately NOT added
+    // here: the overview enumerates the policy-graph catalog, and iqoption never
+    // had a row in it, so inventing one would be a new control surface.
+    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "trading:perps"])
     for (const row of res.body.sites) {
       expect(row.gates).toHaveLength(10)
       expect(row.gates.map((g) => g.gate)).toEqual([
@@ -139,10 +140,14 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     // UNDECLARED → fresh-data honest not-wired (the seam decides, never us)
     const fresh = ccxt.gates.find((g) => g.gate === "fresh-data")
     expect(fresh.status).toBe("not-wired")
-    // expertoption has a capture profile (idle) → observable, not not-wired
-    const eo = res.body.sites.find((r) => r.site === "expertoption")
-    expect(eo.gates.find((g) => g.gate === "fresh-data").status).toBe("pass")
-    expect(eo.metrics.source).toBe("not-observed")
+    // D2/AC-005: the removed venue has NO row at all — not a disabled one. The
+    // previous assertion here (that the EO row was "observable, not
+    // not-wired") is gone with the row; the surviving contrast is that BOTH
+    // remaining sites report their undeclared feeds honestly rather than as a
+    // silent OK — `trading:ccxt` is asserted just above, `trading:perps` here.
+    expect(res.body.sites.find((r) => r.site === "expertoption")).toBeUndefined()
+    const perps = res.body.sites.find((r) => r.site === "trading:perps")
+    expect(perps.gates.find((g) => g.gate === "fresh-data").status).toBe("not-wired")
   })
 
   it("the FIRST equity observation wires ccxt fresh-data: within cadence → pass, floor-mode unchanged", async () => {
@@ -181,21 +186,30 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
   })
 
   it("a per-site kill flips THAT row's verdict, gate rail, and switch input — never the siblings", async () => {
+    // D2/AC-005: the sample per-site scope is `trading:perps` (was the removed
+    // `expertoption` row). The kill-switch contract itself is unchanged: a
+    // per-site kill blocks that row only, and the sibling stays untouched.
     const post = await call(handleApi, "POST", "/api/command-centre/kill-switch", {
-      scope: "expertoption",
+      scope: "trading:perps",
       kill: true
     })
     expect(post.status).toBe(200)
-    expect(post.body.state.sites).toEqual({ expertoption: true })
+    expect(post.body.state.sites).toEqual({ "trading:perps": true })
 
     const res = await call(handleApi, "GET", "/api/command-centre/overview")
-    const eo = res.body.sites.find((r) => r.site === "expertoption")
-    expect(eo.inputs.killSwitch).toBe(true)
-    expect(eo.mode).toBe("BLOCKED")
-    expect(eo.gates.find((g) => g.gate === "kill-switch").status).toBe("block")
+    const perps = res.body.sites.find((r) => r.site === "trading:perps")
+    expect(perps.inputs.killSwitch).toBe(true)
+    expect(perps.mode).toBe("BLOCKED")
+    expect(perps.gates.find((g) => g.gate === "kill-switch").status).toBe("block")
     const ccxt = res.body.sites.find((r) => r.site === "trading:ccxt")
     expect(ccxt.inputs.killSwitch).toBe(false)
     expect(ccxt.mode).toBe("COPILOT")
+    // D2/AC-005: a removed venue is not a valid kill scope either.
+    const gone = await call(handleApi, "POST", "/api/command-centre/kill-switch", {
+      scope: "expertoption",
+      kill: true
+    })
+    expect(gone.status).toBe(400)
   })
 
   it("the GLOBAL kill blocks every site and clears when the human rearms", async () => {
@@ -213,13 +227,13 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
 
   it("kill-switch transitions are audited in the shared chain", async () => {
     const post = await call(handleApi, "POST", "/api/command-centre/kill-switch", {
-      scope: "expertoption",
+      scope: "trading:perps",
       kill: true
     })
     expect(post.status).toBe(200)
     const trail = audit.readAudit()
     const event = trail.find((e) => e.kind === "kill-switch")
-    expect(event).toMatchObject({ site: "expertoption", data: { kill: true } })
+    expect(event).toMatchObject({ site: "trading:perps", data: { kill: true } })
     expect(audit.verifyAudit().ok).toBe(true)
   })
 
@@ -240,7 +254,7 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
   it("?stream=trading filters rows to the trading stream only", async () => {
     const res = await call(handleApi, "GET", "/api/command-centre/overview?stream=trading")
     expect(res.body.stream).toBe("trading")
-    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
+    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "trading:perps"])
     const bad = await call(handleApi, "GET", "/api/command-centre/overview?stream=definitely")
     expect(bad.status).toBe(200)
     expect(bad.body.ok).toBe(false)
@@ -277,7 +291,9 @@ describe("Command Centre overview + kill-switch API (slice 4)", () => {
     writeFileSync(join(dir, "ccxt-perps-risk.json"), JSON.stringify(seed))
     await rebootHandlers()
     const res = await call(handleApi, "GET", "/api/command-centre/overview")
-    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
+    // D2/AC-005: the seeded-risk-store case shows the same two-site catalog —
+    // seeding the perps risk store adds a GATE verdict, not a row.
+    expect(res.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "trading:perps"])
     const perps = res.body.sites.find((r) => r.site === "trading:perps")
     expect(perps).toMatchObject({ stream: "trading", mode: "COPILOT" })
     const fresh = perps.gates.find((g) => g.gate === "fresh-data")

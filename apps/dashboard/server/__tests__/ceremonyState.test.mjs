@@ -52,14 +52,17 @@ afterEach(async () => {
   vi.resetModules()
 })
 
-test("fresh boot is healthy, version 1, defaults: enablement null per class, expertoption platform record null, assetClasses empty", async () => {
+test("fresh boot is healthy, version 1, defaults: enablement null per class, platform record map empty, assetClasses empty", async () => {
   const m = await bootMem()
   expect(m.storeHealth()).toEqual({ ok: true })
   const s = m.ceremonyState()
   expect(s.version).toBe(1)
   expect(s.classes).toEqual({})
-  expect(m.enablement()).toEqual({ "ccxt-crypto": null, "hyperliquid-perps": null, "expertoption": null })
-  expect(m.platformVerification()).toEqual({ expertoption: null })
+  // D2/AC-005: TWO venue classes remain (the `expertoption` class is removed),
+  // and the default platformVerification map is EMPTY — it no longer seeds a
+  // record for a removed venue. The mechanism itself stays generic.
+  expect(m.enablement()).toEqual({ "ccxt-crypto": null, "hyperliquid-perps": null })
+  expect(m.platformVerification()).toEqual({})
   expect(m.assetClasses()).toEqual({})
 })
 
@@ -73,7 +76,7 @@ test("unreadable ceremony state file → UNHEALTHY; mutations refuse; enablement
   expect(m.enablement()).toEqual({ locked: true, reason: "ceremony-state-store-unreadable" })
   expect(m.enablementFor("ccxt-crypto")).toEqual({ locked: true, reason: "ceremony-state-store-unreadable" })
   expect(() => m.unlockVenueClass("ccxt-crypto", "t", { now: NOW })).toThrow(/ceremony-state-store-unreadable/)
-  expect(() => m.setPlatformVerification("expertoption", { verified: true })).toThrow(/ceremony-state-store-unreadable/)
+  expect(() => m.setPlatformVerification("hyperliquid-perps", { verified: true })).toThrow(/ceremony-state-store-unreadable/)
   expect(() => m.setAssetClasses({})).toThrow(/ceremony-state-store-unreadable/)
   expect(await readFile(join(dir, CEREMONY_FILE), "utf8")).toBe("{\n  \"version\": 1,\n  \"classes\":")
 })
@@ -191,7 +194,7 @@ test("enablement: default null for every class; the credit path never writes it;
   const m = await bootMem()
   m.setAssetClasses({ "142": "ccxt-crypto" })
   m.creditResolved([row({ id: 1 })], { now: NOW })
-  expect(m.enablement()).toEqual({ "ccxt-crypto": null, "hyperliquid-perps": null, "expertoption": null })
+  expect(m.enablement()).toEqual({ "ccxt-crypto": null, "hyperliquid-perps": null })
   expect(m.enablementFor("ccxt-crypto")).toBe(null)
   const rec = m.unlockVenueClass("hyperliquid-perps", "owner-1", { now: NOW })
   expect(rec).toEqual({ unlocked: true, at: new Date(NOW).toISOString(), by: "owner-1" })
@@ -215,8 +218,10 @@ test("unlockVenueClass refuses outside VITEST with a ceremony-action-direct deny
 
 test("platformVerification: default null; a deliberate write records the full evidence record", async () => {
   const m = await bootMem()
-  expect(m.platformVerification().expertoption).toBe(null)
-  const rec = m.setPlatformVerification("expertoption", {
+  // D2/AC-005: the default map is EMPTY (no pre-seeded key for the removed
+  // venue class), so the class has no record until one is deliberately written.
+  expect(m.platformVerification()["hyperliquid-perps"]).toBeUndefined()
+  const rec = m.setPlatformVerification("hyperliquid-perps", {
     verified: true,
     by: "operator-a",
     regulator: "public-register-42",
@@ -229,24 +234,27 @@ test("platformVerification: default null; a deliberate write records the full ev
   expect(rec.payoutFloorPct).toBe(90)
   expect(rec.withdrawalTested).toBe(true)
   expect(rec.at).toBeTruthy()
-  expect(m.platformVerification().expertoption).toMatchObject({ verified: true, payoutFloorPct: 90 })
+  expect(m.platformVerification()["hyperliquid-perps"]).toMatchObject({ verified: true, payoutFloorPct: 90 })
 })
 
 test("platformVerification flags payoutFloorPct below 85 as payoutUnderFloor and stays clean at/above 85", async () => {
   const m = await bootMem()
-  const low = m.setPlatformVerification("expertoption", { verified: true, payoutFloorPct: 80, by: "op" })
+  const low = m.setPlatformVerification("hyperliquid-perps", { verified: true, payoutFloorPct: 80, by: "op" })
   expect(low.payoutUnderFloor).toBe(true)
-  const high = m.setPlatformVerification("expertoption", { verified: true, payoutFloorPct: 92, by: "op" })
+  const high = m.setPlatformVerification("hyperliquid-perps", { verified: true, payoutFloorPct: 92, by: "op" })
   expect(high.payoutUnderFloor).toBe(false)
-  expect(m.platformVerification().expertoption.payoutFloorPct).toBe(92)
+  expect(m.platformVerification()["hyperliquid-perps"].payoutFloorPct).toBe(92)
 })
 
 test("platformVerification: unknown venue-class and malformed records are named rejects", async () => {
   const m = await bootMem()
   expect(() => m.setPlatformVerification("mystery", { verified: true })).toThrow(/ceremony:reject:unknown-venue-class/)
-  expect(() => m.setPlatformVerification("expertoption", { verified: false })).toThrow(/ceremony:reject:malformed-platform-verification/)
-  expect(() => m.setPlatformVerification("expertoption", { verified: true, payoutFloorPct: "high" })).toThrow(/ceremony:reject:malformed-platform-verification/)
-  expect(m.platformVerification().expertoption).toBe(null)
+  expect(() => m.setPlatformVerification("hyperliquid-perps", { verified: false })).toThrow(/ceremony:reject:malformed-platform-verification/)
+  expect(() => m.setPlatformVerification("hyperliquid-perps", { verified: true, payoutFloorPct: "high" })).toThrow(/ceremony:reject:malformed-platform-verification/)
+  // D2/AC-005: the rejected writes left the map untouched, and the default map
+  // is now EMPTY (it no longer pre-seeds a key), so the rejected key is absent
+  // rather than null. The named-reject contract itself is unchanged.
+  expect(m.platformVerification()).toEqual({})
 })
 
 test("assetClasses: unknown asset keys and unknown venue-class values are named rejects; valid map round-trips", async () => {
@@ -271,7 +279,7 @@ test("the store survives a re-boot: credits, unlock, verification and the asset 
     { now: NOW }
   )
   m1.unlockVenueClass("hyperliquid-perps", "owner-1", { now: NOW })
-  m1.setPlatformVerification("expertoption", { verified: true, by: "op", regulator: "reg", payoutFloorPct: 88, withdrawalTested: true })
+  m1.setPlatformVerification("hyperliquid-perps", { verified: true, by: "op", regulator: "reg", payoutFloorPct: 88, withdrawalTested: true })
 
   const m2 = await restart()
   expect(m2.storeHealth()).toEqual({ ok: true })
@@ -284,7 +292,7 @@ test("the store survives a re-boot: credits, unlock, verification and the asset 
   expect(cs.streak).toHaveLength(3)
   expect(m2.enablementFor("hyperliquid-perps")).toMatchObject({ unlocked: true, by: "owner-1" })
   expect(m2.enablementFor("ccxt-crypto")).toBe(null)
-  expect(m2.platformVerification().expertoption).toMatchObject({ verified: true, payoutFloorPct: 88, withdrawalTested: true, payoutUnderFloor: false })
+  expect(m2.platformVerification()["hyperliquid-perps"]).toMatchObject({ verified: true, payoutFloorPct: 88, withdrawalTested: true, payoutUnderFloor: false })
   expect(m2.assetClasses()).toEqual({ "142": "ccxt-crypto" })
   const onDisk = JSON.parse(await readFile(join(dir, CEREMONY_FILE), "utf8"))
   expect(onDisk.version).toBe(1)
@@ -299,9 +307,10 @@ test("resetCeremonyState wipes in-memory state and the file", async () => {
   expect(m.classState("ccxt-crypto").spendableResolved).toBe(1)
   m.resetCeremonyState()
   expect(m.classState("ccxt-crypto")).toBe(null)
-  expect(m.enablement()).toEqual({ "ccxt-crypto": null, "hyperliquid-perps": null, "expertoption": null })
+  expect(m.enablement()).toEqual({ "ccxt-crypto": null, "hyperliquid-perps": null })
   expect(m.assetClasses()).toEqual({})
-  expect(m.platformVerification()).toEqual({ expertoption: null })
+  // D2/AC-005: reset restores the EMPTY default platformVerification map.
+  expect(m.platformVerification()).toEqual({})
   expect(m.ceremonyState().version).toBe(1)
   const onDisk = JSON.parse(await readFile(join(dir, CEREMONY_FILE), "utf8"))
   expect(onDisk.classes).toEqual({})

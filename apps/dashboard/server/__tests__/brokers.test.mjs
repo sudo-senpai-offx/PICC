@@ -26,34 +26,32 @@ describe("broker adapter registry (plug-and-play venue status)", () => {
     const out = await brokers.listBrokers()
     expect(out.ok).toBe(true)
     const slugs = out.brokers.map((b) => b.slug)
-    expect(slugs).toContain("expertoption")
     expect(slugs).toContain("ccxt")
     expect(slugs).toContain("paper")
+    // D2/AC-005: the ExpertOption adapter is removed, so its slug must be GONE
+    // from the registry — absent, not present-but-disabled.
+    expect(slugs).not.toContain("expertoption")
 
     const paper = out.brokers.find((b) => b.slug === "paper")
     expect(paper.configured).toBe(true)
     expect(paper.connected).toBe(true)
 
-    const eo = out.brokers.find((b) => b.slug === "expertoption")
-    // No token in a fresh temp dir → honestly unconfigured.
-    expect(eo.configured).toBe(false)
-
     const ccxt = out.brokers.find((b) => b.slug === "ccxt")
     expect(ccxt.configured).toBe(false)
     expect(Array.isArray(ccxt.pairs)).toBe(true)
 
-    // Executor defaults to paper when no broker token exists.
+    // Executor is paper: the EO token no longer selects an executor (D2).
     expect(out.activeExecutor).toBe("paper")
     expect(out.summary.total).toBe(out.brokers.length)
   })
 
-  it("flips executor to expertoption once a token is configured", async () => {
+  it("keeps paper as the executor even when an EO token is stored (D2: the token no longer selects anything)", async () => {
     const trading = await import("../services/trading.mjs")
     await trading.saveCredentials({ expertoptionToken: "tok-123" })
     const out = await brokers.listBrokers()
-    expect(out.brokers.find((b) => b.slug === "expertoption").configured).toBe(true)
-    expect(out.activeExecutor).toBe("expertoption")
-    expect(out.summary.configured).toBeGreaterThanOrEqual(2)
+    expect(out.brokers.find((b) => b.slug === "expertoption")).toBeUndefined()
+    expect(out.activeExecutor).toBe("paper")
+    expect(out.summary.configured).toBeGreaterThanOrEqual(1)
   })
 
   it("every broker row declares its capabilities honestly", async () => {
@@ -79,9 +77,8 @@ describe("broker adapter registry (plug-and-play venue status)", () => {
       expect(Array.isArray(b.timeframes)).toBe(true)
       expect(b.timeframes.length).toBeGreaterThan(0)
     }
-    // EO push builds 1m..1h only — the exact set the chart must render as
-    // enabled when EO is the configured source (T6 acceptance).
-    expect(bySlug.get("expertoption").timeframes).toEqual([60, 300, 900, 3600])
+    // D2/AC-005: no ExpertOption row, so no EO timeframes curve is asserted.
+    expect(bySlug.get("expertoption")).toBeUndefined()
     expect(bySlug.get("ccxt").timeframes).toEqual([60, 300, 900, 1800, 3600, 14400])
     expect(bySlug.get("paper").timeframes).toEqual([60, 300, 900, 3600])
     // Yahoo joined the registry in T7 to enable 1D/1W/1M in the chart.

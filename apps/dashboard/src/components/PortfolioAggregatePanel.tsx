@@ -85,11 +85,11 @@ export function PortfolioAggregatePanel({ paperAvailable }: { paperAvailable: bo
                 </div>
               </div>
             )}
-            {model.todayPnl.expertoption && (
-              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.expertoption.pnl > 0 ? "var(--gain)" : model.todayPnl.expertoption.pnl < 0 ? "var(--loss)" : "var(--border)"}` }}>
+            {model.todayPnl.demo && (
+              <div style={{ padding: "4px 8px", borderRadius: 4, textAlign: "center", background: "var(--bg)", border: `1px solid ${model.todayPnl.demo.pnl > 0 ? "var(--gain)" : model.todayPnl.demo.pnl < 0 ? "var(--loss)" : "var(--border)"}` }}>
                 <div style={{ fontSize: 9, color: "var(--text-muted)" }}>{realPnl}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.expertoption.pnl > 0 ? "var(--gain)" : model.todayPnl.expertoption.pnl < 0 ? "var(--loss)" : "var(--text-muted)" }}>
-                  {model.todayPnl.expertoption.pnl > 0 ? "+" : ""}${model.todayPnl.expertoption.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.expertoption.trades} trades)</span>
+                <div style={{ fontSize: 14, fontWeight: 700, color: model.todayPnl.demo.pnl > 0 ? "var(--gain)" : model.todayPnl.demo.pnl < 0 ? "var(--loss)" : "var(--text-muted)" }}>
+                  {model.todayPnl.demo.pnl > 0 ? "+" : ""}${model.todayPnl.demo.pnl} <span style={{ fontSize: 9, color: "var(--text-muted)" }}>({model.todayPnl.demo.trades} trades)</span>
                 </div>
               </div>
             )}

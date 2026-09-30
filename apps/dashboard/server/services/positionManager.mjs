@@ -55,23 +55,13 @@ export async function aggregateOpenPositions() {
     })
   }
 
-  // ── ExpertOption demo deals (live session when connected) ────────────────
-  try {
-    const { getDemoSession } = await import("./autopilot.mjs")
-    const session = getDemoSession()
-    const open = session && session.connected ? session.deals() : []
-    for (const d of Array.isArray(open) ? open : []) {
-      positions.push({
-        venue: "expertoption",
-        id: String(d.serverId ?? ""),
-        symbol: canonical(String(d.asset ?? d.assetId ?? "")),
-        side: d.type === "put" ? "down" : "up",
-        entry: Number(d.openPrice ?? d.strike ?? 0),
-        amount: Number(d.amount) || 0,
-        openedAt: d.openedAt ?? null
-      })
-    }
-  } catch { /* autopilot unavailable — paper-only view */ }
+  // D2/AC-007: the ExpertOption demo-deal block is REMOVED, not silenced. It
+  // was one of the four dead call sites — `getDemoSession` is defined nowhere in
+  // the server tree, so `getDemoSession()` threw on every call and the `catch`
+  // turned that into a silent paper-only view. AC-007 forbids surviving a
+  // try/catch that converts a missing implementation into a silent no-op, so the
+  // block goes rather than being left to throw. The paper ledger above is now
+  // the only position source here.
 
   // ── Fold into per-instrument and per-venue views ─────────────────────────
   const byInstrument = {}
@@ -153,7 +143,12 @@ export async function combinedTodayPnl() {
 
   return {
     paper: { pnl: round2(paperPnl), trades: paperCount },
-    expertoption: { pnl: round2(demoPnl), trades: demoCount }
+    // D2/AC-005: this bucket was keyed `expertoption`, a venue that no longer
+    // exists. It holds settled DEMO deals from `trading-demo-deals.json` — the
+    // data is venue-agnostic, only the key was venue-named, so it is renamed to
+    // `demo` rather than left as a present-but-disabled EO surface. B-PAP-2's
+    // paper/demo separation and the banned merged `total` are unchanged.
+    demo: { pnl: round2(demoPnl), trades: demoCount }
   }
 }
 

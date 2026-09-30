@@ -20,7 +20,9 @@
 //                        numeric fields mean "not applicable to this stream".
 //   protocols            P-* protocol ids in effect for this site
 
-import { EXPERTOPTION_ROSTER, TRADING_ROSTER } from "./agentRoster.mjs"
+// D2/AC-005: `EXPERTOPTION_ROSTER` is no longer imported — its only consumer was
+// the removed `expertoption` site row below.
+import { TRADING_ROSTER } from "./agentRoster.mjs"
 
 export const DEFAULT_LOOP = Object.freeze({ maxRounds: 3, convergenceDelta: 0.05 })
 
@@ -78,34 +80,13 @@ export const POLICY_GRAPH_CATALOG = Object.freeze([
     },
     protocols: PROTOCOLS
   },
-  {
-    // ExpertOption truth-table row (5C): unregulated venue (EOLabs LLC,
-    // St. Vincent & Grenadines) — live money is FORBIDDEN until the connector
-    // is re-engineered AND an explicit ADR decision; demo path is the ExpertBot
-    // pattern, finished in slice 7.
-    site: "expertoption",
-    stream: "trading",
-    venue: "expertoption (unregulated — demo only today)",
-    automationPermission: "forbidden",
-    demoOnly: true,
-    roster: EXPERTOPTION_ROSTER,
-    edges: [
-      { from: "news_sentiment", to: "model_matrix", topology: "1:1", purpose: "sentiment refines demo matrix conviction" },
-      { from: "technical", to: "model_matrix", topology: "1:1", purpose: "technical read feeds demo matrix confidence" },
-      { from: "volatility", to: "risk_manager", topology: "1:1", purpose: "volatility feeds demo risk sizing" },
-      { from: "model_matrix", to: "risk_manager", topology: "1:1", purpose: "matrix output feeds demo risk sizing" }
-    ],
-    loops: [
-      { node: "model_matrix", maxRounds: 2, convergenceDelta: 0.05 }
-    ],
-    envelope: {
-      mode: "demo",
-      maxExposureUsd: null, // demo credits, not capital
-      maxConcurrent: 1,
-      maxDailyLossPct: 5
-    },
-    protocols: PROTOCOLS
-  },
+  // D2/AC-005: the `expertoption` policy-graph site row (the unregulated
+  // demo-only truth-table entry) and its `EXPERTOPTION_ROSTER` are REMOVED with
+  // the venue. The row was a live control-surface entry: the Command Centre
+  // overview and per-site kill-switch both enumerate this catalog, so leaving it
+  // would keep a kill switch and a gate rail pointed at a venue that no longer
+  // exists. `trading:ccxt` and `trading:perps` are unchanged, and the venue
+  // contract ("a new venue needs a row here behind an ADR") is unchanged.
   {
     // Hyperliquid perps (swap) venue class — the FIRST live order surface
     // (WS-1 live-order-lifecycle). Testnet-first; each perp instrument

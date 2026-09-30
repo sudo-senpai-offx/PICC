@@ -66,37 +66,32 @@ afterAll(() => {
 
 describe("credentials endpoints", () => {
   it("never echoes trading secrets when saving", async () => {
-    const res = await call("POST", "/api/trading/credentials", { expertoptionToken: "eo-tok", riskPerTradePct: 5 })
+    // D2/AC-005: `expertoptionToken` is no longer a credential-store field, so
+    // the secret that must never be echoed is now a CCXT key. The masked-read
+    // guarantee is unchanged; only the secret under test moved.
+    const res = await call("POST", "/api/trading/credentials", {
+      ccxtApiKeys: [{ exchange: "binance", apiKey: "eo-tok", secret: "shhh" }],
+      riskPerTradePct: 5
+    })
     expect(res.status).toBe(200)
-    expect(res.body.expertoptionToken).not.toBe("eo-tok")
+    expect(JSON.stringify(res.body)).not.toContain("shhh")
     expect(res.body.riskPerTradePct).toBe(5)
   })
 
-  it("revives the headless EO session when a NEW token is saved, never on the same token", async () => {
+  it("D2/AC-005: the EO token field and the liveEO revive are gone from the endpoint", async () => {
     const acct = await createAccount({ email: "eo@x.com", password: "password123", name: "EO" })
     const auth = { authorization: `Bearer ${acct.token}` }
-    const { restartLiveEO } = await import("../services/liveEO.mjs")
-    restartLiveEO.mockClear()
-
-    // Token (re)capture → force revive (soft reconnect, buffers preserved).
-    const withToken = await call("POST", "/api/trading/credentials", { expertoptionToken: "fresh-eo-token" }, auth)
-    expect(withToken.status).toBe(200)
-    expect(withToken.body.reconnectTriggered).toBe(true)
-    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
-
-    // Re-saving the SAME token must NOT force-restart a healthy session (no flap).
-    restartLiveEO.mockClear()
-    const sameToken = await call("POST", "/api/trading/credentials", { expertoptionToken: "fresh-eo-token" }, auth)
-    expect(sameToken.status).toBe(200)
-    expect(sameToken.body.reconnectTriggered).toBe(false)
-    expect(restartLiveEO).not.toHaveBeenCalled()
-
-    // A settings-only save must not force-reconnect either.
-    restartLiveEO.mockClear()
+    // Saving a token no longer produces a revive, and `reconnectTriggered` is
+    // removed from the response rather than left as a permanent `false` — the
+    // handler has no session left to restart.
+    const res = await call("POST", "/api/trading/credentials", { expertoptionToken: "fresh-eo-token" }, auth)
+    expect(res.status).toBe(200)
+    expect(res.body).not.toHaveProperty("reconnectTriggered")
+    expect(res.body).not.toHaveProperty("expertoptionToken")
+    // A settings-only save stays clean too.
     const settingsOnly = await call("POST", "/api/trading/credentials", { riskPerTradePct: 3 }, auth)
     expect(settingsOnly.status).toBe(200)
-    expect(settingsOnly.body.reconnectTriggered).toBe(false)
-    expect(restartLiveEO).not.toHaveBeenCalled()
+    expect(settingsOnly.body).not.toHaveProperty("reconnectTriggered")
   })
 
   it("requires auth on credentials once an account exists", async () => {
@@ -116,8 +111,10 @@ describe("credentials endpoints", () => {
     const acct = await createAccount({ email: "ccxt@x.com", password: "password123", name: "CCXT" })
     const auth = { authorization: `Bearer ${acct.token}` }
 
-    // Save pairs alongside a fresh token — the sanitizer must keep the two
-    // well-formed entries, lowercase the exchange, and drop the malformed one.
+    // Save pairs — the sanitizer must keep the two well-formed entries,
+    // lowercase the exchange, and drop the malformed one.
+    // D2/AC-005: the accompanying `expertoptionToken` is gone from the store, so
+    // it is neither accepted nor echoed.
     const save = await call("POST", "/api/trading/credentials", {
       expertoptionToken: "eo-tok-ccxt",
       ccxtExchanges: [
@@ -127,7 +124,7 @@ describe("credentials endpoints", () => {
       ]
     }, auth)
     expect(save.status).toBe(200)
-    expect(save.body.expertoptionToken).not.toBe("eo-tok-ccxt")
+    expect(save.body).not.toHaveProperty("expertoptionToken")
     expect(save.body.ccxtExchanges).toEqual([
       { exchange: "binance", symbol: "BTCUSDT", timeframe: "5m" },
       { exchange: "coinbase", symbol: "ETH/USD", limit: 400 }

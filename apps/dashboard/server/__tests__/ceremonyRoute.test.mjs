@@ -124,7 +124,10 @@ describe("Command Centre ceremony route (WS-3 T3)", () => {
     expect(typeof res.body.at).toBe("string")
     expect(res.body.scaleMinResolves).toBe(500) // PICC_CEREMONY_SCALE_MIN_RESOLVES default read at call time
     expect(res.body.scaleEnvError).toBeNull()
-    expect(res.body.classes.map((c) => c.venueClass)).toEqual(["ccxt-crypto", "hyperliquid-perps", "expertoption"])
+    // D2/AC-005: the `expertoption` venue class is removed with the venue, so
+    // the ceremony now reports the two remaining classes. This is the new TRUE
+    // list — the class was deleted from KNOWN_VENUE_CLASSES, not disabled.
+    expect(res.body.classes.map((c) => c.venueClass)).toEqual(["ccxt-crypto", "hyperliquid-perps"])
 
     const ccxt = res.body.classes.find((c) => c.venueClass === "ccxt-crypto")
     expect(ccxt.spendableResolved).toBe(300)
@@ -154,21 +157,35 @@ describe("Command Centre ceremony route (WS-3 T3)", () => {
     expect(untouched.gates[0].reason).toBe("ceremony:deny:gate1-short (have 0, require 300)")
   })
 
-  it("binaryOptions is true for the fixture binary class and its platform gate / record render honestly", async () => {
+  it("no venue class is a binary-options class after D2, and the platform record still renders honestly", async () => {
     await seed()
     const ledger = await import("../services/accuracyLedger.mjs")
     ledger.startLedger() // healthy-running loop → gate-1 shortfall is the honest deny, not ledger-stale
     const res = await call(handleApi, "GET", "/api/command-centre/ceremony")
-    const expert = res.body.classes.find((c) => c.venueClass === "expertoption")
-    const ccxt = res.body.classes.find((c) => c.venueClass === "ccxt-crypto")
-    expect(expert.binaryOptions).toBe(true)
-    expect(ccxt.binaryOptions).toBe(false)
-    // nothing verified in the fixture → record is null, client shows platform unverified
-    expect(expert.platformVerification).toBeNull()
-    expect(expert.enablement).toBeNull()
-    // gate-1 shortfall stops before the platform gate is evaluated — one honest deny
-    expect(expert.gates).toHaveLength(1)
-    expect(expert.gates[0].reason).toBe("ceremony:deny:gate1-short (have 0, require 300)")
+    expect(res.status).toBe(200)
+    // D2/AC-005: the `expertoption` class WAS the binary class this test pinned
+    // `binaryOptions:true` on. It is removed with the venue, so no surviving
+    // class is a binary-options class. The `binaryOptions` FIELD is retained on
+    // the contract — the client reads it, so it must still be present and
+    // honestly `false` rather than absent.
+    for (const c of res.body.classes) {
+      expect(c.binaryOptions).toBe(false)
+    }
+    // Nothing verified in the fixture → record is null, client shows platform
+    // unverified. This is the surviving half of the original assertion.
+    for (const c of res.body.classes) {
+      expect(c.platformVerification).toBeNull()
+      expect(c.enablement).toBeNull()
+    }
+    // D2/AC-005: the original test asserted a `gate1-short` shortfall, but that
+    // was the REMOVED EO class, whose fixture carried no resolved credits. The
+    // ccxt class in this same fixture carries 300 spendable resolved, so gate 1
+    // honestly PASSES and the reason says so. The surviving contract — an
+    // observed gate reports its real reason, never a silent pass — is what is
+    // asserted, and it is asserted on the class this test now reads.
+    const ccxtClass = res.body.classes.find((c) => c.venueClass === "ccxt-crypto")
+    expect(ccxtClass.gates.length).toBeGreaterThan(0)
+    expect(ccxtClass.gates[0].reason).toBe("spendable resolved 300 \u2265 300 (PICC_CEREMONY_GATE1_MIN_RESOLVES)")
   })
 
   it("ledgerRunning false surfaces ceremony:deny:ledger-stale (gate-ledger-health) — R9.1, never a silent all-pass; true once the loop starts", async () => {
@@ -232,7 +249,7 @@ describe("Command Centre ceremony route (WS-3 T3)", () => {
     const stripTs = (obj) =>
       JSON.parse(JSON.stringify(obj).replace(/"(19|20)\d{2}-\d{2}-\d{2}T[^"]*"/g, '"<ts>"'))
     expect(stripTs(after.body)).toEqual(stripTs(before.body))
-    expect(after.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
+    expect(after.body.sites.map((s) => s.site)).toEqual(["trading:ccxt", "trading:perps"])
     expect(after.body.killSwitch).toEqual({ global: false, sites: {} })
   })
 
@@ -243,7 +260,8 @@ describe("Command Centre ceremony route (WS-3 T3)", () => {
     const res = await call(handleApi, "GET", "/api/command-centre/ceremony")
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true) // the readout executed — the denies are in the gates
-    expect(res.body.classes.map((c) => c.venueClass)).toEqual(["ccxt-crypto", "hyperliquid-perps", "expertoption"])
+    // D2/AC-005: the removed venue class is not reported, not reported-as-denied.
+    expect(res.body.classes.map((c) => c.venueClass)).toEqual(["ccxt-crypto", "hyperliquid-perps"])
     for (const c of res.body.classes) {
       expect(c.spendableResolved).toBeNull()
       expect(c.scaleResolved).toBeNull()

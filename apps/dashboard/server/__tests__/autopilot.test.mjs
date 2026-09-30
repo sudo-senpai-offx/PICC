@@ -116,11 +116,25 @@ describe("advisory scope config (multi-asset targets)", () => {
   })
 
   it("dry-run evaluator reports honest gates without executing anything", async () => {
-    // No token configured in this fresh tmp dir → precondition failure, honestly named.
+    // D2/AC-005: the "token" gate is gone with the venue's credential. The
+    // refusal is now asserted on the gate that actually exists — either the
+    // disabled precondition or the removal gate — and the key guarantee (a
+    // gated refusal, never a fabricated verdict) is unchanged.
     const why = await autopilot.whyAutopilot({})
     expect(why.dryRun).toBe(true)
     expect(why.wouldTrade).toBe(false)
-    expect(why.gates.some((g) => g.name === "token" && g.pass === false)).toBe(true)
+    expect(why.direction).toBeNull()
+    expect(why.confidence).toBeNull()
+    const enabled = why.gates.find((g) => g.name === "enabled")
+    expect(enabled).toBeTruthy()
+    if (!enabled.pass) {
+      expect(why.reason).toBe("precondition failed")
+    } else {
+      const removed = why.gates.find((g) => g.name === "venue-removed")
+      expect(removed).toBeTruthy()
+      expect(removed.pass).toBe(false)
+      expect(why.reason).toBe("execution venue removed")
+    }
   })
 })
 

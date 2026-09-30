@@ -75,7 +75,6 @@ import { log, createRequestId, bindRequest, unbindRequest, recordRequest, getMet
 import {
   tradingStatus,
   predictSymbol,
-  analyzeExpertOptionAsset,
   openPaperTrade,
   closePaperTrade,
   paperPositions,
@@ -97,8 +96,12 @@ import {
   getCredentials as getTradingCredentials,
   saveCredentials as saveTradingCredentials
 } from "./services/trading.mjs"
-import { proAnalyzeSymbol, proAnalyzeExpertOption, summarizeProAnalysis } from "./services/proanalysis.mjs"
-import { subscribeLiveEO, liveEOStats, liveSnapshot, liveEOData } from "./services/liveEO.mjs"
+// D2/AC-005: `proAnalyzeExpertOption` (removed with the venue) and the whole
+// `liveEO.mjs` import block are gone. Every route that consumed them — the two
+// ExpertOption analysis routes, the SSE live-feed subscription, the candles
+// liveEO bridge, the quotes/realtime reads, and the EO demo status route — is
+// removed in this change.
+import { proAnalyzeSymbol, summarizeProAnalysis } from "./services/proanalysis.mjs"
 import { subscribeLiveCCXT } from "./services/liveCCXT.mjs"
 import { tradingSuiteSnapshot, bustRealtimeSuite } from "./services/realtimeSuite.mjs"
 import { subscribeDecisions, subscribeU4faEvents, getDecisions, observedPayouts } from "./services/adaptiveConfluence.mjs"
@@ -117,7 +120,9 @@ import {
   sessionCaptureSettingsView
 } from "./services/sessionCaptureSettings.mjs"
 import {
-  demoStatus as expertOptionDemoStatus,
+  // D2/AC-005: `demoStatus` is no longer imported — the `/api/trading/demo`
+  // route it served is removed. `demoDeals` / `demoAnalytics` are RETAINED:
+  // they read the local settled-deals ledger, not the venue.
   demoDeals,
   demoAnalytics,
   getAutopilotConfig,
@@ -239,7 +244,8 @@ import {
   studioRead,
   studioAutofill,
   studioLogin,
-  captureExpertOptionSession,
+  // D2/AC-005: `captureExpertOptionSession` is no longer imported — the
+  // `/api/browser/capture-session` route it served is removed with the venue.
   maskToken,
   studioOpenSite,
   detectSite,
@@ -632,14 +638,6 @@ function isLocalhostRequest(req) {
  * comparison so broker labels like "XAU/USD" resolve to the same instrument
  * the overlay normalized to GOLD.
  */
-function eoAssetMatches(a, key) {
-  if (!a) return false
-  const k = String(key ?? "").toLowerCase()
-  if (!k) return false
-  if (String(a.id) === String(key)) return true
-  return assetsEquivalent(a.name, key) || assetsEquivalent(a.displayName, key)
-}
-
 function isHttpUrl(value) {
   try {
     const u = new URL(String(value))
@@ -1434,31 +1432,12 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
-  // Feed preference (T4): GET reads the mode + live legs; POST sets the mode.
-  // Preference-with-fallback — a future second leg would take over when the
-  // preferred one dies, so a live feed is never dropped. The studio bridge is
-  // the only browser leg.
-  if (path === "/api/trading/feed-mode" && (req.method === "GET" || req.method === "POST")) {
-    const { getFeedMode, setFeedMode, liveEOStats } = await import("./services/liveEO.mjs")
-    if (req.method === "POST") {
-      const want = body?.feedMode
-      if (typeof want !== "string" || !["auto", "studio"].includes(want)) {
-        writeJson(res, 400, { ok: false, error: "feedMode must be auto | studio" })
-        return
-      }
-      setFeedMode(want)
-    }
-    const stats = liveEOStats()
-    writeJson(res, 200, {
-      ok: true,
-      feedMode: getFeedMode(),
-      preference: getFeedMode(),
-      legs: {
-        studio: { alive: stats.legs.studio.lastAt > 0 && Date.now() - stats.legs.studio.lastAt < 60_000, lastAt: stats.legs.studio.lastAt }
-      }
-    })
-    return
-  }
+  // D2/AC-005: the `/api/trading/feed-mode` route is REMOVED. It read and wrote
+  // the feed-mode preference and reported live-LEG health — every leg it
+  // described belonged to the deleted ExpertOption transport (liveEO.mjs owned
+  // `getFeedMode`/`setFeedMode` and the leg stats). With one leg gone there is
+  // no leg to prefer and no transport to report, so the route would be a
+  // preference with nothing behind it. Reported as a product-visible change.
 
   if (path === "/api/trading/realtime" && req.method === "GET") {
     // Cross-origin EventSource snooping guard (any website can open this from
@@ -1515,7 +1494,9 @@ async function _handleApiInner(req, res, url, reqId) {
       detach()
       return true
     }
-    off = subscribeLiveEO((msg) => send(msg.type, msg))
+    // D2/AC-005: the `subscribeLiveEO` subscription is removed with the venue.
+    // The decisions / u4fa / ccxt / dispatch subscriptions on this socket are
+    // untouched, so the realtime stream still carries every non-EO event.
     offDecisions = subscribeDecisions((msg) => send(msg.type, msg))
     // T12/M8 — `type:"u4fa"` events ride the SAME socket as decision events
     // (no separate endpoint; the client parser routes them on the u4fa name).
@@ -1533,9 +1514,9 @@ async function _handleApiInner(req, res, url, reqId) {
       }
     }, 15000)
     send("ready", { ok: true })
-    send("stats", liveEOStats())
-    const snap = liveSnapshot()
-    if (snap.status === "connected") send("snapshot", snap)
+    // D2/AC-005: the initial `stats` + `snapshot` frames were the liveEO leg
+    // health and live buffer snapshot. No EO transport remains, so the socket
+    // opens on `ready` alone and every subsequent frame is a non-EO event.
     // Fire-and-forget so the first `suite` snapshot is never delayed by a slow
     // decision recompute (getDecisions can take up to 20s when cold).
     void (async () => {
@@ -1659,33 +1640,17 @@ async function _handleApiInner(req, res, url, reqId) {
     if (!(await requireAuth(req, res))) return true
     if (req.method === "GET") {
       const creds = await getTradingCredentials()
-      writeJson(res, 200, {
-        ...creds,
-        expertoptionToken: creds.expertoptionToken ? "••••••" : ""
-      })
+      writeJson(res, 200, { ...creds })
       return
     }
     try {
-      const before = await getTradingCredentials()
       const creds = await saveTradingCredentials(body)
-      // A token (re)capture must revive a dead headless EO session WITHOUT a
-      // server restart (T11 live finding: authFailed is permanent until the
-      // process restarts). Gated on an actual token CHANGE: re-saving the same
-      // token never force-restarts a healthy session (no flap), and a
-      // settings-only save (risk %, schedule) never forces either.
-      // restartLiveEO soft-reconnects, preserving candle buffers.
-      const nextToken = typeof body?.expertoptionToken === "string" ? body.expertoptionToken.trim() : ""
-      const tokenChanged = Boolean(nextToken) && nextToken !== (before?.expertoptionToken ?? "")
-      let reconnectTriggered = false
-      if (tokenChanged) {
-        try {
-          const { restartLiveEO } = await import("./services/liveEO.mjs")
-          reconnectTriggered = await restartLiveEO({ force: true })
-        } catch (err) {
-          console.warn("[picc] EO session refresh on token save failed:", err?.message)
-        }
-      }
-      writeJson(res, 200, { ok: true, reconnectTriggered, ...creds, expertoptionToken: creds.expertoptionToken ? "••••••" : "" })
+      // D2/AC-005: the `expertoptionToken` masking and the `restartLiveEO`
+      // token-change revive are both removed with the venue — there is no EO
+      // session left to revive, and the token field is no longer part of the
+      // credential store. `reconnectTriggered` is gone from the response
+      // rather than left as a permanent `false`. Reported as product-visible.
+      writeJson(res, 200, { ok: true, ...creds })
     } catch (err) {
       console.error("[picc] trading credentials failed:", err)
       writeJson(res, 500, { ok: false, error: err.message })
@@ -2756,30 +2721,12 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
-  if (path === "/api/trading/analyze" && req.method === "POST") {
-    if (validateOr400(res, body, "analyze")) return true
-    const assetId = String(body?.assetId ?? "").trim()
-    if (!assetId) return writeJson(res, 400, { error: "asset id required (e.g. EURUSD)" })
-    try {
-      writeJson(
-        res,
-        200,
-        await withTimeout(
-          analyzeExpertOptionAsset({
-            assetId,
-            timeframe: Number(body?.timeframe) || 60,
-            count: Math.min(Math.max(Number(body?.count) || 120, 60), 500),
-            horizonDays: Number(body?.days) || 3
-          }),
-          25000
-        )
-      )
-    } catch (err) {
-      console.warn("[picc] trading analyze failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
+  // D2/AC-005: the `/api/trading/analyze` route is REMOVED. It had exactly one
+  // implementation — `analyzeExpertOptionAsset` — and that function is deleted
+  // with the venue. The route is not left as a 404 shim: AC-005 forbids
+  // present-but-disabled, and a route whose only body was the removed venue has
+  // no honest 200 to serve. `/api/trading/pro/analyze` and
+  // `/api/trading/predict` below are the surviving venue-agnostic analyses.
 
   if (path === "/api/trading/pro/analyze" && req.method === "POST") {
     const symbol = String(body?.symbol ?? "").trim()
@@ -2804,29 +2751,8 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
-  if (path === "/api/trading/pro/expertoption" && req.method === "POST") {
-    const assetId = String(body?.assetId ?? "").trim()
-    if (!assetId) return writeJson(res, 400, { error: "asset id required (e.g. EURUSD)" })
-    try {
-      writeJson(
-        res,
-        200,
-        await withTimeout(
-          proAnalyzeExpertOption({
-            assetId,
-            timeframe: Number(body?.timeframe) || 60,
-            count: Math.min(Math.max(Number(body?.count) || 240, 60), 500),
-            horizonDays: Number(body?.days) || 3
-          }),
-          25000
-        )
-      )
-    } catch (err) {
-      console.warn("[picc] pro expertoption failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
+  // D2/AC-005: the `/api/trading/pro/expertoption` route is REMOVED. Its only
+  // implementation was `proAnalyzeExpertOption`, deleted with the venue.
 
   if (path === "/api/trading/pro/narrative" && req.method === "POST") {
     const report = body?.report
@@ -3107,15 +3033,9 @@ async function _handleApiInner(req, res, url, reqId) {
   // ExpertOption demo trading + autopilot. Demo account only — the service
   // refuses to place trades when the account is not marked demo.
   // -------------------------------------------------------------------
-  if (path === "/api/trading/demo" && (req.method === "GET" || req.method === "POST")) {
-    try {
-      writeJson(res, 200, await withTimeout(expertOptionDemoStatus(), 10000))
-    } catch (err) {
-      console.warn("[picc] expertoption demo status failed:", err.message)
-      writeJson(res, 502, { ok: false, error: err.message })
-    }
-    return
-  }
+  // D2/AC-005: the `/api/trading/demo` route is REMOVED. It served
+  // `expertOptionDemoStatus()` — an ExpertOption demo-account status read. The
+  // venue is gone, so there is no demo account to report on.
 
   if (path === "/api/trading/demo/place" && req.method === "POST") {
     writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
@@ -3362,21 +3282,22 @@ async function _handleApiInner(req, res, url, reqId) {
       // A pinned `source`/`preferredSource` is tried first and falls through
       // the quality order when it serves nothing (sourceMode:"fallback").
       const { getBestCandles, listAvailableSources, getCrossSourceCandles } = await import("./services/marketDataBus.mjs")
-      const { ensureWatchingAsset, feedProvenance } = await import("./services/liveEO.mjs")
+      // D2/AC-005: the `ensureWatch: ensureWatchingAsset` argument and the
+      // `feedProvenance()` leg tag are removed with liveEO.mjs. `getBestCandles`
+      // still accepts an inert `ensureWatch` option (see marketDataBus), and the
+      // surviving winners (ccxt/yahoo) report their own broker slug as the feed,
+      // so `feed` is simply `out.source` — an honest per-source provenance with
+      // no fabricated leg.
       // Opt-in cross-source verification (verify:true): wraps the fan-in and
       // tags each bar with how many INDEPENDENT sources agree on it (aggregate
       // trust — "same data across multiple sources is trusted"). Off by default
       // so the standard fan-in shape and cost stay unchanged for other callers.
       const fetchCandles = body?.verify === true ? getCrossSourceCandles : getBestCandles
       const [out, availableSources] = await Promise.all([
-        fetchCandles(assetId, { timeframe, count, ensureWatch: ensureWatchingAsset, source, preferredSource }),
+        fetchCandles(assetId, { timeframe, count, source, preferredSource }),
         listAvailableSources(assetId, { timeframe })
       ])
-      // Leg-level provenance when the live EO leg served: studio bridge vs
-      // headless-seeded buffer frames (mirrors dataSources.collectSourceStatuses).
-      // Non-EO winners (yahoo/ccxt REST pulls) report their broker slug as the
-      // feed — REQ-3 honest per-source provenance, never a fabricated leg.
-      const feed = ["expertoption", "live", "buffer"].includes(out.source) ? feedProvenance() : out.source
+      const feed = out.source
       if (!out.candles.length) {
         return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources, sourceMode: out.sourceMode ?? "auto", sources: out.sources ?? [], verifySources: 0, verifiedCount: 0, verifiedRatio: 0 })
       }
@@ -3444,28 +3365,12 @@ async function _handleApiInner(req, res, url, reqId) {
     const safeCount = Math.min(500, Math.max(10, Number(count) || 200))
 
     try {
+      // D2/AC-005: the liveEO buffer read is removed with the venue, so this
+      // route now resolves from Yahoo only. The fallback warning is reworded to
+      // state the real source rather than name a buffer that no longer exists.
       let candles = []
-      try {
-        const { liveEOData } = await import("./services/liveEO.mjs")
-        const data = liveEOData()
-        const asset = data.assets?.find((a) => eoAssetMatches(a, assetId))
-        const buffer = asset?.periods?.[timeframe] ?? []
-        if (buffer.length > 0) {
-          const sliced = buffer.slice(-safeCount)
-          candles = sliced.map(c => ({
-            time: Math.floor(Number(c.t ?? c.time ?? 0) / 1000) || Math.floor(Number(c.t ?? c.time ?? 0)),
-            open: Number(c.o ?? c.open ?? c.close) || 0,
-            high: Number(c.h ?? c.high ?? c.close) || 0,
-            low: Number(c.l ?? c.low ?? c.close) || 0,
-            close: Number(c.c ?? c.close) || 0,
-            volume: Number(c.v ?? c.volume ?? 0) || 0
-          })).filter(c => c.close > 0)
-        }
-      } catch { /* liveEO not available */ }
-
-      if (!candles.length) {
+      {
         const { getHistory } = await import("./services/yahoo.mjs")
-        console.warn(`[picc] ${assetId}: no liveEO candles — Yahoo fallback is DAILY resolution (timeframe 86400), not minute bars`)
         const history = await withTimeout(getHistory(assetId, "6mo"), 12000)
         candles = history.dates.map((ts, i) => ({
           time: Math.floor(ts / 1000),
@@ -3979,21 +3884,18 @@ async function _handleApiInner(req, res, url, reqId) {
     const count = Math.min(Math.max(Number(body?.count) || 200, 30), 500)
     try {
       const { computeEntryLevels } = await import("./services/entryLevels.mjs")
-      const { liveEOData, fetchAssetCandles, ensureWatchingAsset } = await import("./services/liveEO.mjs")
-      const data = liveEOData()
-      const asset = data.assets.find((a) => eoAssetMatches(a, assetId))
+      // D2/AC-005: the liveEO buffer + on-demand fetch are removed with the
+      // venue, so the intraday buffer legs go away and this route resolves from
+      // the market-data fan-in / Yahoo below. `source` reports what actually
+      // served — never a relabeled "live" for bars that came from Yahoo.
       let candles = []
       let source = "none"
-      if (asset && asset.periods[timeframe]?.length) {
-        candles = asset.periods[timeframe].slice(-count)
-        source = "live"
-      }
-      if (!candles.length) {
-        await ensureWatchingAsset(assetId).catch(() => null)
-        const result = await withTimeout(fetchAssetCandles(assetId, timeframe, count), 10000).catch(() => ({ ohlc: [], source: null }))
-        if (result.ohlc?.length) {
-          candles = result.ohlc
-          source = result.source || "live"
+      {
+        const { getBestCandles } = await import("./services/marketDataBus.mjs")
+        const fanIn = await getBestCandles(assetId, { timeframe, count }).catch(() => null)
+        if (fanIn?.candles?.length) {
+          candles = fanIn.candles.slice(-count)
+          source = fanIn.source ?? "none"
         }
       }
       if (!candles.length) {
@@ -4218,18 +4120,12 @@ async function _handleApiInner(req, res, url, reqId) {
     const assetId = String(body?.assetId ?? "").trim().toUpperCase() || "BTCUSD"
     try {
       const quotes = []
-      // EO mid from the newest buffered candle.
-      try {
-        const { liveEOData, fetchAssetCandles } = await import("./services/liveEO.mjs")
-        let eoCandles = []
-        const eoAsset = liveEOData().assets.find((a) => assetsEquivalent(a.name, assetId) || String(a.id) === assetId)
-        if (eoAsset?.periods?.[60]?.length) eoCandles = eoAsset.periods[60]
-        else {
-          const r = await withTimeout(fetchAssetCandles(assetId, 60, 3), 8000).catch(() => ({ ohlc: [] }))
-          eoCandles = r.ohlc ?? []
-        }
-        if (eoCandles.length) quotes.push({ venue: "expertoption", price: Number(eoCandles[eoCandles.length - 1].close) })
-      } catch { /* EO offline */ }
+      // D2/AC-005: the ExpertOption mid leg is removed with the venue. This
+      // route compares venues that are ACTUALLY live, so dropping the EO leg
+      // leaves the CCXT-vs-CCXT comparison intact and honest: with a single
+      // configured exchange there is no cross-venue pair, and the route's own
+      // `quotes.length >= 2` gate reports "no spread available" rather than
+      // inventing a second venue.
       // CCXT tickers from configured pairs.
       try {
         const { fetchTicker, toCcxtSymbol } = await import("./services/ccxtConnector.mjs")
@@ -4291,21 +4187,16 @@ const creds = await getVenueCredentials()
     const count = Math.min(Math.max(Number(body?.count) || 200, 40), 500)
     try {
       const { computeModelMatrix } = await import("./services/modelMatrix.mjs")
-      const { liveEOData, fetchAssetCandles, ensureWatchingAsset } = await import("./services/liveEO.mjs")
-      const data = liveEOData()
-      const asset = data.assets.find((a) => eoAssetMatches(a, assetId))
+      // D2/AC-005: the liveEO buffer + on-demand fetch are removed with the
+      // venue; the fan-in below is now the only live intraday path.
       let candles = []
       let source = "none"
-      if (asset && asset.periods[timeframe]?.length) {
-        candles = asset.periods[timeframe].slice(-count)
-        source = "live"
-      }
-      if (!candles.length) {
-        await ensureWatchingAsset(assetId).catch(() => null)
-        const result = await withTimeout(fetchAssetCandles(assetId, timeframe, count), 10000).catch(() => ({ ohlc: [], source: null }))
-        if (result.ohlc?.length) {
-          candles = result.ohlc
-          source = result.source || "live"
+      {
+        const { getBestCandles } = await import("./services/marketDataBus.mjs")
+        const fanIn = await getBestCandles(assetId, { timeframe, count }).catch(() => null)
+        if (fanIn?.candles?.length) {
+          candles = fanIn.candles.slice(-count)
+          source = fanIn.source ?? "none"
         }
       }
       if (!candles.length) {
@@ -4484,26 +4375,11 @@ const creds = await getVenueCredentials()
   if (path === "/api/trading/health" && (req.method === "GET" || req.method === "POST")) {
     const autopilot = await import("./services/autopilot.mjs").catch(() => null)
     const result = { ok: true, timestamp: new Date().toISOString() }
-    try {
-      const liveStats = liveEOStats()
-      const lastTickAge = Number(liveStats?.lastSeen) > 0 ? Math.round((Date.now() - Number(liveStats.lastSeen)) / 1000) : null
-      let sessionAge = null
-      try {
-        const creds = await getTradingCredentials()
-        const capturedAt = Date.parse(creds?.expertoptionTokenCapturedAt ?? "")
-        if (Number.isFinite(capturedAt)) sessionAge = Math.max(0, Math.round((Date.now() - capturedAt) / 1000))
-      } catch { /* credentials unreadable — leave sessionAge null */ }
-      result.expertOption = {
-        connected: liveStats?.status === "connected",
-        status: liveStats?.status ?? "idle",
-        viewed: liveStats?.viewed ?? null,
-        lastSeen: Number(liveStats?.lastSeen) > 0 ? new Date(liveStats.lastSeen).toISOString() : null,
-        sessionAge,
-        lastTickAge,
-        stalenessWarning: liveStats?.status === "connected" && lastTickAge != null && lastTickAge > 60,
-        connectorTuned: Boolean(getConnector("expertoption")?.tuned)
-      }
-    } catch { result.expertOption = { connected: false, error: "failed" } }
+    // D2/AC-005: the `result.expertOption` health block is REMOVED. It reported
+    // liveEO transport liveness, the EO connector's tuning, and the EO token's
+    // capture age — all venue state. The route itself is retained: it still
+    // serves the autopilot, prediction, MTF and source-status health, none of
+    // which is EO-specific.
     try {
       if (autopilot) {
         const config = await autopilot.getAutopilotConfig()
@@ -4523,9 +4399,23 @@ const creds = await getVenueCredentials()
     try {
       const { backtestModels } = await import("./services/prediction.mjs")
       const { quickMtfCheck } = await import("./services/multiTimeframe.mjs")
-      const liveData = liveEOData()
-      const firstAsset = liveData?.assets?.[0]
-      const closes = firstAsset?.periods?.[60]?.map((c) => Number(c.close ?? c.c)).filter((v) => Number.isFinite(v) && v > 0) || []
+      // D2/AC-005: the liveEO first-asset buffer is removed with the venue, so
+      // the model backtest and MTF health read from the broker fan-in instead.
+      // With no live buffer the `insufficient candle data` branch is the honest
+      // outcome and is what the note already said.
+      let firstAsset = null
+      let closes = []
+      try {
+        const { getActiveBrokers } = await import("./services/brokers/index.mjs")
+        const live = getActiveBrokers().find((b) => {
+          try { return b.resolveTimeframe(60) === 60 } catch { return false }
+        })
+        if (live) {
+          const rows = await withTimeout(live.getCandles("EURUSD", { timeframe: 60, count: 200 }), 8000).catch(() => [])
+          firstAsset = { name: "EURUSD", periods: { 60: rows ?? [] } }
+          closes = (rows ?? []).map((c) => Number(c.close ?? c.c)).filter((v) => Number.isFinite(v) && v > 0)
+        }
+      } catch { /* no live broker — fall through to the honest empty state */ }
       if (closes.length > 40) {
         const bt = backtestModels(closes, 3, 15)
         result.prediction = {
@@ -5588,14 +5478,14 @@ const BROWSER_ROUTES = {
     writeJson(res, 200, result)
     return true
   },
-  "/api/browser/capture-session": async (req, res, parsed) => {
-    if (!(await requireAuth(req, res))) return true
-    if (req.method !== "POST") return false
-    return browserGuard(res, async () => {
-      const r = await captureExpertOptionSession()
-      return { ...r, token: maskToken(r.token) }
-    })
-  },
+  // D2/AC-005: the `/api/browser/capture-session` route is REMOVED. Its only
+  // body called `captureExpertOptionSession()` — an ExpertOption session-token
+  // capture from the in-app browser. The venue it captured a session for is
+  // gone, so there is nothing left to capture. Reported as product-visible.
+
+  // D2/AC-005: `eoAssetMatches` is removed with its last caller (the indicators
+  // route's liveEO buffer lookup). `assetsEquivalent` is retained — it is
+  // imported and used elsewhere for the non-EO broker matching.
   "/api/browser/automate": async (req, res, parsed) => {
     if (!(await requireAuth(req, res))) return true
     if (req.method !== "POST") return false

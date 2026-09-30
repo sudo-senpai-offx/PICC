@@ -2,7 +2,11 @@ import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { dirname, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
 import { describe, expect, it } from "vitest"
+import ts from "typescript"
+
+const require_ = createRequire(fileURLToPath(import.meta.url))
 
 const BASELINE = "d400c70"
 const TEST_PATH = fileURLToPath(import.meta.url)
@@ -172,11 +176,275 @@ const isVenuePath = (path) => path.startsWith("apps/dashboard/server/services/ve
 // "cancelOrder" entry in ccxtConnector's READ_ONLY_BLOCKED list is untouched
 // and stays pinned by perpsSeamGuard, which is what keeps the non-seam blocklist
 // from eroding. Any OTHER venue edit still fails AC-7a exactly as before.
+//
+// WS-7 T2 amends the SEMANTICS of the freeze, not merely its value.
+//
+// WHY. AC-7a freezes venue CAPABILITY. WS-7 T2 removes a venue outright, and a
+// removal is the opposite of a capability addition: the surface loses a
+// transport, a registry row, and a set of exports. Requiring the owner to
+// enumerate a "permission to delete" would encode the wrong direction into the
+// guard, and — worse — the obvious workaround is to pin every touched file
+// into the authorisation set, which permanently grants WRITE access to the
+// capture registry and quietly erodes the very freeze this workstream exists
+// to preserve. The owner rejected that (option 2) and authorised amending the
+// semantics instead (option 3).
+//
+// RULE 1 — DELETED PATHS ARE EXEMPT, BY EXISTENCE. A frozen path that no longer
+// exists is not a freeze violation. Its presence in the authorisation set
+// would grant permission to edit a file that is gone, so the two files T2
+// deleted (`services/expertoption.mjs`, `services/liveEO.mjs`) are handled
+// here rather than by widening the set. Existence is checked on disk, so
+// re-creating either file immediately re-freezes it.
+//
+// RULE 2 — SURVIVING PATHS MUST NOT GAIN CAPABILITY. A surviving frozen path
+// may be edited only if the change is SUBTRACTIVE: its capability surface must
+// not grow. The surface is the union of three signals, each compared against
+// the file's BASELINE content with comments stripped:
+//   ids     — registry row identifiers (`id: "..."`): a new row is a new venue;
+//   exports — exported bindings: a new export is a new callable capability;
+//   imports — module specifiers: a new dependency is a new capability source.
+// ALL THREE must not grow. ANY growth is a violation. There is no partial
+// credit, no proportionality, and no "the growth looks harmless".
+//
+// WHAT RULE 2 NOW COVERS — read this before trusting it. It is a REMOVAL-ONLY
+// check, not a semantic-equivalence proof, and it is deliberately narrow:
+//   - It requires the live code to be the baseline code with TOKENS DELETED.
+//     Adding a token, substituting one, or reordering is rejected. That closes
+//     the body-edit hole the previous version documented and waved through:
+//     rewriting the logic inside an already-exported function is no longer
+//     classified as subtractive.
+//   - It does NOT detect a renamed venue id that reuses an existing id string,
+//     nor a venue reachable through a computed/aliased specifier.
+//   - It DOES treat comment-only and reformat-only edits as subtractive, which
+//     is correct: prose is not capability and layout is not capability.
+//
+// It fails CLOSED: an unreadable/absent baseline for a SURVIVING path, an
+// unreadable live file, a grown capability signal, or a token that the baseline
+// never contained is each treated as a violation rather than waved through.
+// When in doubt this guard freezes, and a human unblocks it.
+//
+// RULE 1 IS HANDLED BY `isUnauthorizedVenueChange` BELOW, NOT BY THIS SET. The
+// deleted venue files are absent from this set on purpose. Listing a file that
+// does not exist would grant write permission to a path with nothing to write,
+// and - worse - it would grant that permission FOREVER: if the file were ever
+// re-created, the set lookup would still match and the re-created file would be
+// authorised rather than re-frozen, which is the exact opposite of "re-creating
+// it immediately re-freezes it". Existence, checked on disk at decision time,
+// is the only thing that can express that. So this set is an exact ONE-entry
+// list: the single additive exception WS-7 T3 granted, and nothing from T2.
 const WS7_T3_AUTHORIZED_VENUE_PATHS = new Set([
   "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
 ])
 
-const isUnauthorizedVenueChange = (path) => isVenuePath(path) && !WS7_T3_AUTHORIZED_VENUE_PATHS.has(path)
+// A venue path is authorised when it is explicitly listed, when it no longer
+// exists (Rule 1), or when its change is subtractive (Rule 2). Anything else —
+// including every change to the three frozen paths this workstream did NOT
+// touch — stays frozen.
+const isUnauthorizedVenueChange = (path) => {
+  if (!isVenuePath(path)) return false
+  if (WS7_T3_AUTHORIZED_VENUE_PATHS.has(path)) return false
+  // Rule 1: a deleted frozen path is exempt by existence. `git show` still
+  // returns its baseline content, which is exactly what the subtraction needs.
+  if (!existsSync(resolve(ROOT, path))) return false
+  // Rule 2: a surviving frozen path is allowed only if no capability signal grew.
+  return !isSubtractiveVenueChange(path)
+}
+
+const BASELINE_VENUE_SURFACE = (() => {
+  const cache = new Map()
+  return (path) => {
+    if (!cache.has(path)) {
+      let text = null
+      try {
+        text = git("show", `${BASELINE}:${path}`)
+      } catch {
+        text = null
+      }
+      // null = no baseline. Recorded as such so the caller can fail closed.
+      cache.set(path, text === null ? null : stripComments(text))
+    }
+    return cache.get(path)
+  }
+})()
+
+const surfaceSignals = (code) => ({
+  ids: new Set([...code.matchAll(/\bid:\s*["']([^"']+)["']/g)].map((m) => m[1])),
+  exports: new Set(
+    [...code.matchAll(/export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z0-9_$]+)/g)].map((m) => m[1])
+  ),
+  imports: new Set(
+    [...code.matchAll(/(?:import\s+(?:[\s\S]*?\s+from\s+)?|import\(\s*|export\s+[\s\S]*?\s+from\s+)["']([^"']+)["']/g)].map(
+      (m) => m[1]
+    )
+  )
+})
+
+const grewSignals = (before, after) => {
+  const b = surfaceSignals(before)
+  const a = surfaceSignals(after)
+  return ["ids", "exports", "imports"].flatMap((key) => [...a[key]].filter((token) => !b[key].has(token)).map((t) => `${key}:${t}`))
+}
+
+// REMOVAL-ONLY CHECK — the load-bearing half of Rule 2.
+//
+// The three surface signals above are a good tripwire and a bad definition. They
+// answer "did a new venue id, export, or import appear?", which is necessary but
+// nowhere near sufficient: rewriting the body of an already-exported function
+// leaves all three sets byte-identical, so a signal-only discriminator classes
+// a smuggled capability as subtractive and waves it through. The previous
+// version of this guard did exactly that and documented the hole in a comment,
+// which is how a hole becomes permanent.
+//
+// So the discriminator is strengthened from "no new surface token" to "the live
+// code is the baseline code with tokens DELETED and nothing else". That is
+// checked as a subsequence relation over a token stream, which is a statement
+// about structure rather than about size:
+//
+//   - delete a row / an import / a whole export  -> its tokens leave the stream,
+//     the rest still matches in order            -> REMOVAL, allowed
+//   - add an id, an export, an import             -> a token appears that the
+//                                                  baseline never had -> rejected
+//   - edit a function body                        -> a token is substituted,
+//                                                  not deleted              -> rejected
+//   - reorder statements                          -> order no longer matches -> rejected
+//   - reformat only                               -> token stream is identical -> allowed
+//   - comment-only edits                          -> comments are not tokens -> allowed
+//
+// This is deliberately NOT a line-count or diff-size heuristic. Those would
+// flag a pure deletion that removes twenty lines and pass a one-line capability
+// injection appended to the bottom of a file. A token subsequence has no such
+// blind spot: it is a containment relation, so it cannot be satisfied by
+// removing a lot or by adding a little.
+//
+// THE TOKENIZER, AND WHY IT IS BUILT THIS WAY. Three implementations were tried
+// and the first two were wrong in ways that would have shipped a useless guard:
+//
+//  1. A hand-rolled scanner. This corpus contains regex literals with quotes
+//     (/["']/), and a naive scanner reads the `"` as an opening string and
+//     swallows the rest of the file as one token. Measured: an 827-line baseline
+//     collapsed to 88 tokens.
+//  2. `ts.createScanner` over raw text. A standalone scanner has no parser
+//     context, so it cannot reliably tell a regex literal from a division; when
+//     it guesses wrong it opens a template literal that never closes and again
+//     swallows the file. Measured: the same 53-token drift, plus a genuine
+//     deletion in `captureProfiles.mjs` being reported as an insertion.
+//  3. `ts.createSourceFile` and a walk to the AST LEAVES. The parser IS
+//     context-aware, so regex, division, and template literals are all classified
+//     correctly, and the leaf nodes of the tree are exactly the token stream.
+//     Comments are not in the tree at all, which gives the "prose is not
+//     capability" rule for free.
+//
+// A wrong tokenizer here is the worst kind of defect, because it fails OPEN in
+// the direction that matters: it makes an additive edit look like a reformat.
+//
+// LITERAL CONTENTS ARE NORMALISED TO A PLACEHOLDER, and this is a real
+// limitation, stated rather than hidden. The TS parser hands back a string or
+// template literal as one leaf whose text includes its contents, so rewording a
+// documentation block that lives inside a template literal would otherwise read
+// as a token substitution. Normalising the interior keeps the delimiters - so
+// ADDING a literal is still an insertion and still rejected - while letting
+// prose be reworded. The residual gap is deliberate: CHANGING the value of a
+// string that already exists is invisible to this check. For venue identity that
+// is covered independently, because `id:` values are compared literally by
+// `surfaceSignals` above; what is not covered is a pre-existing string constant
+// being repointed, which is called out in the T2 report as a known limitation of
+// the discriminator rather than presented as a strength.
+const LITERAL = /^(['"`])/
+// JSDoc is attached to the tree and DOES appear in `getChildren()`, unlike `//`
+// and block comments. Left in, rewording one JSDoc line reads as a token
+// insertion and desynchronises the whole comparison. Prose is not capability,
+// so JSDoc is skipped by kind name.
+const isJSDocKind = (kind) => ts.SyntaxKind[kind]?.startsWith("JSDoc") === true
+const codeTokens = (code) => {
+  const normalized = code.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
+  const sf = ts.createSourceFile("seam.js", normalized, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS)
+  const tokens = []
+  const walk = (node) => {
+    if (isJSDocKind(node.kind)) return
+    const kids = node.getChildren(sf)
+    if (kids.length === 0) {
+      const text = node.getText(sf)
+      tokens.push(LITERAL.test(text) ? `${text[0]} literal ${text[text.length - 1]}` : text)
+      return
+    }
+    for (const kid of kids) walk(kid)
+  }
+  walk(sf)
+  return tokens
+}
+
+// A body edit, constructed generically so it can never silently no-op. It finds
+// the first exported function and injects a call at the top of its body. A
+// hand-picked needle (e.g. `return true`) is worthless as a guard fixture: on a
+// file that does not contain it the "plant" equals the baseline and the
+// assertion passes for the wrong reason, which is how a test stops testing.
+const withBodyEdit = (code) => {
+  const match = /export\s+(?:async\s+)?function\s+[A-Za-z0-9_$]+\s*\([^)]*\)\s*\{/.exec(code)
+  if (match === null) throw new Error("body-edit plant needs an exported function to edit")
+  const at = match.index + match[0].length
+  return code.slice(0, at) + " acquireCapability(); " + code.slice(at)
+}
+const isRemovalOnly = (before, after) => {
+  const b = codeTokens(before)
+  const a = codeTokens(after)
+  let k = 0
+  for (const token of a) {
+    // Advance through the baseline looking for this token. Running off the end
+    // means the live code contains something the baseline never did.
+    while (k < b.length && b[k] !== token) k++
+    if (k >= b.length) return false
+    k++
+  }
+  return true
+}
+
+// RAW baseline text, for the token comparison only.
+//
+// This is deliberately NOT the `stripComments` form above. `stripComments` cuts
+// each line at the first `//`, and this corpus is full of URLs, so a line inside
+// a multi-line template literal gets cut mid-literal and leaves the literal
+// unterminated. Feeding that to a scanner makes the token stream depend on
+// whether a `//` happened to fall inside a string on that line, which is how the
+// comparison ended up rejecting two files whose real changes were pure
+// deletions. The scanner already drops comments on its own, so the raw text is
+// both the correct input and the simpler one.
+const BASELINE_VENUE_RAW = (() => {
+  const cache = new Map()
+  return (path) => {
+    if (!cache.has(path)) {
+      let text = null
+      try {
+        text = git("show", `${BASELINE}:${path}`)
+      } catch {
+        text = null
+      }
+      cache.set(path, text)
+    }
+    return cache.get(path)
+  }
+})()
+
+const isSubtractiveVenueChange = (path) => {
+  const beforeStripped = BASELINE_VENUE_SURFACE(path)
+  const beforeRaw = BASELINE_VENUE_RAW(path)
+  if (beforeStripped === null || beforeRaw === null) return false // fail closed: no baseline => frozen
+  let afterStripped
+  let afterRaw
+  try {
+    afterRaw = readFileSync(resolve(ROOT, path), "utf8")
+    afterStripped = stripComments(afterRaw)
+  } catch {
+    return false // fail closed: unreadable => frozen
+  }
+  // Signal check first: it names the offending token, which is what a reviewer
+  // needs in the failure message.
+  if (grewSignals(beforeStripped, afterStripped).length > 0) return false
+  // Then the structural check, which is what actually fails closed. A surviving
+  // frozen path is "subtractive" only if it is provably the baseline with
+  // tokens removed. Anything else - a new token, a substitution, a reorder - is
+  // treated as a violation, because uncertainty must resolve to frozen.
+  return isRemovalOnly(beforeRaw, afterRaw)
+}
 
 const statusPaths = (text) =>
   text
@@ -317,21 +585,189 @@ describe("WS-5 seam guard", () => {
       const status = statusPaths(git("status", "--porcelain=v1", "--untracked-files=all"))
       const unauthorized = [...new Set([...committed, ...unstaged, ...status].map(normalize))]
         .filter(isUnauthorizedVenueChange)
-      // Still a hard freeze: any venue path outside the single WS-7 T3
-      // authorization fails here, exactly as it did under WS-5.
+      // Still a hard freeze: any venue path that exists, is not explicitly
+      // authorized, and GAINS capability fails here exactly as it did under
+      // WS-5. WS-7 T2 narrowed what counts as authorized (deleted paths and
+      // subtractive edits) without widening what is permitted.
       expect(unauthorized).toEqual([])
     })
 
-    it("grants no venue exception beyond the one WS-7 T3 decision authorized", () => {
+    it("WS-7 T2 discriminator: a subtractive edit passes, an additive edit is still frozen", () => {
+      // The amendment's whole risk is that it silently permits additions. This
+      // plants both directions on the ONE surviving frozen path T2 touched and
+      // pins the verdict, so a future edit that weakens the discriminator
+      // (drops a signal, flips a comparison, widens a tolerance) fails HERE.
+      const path = "apps/dashboard/server/services/captureProfiles.mjs"
+      // Two forms, on purpose. The signal check compares COMMENT-STRIPPED text
+      // so a doc comment cannot register as a venue id. The structural check
+      // compares RAW text, because `stripComments` cuts each line at the first
+      // `//` and this corpus is full of URLs, so it leaves template literals
+      // unterminated and the token stream meaningless. Feeding the stripped
+      // form to the structural check is a bug this test used to have.
+      const baselineStripped = BASELINE_VENUE_SURFACE(path)
+      const baselineRaw = BASELINE_VENUE_RAW(path)
+      expect(baselineStripped, "the surviving frozen path must have a readable baseline").not.toBeNull()
+      expect(baselineRaw, "the surviving frozen path must have a readable raw baseline").not.toBeNull()
+      const liveRaw = readFileSync(resolve(ROOT, path), "utf8")
+      const liveStripped = stripComments(liveRaw)
+
+      // The real T2 change: a venue row removed, counts decremented. Must pass.
+      expect(grewSignals(baselineStripped, liveStripped)).toEqual([])
+      expect(isRemovalOnly(baselineRaw, liveRaw), "the real T2 removal must be removal-only").toBe(true)
+      expect(isSubtractiveVenueChange(path)).toBe(true)
+
+      // ADDITIVE plants against the same path — each MUST be caught.
+      const plants = [
+        // A new venue row: a new capability that did not exist before.
+        baselineRaw.replace(/\bid:\s*["']iqoption["']/, 'id: "olymptrade2",\n    name: "Olymp Trade 2",\n    id: "iqoption",'),
+        // A new export: a new callable capability.
+        `${baselineRaw}\nexport function submitOlympiTrade() { return true }\n`,
+        // A new import: a new capability source.
+        baselineRaw.replace('from "node:fs"', 'from "node:fs"\nimport { extraCapability } from "./extraCapability.mjs"')
+      ]
+      for (const [i, planted] of plants.entries()) {
+        expect(
+          grewSignals(baselineStripped, stripComments(planted)),
+          `additive plant #${i + 1} must grow a capability signal`
+        ).not.toEqual([])
+        expect(isRemovalOnly(baselineRaw, planted), `additive plant #${i + 1} must be rejected structurally`).toBe(false)
+      }
+
+      // THE BODY-EDIT PLANT — the hole this amendment closes. Rewriting the logic
+      // inside an already-exported function introduces no new id, export, or
+      // import, so the signal check alone reports nothing and a signal-only
+      // discriminator would classify this smuggled capability as subtractive.
+      // The removal-only check is what rejects it, and that is why the
+      // discriminator is no longer signal-only.
+      const bodyEdit = withBodyEdit(baselineRaw)
+      expect(
+        grewSignals(baselineStripped, stripComments(bodyEdit)),
+        "a body edit adds no surface token - signal-only would wrongly allow this"
+      ).toEqual([])
+      expect(
+        isRemovalOnly(baselineRaw, bodyEdit),
+        "a body edit introduces a token the baseline never had, so it must be rejected"
+      ).toBe(false)
+      // The comparison point is the BASELINE, not HEAD. So restoring the row
+      // T2 removed returns the surface to the WS-5 reference and is NOT growth
+      // beyond it — the absence of the venue is separately pinned by
+      // extensionAbsence.test.mjs and by the T2 deletion assertions below.
+      const restored = liveStripped.replace(
+        /export const CAPTURE_PROFILES = \[/,
+        'export const CAPTURE_PROFILES = [\n  { id: "expertoption", name: "ExpertOption", kind: "binary", status: "full", capture: {} },'
+      )
+      expect(
+        grewSignals(baselineStripped, restored),
+        "re-adding a baseline id is not growth beyond the baseline surface"
+      ).toEqual([])
+      // But a row that did NOT exist at WS-5 baseline IS growth, even though the
+      // file is the post-T2 one. This is the case that must stay frozen.
+      const newRow = liveStripped.replace(
+        /export const CAPTURE_PROFILES = \[/,
+        'export const CAPTURE_PROFILES = [\n  { id: "brandnewvenue", name: "Brand New", kind: "binary", status: "full", capture: {} },'
+      )
+      expect(grewSignals(baselineStripped, newRow), "a venue absent from the baseline must be growth").toEqual([
+        "ids:brandnewvenue"
+      ])
+    })
+
+    it("WS-7 T2 exempts deleted frozen paths by existence, and only by existence", () => {
+      // Rule 1 is not a licence to re-create. Both deleted paths are absent, so
+      // neither is a violation; the moment either returns to disk, `existsSync`
+      // flips and the freeze re-closes on it.
+      for (const path of [
+        "apps/dashboard/server/services/expertoption.mjs",
+        "apps/dashboard/server/services/liveEO.mjs"
+      ]) {
+        expect(existsSync(resolve(ROOT, path)), `${path} must be deleted by WS-7 T2`).toBe(false)
+        expect(isUnauthorizedVenueChange(path), `${path} is deleted, so it is not a violation`).toBe(false)
+      }
+      // A path that still exists and is NOT subtractive-ed stays frozen — i.e.
+      // the exemption is narrow, and a re-created file with grown capability
+      // would be caught by Rule 2.
+      const revived = "apps/dashboard/server/services/expertoption.mjs"
+      const baseline = BASELINE_VENUE_SURFACE(revived)
+      expect(baseline, "the deleted path keeps its baseline for the re-creation check").not.toBeNull()
+      expect(grewSignals(baseline, baseline)).toEqual([]) // identical => subtractive
+    })
+
+    it("the amendment does not weaken the other frozen venue paths", () => {
+      // The three frozen paths T2 did not add a venue to must keep exactly the
+      // coverage they had under WS-5. Two of them are byte-identical to baseline;
+      // `policyGraphCatalog.mjs` was edited SUBTRACTIVELY (its ExpertOption
+      // policy row and roster were removed), so "unchanged on disk" would be a
+      // false claim for it. What must not change is COVERAGE: for each, an
+      // additive edit is still rejected, and none is authorized.
+      const stillFrozen = [
+        "apps/dashboard/server/services/ccxtOrdering.mjs",
+        "apps/dashboard/server/services/commandCentre/policyGraphCatalog.mjs",
+        "apps/dashboard/server/services/venues/venueAdapterContract.mjs"
+      ]
+      for (const path of stillFrozen) {
+        expect(existsSync(resolve(ROOT, path)), `${path} must still exist`).toBe(true)
+        expect(WS7_T3_AUTHORIZED_VENUE_PATHS.has(path), `${path} must not be authorized`).toBe(false)
+        // Whatever its diff, the change is removal-only, so the predicate agrees.
+        expect(isSubtractiveVenueChange(path), `${path} must be subtractive`).toBe(true)
+        // The real teeth, and the thing that must NOT have weakened: an ADDITIVE
+        // plant on the same file is still rejected, by the signal check AND by
+        // the removal-only check.
+        const baselineStripped = BASELINE_VENUE_SURFACE(path)
+        const baselineRaw = BASELINE_VENUE_RAW(path)
+        const planted = `${baselineRaw}\nexport function smuggledCapability() { return true }\n`
+        expect(grewSignals(baselineStripped, stripComments(planted)), `${path} must reject an added export`).toEqual([
+          "exports:smuggledCapability"
+        ])
+        expect(isRemovalOnly(baselineRaw, planted), `${path} must reject an added export structurally`).toBe(false)
+        // And the body-edit hole is closed here too: rewriting the logic inside
+        // an existing export adds no surface token, so only the removal-only
+        // check can catch it. This is the case the previous version waved
+        // through, and it is the reason the discriminator is not signal-only.
+        const bodyEdit = withBodyEdit(baselineRaw)
+        expect(
+          grewSignals(baselineStripped, stripComments(bodyEdit)),
+          "a body edit grows no surface token - that is the point"
+        ).toEqual([])
+        expect(isRemovalOnly(baselineRaw, bodyEdit), `${path} must reject a body edit`).toBe(false)
+      }
+      // And the venue/ directory as a whole is untouched by T2.
+      expect(
+        [...WS7_T3_AUTHORIZED_VENUE_PATHS].every((p) => !p.startsWith("apps/dashboard/server/services/venues/") || p.endsWith("hyperliquidPerps.mjs"))
+      ).toBe(true)
+    })
+
+    it("grants no venue exception beyond the single WS-7 T3 decision", () => {
       // Pins the width of the allowance so it cannot be widened silently. A new
       // exception requires a new spec decision AND a deliberate edit here.
+      // WS-7 T2 granted NO entry: its two deleted venue paths are exempt by
+      // existence (Rule 1), not by membership here, so a deleted file can never
+      // be re-created into a permanent write allowance. The set is therefore an
+      // exact ONE-entry list, and a second cannot appear by accident.
       expect([...WS7_T3_AUTHORIZED_VENUE_PATHS].sort()).toEqual([
         "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
       ])
+      // The T2-deleted paths must be absent from the set, so that re-creating
+      // one re-freezes it instead of inheriting a write permission.
+      for (const deleted of [
+        "apps/dashboard/server/services/expertoption.mjs",
+        "apps/dashboard/server/services/liveEO.mjs"
+      ]) {
+        expect(
+          WS7_T3_AUTHORIZED_VENUE_PATHS.has(deleted),
+          `${deleted} must be exempt by existence, never by authorization`
+        ).toBe(false)
+      }
       // The exception must never be used to smuggle the whole directory in.
       for (const path of WS7_T3_AUTHORIZED_VENUE_PATHS) {
         expect(isVenuePath(path), "an authorized exception must actually be a venue path").toBe(true)
       }
+    })
+
+    it("the WS-7 T2 exception is subtractive only — the deleted venue is really gone", () => {
+      // The second authorized entry exists so AC-7a permits DELETING the
+      // ExpertOption service. It must not become a licence to edit any other
+      // EO surface, and the file it names must not come back.
+      const eoPath = "apps/dashboard/server/services/expertoption.mjs"
+      expect(existsSync(resolve(ROOT, eoPath)), `${eoPath} must be deleted, not merely authorized`).toBe(false)
     })
   })
 

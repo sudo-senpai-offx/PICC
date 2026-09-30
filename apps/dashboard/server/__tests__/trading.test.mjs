@@ -106,11 +106,25 @@ describe("paper ledger", () => {
 
 describe("credentials", () => {
   it("round-trips credentials", async () => {
-    await mod.saveCredentials({ expertoptionToken: "tok-123", riskPerTradePct: 5 })
+    // D2/AC-005: `expertoptionToken` is no longer a credential field. The
+    // round-trip guarantee itself is unchanged and still asserted — it now
+    // covers the surviving fields.
+    await mod.saveCredentials({ riskPerTradePct: 5 })
     const creds = await mod.getCredentials()
-    expect(creds.expertoptionToken).toBe("tok-123")
     expect(creds.riskPerTradePct).toBe(5)
     expect(creds.paperStartingBalance).toBe(10000)
+  })
+
+  it("does NOT persist an expertoptionToken, even if a caller still sends one (D2)", () => {
+    // This is the new, stronger guarantee: a surviving caller cannot re-persist
+    // the removed venue's credential. Before D2 the field round-tripped; now it
+    // is inert, so a stale client cannot resurrect it.
+    return (async () => {
+      await mod.saveCredentials({ expertoptionToken: "tok-should-not-persist", riskPerTradePct: 5 })
+      const creds = await mod.getCredentials()
+      expect(creds.expertoptionToken).toBeUndefined()
+      expect(creds.riskPerTradePct).toBe(5)
+    })()
   })
 
   it("clamps risk and balance to sane ranges", async () => {
@@ -120,13 +134,12 @@ describe("credentials", () => {
     expect(creds.paperStartingBalance).toBe(100)
   })
 
-  it("keeps the saved token when a blank token is submitted", async () => {
-    await mod.saveCredentials({ expertoptionToken: "tok-abc" })
-    await mod.saveCredentials({ riskPerTradePct: 5 })
-    const creds = await mod.getCredentials()
-    expect(creds.expertoptionToken).toBe("tok-abc")
-    expect(creds.riskPerTradePct).toBe(5)
-  })
+  // D2/AC-005: "keeps the saved token when a blank token is submitted" is
+  // REMOVED. Its subject was the `expertoptionToken` "blank means keep the saved
+  // one" rule in `sanitizePatch`, and that whole branch is gone with the field —
+  // there is no saved EO token to keep. The per-venue storage-scan token store
+  // below keeps its own "blank means keep" test, so that guarantee is still
+  // covered for the surface that still has tokens.
 })
 
 describe("venue tokens (T11 storage-scan captures)", () => {
@@ -157,10 +170,14 @@ describe("venue tokens (T11 storage-scan captures)", () => {
 })
 
 describe("status + signals", () => {
-  it("reports paper mode and expertoption configuration", async () => {
+  it("reports paper mode and carries no expertOption block (D2)", async () => {
     const status = await mod.tradingStatus()
     expect(status.mode).toBe("paper")
-    expect(status.expertOption.configured).toBe(false)
+    // D2/AC-005: the `expertOption` status block is REMOVED from tradingStatus.
+    // Asserting its ABSENCE is the new guarantee — AC-005 prohibits leaving the
+    // venue present-but-disabled, and a lingering `expertOption: {configured:false}`
+    // is exactly that shape.
+    expect(status.expertOption).toBeUndefined()
     expect(status.paper.starting).toBe(10000)
   })
 

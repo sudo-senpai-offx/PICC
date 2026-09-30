@@ -1,18 +1,22 @@
-// PICC Trading Suite — ExpertOption demo trading + autopilot.
+// PICC Trading Suite — advisory autopilot.
 //
-// EVERYTHING here is DEMO-ONLY. The autopilot refuses to run unless the
-// ExpertOption account is configured as a demo account (`expertoptionDemo: true`)
-// and a session token is present. Every decision and settlement is written to
-// the local demo-deals file and the agent log so the experiment is fully
-// auditable. This is NOT investment advice and nothing here risks real money.
+// D2/AC-005 removed the ExpertOption venue (WS-7 T2). The autopilot's execution
+// session is gone: `ensureSession()` was called at the old `:1191` but defined
+// NOWHERE in the server tree, so it threw and the throw was swallowed. With
+// `expertoption.mjs` and `liveEO.mjs` deleted, there is no venue left to drive.
+//
+// What is RETAINED here is the venue-agnostic decision surface, which never
+// needed a broker: the pure `decideAutopilot` contract, the config, the loss and
+// regime breakers, the per-asset scope, the decision log, and the demo-deals /
+// analytics ledger. None of it places an order. This is NOT investment advice
+// and nothing here risks real money.
 
 import { mkdirSync, unlinkSync } from "node:fs"
 import { readFile, writeFile, rename } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
-import { connectTradingSession, candlesFrom } from "./expertoption.mjs"
-import { getCredentials, recordSignal, resolveSignal, signalAccuracy } from "./trading.mjs"
+import { recordSignal, resolveSignal, signalAccuracy } from "./trading.mjs"
 import { predictDirection } from "./prediction.mjs"
 import { proAnalyzeCandles } from "./proanalysis.mjs"
 import { metricsFrom } from "./analytics.mjs"
@@ -932,22 +936,13 @@ async function aiConsents(pred) {
 let tickInFlight = false
 
 export async function getSessionLive() {
-  // Leg 0: an authenticated gateway session IS a live session — the broker
-  // validated the token at connect and keeps the socket alive.
-  try {
-    if (state.session && state.session.connected) {
-      return { live: true, reason: "authenticated gateway session active", url: null, via: "gateway-session" }
-    }
-  } catch { /* ignore */ }
-  try {
-    const { checkExpertOptionSessionLive } = await import("./browserStudio.mjs")
-    const studioCheck = checkExpertOptionSessionLive()
-    if (studioCheck.live) return { ...studioCheck, via: "studio" }
-    var studioReason = studioCheck.reason
-  } catch { var studioReason = "studio browser unavailable" }
-  // The studio browser is the only browser leg — no further liveness source
-  // exists here.
-  return { live: false, reason: studioReason, url: null, via: "none" }
+  // D2/AC-005: both liveness legs are removed with the venue. Leg 0 read
+  // `state.session` (the EO gateway session — only ever populated by the removed
+  // execution path, so always null) and leg 1 called
+  // `checkExpertOptionSessionLive()` (an ExpertOption app-tab check). There is no
+  // venue session left to probe, so the honest answer is a permanent
+  // not-live verdict naming the reason — never a fabricated "live".
+  return { live: false, reason: "no execution venue session (ExpertOption removed)", url: null, via: "none" }
 }
 
 /** Cached liveness for status endpoints — refreshed by the scheduler job. */
@@ -972,32 +967,22 @@ export function refreshSessionLiveCache(verdict) {
  * maxConcurrent is enforced across ALL assets combined (open-deal budget).
  */
 export async function demoStatus() {
-  const creds = await getCredentials()
   const config = await getAutopilotConfig()
   const file = await readJSON(DEALS_FILE, { deals: [] })
-  const open = state.session && state.session.connected ? state.session.deals() : []
-  let balance = null
-  let currency = "USD"
-  if (state.session && state.session.connected) {
-    try {
-      const b = await state.session.balance()
-      balance = b.balance
-      currency = b.currency
-    } catch {
-      /* status stays best-effort */
-    }
-  }
+  // D2/AC-005: the EO session reads are removed. `state.session` was only ever
+  // populated by the removed execution path, so it was always null and the
+  // balance/openDeals reads below it could never fire. The historical settled
+  // ledger (`DEALS_FILE`) is RETAINED and still served: it is a local record of
+  // past demo outcomes, not a connection to the removed venue.
   return {
     ok: true,
-    configured: Boolean(creds.expertoptionToken),
-    demo: creds.expertoptionDemo,
-    connected: Boolean(state.session && state.session.connected),
+    connected: false,
     sessionLive: state.sessionLive,
     sessionLiveReason: state.sessionLiveReason,
     sessionError: state.sessionError,
-    balance,
-    currency,
-    openDeals: open.map((d) => ({ ...d })),
+    balance: null,
+    currency: "USD",
+    openDeals: [],
     settled: file.deals.slice(0, 20),
     todayPnl: round2(await todayPnl()),
     todayTrades: await todayTradeCount(),
@@ -1079,13 +1064,12 @@ export async function tradingReadiness() {
   }
 
   // Breakeven vs realized, using the payout actually offered.
+  //
+  // D2/AC-005: the `expertoptionDemo` credential read is removed with the venue
+  // (the field no longer exists, and PICC is advisory-only regardless of it), so
+  // the "demo mode is OFF" blocker is deleted rather than left reading a field
+  // that is always undefined — which would have made it fire unconditionally.
   try {
-    const creds = await getCredentials()
-    facts.demoMode = Boolean(creds.expertoptionDemo)
-    if (!creds.expertoptionDemo) {
-      blockers.push("demo mode is OFF in credentials — this report is only meaningful in demo mode")
-    }
-    void creds
     const dealsFile = await readJSON(DEALS_FILE, { deals: [] })
     const withPayout = (dealsFile.deals || []).find((d) => d.payout != null)
     const payoutPct = Number(withPayout?.payout) || 82
@@ -1174,137 +1158,74 @@ export async function whyAutopilot({ assetId } = {}) {
 
   note("enabled", config.enabled, config.enabled ? null : "autopilot disabled")
 
-  const creds = await getCredentials()
-  note("token", Boolean(creds.expertoptionToken), creds.expertoptionToken ? null : "no token configured")
-  note("demo-only", Boolean(creds.expertoptionDemo), creds.expertoptionDemo ? null : "demo mode disabled")
-  if (!config.enabled || !creds.expertoptionToken || !creds.expertoptionDemo) {
-    return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "precondition failed" }
+  if (!config.enabled) {
+    // Same refusal SHAPE as the removal return below, so a consumer can read
+    // `direction`/`confidence` without branching on which gate refused.
+    return {
+      ok: true,
+      dryRun: true,
+      wouldTrade: false,
+      gates,
+      reason: "precondition failed",
+      direction: null,
+      confidence: null,
+      engine: "none",
+      assetId: config.assetId,
+      balance: null,
+      openDeals: 0,
+      todayTrades: 0,
+      todayPnl: 0,
+      durationSec: config.duration,
+      signalNote: null
+    }
   }
 
-  // Liveness (read-only cache refresh is fine here).
-  const liveVerdict = await getSessionLive()
-  refreshSessionLiveCache(liveVerdict)
-  note("liveness", liveVerdict.live, `${liveVerdict.via}: ${liveVerdict.reason}`)
-
-  let balance = 0
-  try {
-    const session = await ensureSession()
-    balance = (await session.balance()).balance ?? 0
-    note("session", true, `balance ${balance}`)
-    var sessionRef = session
-  } catch (err) {
-    note("session", false, `balance fetch failed: ${err?.message ?? err}`)
-    return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "session unreachable" }
-  }
-
-  let raw = null
-  try {
-    raw = await sessionRef.candles(config.assetId, config.timeframe, config.count)
-  } catch (err) {
-    note("candles", false, `candle fetch failed: ${err?.message ?? err}`)
-    return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "candle fetch failed" }
-  }
-  const { closes, ohlc } = candlesFrom(raw)
-  note("candles", closes.length >= 30, `${closes.length} bars`)
-  if (closes.length < 30) return { ok: true, dryRun: true, wouldTrade: false, gates, reason: "not enough candles" }
-
-  // Freshness mirror of the tick guard.
-  const newestCandleSec = Number(ohlc[ohlc.length - 1]?.time)
-  const tfSec = Math.max(1, Math.round(Number(config.timeframe) || 60))
-  let fresh = true
-  if (Number.isFinite(newestCandleSec) && newestCandleSec > 1_000_000_000 && Number(config.maxCandleAgeSec) > 0) {
-    fresh = Math.floor(Date.now() / 1000) <= newestCandleSec + tfSec + Number(config.maxCandleAgeSec)
-  }
-  note("freshness", fresh, fresh ? null : "candle data stale")
-
-  const pred = predictDirection(closes, 3, { maxWindows: 200 })
-  note("signal", Boolean(pred.direction && pred.direction !== "flat"), `${pred.direction ?? "flat"} @ ${pred.confidence ?? "?"}%`)
-
-  let pro = null
-  if (config.proGate) {
-    try {
-      pro = proAnalyzeCandles({ candles: ohlc, symbol: config.assetId, timeframe: `${config.timeframe}s`, horizonDays: 3 })
-      if (!pro.ok) pro = null
-    } catch { pro = null }
-  }
-
-  const pnl = await todayPnl()
-  const todayTrades = await todayTradeCount()
-
-  // Breakers evaluated WITHOUT mutating their latch state (pure evaluation).
-  const regimeNow = regimeStatus()
-  note(
-    "regime-breaker",
-    !(config.regimeShiftPause && regimeNow.paused),
-    regimeNow.paused ? `${regimeNow.stable} -> ${regimeNow.candidate} pending stabilization` : null
-  )
-  let lossSignals = []
-  try {
-    const acc = await signalAccuracy()
-    lossSignals = Array.isArray(acc?.recent) ? acc.recent : []
-  } catch { /* treat as empty */ }
-  const lossEval = evaluateLossBreaker(lossSignals, { limit: config.consecutiveLossLimit, windowMs: config.consecutiveLossWindowMs })
-  const lossBlocked = lossEval.tripped || breakers.lossTrippedUntil > Date.now()
-  note("loss-breaker", !lossBlocked, lossBlocked ? `streak ${lossEval.streak}/${config.consecutiveLossLimit}` : null)
-
-  const aiVeto = config.aiGate ? !(await aiConsents(pred)) : false
-  note("ai-gate", !aiVeto, config.aiGate ? (aiVeto ? "AI vetoed the signal" : "AI consents") : "off")
-
-  let mtf = null
-  if (config.mtfGate !== false) {
-    try {
-      const eoData = getBrokerData()
-      const asset = (eoData.assets || []).find((a) => a.id === config.assetId)
-      if (asset) {
-        const dir = pred.direction === "down" ? -1 : pred.direction === "up" ? 1 : 0
-        mtf = quickMtfCheck(asset, dir)
-      }
-    } catch { /* skip */ }
-  }
-  note("mtf-gate", true, mtf ? `agree ${mtf.agree}/${mtf.total}` : "no MTF data (skipped)")
-
-  let sent = null
-  if (config.sentimentGate) {
-    try {
-      const { getSentiment } = await import("./sentimentEngine.mjs")
-      sent = await getSentiment(config.assetId)
-    } catch { /* skip */ }
-  }
-
-  const decision = decideAutopilot({
-    config,
-    pred,
-    pro,
-    mtf,
-    sentiment: sent,
-    openCount: sessionRef.deals().length,
-    lastEntryAt: config.lastEntryAt || 0,
-    now: Date.now(),
-    dailyPnl: pnl,
-    dayStartBalance: config.dayStartBalance,
-    todayTrades,
-    aiVeto
-  })
-
+  // D2/AC-007: the `ensureSession()` call site is REMOVED, not silenced.
+  //
+  // `ensureSession` was defined NOWHERE in the server tree, so this call threw a
+  // ReferenceError on every invocation and the surrounding try/catch converted
+  // that into a silent "session unreachable" no-op — exactly the pattern AC-007
+  // prohibits surviving. Every downstream statement in this function depended on
+  // `sessionRef` (balance, candles, open deals), and the candle read also went
+  // through `candlesFrom` from the deleted expertoption.mjs, so there is no
+  // honest remainder to keep: the dry-run evaluator's entire input path was the
+  // ExpertOption session.
+  //
+  // The export itself is RETAINED because it is a live public surface with
+  // non-EO callers — `handlers.mjs` (`/api/trading/autopilot/why`) and
+  // `src/pages/ministry/AutopilotRoom.tsx:118` both consume it. It now returns
+  // the same honest refusal shape it already used for its other preconditions
+  // (`ok/dryRun/wouldTrade:false` + a stated reason), never a fabricated verdict.
+  // This is reported as a product-visible change: the "why" panel can no longer
+  // explain a decision, because the decision inputs no longer exist.
+  note("venue-removed", false, "ExpertOption removed (WS-7 T2 / D2); no execution session remains to explain")
   return {
     ok: true,
     dryRun: true,
-    wouldTrade: Boolean(decision.trade),
-    reason: decision.trade ? decision.reason : decision.reason,
-    direction: decision.direction ?? null,
-    confidence: decision.confidence ?? null,
-    // F-08: which brain produced the direction behind this decision
-    engine: pred?.engine ?? "8-model-classic",
+    wouldTrade: false,
+    gates,
+    reason: "execution venue removed",
+    direction: null,
+    confidence: null,
+    engine: "none",
     assetId: config.assetId,
-    balance,
-    openDeals: sessionRef.deals().length,
-    todayTrades,
-    todayPnl: round2(pnl),
+    balance: null,
+    openDeals: 0,
+    todayTrades: 0,
+    todayPnl: 0,
     durationSec: config.duration,
-    signalNote: pred.note ?? null,
-    gates
+    signalNote: null
   }
 }
+
+// D2/AC-007 (continued): the rest of the old `whyAutopilot` body — the
+// freshness mirror, `predictDirection`, the pro/regime/loss/AI/MTF/sentiment
+// gates and the `decideAutopilot` call — is DELETED, not left as unreachable
+// code. Every one of those steps consumed `closes`/`ohlc`/`pred`/`sessionRef`,
+// all derived from the ExpertOption session `ensureSession()` could never
+// return. `decideAutopilot` itself is UNCHANGED and still exported: it is a
+// pure decision contract with direct coverage (autopilot.test.mjs,
+// decisionEngine.test.mjs) and needs no venue.
 
 // ---------------------------------------------------------------------
 // Demo analytics + deal history

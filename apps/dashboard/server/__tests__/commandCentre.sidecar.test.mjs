@@ -16,7 +16,17 @@ import { templateForSite } from "../services/commandCentre/policyGraphCatalog.mj
 import { dayKeyOf } from "../services/u4faRisk.mjs"
 
 const ccxt = () => templateForSite("trading:ccxt")
-const expertoption = () => templateForSite("expertoption")
+/** D2/AC-005: the demoOnly/envelope-null template WAS the removed
+ * `expertoption` row. The sidecar still guards both behaviours, so they are
+ * pinned through a synthetic template — the shipped catalog now has only
+ * sanctioned rows, none of which are demo-only. */
+const demoOnly = () => ({
+  ...ccxt(),
+  site: "test:demo-only",
+  automationPermission: "forbidden",
+  demoOnly: true,
+  envelope: { mode: "demo", maxExposureUsd: null, maxConcurrent: 1, maxDailyLossPct: 5 }
+})
 /** The gray truth-table row left the shipped catalog with the bandwidth suite;
  * the sidecar still enforces gray venues — pinned via a synthetic template
  * (gray = no standing opt-in ceiling, no capital-exposure envelope numbers). */
@@ -91,10 +101,10 @@ describe("Command Centre — Safety Sidecar: allow path", () => {
     expect(r.reason).toContain("gate passed")
   })
 
-  test("demo execution passes on a demoOnly template (expertoption surface)", () => {
+  test("demo execution passes on a demoOnly template (synthetic surface)", () => {
     const r = evaluateGate({
-      template: expertoption(),
-      proposal: greenProposal({ action: "eo:demo-trade", live: false }),
+      template: demoOnly(),
+      proposal: greenProposal({ action: "demo-trade", live: false }),
       state: greenState(),
       audit: auditCollector()
     })
@@ -103,13 +113,17 @@ describe("Command Centre — Safety Sidecar: allow path", () => {
 
   test("envelope ceiling is the site's own template (null = n/a fields never block)", () => {
     const r = evaluateGate({
-      template: expertoption(),
-      proposal: greenProposal({ action: "eo:demo-trade", live: false, exposureUsd: 999 }),
+      template: demoOnly(),
+      proposal: greenProposal({ action: "demo-trade", live: false, exposureUsd: 999 }),
       state: greenState({ concurrentUnits: 0 }),
       audit: auditCollector()
     })
-    // expertoption envelope: maxExposureUsd null (demo credits) — 999 passes, no fabricated cap
+    // demoOnly envelope: maxExposureUsd null (demo credits) — 999 passes, no fabricated cap
     expect(r.allow).toBe(true)
+  })
+
+  test("D2/AC-005: the removed venue has no row, so the sidecar never evaluates it", () => {
+    expect(templateForSite("expertoption")).toBeUndefined()
   })
 })
 
@@ -190,7 +204,7 @@ describe("Command Centre — Safety Sidecar: each gate in order", () => {
   })
 
   test("forbidden venue live action (5C)", () => {
-    const r = evaluateGate({ template: expertoption(), proposal: greenProposal(), state: greenState() })
+    const r = evaluateGate({ template: demoOnly(), proposal: greenProposal(), state: greenState() })
     expect(r.allow).toBe(false)
     expect(r.blockedBy).toBe("toS-survival")
   })
@@ -472,8 +486,8 @@ describe("Command Centre — Safety Sidecar: execution power (slice 5 proposals/
 
   test("forbidden venue + liveDemo on a demoOnly template passes (the recorded demo exception)", () => {
     const r = evaluateGate({
-      template: expertoption(),
-      proposal: greenProposal({ action: "eo:demo-trade", power: "liveDemo" }),
+      template: demoOnly(),
+      proposal: greenProposal({ action: "demo-trade", power: "liveDemo" }),
       state: greenState({ optIn: true })
     })
     expect(r.allow).toBe(true)
@@ -481,8 +495,8 @@ describe("Command Centre — Safety Sidecar: execution power (slice 5 proposals/
 
   test("forbidden venue + proposals on a demoOnly template passes (demo proposals are the demo surface)", () => {
     const r = evaluateGate({
-      template: expertoption(),
-      proposal: greenProposal({ action: "eo:demo-trade", power: "proposals", consentBy: "usr_demo_01" }),
+      template: demoOnly(),
+      proposal: greenProposal({ action: "demo-trade", power: "proposals", consentBy: "usr_demo_01" }),
       state: greenState({ optIn: false })
     })
     expect(r.allow).toBe(true)
@@ -490,8 +504,8 @@ describe("Command Centre — Safety Sidecar: execution power (slice 5 proposals/
 
   test("forbidden venue + live power is denied (5C truth table)", () => {
     const r = evaluateGate({
-      template: expertoption(),
-      proposal: greenProposal({ action: "eo:live-trade", power: "live" }),
+      template: demoOnly(),
+      proposal: greenProposal({ action: "live-trade", power: "live" }),
       state: greenState({ optIn: true })
     })
     expect(r.allow).toBe(false)

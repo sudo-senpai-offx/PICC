@@ -21,9 +21,16 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
-// The ten wired suite modules (B-SPEC D1/D2/D3): every read that can drive a
+// The nine wired suite modules (B-SPEC D1/D2/D3): every read that can drive a
 // buy/sell decision on the dashboard. ZERO of them may open/close/place an
 // order on their own — paper or real.
+//
+// D2/AC-005: the count is NINE, not ten. The `services/expertoption.mjs` entry
+// is REMOVED in the same change that deletes the module — the spec's bisect note
+// is explicit that a half-applied removal is worse than none, because the suite
+// would then fail for a reason unrelated to the venue. This list is a guard
+// against the ABSENCE of order calls, so deleting a module can only remove a
+// covered module; nothing else about the guard is widened.
 const SUITE_SOURCES = {
   "services/proanalysis.mjs": "../services/proanalysis.mjs",
   "services/adaptiveConfluence.mjs": "../services/adaptiveConfluence.mjs",
@@ -32,7 +39,6 @@ const SUITE_SOURCES = {
   "services/regimeEngine.mjs": "../services/regimeEngine.mjs",
   "services/indicators.mjs": "../services/indicators.mjs",
   "services/dataSources.mjs": "../services/dataSources.mjs",
-  "services/expertoption.mjs": "../services/expertoption.mjs",
   "services/yahoo.mjs": "../services/yahoo.mjs",
   "services/autopilot.mjs": "../services/autopilot.mjs"
 }

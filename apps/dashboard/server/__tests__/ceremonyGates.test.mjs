@@ -68,7 +68,7 @@ const creditDays = (store, n, { venueClass = "ccxt-crypto" } = {}) => {
   return store.classState(venueClass)
 }
 
-const creditBalance = (store, venueClass = "expertoption") => {
+const creditBalance = (store, venueClass = "hyperliquid-perps") => {
   store.setAssetClasses({ "142": venueClass })
   const list = []
   let id = 1
@@ -82,7 +82,7 @@ const creditBalance = (store, venueClass = "expertoption") => {
 }
 
 const verifyPlatform = (store, over = {}) =>
-  store.setPlatformVerification("expertoption", { verified: true, by: "op", regulator: "reg", payoutFloorPct: 90, withdrawalTested: true, ...over })
+  store.setPlatformVerification("hyperliquid-perps", { verified: true, by: "op", regulator: "reg", payoutFloorPct: 90, withdrawalTested: true, ...over })
 
 // --- gate-3 cases FIRST (spec T4: gate-3/gate-4 listed first) -----------------
 
@@ -156,15 +156,15 @@ test("gate-4 passes at 30 distinct trading days (same-day duplicates count once)
 
 // --- gate-1 constitution floor -------------------------------------------------
 
-test("gate-1 short per class — ccxt-crypto and expertoption each deny below 300", async () => {
+test("gate-1 short per class — ccxt-crypto and hyperliquid-perps each deny below 300", async () => {
   const { store, gates } = await boot()
-  store.setAssetClasses({ "142": "ccxt-crypto", "998": "expertoption" })
+  store.setAssetClasses({ "142": "ccxt-crypto", "998": "hyperliquid-perps" })
   const list = []
   for (let i = 1; i <= 10; i++) list.push(row({ id: i, assetId: "142" }))
   for (let i = 11; i <= 20; i++) list.push(row({ id: i, assetId: "998" }))
   store.creditResolved(list, { now: NOW })
   const ccxt = gates.ceremonyGate1(store.classState("ccxt-crypto"))
-  const exp = gates.ceremonyGate1(store.classState("expertoption"))
+  const exp = gates.ceremonyGate1(store.classState("hyperliquid-perps"))
   expect(ccxt.pass).toBe(false)
   expect(ccxt.reason).toBe("ceremony:deny:gate1-short (have 10, require 300)")
   expect(exp.pass).toBe(false)
@@ -246,47 +246,67 @@ test("evaluateCeremony composes past passes and stops with ONE reason at the fir
 })
 
 // --- platform verification gate (binary-options classes only) -------------------
+//
+// D2/AC-005: the `expertoption` class was the ONLY binary-options class, and it
+// is removed with the venue. The three "platform gate" tests that used it
+// (unverified -> platform-unverified; verified-below-floor -> payout-below-floor;
+// verified -> proceeds to gate-2) are therefore REMOVED: there is no binary
+// class left for that branch to take, and re-pointing them at a surviving class
+// would assert a gate the production code does not run for it.
+//
+// The mechanism is NOT removed from production - it is generic over venue class
+// and stays for any future binary venue. What is asserted below is the honest
+// post-removal contract: no surviving class receives a platform gate, and the
+// core four-gate rail is unchanged.
 
-test("platform gate: a binary-options class with no platformVerification is blocked platform-unverified", async () => {
+test("D2/AC-005: no shipped venue class is binary, so no class receives a platform gate", async () => {
   const { store, gates } = await boot()
-  store.setAssetClasses({ "142": "expertoption" })
-  const list = []
-  for (let i = 1; i <= 300; i++) list.push(row({ id: i, engine: "legacy" }))
-  store.creditResolved(list, { now: NOW })
-  const res = gates.evaluateCeremony("expertoption")
-  expect(res.ok).toBe(false)
-  expect(res.gates).toHaveLength(2)
-  expect(res.gates[1].id).toBe("gate-platform-verification-85")
-  expect(res.gates[1].pass).toBe(false)
-  expect(res.gates[1].reason).toBe("ceremony:deny:platform-unverified")
+  for (const venueClass of ["ccxt-crypto", "hyperliquid-perps"]) {
+    const list = []
+    for (let i = 1; i <= 300; i++) list.push(row({ id: i, engine: "legacy" }))
+    store.setAssetClasses({ "142": venueClass })
+    store.creditResolved(list, { now: NOW })
+    const res = gates.evaluateCeremony(venueClass)
+    expect(
+      res.gates.map((g) => g.id),
+      `${venueClass} must not receive a platform-verification gate`
+    ).not.toContain("gate-platform-verification-85")
+  }
 })
 
-test("platform gate: a verified binary class with payout below the 85 floor is blocked payout-below-floor", async () => {
+test("D2/AC-005: the platform gate is armed by the PRESENCE of a verification record, not by a class list", async () => {
+  // OBSERVED BEHAVIOUR, recorded rather than designed around.
+  // `ceremonyPlatformGate` derives "is this a binary class" from whether the
+  // platformVerification map HAS AN ENTRY for the venueClass key. That was
+  // equivalent to a class check only while `expertoption` was the single
+  // seeded key. With EO removed, the default map is empty, so no surviving
+  // class is armed by default — but a record written for ANY key arms the gate
+  // for that key.
+  //
+  // This is a PRE-EXISTING property of the gate, not something WS-7 T2 changed,
+  // and it is deliberately NOT redesigned here: the mechanism stays generic for
+  // a future binary venue. What T2 guarantees is the DEFAULT state — an empty
+  // map, no armed gate — which is asserted by the test above. Pinned here so
+  // the coupling is visible to whoever next touches this gate.
   const { store, gates } = await boot()
-  store.setAssetClasses({ "142": "expertoption" })
   const list = []
   for (let i = 1; i <= 300; i++) list.push(row({ id: i, engine: "legacy" }))
+  store.setAssetClasses({ "142": "ccxt-crypto" })
   store.creditResolved(list, { now: NOW })
-  verifyPlatform(store, { payoutFloorPct: 80 })
-  const res = gates.evaluateCeremony("expertoption")
-  expect(res.ok).toBe(false)
-  expect(res.gates[1].pass).toBe(false)
-  expect(res.gates[1].reason).toBe("ceremony:deny:payout-below-floor")
-})
+  expect(gates.evaluateCeremony("ccxt-crypto").gates.map((g) => g.id)).not.toContain(
+    "gate-platform-verification-85"
+  )
 
-test("platform gate: a verified binary class passes and evaluation proceeds to gate-2", async () => {
-  const { store, gates } = await boot()
-  store.setAssetClasses({ "142": "expertoption" })
-  const list = []
-  for (let i = 1; i <= 300; i++) list.push(row({ id: i, engine: "legacy" }))
-  store.creditResolved(list, { now: NOW })
-  verifyPlatform(store)
-  const res = gates.evaluateCeremony("expertoption")
-  expect(res.ok).toBe(false)
-  expect(res.gates).toHaveLength(3)
-  expect(res.gates[1].pass).toBe(true)
-  expect(res.gates[2].pass).toBe(false)
-  expect(res.gates[2].reason).toContain("ceremony:deny:flip-unmet")
+  // Writing a record for that key arms the gate — the coupling, stated plainly.
+  store.setPlatformVerification("ccxt-crypto", {
+    verified: true,
+    by: "op",
+    regulator: "reg",
+    payoutFloorPct: 10,
+    withdrawalTested: true
+  })
+  const res = gates.evaluateCeremony("ccxt-crypto")
+  expect(res.gates.map((g) => g.id)).toContain("gate-platform-verification-85")
 })
 
 test("platform gate: a non-binary class is unaffected — exactly the four core gate ids, never a platform entry", async () => {
@@ -309,7 +329,7 @@ test("platform gate: a non-binary class is unaffected — exactly the four core 
 
 test("evaluateCeremony: an UNHEALTHY store denies every gate with store-unhealthy, never a pass", async () => {
   const { gates } = await boot({ corrupt: "{\n  \"version\": 1,\n  \"classes\":" })
-  for (const venueClass of ["ccxt-crypto", "expertoption"]) {
+  for (const venueClass of ["ccxt-crypto", "hyperliquid-perps"]) {
     const res = gates.evaluateCeremony(venueClass)
     expect(res.ok).toBe(false)
     expect(res.gates).toHaveLength(4)
@@ -348,9 +368,9 @@ test("invalid env numbers → named invalid-environment deny on the owning gate"
 
 test("evaluateCeremony full pass on a binary class: gate1 → platform → gate2 → gate3 → gate4 together with the readout fields", async () => {
   const { store, gates } = await boot()
-  creditBalance(store, "expertoption")
+  creditBalance(store, "hyperliquid-perps")
   const verification = verifyPlatform(store)
-  const res = gates.evaluateCeremony("expertoption")
+  const res = gates.evaluateCeremony("hyperliquid-perps")
   expect(res.ok).toBe(true)
   expect(res.gates.map((g) => g.id)).toEqual([
     "gate1-constitution-300",

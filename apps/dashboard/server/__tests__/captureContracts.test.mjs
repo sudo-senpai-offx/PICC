@@ -94,7 +94,7 @@ describe("capture contracts (T12 locks 1-4)", () => {
 
   it("capture-config file schema: exact per-user { venue → row } shape, sanitized + clamped", async () => {
     await call(handleApi, "POST", "/api/trading/capture-config", {
-      expertoption: { enabled: false, refreshCadenceMs: 10, metricsCadenceMs: 999_999_999_999 },
+      olymptrade: { enabled: false, refreshCadenceMs: 10, metricsCadenceMs: 999_999_999_999 },
       IQOPTION: { enabled: true }, // uppercase id must be folded to the lowercased catalog id
       notavenue: { enabled: true } // unknown venue must vanish from the file too
     })
@@ -102,9 +102,11 @@ describe("capture contracts (T12 locks 1-4)", () => {
     // Exact shape: keys appear ONLY when the caller supplied them; cadences are
     // clamped to the venue floor/cap; the row survives as {enabled:true} with
     // no invented cadence keys.
+    // D2/AC-005: the sample venue is `olymptrade`, not the removed `expertoption`
+    // — these are generic per-venue config locks, not EO behaviour.
     expect(onDisk).toEqual({
       default: {
-        expertoption: { enabled: false, refreshCadenceMs: 60_000, metricsCadenceMs: 86_400_000 },
+        olymptrade: { enabled: false, refreshCadenceMs: 60_000, metricsCadenceMs: 86_400_000 },
         iqoption: { enabled: true }
       }
     })
@@ -138,10 +140,10 @@ describe("capture contracts (T12 locks 1-4)", () => {
       // blocks the file, never the state (otherwise the pin could pass
       // vacuously because nothing ran).
       const cfg = await cp.saveCaptureConfigForUser("t12lock", {
-        expertoption: { refreshCadenceMs: 90_000 }
+        olymptrade: { refreshCadenceMs: 90_000 }
       })
-      expect(cfg.expertoption.refreshCadenceMs).toBe(90_000)
-      expect(cp.captureConfigForUser("t12lock").expertoption.refreshCadenceMs).toBe(90_000)
+      expect(cfg.olymptrade.refreshCadenceMs).toBe(90_000)
+      expect(cp.captureConfigForUser("t12lock").olymptrade.refreshCadenceMs).toBe(90_000)
       await am.putAccountMetrics("t12lock", {
         venueId: "iqoption",
         balance: 10,
@@ -164,16 +166,45 @@ describe("capture contracts (T12 locks 1-4)", () => {
 
   // ── Lock 3 — account-metrics record shape (no fabricated zeros) ───────────
 
-  it("metrics record shape: absent → null, a genuine observed 0 stays 0, full vocabulary pinned", async () => {
+  it("metrics record shape: extractVia:[\"ws\"] gates extraction, and no profile qualifies after D2", async () => {
     const observedAt = "2026-08-30T12:00:00.000Z"
+    const frame = { at: 0, leg: "ws", payload: { is_demo: 0, balance: 250.5, currency: "eur" } }
+
+    // D2/AC-005 — this test previously drove the extractor with
+    // `venueId:"expertoption"`, because EO was the ONLY profile declaring
+    // `metrics.extractVia:["ws"]`. With the venue removed, NO profile qualifies,
+    // so `extractAccountState` returns null for every catalog venue. That is the
+    // honest post-removal state, and it is asserted here rather than papered
+    // over by inventing a venue that would have to lie about extractVia.
+    expect(
+      captureProfiles.CAPTURE_PROFILES.filter((p) => (p.metrics?.extractVia ?? []).includes("ws")).map((p) => p.id)
+    ).toEqual([])
+
+    // Every surviving catalog venue is therefore gated out, not silently broken.
+    for (const id of captureProfiles.listCaptureProfiles().map((p) => p.id)) {
+      expect(
+        accountMetrics.extractAccountState({ venueId: id, frames: [frame], observedAt }),
+        `${id} must not produce a metrics record while no profile declares extractVia:["ws"]`
+      ).toBeNull()
+    }
+    // The removed venue is not a catalog venue at all, so it is rejected twice
+    // over: no profile, and no row.
+    expect(accountMetrics.extractAccountState({ venueId: "expertoption", frames: [frame], observedAt })).toBeNull()
+    // getCaptureProfile returns null for an unknown id (not undefined), which is
+    // why extractAccountState bails at its first line.
+    expect(captureProfiles.getCaptureProfile("expertoption")).toBeNull()
+  })
+
+  it("metrics record shape: absent → null, a genuine observed 0 stays 0 (parser, venue-independent)", async () => {
+    const observedAt = "2026-08-30T12:00:00.000Z"
+    // The extraction GATE above is venue-scoped and now closed, so the parser's
+    // own guarantees are pinned through the exported `parseAccountFrame`, which
+    // is the venue-independent half and still reachable. These are the same
+    // "no fabricated zero" guarantees the old EO-driven test asserted.
+    const { parseAccountFrame } = accountMetrics
     // is_demo=0 with a single `balance` → real context, single value assigned
-    // to the real wallet; currency defaults to USD (the documented default,
-    // not a fabricated number).
-    const real = accountMetrics.extractAccountState({
-      venueId: "expertoption",
-      frames: [{ at: 0, leg: "ws", payload: { is_demo: 0, balance: 250.5, currency: "eur" } }],
-      observedAt
-    })
+    // to the real wallet; currency upper-cased from the payload.
+    const real = parseAccountFrame({ is_demo: 0, balance: 250.5, currency: "eur" })
     expect(real).toEqual({
       demoWallet: { balance: null, currency: "EUR" },
       realWallet: { balance: 250.5, currency: "EUR" },
@@ -184,26 +215,15 @@ describe("capture contracts (T12 locks 1-4)", () => {
       email: null,
       name: null,
       openPositions: null, // never observed → null, never 0/[]
-      exposurePct: null,
-      venueId: "expertoption",
-      sourceLeg: "ws",
-      observedAt
+      exposurePct: null
     })
     // A GENUINE reported 0 is preserved as 0 (the strict parser's other half).
-    const zero = accountMetrics.extractAccountState({
-      venueId: "expertoption",
-      frames: [{ at: 0, leg: "ws", payload: { is_demo: 1, demo_balance: 0 } }],
-      observedAt
-    })
+    const zero = parseAccountFrame({ is_demo: 1, demo_balance: 0 })
     expect(zero.demoWallet.balance).toBe(0)
     expect(zero.balance).toBe(0)
     expect(zero.realWallet.balance).toBeNull() // absent — not coerced to 0
     // An absent balance in a demo frame → null (the "no fabricated zero" pin).
-    const absent = accountMetrics.extractAccountState({
-      venueId: "expertoption",
-      frames: [{ at: 0, leg: "ws", payload: { is_demo: 1 } }],
-      observedAt
-    })
+    const absent = parseAccountFrame({ is_demo: 1 })
     expect(absent.balance).toBeNull()
     expect(absent.demoWallet.balance).toBeNull()
   })
@@ -212,11 +232,13 @@ describe("capture contracts (T12 locks 1-4)", () => {
 
   it("headless-status row shape: exact key set the popup renders from", async () => {
     const rows = captureProfiles.headlessSessionStatus()
+    // D2/AC-005: TEN -> NINE rows. The `expertoption` row is removed with the
+    // venue, so the exact key set is the new true value, not a loosened one.
     expect(Object.keys(rows).sort()).toEqual([
-      "binance", "bybit", "deriv", "etoro", "expertoption",
+      "binance", "bybit", "deriv", "etoro",
       "iqoption", "kucoin", "okx", "olymptrade", "plus500"
     ])
-    const row = rows.expertoption
+    const row = rows.olymptrade
     expect(Object.keys(row).sort()).toEqual([
       "enabled", "lastCaptureAt", "lastStateAt", "name", "reason",
       "refreshCadenceMs", "sourceLeg", "stale", "status", "tokenChangedAt", "venueId"
@@ -228,6 +250,8 @@ describe("capture contracts (T12 locks 1-4)", () => {
     expect(rows.iqoption.status).toBe("idle")
     expect(rows.iqoption.stale).toBe(true) // CAN capture but never HAS
     expect(rows.iqoption.enabled).toBe(true)
+    // D2/AC-005: the removed venue must not reappear in the status surface.
+    expect(rows.expertoption).toBeUndefined()
   })
 
   it("headless-status endpoint row = the engine row + lastMetricsAt (popup's merge contract)", async () => {
@@ -244,7 +268,11 @@ describe("capture contracts (T12 locks 1-4)", () => {
       "refreshCadenceMs", "sourceLeg", "stale", "status", "tokenChangedAt", "venueId"
     ])
     expect(iq.lastMetricsAt).toBe("2026-08-30T12:00:00.000Z")
-    expect(res.body.venues.expertoption.lastMetricsAt).toBeNull() // never observed → null
-    expect(res.body.venues.expertoption.tokenChangedAt).toBeNull() // never captured → null, never a token
+    // D2/AC-005: a venue that never observed metrics reports null for both, and
+    // the removed `expertoption` row is gone from the endpoint entirely.
+    const olymp = res.body.venues.olymptrade
+    expect(olymp.lastMetricsAt).toBeNull() // never observed → null
+    expect(olymp.tokenChangedAt).toBeNull() // never captured → null, never a token
+    expect(res.body.venues.expertoption).toBeUndefined()
   })
 })

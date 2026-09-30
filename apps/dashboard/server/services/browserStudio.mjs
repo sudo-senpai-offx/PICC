@@ -1439,38 +1439,13 @@ async function stopScreencast() {
 // Public session API
 // ---------------------------------------------------------------------
 
-/** The ExpertOption app SPA, on either domain. Shared so every consumer
- * (capture script, liveness checks) agrees on what "the app tab" means. */
-export const EO_APP_URL_RE = /^https?:\/\/(www\.)?app\.expertoption\.(com|finance)\//i
-/** URL substrings that mean the user is NOT in a trading session. */
-const EO_NON_APP_RE = /login|register|signin|authorize|choose-account/i
-
-/**
- * Phase 13 — session-liveness verification (correctness, not camouflage):
- * confirm a real, currently-open ExpertOption app tab exists behind the
- * cached token. A token with no live tab is exactly the orphaned-token
- * pattern; catching it keeps the system from acting on data nobody can see.
- *
- * @returns {{ live: boolean, reason: string, url: string|null }}
- */
-export function checkExpertOptionSessionLive() {
-  try {
-    if (!studio.open) return { live: false, reason: "PICC browser not open", url: null }
-    const tabs = Array.isArray(studio.tabs) ? studio.tabs : []
-    const appTabs = tabs.filter((t) => t?.url && EO_APP_URL_RE.test(String(t.url)))
-    if (!appTabs.length) {
-      return { live: false, reason: "no app.expertoption tab open in the PICC browser", url: null }
-    }
-    // An app tab stuck on login/register/error is not a live trading session.
-    const loggedIn = appTabs.find((t) => !EO_NON_APP_RE.test(String(t.url).toLowerCase()))
-    if (!loggedIn) {
-      return { live: false, reason: "ExpertOption tab is on a login/register page — sign in", url: String(appTabs[0].url) }
-    }
-    return { live: true, reason: "ExpertOption app tab open", url: String(loggedIn.url) }
-  } catch (err) {
-    return { live: false, reason: `liveness check failed: ${err?.message ?? err}`, url: null }
-  }
-}
+// D2/AC-005: `EO_APP_URL_RE`, `EO_NON_APP_RE` and `checkExpertOptionSessionLive`
+// are REMOVED with the venue. The liveness check existed to catch an orphaned
+// EO token — a token whose tab was closed. There is no EO token and no EO
+// session, so the check has nothing to verify. Its only production caller,
+// `autopilot.getSessionLive`, now returns a permanent not-live verdict naming
+// the removal. The generic browser surface below (tab tracking, login-state
+// detection, `studioStatus`) is unchanged and site-agnostic.
 
 export function studioStatus() {
   const active = studio.tabs.find((t) => t.id === studio.activeId)
@@ -3318,32 +3293,13 @@ async function refreshTabLogin(tabId) {
     broadcast({ type: "tabs", ...tabsPayload() })
     broadcast({ type: "status", status: studioStatus() })
   }
-  if (auth.loggedIn && auth.site === "expertoption") {
-    if (now - studio._lastEOCapture >= EO_CAPTURE_COOLDOWN_MS) {
-      void captureExpertOptionSession(tab.page)
-        .then(async (r) => {
-          // A guest session carries the same token cookie — never let it clobber
-          // a good active-account token (demo context refuses guest tokens).
-          if (!r?.ok || r.guest) return
-          studio._lastEOCapture = Date.now()
-          const changed = r.token !== studio._lastEOCaptureToken
-          studio._lastEOCaptureToken = r.token
-          if (!changed) return
-          const { getBrokerStats } = await import("./brokers/index.mjs").catch(() => ({}))
-          const stats = typeof getBrokerStats === "function" ? getBrokerStats() : null
-          const broken = !stats || stats.status !== "connected" || Boolean(stats.error)
-          if (changed || broken) {
-            const live = await import("./liveEO.mjs").catch(() => null)
-            live?.restartLiveEO?.({ force: true })
-          }
-        })
-        .catch(() => {
-          // Never hammer a failing page — only a successful active-account
-          // capture resets the cooldown for the next attempt.
-          studio._lastEOCapture = Date.now()
-        })
-    }
-  }
+  // D2/AC-005: the auto-EO-capture-on-login branch is REMOVED with the venue.
+  // It existed to re-capture the EO session token on a detected login and
+  // restart the live transport; neither the venue nor the transport remains, so
+  // it would have written `expertoptionToken` into a credential store that no
+  // longer has the field. The login-state detection above is UNCHANGED — it is
+  // generic (site-agnostic) and still drives the `flipped` broadcast for the
+  // tabs UI.
   return auth
 }
 
@@ -3652,18 +3608,10 @@ export async function studioLogin({ site } = {}) {
   } else {
     report = await googleAutoLogin(page, creds.username, creds.password)
   }
-  // ExpertOption keeps a short-lived session token in web storage. Grab it the
-  // moment a login lands so the WS bridge never runs on a stale pasted token.
-  // A session still showing as guest means the sign-in hasn't landed yet.
-  if (report.ok && key === "expertoption") {
-    try {
-      const cap = await captureExpertOptionSession()
-      report.tokenCaptured = cap.guest ? null : maskToken(cap.token)
-      report.tokenGuest = cap.guest || null
-    } catch {
-      report.tokenCaptured = null // session not live yet — recapture via /api/browser/capture-session
-    }
-  }
+  // D2/AC-005: the post-login ExpertOption token capture is removed with the
+  // venue. `studioLogin`'s generic fill/submit report is unchanged; the
+  // `tokenCaptured`/`tokenGuest` fields it used to add for EO are simply gone
+  // rather than left permanently null.
   return report
 }
 
@@ -3708,89 +3656,13 @@ export async function studioGoogleSession({ navigate = false } = {}) {
   }
 }
 
-/**
- * Read the active ExpertOption tab's live session token and save it as the
- * `expertoptionToken` trading credential. Runs inside the real browser session
- * (cookies/web storage are only visible there), so the captured token is always
- * fresh — no more pasting a token that quietly goes stale.
- */
-export async function captureExpertOptionSession(page) {
-  ensureOpen()
-  const target = page && livePage(page) ? page : activePage()
-  if (!/expertoption\.(com|finance)/i.test(target.url())) {
-    throw new Error("open an app.expertoption.finance tab first")
-  }
-  const hits = await target.evaluate(() => {
-    // Current platform: a 32-hex cookie token (`token` = the session the app is
-    // actively using and that setContext accepts). The `token` cookie value can
-    // carry a binary prefix before the hex, so also extract a trailing 32-hex
-    // run. Legacy sessions used a `uuid::base64` web-storage token.
-    const pattern = /^[0-9a-f]{32}$/
-    const tailHex = /([0-9a-f]{32})$/
-    const legacy = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}::[A-Za-z0-9+/=_\-]+$/
-    const found = []
-    const check = (source, key, value, score) => {
-      const v = String(value ?? "")
-      if (!v) return
-      if (pattern.test(v)) found.push({ source, key, value: v, score })
-      else if (legacy.test(v)) found.push({ source, key, value: v, score: score - 1 })
-      else if (source === "cookie") {
-        const m = v.match(tailHex)
-        if (m) found.push({ source, key, value: m[1], score: score + 2 })
-      }
-    }
-    document.cookie.split(";").forEach((c) => {
-      const i = c.indexOf("=")
-      if (i > 0) check("cookie", c.slice(0, i).trim(), decodeURIComponent(c.slice(i + 1)), 3)
-    })
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i)
-      check("localStorage", k, localStorage.getItem(k), 2)
-    }
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const k = sessionStorage.key(i)
-      check("sessionStorage", k, sessionStorage.getItem(k), 2)
-    }
-    // The `token` cookie is the live session token (accepts demo AND real WS
-    // contexts); `tokenDemo` is only the demo-context token and can go stale.
-    // Prefer cookies over web-storage mirrors, which the app can lag behind.
-    const rank = (h) =>
-      h.source === "cookie" && h.key === "token" ? 4 : h.source === "cookie" && h.key === "tokenDemo" ? 3 : h.source === "cookie" ? 2 : 1
-    found.sort((a, b) => rank(b) - rank(a) || b.score - a.score)
-    return found
-  })
-  if (!hits.length) {
-    throw new Error("no session token found on this page — log in first")
-  }
-  const best = hits[0]
-  // Guest (not signed-in) sessions carry the same token cookie, so read the
-  // account model from the content window's own login state. A guest token is
-  // never saved over a good active-account one (the demo WS context refuses it).
-  let guest = false
-  let account = null
-  try {
-    const dom = await target.evaluate(domLoginSignals)
-    guest = Boolean(dom && dom.guest && !dom.active)
-    if (guest || dom?.active) {
-      account = {
-        type: guest ? "guest" : "active",
-        guest,
-        email: dom.email ?? null,
-        name: dom.name ?? null,
-        wallet: dom.wallet ?? null,
-        balance: dom.balance ?? null
-      }
-    }
-  } catch {
-    guest = false
-  }
-  if (guest) {
-    return { ok: true, token: best.value, source: `${best.source}:${best.key}`, guest: true, saved: false, account }
-  }
-  const { saveCredentials } = await import("./trading.mjs")
-  await saveCredentials({ expertoptionToken: best.value })
-  return { ok: true, token: best.value, source: `${best.source}:${best.key}`, guest: false, saved: true, account }
-}
+// D2/AC-005: `captureExpertOptionSession` is REMOVED. It scanned an
+// ExpertOption tab's cookie/web-storage for a 32-hex session token and saved it
+// as the `expertoptionToken` trading credential — a credential field that no
+// longer exists. `captureViaStorageScan` below is the surviving capture hook and
+// is venue-agnostic: it reads only the exact keys a profile row lists, so the
+// 32-hex/`uuid::base64` EO token heuristics go with the venue rather than
+// becoming a generic hook that would guess at any site's storage layout.
 
 /**
  * Generic fixture-driven session capture for a storage-scan venue (T11).

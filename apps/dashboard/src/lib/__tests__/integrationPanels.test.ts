@@ -71,7 +71,9 @@ const AGG: AggregateResult = {
   totals: { openPositions: 1, notional: 100, instruments: 1 },
   todayPnl: {
     paper: { pnl: 12.5, trades: 2 },
-    expertoption: { pnl: -4.5, trades: 1 }
+    // D2/AC-005: the second bucket was keyed `expertoption`; the venue is
+    // removed and the data is venue-agnostic settled demo deals, so it is `demo`.
+    demo: { pnl: -4.5, trades: 1 }
   },
   riskCheck: {
     ok: true,
@@ -81,7 +83,7 @@ const AGG: AggregateResult = {
     after: { totalNotional: 300 },
     todayPnl: {
       paper: { pnl: 12.5, trades: 2 },
-      expertoption: { pnl: -4.5, trades: 1 }
+      demo: { pnl: -4.5, trades: 1 }
     },
     exposureByInstrument: { EURUSD: 100 }
   }
@@ -97,10 +99,12 @@ describe("aggregatePanelModel (T5)", () => {
   it("renders today PnL as TWO separately-labeled buckets — no merged total (B-PAP-2)", () => {
     const d = aggregatePanelModel(AGG)
     expect(d.todayPnl.paper).toEqual({ pnl: 12.5, trades: 2 })
-    expect(d.todayPnl.expertoption).toEqual({ pnl: -4.5, trades: 1 })
+    expect(d.todayPnl.demo).toEqual({ pnl: -4.5, trades: 1 })
     // The merged total slice is gone from the server shape — the model must
     // never resurrect a summed paper+demo number the UI could paint.
     expect(d.todayPnl).not.toHaveProperty("total")
+    // D2/AC-005: the removed venue is not a key on the model either.
+    expect(d.todayPnl).not.toHaveProperty("expertoption")
     expect(paperIncome).toBe("Paper P&L (simulated)")
     expect(realPnl).toBe("EO demo P&L")
     expect(paperIncome).not.toBe(realPnl)

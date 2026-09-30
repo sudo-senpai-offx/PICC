@@ -8,11 +8,13 @@ import { randomBytes } from "node:crypto"
 // parser understands. The client matches `ready`/`stats`/`snapshot`/`decision`/
 // `decisions`/`suite`; any other name falls through to `ready ok:Boolean(...)`
 // and silently drops the payload (and previously faked a "stream failed").
-vi.mock("../services/liveEO.mjs", () => ({
-  subscribeLiveEO: vi.fn(() => () => {}),
-  liveEOStats: vi.fn(() => ({ status: "idle" })),
-  liveSnapshot: vi.fn(() => ({ status: "idle" }))
-}))
+//
+// D2/AC-005: the `vi.mock("../services/liveEO.mjs")` block is REMOVED with the
+// module — mocking a path that no longer resolves is a hard failure, and no
+// surviving handler imports it. The `stats` and `snapshot` events were the
+// liveEO stream's own frames, so they are no longer emitted; the client's
+// parser still understands them, which is why the test below asserts the
+// SURVIVING event names and pins the two removed ones as absent.
 vi.mock("../services/adaptiveConfluence.mjs", () => ({
   subscribeDecisions: vi.fn((cb) => {
     cb({ type: "decision", ts: 1, status: "connected", mode: "demo", account: null, viewed: [], decisions: [] })
@@ -90,12 +92,14 @@ async function connect(token) {
 }
 
 describe("trading realtime SSE event names", () => {
-  it("emits ready/stats/decision/decisions/suite with parseable names", async () => {
+  it("emits ready/decision/decisions/suite/u4fa with parseable names", async () => {
+    // The regression this file exists for is a MISNAMED event silently dropping
+    // its payload in the client parser. Every event the server still emits is
+    // asserted by name below, so a rename cannot slip through.
     const { req, pending, frames } = await connect(token)
     const body = await frames(120)
     expect(body).toContain("event: ready")
     expect(body).toContain('"ok":true')
-    expect(body).toContain("event: stats")
     expect(body).toContain("event: decision")
     expect(body).toContain("event: decisions")
     // T12/M8 — `type:"u4fa"` rides this same SSE socket (no separate endpoint).
@@ -106,6 +110,10 @@ describe("trading realtime SSE event names", () => {
     // suite is emitted independently of the (slow) decisions fetch
     expect(body).toContain("event: suite")
     expect(body).toContain('"ok":true')
+    // D2/AC-005: the liveEO `stats`/`snapshot` frames are gone with the module.
+    // Pinned so a re-added EO stream cannot quietly resume emitting them.
+    expect(body).not.toContain("event: stats")
+    expect(body).not.toContain("event: snapshot")
     req.emit("close")
     await pending
   })

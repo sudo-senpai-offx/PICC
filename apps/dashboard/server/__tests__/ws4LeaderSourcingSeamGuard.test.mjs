@@ -315,8 +315,12 @@ describe("WS-4 AC-7 (d) — overview/aggregate compose byte-identical (additive)
     expect(out.killSwitch).toEqual({ global: false, sites: {} })
     expect(out.risk).toBeNull()
     expect(Object.keys(out).sort()).toEqual(["at", "killSwitch", "ok", "risk", "sites", "stream"])
-    expect(out.sites).toHaveLength(3)
-    expect(out.sites.map((s) => s.site)).toEqual(["trading:ccxt", "expertoption", "trading:perps"])
+    // D2/AC-005: the `expertoption` site is removed with the venue, so the
+    // compose output is the new true two-site shape. The point of this guard is
+    // that the envelope (`ok/at/stream/killSwitch/risk/sites`) is unchanged and
+    // carries no `leaders` key — that is asserted above and is untouched.
+    expect(out.sites).toHaveLength(2)
+    expect(out.sites.map((s) => s.site)).toEqual(["trading:ccxt", "trading:perps"])
     for (const row of out.sites) {
       expect(row.gates).toHaveLength(10)
       expect(row.gates.map((g) => g.gate)).toEqual([

@@ -43,7 +43,11 @@ import {
   atr,
   returnAutocorrelation
 } from "./indicators.mjs"
-import { connectSession, candlesFrom, assetsFrom } from "./expertoption.mjs"
+// D2/AC-005: the `connectSession`/`candlesFrom`/`assetsFrom` import from the
+// deleted expertoption.mjs is gone, and with it `proAnalyzeExpertOption` (the
+// single function that used them) at the end of this file. `proAnalyzeCandles`
+// — the pure analysis core every caller shares — is unchanged, as is
+// `proAnalyzeSymbol`, which sources from Yahoo.
 import { getCredentials } from "./trading.mjs"
 import { chatText, llmConfigured, provider as llmProvider } from "./llm.mjs"
 
@@ -815,45 +819,7 @@ export async function proAnalyzeSymbol(symbol, { range = "2y", interval = "1d", 
   return { ...result, platform: "Yahoo", lastPrice: history.lastPrice }
 }
 
-/** Pro analysis over live ExpertOption candles for a configured account. */
-export async function proAnalyzeExpertOption({ assetId, timeframe = 60, count = 240, horizonDays = 3 }) {
-  const creds = await getCredentials()
-  if (!creds.expertoptionToken) {
-    throw new Error("ExpertOption not configured — add your session token in the Trading Suite settings first")
-  }
-  const session = await connectSession({
-    token: creds.expertoptionToken,
-    isDemo: creds.expertoptionDemo,
-    wsUrl: creds.expertoptionWsUrl
-  })
-  try {
-    const [profile, candles, balance] = await Promise.allSettled([
-      session.assets(),
-      session.candles(assetId, timeframe, count),
-      session.balance()
-    ])
-    const balanceData = balance.status === "fulfilled" ? balance.value : { balance: null, currency: null, demo: null }
-    let asset = null
-    if (profile.status === "fulfilled") {
-      const found = assetsFrom(profile.value).find((a) => a.id === String(assetId))
-      asset = found ?? null
-    }
-    if (candles.status !== "fulfilled") {
-      throw new Error(`candle history failed: ${candles.reason?.message ?? "unknown"}`)
-    }
-    const raw = candlesFrom(candles.value)
-    const result = proAnalyzeCandles({
-      candles: raw.ohlc ?? [],
-      symbol: asset?.name ?? String(assetId),
-      name: asset?.name ?? String(assetId),
-      currency: "USD",
-      timeframe: `${timeframe}s`,
-      horizonDays,
-      layers: buildFusionLayers(raw.ohlc ?? [], timeframe)
-    })
-    if (!result.ok) return result
-    return { ...result, platform: "ExpertOption", account: balanceData, timeframe: `${timeframe}s` }
-  } finally {
-    session.close()
-  }
-}
+// D2/AC-005: `proAnalyzeExpertOption` is REMOVED. It opened an ExpertOption
+// session and analysed its candles; the venue is gone, so the route that served
+// it (`/api/trading/pro/expertoption`) is removed in the same change. Nothing is
+// rewired: `proAnalyzeSymbol` remains the venue-agnostic path and never used EO.

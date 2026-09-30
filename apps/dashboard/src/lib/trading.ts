@@ -200,7 +200,12 @@ export function analyzeAsset(
   assetId: string,
   opts: { timeframe?: number; count?: number; days?: number } = {}
 ): Promise<PredictionResult> {
-  return post<PredictionResult>("/trading/analyze", { assetId, ...opts })
+  // D2/AC-005: the endpoint is `/trading/predict`. This wrapper used to POST to
+  // `/trading/analyze`, which the venue removal deleted, and TradingSuite.tsx
+  // still calls THIS function - so the stale path was a live 404 on every
+  // trading-suite page, caught by the e2e console-error assertion and invisible
+  // to the unit suite because nothing in unit scope exercises this call.
+  return post<PredictionResult>("/trading/predict", { assetId, ...opts })
 }
 
 export function openPaperTrade(input: {
@@ -485,9 +490,17 @@ export interface BrokerDemoStatus {
   }
 }
 
-export function getBrokerDemoStatus(): Promise<BrokerDemoStatus> {
-  return request("/trading/demo")
-}
+// D2/AC-005: `getBrokerDemoStatus()` is REMOVED. It wrapped
+// `/api/trading/demo`, which at HEAD returned `expertOptionDemoStatus()` — an
+// ExpertOption-only payload — and that route is deleted with the venue. Its sole
+// caller (AutopilotSuite's boot load) is gone too, so this wrapper is dead code
+// pointing at a route that cannot answer. The `BrokerDemoStatus` interface above
+// STAYS: it is still the type of the `demo` state in AutopilotSuite and
+// TradingSuite, which is now fed by the realtime snapshot instead.
+//
+// This orphan was found by clientRouteGuard.test.mjs, not by the e2e: the e2e
+// had already been made green by removing the CALLER, and the wrapper would
+// otherwise have sat there indefinitely as a latent 404 for the next caller.
 
 // Phase 14 — decision support: rolling decision log + dry-run gate evaluation.
 export interface AutopilotDecisionEntry {
@@ -835,7 +848,11 @@ export function proAnalyzeSymbol(
 export function proAnalyze(
   opts: { assetId?: string; timeframe?: number; count?: number; days?: number } = {}
 ): Promise<ProAnalysisResult> {
-  return post<ProAnalysisResult>("/trading/pro/expertoption", opts)
+  // D2/AC-005: the venue-scoped `/trading/pro/expertoption` route is deleted.
+  // The surviving `/trading/pro/analyze` takes the same body and returns the
+  // same shape, so this wrapper points at it rather than 404ing for the
+  // TradingSuite.tsx caller.
+  return post<ProAnalysisResult>("/trading/pro/analyze", opts)
 }
 
 export interface ProNarrativeResult {
@@ -1511,7 +1528,9 @@ export interface PortfolioRiskCheck {
   proposed: { symbol: string; amount: number }
   after: { totalNotional: number }
   // B-PAP-2: two money buckets, never a merged paper+demo total.
-  todayPnl: { paper: PnlSlice; expertoption: PnlSlice }
+  // D2/AC-005: the second bucket is `demo` (was `expertoption`; the venue is
+  // removed and the data is venue-agnostic settled demo deals).
+  todayPnl: { paper: PnlSlice; demo: PnlSlice }
   exposureByInstrument: Record<string, number>
 }
 
@@ -1522,7 +1541,7 @@ export interface AggregateResult {
   byInstrument: Record<string, AggInstrument>
   venues: AggVenue[]
   totals: { openPositions: number; notional: number; instruments: number }
-  todayPnl: { paper: PnlSlice; expertoption: PnlSlice }
+  todayPnl: { paper: PnlSlice; demo: PnlSlice }
   riskCheck: PortfolioRiskCheck | null
 }
 

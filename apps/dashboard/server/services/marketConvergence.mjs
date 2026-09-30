@@ -1,20 +1,19 @@
 // PICC MTF Convergence — live section loader for the realtime suite (spec 7b).
 //
 // Thin glue between the pure convergence engine (mtfConvergence.mjs) and the
-// live ExpertOption buffers (liveEO.mjs): pick the viewed asset, stream its
-// in-buffer timeframes directly, aggregate 30m/4h from the M1 buffer, and
-// never fabricate a read when nothing is connected — an absent buffer reports
-// source "none" / stale / empty planes, which converge turns into NO TRADE with
-// "—" values (R10 honesty rule). The section cache TTL lives in realtimeSuite.
+// live buffers that fed it. D2/AC-005 removed the ExpertOption realtime layer
+// (liveEO.mjs), so no live-buffer plane exists: the section never fabricates a
+// read and an absent buffer reports source "none" / stale / empty planes, which
+// converge turns into NO TRADE with "—" values (R10 honesty rule). The section
+// cache TTL lives in realtimeSuite.
 import { loadConvergence, converge, setConvergenceOutcomeHook, PRESETS, resolvePreset } from "./mtfConvergence.mjs"
-import { liveEOData } from "./liveEO.mjs"
 import { updateConvergence } from "./alertEngine.mjs"
 import { recordConvergence, flushConvergence } from "./convergenceLedger.mjs"
 import { detectRegimeLatched, regimeKnobs, REGIME_MODES as REGIME_MODE_LIST } from "./regimeEngine.mjs"
 
-// The full ladder the convergence matrix shows: intraday buffers direct from
-// liveEO, 30m/4h derived from M1 (dailies would go through getBestCandles at
-// a call site — out of scope for the live-buffer section).
+// The full ladder the convergence matrix shows. D2/AC-005 removed the live
+// ExpertOption buffers, so every timeframe is now derived/empty rather than
+// served from a live plane.
 export const CONVERGENCE_TIMEFRAMES = [60, 300, 900, 3600, 1800, 14400]
 export const CONVERGENCE_DERIVE_TFS = [1800, 14400]
 
@@ -65,12 +64,11 @@ const SECTION_PRESET = "intraday"
  *   resolved asset identity and read timestamp.
  */
 export async function convergenceSection({ now = Date.now() } = {}) {
-  let data = null
-  try {
-    data = liveEOData()
-  } catch {
-    data = null
-  }
+  // D2/AC-005: the ExpertOption realtime layer (liveEO.mjs) is removed, so there
+  // is no live-buffer plane to read here. `data` stays null and the section
+  // degrades to its derived/aggregated planes honestly rather than fabricating a
+  // live plane it can no longer observe.
+  const data = null
   const assets = Array.isArray(data?.assets) ? data.assets : []
   const asset = assets.find((a) => a.id === data?.viewed) ?? assets[0] ?? null
   const periods = asset?.periods ?? {}
@@ -130,7 +128,7 @@ export async function convergenceSection({ now = Date.now() } = {}) {
     ...result,
     assetId: asset?.id ?? null,
     asset: asset?.name ?? null,
-    source: "liveEO-buffers",
+    source: "none",
     ts: now,
     // Additive regime block (R1 mitigation): how the read was modulated, and
     // by which regime. `applied` false + `labels` null = advisory, not applied.

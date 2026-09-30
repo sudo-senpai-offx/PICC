@@ -145,10 +145,8 @@ if (!process.env.PICC_NO_LISTEN) {
       const { stopDecisionEngine } = await import("./services/adaptiveConfluence.mjs")
       shutdownFns.push(stopDecisionEngine)
     } catch { /* optional */ }
-    try {
-      const { stopLiveEO } = await import("./services/liveEO.mjs")
-      shutdownFns.push(stopLiveEO)
-    } catch { /* optional */ }
+    // D2/AC-005: the stopLiveEO shutdown hook is removed with liveEO.mjs. There
+    // is no live ExpertOption transport left to tear down.
     try {
       const { stopStudioAutomation } = await import("./services/browserStudio.mjs")
       shutdownFns.push(stopStudioAutomation)
@@ -206,7 +204,7 @@ if (!process.env.PICC_NO_LISTEN) {
     console.log("[picc-accuracy-ledger] auto-resolving trading decisions")
         import("./services/adaptiveConfluence.mjs").then(({ startDecisionEngine }) => {
       startDecisionEngine()
-      console.log("[picc-decision-engine] started — AI signals + liveEO active")
+      console.log("[picc-decision-engine] started — AI signals active")
     }).catch(() => {})
   })
 }

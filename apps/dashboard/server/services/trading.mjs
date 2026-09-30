@@ -1,7 +1,13 @@
-// PICC Trading Suite — signal generation, paper trading, and a read-only
-// ExpertOption bridge. No auto-execution: nothing here places a real order.
-// Signals are decision support; any live trade must be executed by the human
-// (and the paper ledger exists so you can validate a strategy first).
+// PICC Trading Suite — signal generation and paper trading. No auto-execution:
+// nothing here places a real order. Signals are decision support; any live trade
+// must be executed by the human (and the paper ledger exists so you can validate
+// a strategy first).
+//
+// D2/AC-005 removed the read-only ExpertOption bridge along with the venue, so
+// the `connectSession`/`balanceFrom`/`assetsFrom`/`candlesFrom` import from
+// expertoption.mjs is gone and `analyzeExpertOptionAsset` is deleted below.
+// The paper ledger, the credential store and the prediction surface are
+// unchanged.
 
 import { mkdirSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
@@ -11,13 +17,6 @@ import { randomBytes } from "node:crypto"
 import { getHistory } from "./yahoo.mjs"
 import { predictDirection } from "./prediction.mjs"
 import { metricsFrom } from "./analytics.mjs"
-import {
-  connectSession,
-  balanceFrom,
-  assetsFrom,
-  candlesFrom,
-  DEFAULT_WS_URL
-} from "./expertoption.mjs"
 import { chatText, llmConfigured } from "./llm.mjs"
 import { env } from "../config.mjs"
 import { news as serperNews } from "./serper.mjs"
@@ -91,9 +90,12 @@ async function writeJSON(file, value) {
 }
 
 const DEFAULT_CREDS = {
-  expertoptionToken: "",
-  expertoptionDemo: true,
-  expertoptionWsUrl: DEFAULT_WS_URL,
+  // D2/AC-005: the three expertoption* credential fields are removed with the
+  // venue. A credentials file written before this change may still carry them on
+  // disk; they are simply no longer read, defaulted, or written back, so a stale
+  // key is inert rather than resurrected. It is NOT migrated or deleted from
+  // existing files — that is a separate local-data cleanup, and silently
+  // rewriting a user's credential store is not this task's authority.
   paperStartingBalance: 10000,
   riskPerTradePct: 2,
   // Phase 9 — read-only multi-exchange market data (CCXT). Each entry:
@@ -158,22 +160,16 @@ export async function saveCredentials(patch) {
   const next = { ...(await getCredentials()), ...sanitizePatch(patch) }
   next.paperStartingBalance = Math.max(100, Number(next.paperStartingBalance) || 10000)
   next.riskPerTradePct = Math.min(20, Math.max(1, Number(next.riskPerTradePct) || 2))
-  next.expertoptionDemo = patch.expertoptionDemo != null ? Boolean(patch.expertoptionDemo) : next.expertoptionDemo
   await writeJSON(CREDS_FILE, next)
   return getCredentials()
 }
 
 function sanitizePatch(patch) {
   const out = {}
-  // A blank token means "keep the saved one" — the UI only sends a value when
-  // the user pastes a replacement, and never sends back the masked one.
-  if (typeof patch.expertoptionToken === "string" && patch.expertoptionToken.trim()) {
-    out.expertoptionToken = patch.expertoptionToken.trim()
-    out.expertoptionTokenCapturedAt = new Date().toISOString()
-  }
-  if (typeof patch.expertoptionWsUrl === "string" && patch.expertoptionWsUrl.trim()) {
-    out.expertoptionWsUrl = patch.expertoptionWsUrl.trim()
-  }
+  // D2/AC-005: the expertoptionToken / expertoptionWsUrl / expertoptionDemo
+  // branches are removed with the venue. A caller still sending them is ignored
+  // rather than stored, so the venue's credentials can no longer be re-persisted
+  // by any surviving caller.
   if (patch.paperStartingBalance != null) out.paperStartingBalance = Number(patch.paperStartingBalance)
   if (patch.riskPerTradePct != null) out.riskPerTradePct = Number(patch.riskPerTradePct)
   // CCXT pairs: keep only well-formed entries — the scheduler treats a
@@ -943,53 +939,12 @@ export async function _overwriteSignals(signals) {
 export async function tradingStatus() {
   const creds = await getCredentials()
   const overview = await paperOverview()
-  let eoBalance = null
-  let eoCurrency = null
-  let eoConnected = false
-  let eoDemoWallet = null
-  let eoRealWallet = null
-  let sessionLive = null
-  let sessionLiveReason = null
-  let gatewayRpm = null
-  try {
-    const { getBrokerStats } = await import("./brokers/index.mjs")
-    const stats = getBrokerStats()
-    eoConnected = stats?.status === "connected"
-    // Try fresh account fetch from the EO adapter (headless browser)
-    try {
-      const { fetchFreshAccount } = await import("./liveEO.mjs")
-      if (eoConnected && fetchFreshAccount) {
-        const fresh = await fetchFreshAccount()
-        if (fresh?.balance != null) {
-          eoBalance = fresh.balance
-          eoCurrency = fresh.currency || "USD"
-          eoDemoWallet = fresh.demoWallet || null
-          eoRealWallet = fresh.realWallet || null
-        }
-      }
-    } catch { /* fetchFreshAccount not available */ }
-    if (eoBalance == null) {
-      const { getBrokerData } = await import("./brokers/index.mjs")
-      const snap = getBrokerData()
-      if (snap.account?.balance != null) {
-        eoBalance = snap.account.balance
-        eoCurrency = snap.account.currency || "USD"
-        eoDemoWallet = snap.account.demoWallet || null
-        eoRealWallet = snap.account.realWallet || null
-      }
-    }
-  } catch { /* broker data not loaded */ }
-  // Phase 13/12: cached liveness verdict + gateway pacing meter.
-  try {
-    const { cachedSessionLive } = await import("./autopilot.mjs")
-    const cached = cachedSessionLive()
-    sessionLive = cached.sessionLive
-    sessionLiveReason = cached.sessionLiveReason
-  } catch { /* ignore */ }
-  try {
-    const { getDemoSession } = await import("./autopilot.mjs")
-    gatewayRpm = getDemoSession()?.gatewayStats?.() ?? null
-  } catch { /* ignore */ }
+  // D2/AC-005: the `expertOption` status block is REMOVED. It reported the EO
+  // session (connected / balance / wallets / gateway rpm), all of which came
+  // from the deleted transport. The fourth dead call site lived here too:
+  // `getDemoSession()` (old `:991`) is defined nowhere, so it threw on every
+  // call and the `catch` turned the gateway meter into a permanent silent null.
+  // It is deleted rather than kept as a try/catch around a missing symbol.
   let uptime24h = null
   try {
     const { sessionUptime24h } = await import("./scheduler.mjs")
@@ -1000,19 +955,6 @@ export async function tradingStatus() {
     mode: "paper",
     updatedAt: new Date().toISOString(),
     riskPerTradePct: creds.riskPerTradePct,
-    expertOption: {
-      configured: Boolean(creds.expertoptionToken),
-      demo: creds.expertoptionDemo,
-      wsUrl: creds.expertoptionWsUrl,
-      connected: eoConnected,
-      sessionLive,
-      sessionLiveReason,
-      balance: eoBalance,
-      currency: eoCurrency,
-      demoWallet: eoDemoWallet,
-      realWallet: eoRealWallet,
-      gatewayRpm
-    },
     uptime24h,
     paper: overview
   }
@@ -1036,61 +978,14 @@ export async function predictSymbol(symbol, horizonDays = 3) {
   }
 }
 
-/**
- * Read-only ExpertOption analysis: connect, pull candles for one asset,
- * run the prediction engine, and attach account balance + asset metadata.
- * Never places an order.
- */
-export async function analyzeExpertOptionAsset({ assetId, timeframe = 60, count = 120, horizonDays = 3 }) {
-  const creds = await getCredentials()
-  if (!creds.expertoptionToken) {
-    throw new Error("ExpertOption not configured — add your session token in the Trading Suite settings first")
-  }
-
-  const session = await connectSession({
-    token: creds.expertoptionToken,
-    isDemo: creds.expertoptionDemo,
-    wsUrl: creds.expertoptionWsUrl
-  })
-
-  try {
-    const [profile, candles, balance] = await Promise.allSettled([
-      session.assets(),
-      session.candles(assetId, timeframe, count),
-      session.balance()
-    ])
-
-    const balanceData =
-      balance.status === "fulfilled" ? balanceFrom(balance.value) : { balance: null, currency: null, demo: null }
-
-    let asset = null
-    if (profile.status === "fulfilled") {
-      const found = assetsFrom(profile.value).find((a) => a.id === String(assetId))
-      asset = found ?? null
-    }
-
-    if (candles.status !== "fulfilled") {
-      throw new Error(`candle history failed: ${candles.reason?.message ?? "unknown"}`)
-    }
-    const { closes } = candlesFrom(candles.value)
-    if (closes.length < 30) throw new Error("not enough candles from ExpertOption yet — try a longer timeframe")
-
-    const prediction = predictDirection(closes, horizonDays)
-    return {
-      ok: true,
-      platform: "ExpertOption",
-      asset: asset ?? { id: String(assetId), name: String(assetId) },
-      timeframe,
-      account: balanceData,
-      candles: closes.length,
-      ...prediction,
-      advisory:
-        "Read-only analysis. No order was placed. If you choose to trade, use the paper ledger first and only then the platform UI yourself."
-    }
-  } finally {
-    session.close()
-  }
-}
+// D2/AC-005: `analyzeExpertOptionAsset` is REMOVED. It connected to the
+// ExpertOption websocket via `connectSession` and parsed the response with
+// `assetsFrom`/`candlesFrom`/`balanceFrom` — all from the deleted
+// expertoption.mjs. It had exactly one caller, the `/api/trading/analyze/
+// expertoption` route in handlers.mjs, which is removed in the same change.
+// Nothing is rewired to another venue: an EO analysis request is no longer a
+// route, and the surviving `/api/trading/analyze` and `/api/trading/pro/analyze`
+// routes are the venue-agnostic symbol/asset analyses that never touched EO.
 
 // ---------------------------------------------------------------------
 // LLM trading assistant (decision support only)

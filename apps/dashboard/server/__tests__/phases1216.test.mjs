@@ -45,18 +45,31 @@ describe("Phase 14 — rolling decision log", () => {
 })
 
 describe("Phase 14 — dry-run whyAutopilot refuses cleanly without a live setup", () => {
-  it("returns precondition-failure gates when disabled/unconfigured", async () => {
+  it("returns a gated refusal and never a fabricated verdict", async () => {
     const { whyAutopilot } = await import("../services/autopilot.mjs")
     const res = await whyAutopilot({})
     expect(res.ok).toBe(true)
     expect(res.dryRun).toBe(true)
     expect(res.wouldTrade).toBe(false)
-    // Disabled by default in a clean data dir → first gate fails
+    // The "enabled" gate always fires first, whatever the persisted config says.
     const enabled = res.gates.find((g) => g.name === "enabled")
     expect(enabled).toBeTruthy()
-    if (!res.gates.find((g) => g.name === "token")?.pass) {
-      expect(enabled.pass).toBe(false)
+    // D2/AC-005: the "token" gate is gone with the venue's credential. Two
+    // honest outcomes remain and BOTH are asserted, so this test can fail:
+    //   - disabled config → refuses at the precondition, before the removal
+    //     gate is ever reached;
+    //   - enabled config → reaches the removal gate and names the reason.
+    // Either way the refusal carries a stated reason and no direction.
+    if (enabled.pass) {
+      const removed = res.gates.find((g) => g.name === "venue-removed")
+      expect(removed).toBeTruthy()
+      expect(removed.pass).toBe(false)
+      expect(res.reason).toBe("execution venue removed")
+    } else {
+      expect(res.reason).toBe("precondition failed")
     }
+    expect(res.direction).toBeNull()
+    expect(res.confidence).toBeNull()
   })
 })
 
@@ -69,28 +82,24 @@ describe("Phase 13 — liveness verdicts are honest", () => {
     expect(verdict.via).toBe("none")
   })
 
-  it("checkExpertOptionSessionLive rejects login-page tabs as not live", async () => {
-    const mod = await import("../services/browserStudio.mjs")
-    expect(mod.EO_APP_URL_RE.test("https://app.expertoption.finance/trading/160")).toBe(true)
-    expect(mod.EO_APP_URL_RE.test("https://app.expertoption.com/en/trade")).toBe(true)
-    expect(mod.EO_APP_URL_RE.test("https://evil.example/app.expertoption.finance/")).toBe(false)
-    // With no studio open at all in this test env:
-    const v = mod.checkExpertOptionSessionLive()
-    expect(v.live).toBe(false)
-  })
+  // D2/AC-005: the two tests below tested the removed ExpertOption surface —
+  // `checkExpertOptionSessionLive` (an EO app-tab liveness check) and
+  // `connectSession` (the EO gateway pacer, via the deleted expertoption.mjs).
+  // Both modules are deleted with the venue, so both tests are removed with
+  // them. This is NOT a weakened assertion: the guarantee they pinned (an EO tab
+  // with no live session must read as not-live) is now structurally impossible
+  // to violate, because there is no EO session and no EO tab check at all.
+  // `getSessionLive`'s not-live verdict above is still asserted, and it now
+  // states the removal as its reason.
 })
 
-describe("Phase 12 — gateway pacer meters without breaking normal flow", () => {
-  it("connectSession exposes gateway stats with sane defaults", async () => {
-    const { connectSession } = await import("../services/expertoption.mjs")
-    // No token → connect throws; use createTransport indirectly via connectSession error path
-    await expect(connectSession({})).rejects.toThrow(/token required/)
-    // Stats surface through trading sessions only after connect; here we pin
-    // the exported constant behavior instead.
-    const src = await import("../services/expertoption.mjs")
-    expect(src).toBeTruthy()
-  })
-})
+// D2/AC-005: the Phase 12 "gateway pacer" suite is REMOVED with
+// expertoption.mjs. Its only test asserted that `connectSession` exposed gateway
+// stats with sane defaults — the pacer existed solely to be a well-behaved
+// client of the ExpertOption websocket, and the `gatewayRpm` field that
+// surfaced it was removed from `tradingStatus` in the same change. The suite
+// is deleted rather than left as an empty `describe`, which vitest treats as a
+// failure. No surviving module exposes a gateway pacer.
 
 describe("Phase 15 — per-asset breakdown + uptime shape", () => {
   it("perAssetStats returns rows sorted by sample count", async () => {

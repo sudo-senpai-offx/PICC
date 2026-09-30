@@ -85,7 +85,7 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
 
   it("GET account-metrics returns the observed record with staleness derived live", async () => {
     await accountMetrics.putAccountMetrics("default", {
-      venueId: "expertoption",
+      venueId: "olymptrade",
       balance: 432.1,
       demoWallet: { balance: 432.1, currency: "USD" },
       realWallet: { balance: null, currency: "USD" },
@@ -97,7 +97,7 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
       exposurePct: null
     })
     const res = await call(handleApi, "GET", "/api/trading/account-metrics")
-    const rec = res.body.venues.expertoption
+    const rec = res.body.venues.olymptrade
     expect(rec.balance).toBe(432.1)
     expect(rec.demoWallet.balance).toBe(432.1)
     expect(rec.realWallet.balance).toBeNull()
@@ -107,22 +107,22 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
 
   it("a record older than one metrics cadence reports stale:true", async () => {
     await accountMetrics.putAccountMetrics("default", {
-      venueId: "expertoption",
+      venueId: "olymptrade",
       balance: 1,
       observedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString()
     })
     const res = await call(handleApi, "GET", "/api/trading/account-metrics")
-    expect(res.body.venues.expertoption.stale).toBe(true)
+    expect(res.body.venues.olymptrade.stale).toBe(true)
   })
 
   it("?venue filters and never reports a fabricated zero for an absent venue", async () => {
     await accountMetrics.putAccountMetrics("default", {
-      venueId: "expertoption",
+      venueId: "olymptrade",
       balance: null, // observed frame where the broker reported no balance
       observedAt: new Date().toISOString()
     })
-    const res = await call(handleApi, "GET", "/api/trading/account-metrics?venue=expertoption")
-    expect(res.body.venues.expertoption.balance).toBeNull()
+    const res = await call(handleApi, "GET", "/api/trading/account-metrics?venue=olymptrade")
+    expect(res.body.venues.olymptrade.balance).toBeNull()
     const other = await call(handleApi, "GET", "/api/trading/account-metrics?venue=iqoption")
     expect(other.body.venues).toEqual({}) // never captured → honest absence
   })
@@ -131,66 +131,71 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
 
   it("POST capture-config sanitizes unknown venues and clamps cadences", async () => {
     const res = await call(handleApi, "POST", "/api/trading/capture-config", {
-      expertoption: { enabled: false, refreshCadenceMs: 10, metricsCadenceMs: 999_999_999_999 },
+      olymptrade: { enabled: false, refreshCadenceMs: 10, metricsCadenceMs: 999_999_999_999 },
       notavenue: { enabled: true }
     })
     expect(res.status).toBe(200)
     const cfg = res.body.config
-    expect(cfg.expertoption.enabled).toBe(false)
-    expect(cfg.expertoption.refreshCadenceMs).toBe(60_000) // floor
-    expect(cfg.expertoption.metricsCadenceMs).toBe(24 * 60 * 60 * 1000) // cap
+    expect(cfg.olymptrade.enabled).toBe(false)
+    expect(cfg.olymptrade.refreshCadenceMs).toBe(60_000) // floor
+    expect(cfg.olymptrade.metricsCadenceMs).toBe(24 * 60 * 60 * 1000) // cap
     expect(cfg.notavenue).toBeUndefined()
   })
 
   it("POST capture-config feeds the runtime policy seam live", async () => {
-    expect(captureProfiles.refreshCadenceMs("expertoption")).toBe(30 * 60 * 1000) // profile default
+    expect(captureProfiles.refreshCadenceMs("olymptrade")).toBe(30 * 60 * 1000) // profile default
     await call(handleApi, "POST", "/api/trading/capture-config", {
-      expertoption: { refreshCadenceMs: 120_000, metricsCadenceMs: 60_000 }
+      olymptrade: { refreshCadenceMs: 120_000, metricsCadenceMs: 60_000 }
     })
-    expect(captureProfiles.refreshCadenceMs("expertoption")).toBe(120_000)
-    expect(captureProfiles.metricsCadenceMs("expertoption")).toBe(60_000)
+    expect(captureProfiles.refreshCadenceMs("olymptrade")).toBe(120_000)
+    expect(captureProfiles.metricsCadenceMs("olymptrade")).toBe(60_000)
   })
 
   it("persisted config survives a module restart (boot read applies it)", async () => {
     await call(handleApi, "POST", "/api/trading/capture-config", {
-      expertoption: { enabled: false, refreshCadenceMs: 120_000 }
+      olymptrade: { enabled: false, refreshCadenceMs: 120_000 }
     })
     vi.resetModules()
     const cp2 = await import("../services/captureProfiles.mjs")
-    const row = cp2.headlessSessionStatus().expertoption
+    const row = cp2.headlessSessionStatus().olymptrade
     expect(row.enabled).toBe(false)
-    expect(cp2.refreshCadenceMs("expertoption")).toBe(120_000)
+    expect(cp2.refreshCadenceMs("olymptrade")).toBe(120_000)
   })
 
   it("removing a venue row from the config re-enables profile defaults live", async () => {
+    // D2/AC-005: the subject venue must be CAPTURE-CAPABLE, because
+    // `isVenueEnabled` returns false for any profile with no `capture.via`.
+    // The removed `expertoption` row was the other such venue; `iqoption` is the
+    // only one left, so it is the subject here. `olymptrade` is catalog-only and
+    // is still exercised as a config-row subject by the tests above.
     await call(handleApi, "POST", "/api/trading/capture-config", {
-      expertoption: { enabled: false, metricsCadenceMs: 60_000 }
+      iqoption: { enabled: false, metricsCadenceMs: 60_000 }
     })
-    expect(captureProfiles.isVenueEnabled("expertoption")).toBe(false)
+    expect(captureProfiles.isVenueEnabled("iqoption")).toBe(false)
     await call(handleApi, "POST", "/api/trading/capture-config", {
-      iqoption: { metricsCadenceMs: 90_000 } // expertoption row GONE from the config
+      olymptrade: { metricsCadenceMs: 90_000 } // iqoption row GONE from the config
     })
-    expect(captureProfiles.isVenueEnabled("expertoption")).toBe(true)
-    expect(captureProfiles.metricsCadenceMs("expertoption")).toBe(5 * 60 * 1000)
+    expect(captureProfiles.isVenueEnabled("iqoption")).toBe(true)
+    expect(captureProfiles.metricsCadenceMs("iqoption")).toBe(5 * 60 * 1000)
   })
 
   it("GET capture-config returns the current user's persisted rows", async () => {
     await call(handleApi, "POST", "/api/trading/capture-config", {
-      expertoption: { metricsCadenceMs: 120_000 }
+      olymptrade: { metricsCadenceMs: 120_000 }
     })
     const res = await call(handleApi, "GET", "/api/trading/capture-config")
     expect(res.body.ok).toBe(true)
-    expect(res.body.config.expertoption.metricsCadenceMs).toBe(120_000)
+    expect(res.body.config.olymptrade.metricsCadenceMs).toBe(120_000)
   })
 
   it("a real authenticated session keys its own config bucket", async () => {
     const acct = await auth.createAccount({ email: "alice@example.com", password: "correct-horse-battery", name: "Alice" })
     expect(acct.error).toBeUndefined()
     const headers = { authorization: `Bearer ${acct.token}` }
-    await call(handleApi, "POST", "/api/trading/capture-config", { expertoption: { metricsCadenceMs: 150_000 } }, headers)
+    await call(handleApi, "POST", "/api/trading/capture-config", { olymptrade: { metricsCadenceMs: 150_000 } }, headers)
     const resA = await call(handleApi, "GET", "/api/trading/capture-config", undefined, headers)
     expect(resA.body.userId).toBe(acct.user.id)
-    expect(resA.body.config.expertoption.metricsCadenceMs).toBe(150_000)
+    expect(resA.body.config.olymptrade.metricsCadenceMs).toBe(150_000)
     const resDefault = await call(handleApi, "GET", "/api/trading/capture-config")
     expect(resDefault.body.userId).toBe("default")
     expect(resDefault.body.config).toEqual({})
@@ -202,30 +207,33 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
     const res = await call(handleApi, "GET", "/api/trading/headless-status")
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
+    // D2/AC-005: TEN -> NINE venue rows. The removed `expertoption` row is gone
+    // from the status surface, and the exact sorted set is the new true value.
     expect(Object.keys(res.body.venues).sort()).toEqual([
-      "binance", "bybit", "deriv", "etoro", "expertoption",
-      "iqoption", "kucoin", "okx", "olymptrade", "plus500"
+      "binance", "bybit", "deriv", "etoro", "iqoption",
+      "kucoin", "okx", "olymptrade", "plus500"
     ])
-    const eo = res.body.venues.expertoption
-    expect(eo.status).toBe("idle") // full capture venue, never run — idle, never "ok"
-    expect(eo.stale).toBe(true) // never captured = stale, honestly
-    expect(eo.lastCaptureAt).toBeNull()
-    expect(eo.tokenChangedAt).toBeNull()
-    expect(eo.lastMetricsAt).toBeNull()
-    expect(eo.name).toBe("ExpertOption")
+    // The inspected row is a surviving capture-capable venue (was the EO row).
+    const iq = res.body.venues.iqoption
+    expect(iq.status).toBe("idle") // full capture venue, never run — idle, never "ok"
+    expect(iq.stale).toBe(true) // never captured = stale, honestly
+    expect(iq.lastCaptureAt).toBeNull()
+    expect(iq.tokenChangedAt).toBeNull()
+    expect(iq.lastMetricsAt).toBeNull()
+    expect(iq.name).toBe("IQ Option")
     expect(res.body.venues.bybit.status).toBe("not-enabled")
     expect(res.body.venues.bybit.stale).toBe(false)
-    expect(res.body.venues.expertoption.refreshCadenceMs).toBe(30 * 60 * 1000)
+    expect(res.body.venues.olymptrade.refreshCadenceMs).toBe(30 * 60 * 1000)
   })
 
   it("GET headless-status merges the observed metrics timestamp per venue", async () => {
     await accountMetrics.putAccountMetrics("default", {
-      venueId: "expertoption",
+      venueId: "olymptrade",
       balance: 100,
       observedAt: "2026-08-30T12:00:00.000Z"
     })
     const res = await call(handleApi, "GET", "/api/trading/headless-status")
-    expect(res.body.venues.expertoption.lastMetricsAt).toBe("2026-08-30T12:00:00.000Z")
+    expect(res.body.venues.olymptrade.lastMetricsAt).toBe("2026-08-30T12:00:00.000Z")
     expect(res.body.venues.iqoption.lastMetricsAt).toBeNull() // never observed — honest
   })
 
@@ -245,7 +253,10 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
     expect(res.body.userId).toBe("default")
-    expect(Object.keys(res.body.venues)).toHaveLength(10)
+    // D2/AC-005: TEN -> NINE. The policy endpoint enumerates the capture
+    // profile catalog, and the `expertoption` row is removed with the venue.
+    expect(Object.keys(res.body.venues)).toHaveLength(9)
+    expect(res.body.venues.expertoption).toBeUndefined()
     for (const row of Object.values(res.body.venues)) {
       expect(row.decision).toBe("ask") // undecided = still prompting
       expect(row.at).toBeNull()
@@ -255,13 +266,13 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
 
   it("POST session-policy persists the decision; GET reflects it", async () => {
     const post = await call(handleApi, "POST", "/api/trading/session-policy", {
-      venueId: "expertoption", decision: "approved"
+      venueId: "olymptrade", decision: "approved"
     })
     expect(post.status).toBe(200)
-    expect(post.body).toMatchObject({ ok: true, userId: "default", venueId: "expertoption", decision: "approved" })
+    expect(post.body).toMatchObject({ ok: true, userId: "default", venueId: "olymptrade", decision: "approved" })
     expect(post.body.at).toBeTruthy()
     const res = await call(handleApi, "GET", "/api/trading/session-policy")
-    expect(res.body.venues.expertoption.decision).toBe("approved")
+    expect(res.body.venues.olymptrade.decision).toBe("approved")
     expect(res.body.venues.iqoption.decision).toBe("ask") // untouched
   })
 
@@ -271,31 +282,31 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
     const cp2 = await import("../services/captureProfiles.mjs")
     expect(cp2.sessionPolicyForUser("default").iqoption).toMatchObject({ decision: "rejected" })
     // And the "default" user bucket is the one the gate reads (SESSION_USER).
-    expect(cp2.sessionPolicyForUser("default").expertoption).toBeUndefined()
+    expect(cp2.sessionPolicyForUser("default").olymptrade).toBeUndefined()
   })
 
   it("POST session-policy 'ask' clears the decision back to prompting", async () => {
-    await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "rejected" })
-    const clear = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "ask" })
+    await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "olymptrade", decision: "rejected" })
+    const clear = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "olymptrade", decision: "ask" })
     expect(clear.body).toMatchObject({ decision: "ask", at: null })
     const res = await call(handleApi, "GET", "/api/trading/session-policy")
-    expect(res.body.venues.expertoption.decision).toBe("ask")
-    expect(res.body.venues.expertoption.at).toBeNull()
+    expect(res.body.venues.olymptrade.decision).toBe("ask")
+    expect(res.body.venues.olymptrade.at).toBeNull()
   })
 
   it("POST session-policy sanitizes unknown venues and decisions", async () => {
     const unknownVenue = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "notavenue", decision: "approved" })
     expect(unknownVenue.status).toBe(400)
-    const unknownDecision = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "sure" })
+    const unknownDecision = await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "olymptrade", decision: "sure" })
     expect(unknownDecision.status).toBe(400)
     const res = await call(handleApi, "GET", "/api/trading/session-policy")
-    expect(res.body.venues.expertoption.decision).toBe("ask")
+    expect(res.body.venues.olymptrade.decision).toBe("ask")
   })
 
   it("session-policy is authenticated: remote caller without a session gets 401", async () => {
     await auth.createAccount({ email: "charlie@example.com", password: "correct-horse-battery", name: "Charlie" })
     const res = makeRes()
-    const remote = makeReq("POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "approved" })
+    const remote = makeReq("POST", "/api/trading/session-policy", { venueId: "olymptrade", decision: "approved" })
     remote.socket = { remoteAddress: "203.0.113.5" }
     await handleApi(remote, res, "/api/trading/session-policy")
     expect(res.status).toBe(401)
@@ -305,11 +316,11 @@ describe("headless capture-config + account-metrics API (T6/T7)", () => {
     const acct = await auth.createAccount({ email: "dave@example.com", password: "correct-horse-battery", name: "Dave" })
     expect(acct.error).toBeUndefined()
     const headers = { authorization: `Bearer ${acct.token}` }
-    await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "expertoption", decision: "approved" }, headers)
+    await call(handleApi, "POST", "/api/trading/session-policy", { venueId: "olymptrade", decision: "approved" }, headers)
     const resA = await call(handleApi, "GET", "/api/trading/session-policy", undefined, headers)
     expect(resA.body.userId).toBe(acct.user.id)
-    expect(resA.body.venues.expertoption.decision).toBe("approved")
+    expect(resA.body.venues.olymptrade.decision).toBe("approved")
     const resDefault = await call(handleApi, "GET", "/api/trading/session-policy")
-    expect(resDefault.body.venues.expertoption.decision).toBe("ask") // bucketed — never mixed
+    expect(resDefault.body.venues.olymptrade.decision).toBe("ask") // bucketed — never mixed
   })
 })

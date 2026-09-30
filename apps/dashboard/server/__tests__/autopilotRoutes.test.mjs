@@ -122,9 +122,15 @@ describe("autopilot API routes", () => {
     expect(res.body.dryRun).toBe(true)
     expect(res.body.wouldTrade).toBe(false)
     expect(res.body.reason).toBe("precondition failed")
-    const tokenGate = res.body.gates.find((g) => g.name === "token")
-    expect(tokenGate).toBeDefined()
-    expect(tokenGate.pass).toBe(false)
+    // D2/AC-005: the "token" gate is gone with the venue's credential, so the
+    // route's honest-refusal contract is asserted on the gates that exist. The
+    // refusal must still carry the `enabled` gate and a stated reason — the
+    // route must never answer with a fabricated direction.
+    const enabledGate = res.body.gates.find((g) => g.name === "enabled")
+    expect(enabledGate).toBeDefined()
+    expect(enabledGate.pass).toBe(false)
+    expect(res.body.direction).toBeNull()
+    expect(res.body.confidence).toBeNull()
 
     const viaGet = await call(handleApi, "GET", "/api/trading/autopilot/why?assetId=BTCUSD", undefined, { authorization: `Bearer ${token}` })
     expect(viaGet.status).toBe(200)

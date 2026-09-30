@@ -1,7 +1,6 @@
 import { getBrokerStats } from "./brokers/index.mjs"
 import { sentimentLastUpdate } from "./sentimentEngine.mjs"
 import { kellySnapshot } from "./kellyCriterion.mjs"
-import { mostRecentLeg } from "./liveEO.mjs"
 
 export const REQUIRED_SOURCES = ["candles", "sentiment", "orderflow", "regime", "expiry", "kelly"]
 
@@ -27,20 +26,15 @@ function unconfigured() {
 
 export function collectSourceStatuses(now = Date.now()) {
   let candles = unconfigured()
-  let candleFeed = null
+  // D2/AC-005: the ExpertOption live legs (liveEO.mjs) are removed, so there is
+  // no per-leg provenance to attribute. `candleFeed` therefore stays null and
+  // the candles row is reported without a `feed` tag rather than carrying a leg
+  // that can no longer be observed.
+  const candleFeed = null
   try {
     const stats = getBrokerStats()
     const lastSeen = Number(stats?.lastSeen) > 0 ? Number(stats.lastSeen) : null
-    if (lastSeen != null) {
-      candles = classifySource(lastSeen, now)
-      // Provenance: which live leg's frames were CONSUMED most recently (T4 —
-      // explicit leg accounting instead of the studio-only inline heuristic).
-      // The feed is attributed to a leg only when its last consumption landed
-      // within the 1500 ms fallback window of the buffers' lastSeen — a stale
-      // prior consumption never labels a current feed.
-      const recent = mostRecentLeg()
-      candleFeed = recent && recent.lastConsumedAt >= lastSeen - 1500 ? recent.leg : null
-    }
+    if (lastSeen != null) candles = classifySource(lastSeen, now)
   } catch {}
   let sentiment = unconfigured()
   try {

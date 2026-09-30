@@ -8,7 +8,15 @@ import {
 import { templateForSite } from "../services/commandCentre/policyGraphCatalog.mjs"
 
 const ccxt = () => templateForSite("trading:ccxt")
-const expertoption = () => templateForSite("expertoption")
+/** D2/AC-005: the `expertoption` row was the only catalog template carrying a
+ * per-NODE graph loop (`model_matrix: maxRounds 2`). The graph-override
+ * behaviour is still what this test pins, so the loop is supplied on a
+ * synthetic template — the shipped catalog's rows are unchanged. */
+const nodeLoopGraph = () => ({
+  ...ccxt(),
+  site: "test:node-loop",
+  loops: [{ node: "model_matrix", maxRounds: 2, convergenceDelta: 0.05 }]
+})
 
 /** One finding per source arm, all conveying the same side — a balanced board. */
 function uniformFindings(side, strength = 1, overrides = {}) {
@@ -216,13 +224,16 @@ describe("Command Centre — Deliberation: solar-consensus convergence detector"
   })
 
   test("graph loop overrides the DEFAULT_LOOP for that node", () => {
-    const g = expertoption()
+    // D2/AC-005: was the `expertoption` row's `model_matrix` loop; now a
+    // synthetic template carrying the same per-node loop. The DEFAULT_LOOP
+    // (maxRounds 3) must still be overridden to 2 by the graph entry.
+    const g = nodeLoopGraph()
     const r = deliberate({
       graph: g,
       decisionNode: "model_matrix",
       findings: [{ agentId: "technical", side: 1, strength: 1 }]
     })
-    expect(r.maxRounds).toBe(2) // expertoption model_matrix loop
+    expect(r.maxRounds).toBe(2) // the graph's model_matrix loop
   })
 
   test("neutral board converges when nothing moves (surface 0 < delta)", () => {

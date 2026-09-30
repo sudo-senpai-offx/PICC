@@ -53,10 +53,14 @@ describe("positionManager (slice 5d coverage)", () => {
     })
     const pnl = await pm.combinedTodayPnl()
     expect(pnl.paper).toEqual({ pnl: 5, trades: 1 })
-    expect(pnl.expertoption).toEqual({ pnl: 7, trades: 1 })
+    // D2/AC-005: this bucket was keyed `expertoption`; the venue is removed and
+    // the data is venue-agnostic settled demo deals, so the key is `demo`.
+    expect(pnl.demo).toEqual({ pnl: 7, trades: 1 })
     // The merged `total` slice is removed: paper and venue-demo money are
     // never summed on any shared surface.
     expect(pnl).not.toHaveProperty("total")
+    // The removed venue must not linger as a key on the response.
+    expect(pnl).not.toHaveProperty("expertoption")
   })
 
   test("portfolioRiskCheck refuses over-cap proposals", async () => {
@@ -89,7 +93,7 @@ describe("positionManager (slice 5d coverage)", () => {
     expect(agg.totals).toEqual({ openPositions: 0, notional: 0, instruments: 0 })
     const pnl = await pm.combinedTodayPnl()
     expect(pnl.paper).toEqual({ pnl: 0, trades: 0 })
-    expect(pnl.expertoption).toEqual({ pnl: 0, trades: 0 })
+    expect(pnl.demo).toEqual({ pnl: 0, trades: 0 })
     expect(pnl).not.toHaveProperty("total")
     const check = await pm.portfolioRiskCheck({ symbol: "BTCUSD", amount: 10 })
     expect(check.allowed).toBe(true)

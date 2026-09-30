@@ -1,13 +1,18 @@
 // captureVenue against the REAL reference implementation (T3 acceptance):
-// real browserStudio.captureExpertOptionSession (the profile's capture hook)
+// real browserStudio.captureViaStorageScan (the profile's capture hook)
 // driven by the fake-page harness from browserStudio.login.test.mjs, real
-// trading.mjs getCredentials/saveCredentials on a tmp data dir, and liveEO
-// vi.mocked so the revive wiring is asserted rather than a real socket session.
+// trading.mjs getCredentials/saveCredentials on a tmp data dir.
+//
+// D2/AC-005: the ExpertOption reference implementation and `services/liveEO.mjs`
+// are deleted with the venue, so the `vi.mock("../services/liveEO.mjs")` block
+// and the `restartLiveEO` assertions are removed. The revive wiring they pinned
+// is gone because NO venue has a live leg now, so the report carries no revive
+// field at all and its ABSENCE is asserted directly instead.
 //
 // Covered: empty vault + logged-in tab → capture still runs (after-login
 // workflow, T12.1); no matching tab → honest no-tab; guest session never
 // saved; same-token re-capture → no revive (flap guard); changed token →
-// restartLiveEO({force:true}) + observable token save; non-EO host → honest
+// observable token save with no revive field on the report; non-venue host → honest
 // error with the pinned message; token never in any returned report.
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -96,15 +101,6 @@ vi.mock("../services/browserBridge.mjs", () => ({
   browserAvailable: () => true
 }))
 
-vi.mock("../services/liveEO.mjs", () => ({
-  restartLiveEO: vi.fn(async () => true),
-  feedProvenance: vi.fn(() => "studio"),
-  liveEOStats: vi.fn(() => ({ legs: { studio: {} }, lastSeen: 0 })),
-  liveEOData: vi.fn(() => null)
-}))
-
-import { restartLiveEO } from "../services/liveEO.mjs"
-
 let tmp
 let captureVenue
 let headlessSessionStatus
@@ -116,32 +112,36 @@ let respondIntervention
 const TOKEN_A = "11111111111111111111111111111111" // already saved (before)
 const TOKEN_B = "22222222222222222222222222222222" // what the page now carries
 const VAULT_FILE = () => join(tmp, "browser-credentials.json")
-const CREDS_FILE = () => join(tmp, "trading-credentials.json")
+// D2/AC-005: iqoption is a storageScan venue, so its token is saved in the
+// DEDICATED venue-tokens file (never inside trading-credentials.json). The EO
+// reference path used the credentials file; the assertion is re-pointed, not
+// dropped, so the save is still proven observable on disk.
+const VENUE_TOKENS_FILE = () => join(tmp, "trading-venue-tokens.json")
 
 function seedVault() {
-  return writeFile(VAULT_FILE(), JSON.stringify({ expertoption: { username: "trader@example.com", password: "pw" } }))
+  return writeFile(VAULT_FILE(), JSON.stringify({ iqoption: { username: "trader@example.com", password: "pw" } }))
 }
 
 function seedTradingToken(token) {
-  return writeFile(CREDS_FILE(), JSON.stringify({ expertoptionToken: token }))
+  return writeFile(VENUE_TOKENS_FILE(), JSON.stringify({ venueTokens: { iqoption: token } }))
 }
 
-// trading-credentials.json is encrypted at rest (F-02 vault) — read saved
-// state back through the vault, never raw JSON.parse.
-async function readSavedCreds() {
+// D2/AC-005: the venue token lives in the dedicated venue-tokens file, read
+// back through the vault (F-02, encrypted at rest) — never raw JSON.parse.
+async function readSavedToken() {
   const { readSecretJson } = await import("../services/vault.mjs")
-  return readSecretJson(CREDS_FILE(), {})
+  return (await readSecretJson(VENUE_TOKENS_FILE(), {})).venueTokens?.iqoption ?? null
 }
 
 function eoPage() {
   const p = h.bridges.at(-1).context.pages()[0]
-  p.setUrl("https://app.expertoption.com/")
+  p.setUrl("https://iqoption.com/en/login")
   return p
 }
 
 /** Storage-scan hits with domLoginSignals shape attached (the harness trick). */
 function scanHits(token, { guest = false, active = true } = {}) {
-  const hits = [{ source: "cookie", key: "token", value: token, score: 3 }]
+  const hits = [{ source: "cookie", key: "ssid", value: token, score: 3 }]
   hits.guest = guest
   hits.active = active
   hits.email = "trader@example.com"
@@ -178,109 +178,103 @@ afterAll(async () => {
   delete process.env.PICC_TRADING_DATA_DIR
 })
 
-beforeEach(() => {
-  restartLiveEO.mockClear()
-})
+// D2/AC-005: the top-level `beforeEach(() => { restartLiveEO.mockClear() })` is
+// removed with the module. The report's ABSENCE of any revive field is now
+// asserted directly on each report, which is the honest signal and does not
+// depend on a mock.
 
-describe("captureVenue — real EO reference path", () => {
-  it("vault has NO expertoption entry — the logged-in tab alone drives capture (after-login workflow)", async () => {
-    // The user logged into EO by hand in the PICC browser; no username/password
-    // was ever pasted into the vault. The vault gate must not block: the REAL
-    // session on the open EO tab IS the credential. (Regression: EO showed
-    // "login needed · stale" forever after relogging because the legacy
-    // form-fill vault gate stopped the engine before it ever looked at the tab.)
-    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
-    await writeFile(VAULT_FILE(), JSON.stringify({})) // no expertoption entry at all
+describe("captureVenue — real reference path (D2/AC-005: re-pointed from EO to iqoption)", () => {
+  it("vault has NO iqoption entry — the logged-in tab alone drives capture (after-login workflow)", async () => {
+    // The user logged in by hand in the PICC browser; no username/password was
+    // ever pasted into the vault. The vault gate must not block: the REAL session
+    // on the open venue tab IS the credential. (Regression: the venue showed
+    // "login needed · stale" forever after relogging because the legacy form-fill
+    // vault gate stopped the engine before it ever looked at the tab.)
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
+    await writeFile(VAULT_FILE(), JSON.stringify({})) // no iqoption entry at all
     await seedTradingToken(TOKEN_A)
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B))
-    const r = await captureVenue("expertoption", { page: p })
+    const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("ok")
     expect(r.saved).toBe(true)
     expect(r.tokenChanged).toBe(true)
-    expect(r.reconnectTriggered).toBe(true) // token changed → liveEO restart
-    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
-    const saved = await readSavedCreds()
-    expect(saved.expertoptionToken).toBe(TOKEN_B)
+    expect(r).not.toHaveProperty("reconnectTriggered") // D2: no venue has a live leg to restart
+    expect(r).not.toHaveProperty("liveLeg")
+    expect(await readSavedToken()).toBe(TOKEN_B)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
     await seedVault() // restore for the rest of the suite
   })
 
   it("no matching venue tab → honest no-tab, nothing touched, no revive", async () => {
-    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
-    // The only tracked studio tab points at a non-EO site — the engine must
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
+    // The only tracked studio tab points at a non-venue site — the engine must
     // NOT grab the active tab (the user may be looking at anything); it asks
     // for the venue's own tab instead.
     const p = eoPage()
     p.setUrl("https://example.com/")
-    const r = await captureVenue("expertoption") // NO page given — host lookup decides
+    const r = await captureVenue("iqoption") // NO page given — host lookup decides
     expect(r.state).toBe("no-tab")
-    expect(r.venue).toBe("expertoption")
-    expect(r.reason).toMatch(/Ex[ée]xpertOption|expertoption/i)
-    expect(restartLiveEO).not.toHaveBeenCalled()
+    expect(r.venue).toBe("iqoption")
+    expect(r.reason).toMatch(/IQ Option|iqoption/i)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
   })
 
-  it("non-EO page → honest error with the pinned host message", async () => {
-    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+  it("non-venue page → honest error with the pinned host message", async () => {
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
     const p = eoPage()
     p.setUrl("https://example.com/")
-    const r = await captureVenue("expertoption", { page: p })
+    const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("error")
-    expect(r.reason).toMatch(/app\.expertoption\.(com|finance)/)
-    expect(restartLiveEO).not.toHaveBeenCalled()
+    expect(r.reason).toMatch(/IQ Option|iqoption/i)
   })
 
   it("guest session → reported guest, token never saved, no revive", async () => {
-    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
-    await rmSync(CREDS_FILE(), { force: true }) // no good token on disk
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
+    await rmSync(VENUE_TOKENS_FILE(), { force: true }) // no good token on disk
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B, { guest: true, active: false }))
-    const r = await captureVenue("expertoption", { page: p })
+    const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("guest")
     expect(r.account).toMatchObject({ type: "guest", guest: true })
-    expect(restartLiveEO).not.toHaveBeenCalled()
     // Guest is never saved — the token file either stays absent or carries no
-    // expertoptionToken (never the captured guest's token).
-    let file = null
+    // iqoption token (never the captured guest's token).
+    let saved = null
     try {
-      file = await readSavedCreds()
+      saved = await readSavedToken()
     } catch {
       /* no file written — also fine */
     }
-    expect(file?.expertoptionToken ?? "").not.toBe(TOKEN_B)
+    expect(saved ?? "").not.toBe(TOKEN_B)
   })
 
   it("same token re-captured → ok, tokenChanged false, NO restart (flap guard)", async () => {
-    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
     await seedTradingToken(TOKEN_A)
     const p = eoPage()
     p.setEval(scanHits(TOKEN_A))
-    const r = await captureVenue("expertoption", { page: p })
+    const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("ok")
     expect(r.saved).toBe(true)
-    expect(r.source).toBe("cookie:token")
+    expect(r.source).toBe("cookie:ssid")
     expect(r.tokenChanged).toBe(false)
-    expect(r.reconnectTriggered).toBe(false)
-    expect(restartLiveEO).not.toHaveBeenCalled()
     expect(r.account).toMatchObject({ type: "active", guest: false })
+    expect(r).not.toHaveProperty("reconnectTriggered")
     expect(JSON.stringify(r)).not.toContain(TOKEN_A)
   })
 
-  it("changed token → saved, tokenChanged true, restartLiveEO({force:true}), no token in report", async () => {
-    await _approveFirstLogin("expertoption") // T9 gate: approved before first capture
+  it("changed token → saved, tokenChanged true, no token in report", async () => {
+    await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
     await seedTradingToken(TOKEN_A)
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B))
-    const r = await captureVenue("expertoption", { page: p })
+    const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("ok")
     expect(r.tokenChanged).toBe(true)
-    expect(r.reconnectTriggered).toBe(true)
-    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
+    expect(r).not.toHaveProperty("reconnectTriggered")
     // The reference implementation's save is observable on disk and the report
     // body + status surface never carry the token.
-    const saved = await readSavedCreds()
-    expect(saved.expertoptionToken).toBe(TOKEN_B)
+    expect(await readSavedToken()).toBe(TOKEN_B)
     expect(JSON.stringify(r)).not.toContain(TOKEN_A)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
     expect(JSON.stringify(headlessSessionStatus())).not.toContain(TOKEN_B)
@@ -289,26 +283,24 @@ describe("captureVenue — real EO reference path", () => {
 
 describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
   beforeEach(async () => {
-    restartLiveEO.mockClear()
     await _resetHeadlessSessionState() // fresh gate state per test
-    await rmSync(CREDS_FILE(), { force: true }) // clean slate for save assertions
+    await rmSync(VENUE_TOKENS_FILE(), { force: true }) // clean slate for save assertions
   })
 
   it("the first capture emits a real capture proposal; the browser is NEVER touched", async () => {
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B)) // a logged-in session is RIGHT there — still gated
-    const r = await captureVenue("expertoption", { page: p })
-    expect(r).toMatchObject({ state: "pending-approval", venue: "expertoption" })
+    const r = await captureVenue("iqoption", { page: p })
+    expect(r).toMatchObject({ state: "pending-approval", venue: "iqoption" })
     expect(r.proposalId).toBeTruthy()
-    expect(restartLiveEO).not.toHaveBeenCalled()
-    // No save happened — the token file is absent or carries no expertoptionToken.
-    let file = null
+    // No save happened — the token file is absent or carries no iqoption token.
+    let saved = null
     try {
-      file = await readSavedCreds()
+      saved = await readSavedToken()
     } catch {
       /* no file written — also fine */
     }
-    expect(file?.expertoptionToken ?? "").not.toBe(TOKEN_B)
+    expect(saved ?? "").not.toBe(TOKEN_B)
     // The proposal sits in the REAL interventions queue, source "capture".
     const { listInterventions } = await import("../services/interventions.mjs")
     const q = listInterventions().proposals.find((x) => x.id === r.proposalId)
@@ -316,7 +308,7 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
   })
 
   it("approve through the real endpoint → the real capture runs and saves", async () => {
-    const first = await captureVenue("expertoption", { page: eoPage() })
+    const first = await captureVenue("iqoption", { page: eoPage() })
     expect(first.state).toBe("pending-approval")
     const { respondIntervention: respond } = await import("../services/interventions.mjs")
     await respond({ id: first.proposalId, decision: "approve" })
@@ -324,44 +316,39 @@ describe("first-login approval gate — real harness (T9 / REQ-E)", () => {
     await seedTradingToken(TOKEN_A)
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B))
-    const r = await captureVenue("expertoption", { page: p })
+    const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("ok")
     expect(r.loginApproved).toBe(true) // approval echoed honestly in the report
     expect(r.tokenChanged).toBe(true)
     expect(r.saved).toBe(true)
-    expect(restartLiveEO).toHaveBeenCalledWith({ force: true })
-    const saved = await readSavedCreds()
-    expect(saved.expertoptionToken).toBe(TOKEN_B)
+    expect(await readSavedToken()).toBe(TOKEN_B)
     expect(JSON.stringify(r)).not.toContain(TOKEN_B)
     expect(JSON.stringify(headlessSessionStatus())).not.toContain(TOKEN_B)
   })
 
   it("reject → state rejected and the engine ignores a waiting logged-in page", async () => {
-    const first = await captureVenue("expertoption", { page: eoPage() })
+    const first = await captureVenue("iqoption", { page: eoPage() })
     const { respondIntervention: respond } = await import("../services/interventions.mjs")
     await respond({ id: first.proposalId, decision: "reject" })
 
     const p = eoPage()
     p.setEval(scanHits(TOKEN_B)) // live session observed — still not captured
-    const r = await captureVenue("expertoption", { page: p })
-    expect(r).toMatchObject({ state: "rejected", venue: "expertoption" })
+    const r = await captureVenue("iqoption", { page: p })
+    expect(r).toMatchObject({ state: "rejected", venue: "iqoption" })
     // Honest non-approval reason: either the persisted "turned off in Settings"
     // path (this harness persists in-memory only) or the classic cooldown text.
     expect(r.reason).toMatch(/not approved|turned off in Settings/)
-    expect(restartLiveEO).not.toHaveBeenCalled()
-    let file = null
+    let saved = null
     try {
-      file = await readSavedCreds()
+      saved = await readSavedToken()
     } catch {
       /* no file written — also fine */
     }
-    expect(file?.expertoptionToken ?? "").not.toBe(TOKEN_B)
+    expect(saved ?? "").not.toBe(TOKEN_B)
   })
 })
 
 describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
-  const VENUE_TOKENS_FILE = () => join(tmp, "trading-venue-tokens.json")
-
   async function readVenueTokens() {
     const { readSecretJson } = await import("../services/vault.mjs")
     return readSecretJson(VENUE_TOKENS_FILE(), {})
@@ -386,16 +373,14 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
   }
 
   beforeEach(async () => {
-    restartLiveEO.mockClear()
     await _resetHeadlessSessionState()
     await _approveFirstLogin("iqoption") // T9 gate: approved before first capture
     // Vault entries are vestigial for token-capture venues now (T12.1: the
-    // logged-in tab is the credential, not the vault) — seeded for parity
-    // with the EO describe.
+    // logged-in tab is the credential, not the vault) — seeded for parity with
+    // the reference-path describe.
     await writeFile(
       VAULT_FILE(),
       JSON.stringify({
-        expertoption: { username: "trader@example.com", password: "pw" },
         iqoption: { username: "iq@example.com", password: "pw" }
       })
     )
@@ -412,11 +397,8 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
       saved: true,
       source: "cookie:ssid",
       tokenChanged: true,
-      reconnectTriggered: false,
-      liveLeg: false, // honest: no live bridge consumes this token yet
       loginApproved: true
     })
-    expect(restartLiveEO).not.toHaveBeenCalled() // storage-scan venues have no live leg
     // The hook's save is observable on disk — in the DEDICATED venue-tokens
     // file, never inside trading-credentials.json (handlers spread that).
     const saved = await readVenueTokens()
@@ -432,7 +414,6 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("error")
     expect(r.reason).toMatch(/no configured session token/)
-    expect(restartLiveEO).not.toHaveBeenCalled()
     let file = null
     try {
       file = await readVenueTokens()
@@ -448,7 +429,6 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("guest")
     expect(r.account).toMatchObject({ type: "guest", guest: true })
-    expect(restartLiveEO).not.toHaveBeenCalled()
     let file = null
     try {
       file = await readVenueTokens()
@@ -458,13 +438,12 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     expect(file?.venueTokens?.iqoption ?? "").not.toBe(TOKEN_B)
   })
 
-  it("wrong host (an EO tab) → honest host error for iqoption", async () => {
+  it("wrong host (an unrelated tab) → honest host error for iqoption", async () => {
     const p = h.bridges.at(-1).context.pages()[0]
-    p.setUrl("https://app.expertoption.com/") // the EO studio — not an IQ tab
+    p.setUrl("https://example.com/") // not an IQ tab
     const r = await captureVenue("iqoption", { page: p })
     expect(r.state).toBe("error")
     expect(r.reason).toMatch(/IQ Option/i) // the venue is named in the honest host error
-    expect(restartLiveEO).not.toHaveBeenCalled()
   })
 
   it("same ssid re-captured → ok, tokenChanged false (flap-guard analog)", async () => {
@@ -475,8 +454,7 @@ describe("captureVenue — real storageScan path (IQ Option, T11)", () => {
     expect(r.state).toBe("ok")
     expect(r.saved).toBe(true)
     expect(r.tokenChanged).toBe(false)
-    expect(r.reconnectTriggered).toBe(false)
-    expect(restartLiveEO).not.toHaveBeenCalled()
+    expect(r).not.toHaveProperty("reconnectTriggered")
     expect(JSON.stringify(r)).not.toContain(TOKEN_A)
   })
 })

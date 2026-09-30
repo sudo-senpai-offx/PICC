@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { getBestCandles } from "../services/marketDataBus.mjs"
 import { registerBroker, unregisterBroker } from "../services/brokers/index.mjs"
-import { stopLiveEO } from "../services/liveEO.mjs"
+// D2/AC-005: the `stopLiveEO` import is removed with liveEO.mjs.
 
 function synthCandles(n, base = 100, stepSec = 60) {
   return Array.from({ length: n }, (_, i) => ({
@@ -39,7 +39,8 @@ function registerTestBroker(adapter) {
 afterEach(async () => {
   for (const slug of testBrokerSlugs) unregisterBroker(slug)
   testBrokerSlugs.length = 0
-  await stopLiveEO()
+  // D2/AC-005: the `stopLiveEO()` teardown is removed with liveEO.mjs — there
+  // is no ExpertOption transport to stop between these tests.
 })
 
 describe("T2 fan-in quality order", () => {

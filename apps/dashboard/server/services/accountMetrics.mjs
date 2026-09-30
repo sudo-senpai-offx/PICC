@@ -3,23 +3,26 @@
 // ── Honesty contract ─────────────────────────────────────────────────────────
 //   Every number here is an OBSERVED value or null. A field absent from the
 //   broker's raw profile frame stays null in storage and null in the API — the
-//   strict parser never falls back to 0 like expertoption.accountFrom does
-//   (`num(...) ?? 0`), because a fabricated 0 is indistinguishable from a real
-//   balance of zero. Genuine zeros ARE preserved.
+//   the strict parser never falls back to 0, because a fabricated 0 is
+//   indistinguishable from a real balance of zero. Genuine zeros ARE preserved.
 //
 // ── Where the data comes from ─────────────────────────────────────────────────
-//   v1 extractVia:["ws"] (only `expertoption`): liveEO keeps the most recent
-//   RAW profile frame per leg (liveEO.lastRawProfile, exposed via
-//   liveEOAccountRaw()) — re-parsed here strictly. observedAt = the frame's
-//   arrival time; sourceLeg = the leg that delivered it. The collector runs on
-//   the venue's metrics cadence (spec T5) via the same scheduler job that
-//   refreshes sessions (spec mechanism B/C).
+//   The `ws` via read raw profile frames per leg and re-parsed them strictly
+//   here: observedAt = the frame's arrival time; sourceLeg = the leg that
+//   delivered it. D2/AC-005 removed that producer (the ExpertOption websocket
+//   transport), and `expertoption` was the only profile declaring
+//   `extractVia:["ws"]` — so with the venue gone NO profile declares it and the
+//   collector stores nothing. The store, the parser and the API surface are
+//   retained unchanged: they are venue-agnostic and a future `ws` producer
+//   (a new capture profile declaring the via) would repopulate them with no
+//   change here. The collector runs on the venue's metrics cadence (spec T5)
+//   via the same scheduler job that refreshes sessions (spec mechanism B/C).
 //
 // ── Store ────────────────────────────────────────────────────────────────────
 //   account-metrics.json, keyed { [userId]: { [venueId]: record } }. Latest
 //   record per (user, venue); the API derives `stale` from observedAt vs the
-//   venue's current metrics cadence. The boot read follows the feed-mode rule
-//   (liveEO.mjs:76-116): under vitest the file is only touched when a test set
+//   venue's current metrics cadence. The boot read follows the VITEST-suppressed
+//   JSON-store rule: under vitest the file is only touched when a test sets
 //   PICC_ACCOUNT_METRICS_DATA_DIR, so a test run can never poison the real
 //   server's store.
 
@@ -51,9 +54,9 @@ function num(v) {
 }
 
 /**
- * Unwrap a profile payload the same way liveEO does (obj.message?.profile ??
- * obj.message), accepting both the accountFrom-style `{ profile: {...} }` and
- * the raw WS app-object `{ action: "profile", message: {...} }`.
+ * Unwrap a profile payload: `obj.message?.profile ?? obj.message`, accepting
+ * both the accountFrom-style `{ profile: {...} }` and the raw WS app-object
+ * `{ action: "profile", message: {...} }`.
  */
 function unwrapProfile(payload) {
   if (!payload || typeof payload !== "object") return null
@@ -145,7 +148,7 @@ export function parseAccountFrame(payload) {
 
 /**
  * T5 extractor. Frames may be either raw WS app-objects (tests) or
- * { at, leg, payload } entries (production, mapped from liveEOAccountRaw()).
+ * { at, leg, payload } entries (the production shape).
  * Picks the MOST RECENT parseable frame; stamps venueId/sourceLeg/observedAt.
  * @returns record | null (unknown venue, no extractor, or no usable frame).
  */
@@ -254,11 +257,19 @@ function metricsEnabledFor(profile) {
   return !profile.capture?.via || isVenueEnabled(profile.id)
 }
 
-/** Production read for the "ws" via: liveEO's most recent raw profile frames. */
-async function framesFromLiveEO() {
-  const { liveEOAccountRaw } = await import("./liveEO.mjs")
-  const raws = liveEOAccountRaw() ?? {}
-  return Object.entries(raws).map(([leg, e]) => ({ leg, at: e.at, payload: e.payload }))
+/**
+ * Production read for the "ws" via: the most recent raw profile frames.
+ *
+ * D2/AC-005: the ExpertOption websocket transport (liveEO.mjs) is removed, and
+ * `expertoption` was the ONLY capture profile declaring `extractVia:["ws"]`
+ * (every other profile declares `extractVia:[]`). So the "ws" via has no
+ * remaining producer. This returns an empty frame set rather than importing a
+ * deleted module: `extractAccountState` then yields null and the collector
+ * stores nothing, which is the honest "no observation" outcome — never a
+ * fabricated zero and never a thrown import.
+ */
+async function framesFromWs() {
+  return []
 }
 
 /**
@@ -271,7 +282,7 @@ export async function collectAccountMetrics(userId, venueId) {
   if (!profile || !metricsEnabledFor(profile)) return null
   const via = profile.metrics?.extractVia ?? []
   if (!via.includes("ws")) return null
-  const frames = await framesFromLiveEO()
+  const frames = await framesFromWs()
   const record = extractAccountState({ venueId, frames })
   if (!record) return null // honest: no observation yet, nothing stored
   await putAccountMetrics(userId, record)

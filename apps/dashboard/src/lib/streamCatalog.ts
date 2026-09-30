@@ -122,7 +122,6 @@ export const RENTAL_APPS: CatalogEntry[] = [
 // settings. Not income streams — these are active trading platforms.
 // ---------------------------------------------------------------------
 export const TRADING_PLATFORM_APPS: CatalogEntry[] = [
-  { id: "expertoption", name: "ExpertOption", category: "trading", residential: false, vps: false, payout: "—", url: "https://app.expertoption.com/", note: "Reference implementation: full capture + live session (liveEO). Binary options — demo-first." },
   { id: "iqoption", name: "IQ Option", category: "trading", residential: false, vps: false, payout: "—", url: "https://iqoption.com/en/login", note: "Full capture via storage-scan hook (ssid cookie). Binary options — demo-first." },
   { id: "olymptrade", name: "Olymp Trade", category: "trading", residential: false, vps: false, payout: "—", url: "https://olymptrade.com", note: "Binary options — demo-first. Capture hook pending." },
   { id: "deriv", name: "Deriv", category: "trading", residential: false, vps: false, payout: "—", url: "https://deriv.com", note: "Binary options — demo-first. Capture hook pending." },

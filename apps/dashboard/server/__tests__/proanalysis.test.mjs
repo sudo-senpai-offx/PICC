@@ -3,13 +3,13 @@ import {
   proAnalyzeCandles,
   buildConfluence,
   summarizeProAnalysis,
-  proAnalyzeSymbol,
-  proAnalyzeExpertOption
+  proAnalyzeSymbol
 } from "../services/proanalysis.mjs"
 import { chatText, llmConfigured } from "../services/llm.mjs"
 import { getHistory } from "../services/yahoo.mjs"
-import { getCredentials } from "../services/trading.mjs"
-import { connectSession } from "../services/expertoption.mjs"
+// D2/AC-005: `proAnalyzeExpertOption` (removed with the venue), the
+// `connectSession` import from the deleted expertoption.mjs, and the
+// `vi.mock("../services/expertoption.mjs", …)` block are all removed.
 
 vi.mock("../services/llm.mjs", async (importOriginal) => {
   const actual = await importOriginal()
@@ -22,13 +22,6 @@ vi.mock("../services/llm.mjs", async (importOriginal) => {
 
 // B-FUS-2 fixture sources: the entry points must never hit the real network.
 vi.mock("../services/yahoo.mjs", () => ({ getHistory: vi.fn() }))
-vi.mock("../services/trading.mjs", () => ({
-  getCredentials: vi.fn(async () => ({ expertoptionToken: "tok-demo", expertoptionDemo: true, expertoptionWsUrl: "ws://127.0.0.1:1" }))
-}))
-vi.mock("../services/expertoption.mjs", async (importOriginal) => {
-  const actual = await importOriginal()
-  return { ...actual, connectSession: vi.fn() }
-})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -334,38 +327,14 @@ describe("fusion-layer wiring (B-FUS-2)", () => {
     expect(JSON.stringify(r.confluence.reasoning)).toContain("Regime layer")
   })
 
-  it("ExpertOption path: wires layers over liveEO buffers, one candles() call", async () => {
-    // 300 x 60s bars so the 5m sibling (60 bars) clears the 50-bar regression
-    // period and can contribute a directional read; floor for bars is 40.
-    const candles = candlesFromSeries(trendSeries(100, 0.002, 300))
-    const session = {
-      assets: vi.fn(async () => ({ assets: [{ id: "TEST", name: "Test Asset" }] })),
-      candles: vi.fn(async () => ({ closes: candles.map((c) => c.close), ohlc: candles, count: candles.length })),
-      balance: vi.fn(async () => ({ balance: 1000, currency: "USD", demo: true })),
-      close: vi.fn()
-    }
-    vi.mocked(connectSession).mockResolvedValue(session)
-
-    const r = await proAnalyzeExpertOption({ assetId: "TEST", timeframe: 60, count: 300 })
-
-    expect(connectSession).toHaveBeenCalledTimes(1)
-    expect(connectSession).toHaveBeenCalledWith(expect.objectContaining({ token: "tok-demo", isDemo: true }))
-    expect(session.candles).toHaveBeenCalledTimes(1)
-    expect(session.candles).toHaveBeenCalledWith("TEST", 60, 300)
-    expect(session.close).toHaveBeenCalledTimes(1)
-    expect(r.ok).toBe(true)
-    expect(r.platform).toBe("ExpertOption")
-    expect(r.confluence.groups.map((g) => g.id)).toEqual(["trend", "momentum", "volatility", "regimeLayer", "mtfLayer"])
-
-    const regime = r.confluence.groups.find((g) => g.id === "regimeLayer")
-    expect(regime.observed).toBe(true)
-    expect(regime.evidence.map((e) => e.name)).toEqual(["regime 1m", "regime 5m"])
-
-    const mtf = r.confluence.groups.find((g) => g.id === "mtfLayer")
-    expect(mtf.observed).toBe(true)
-    expect(mtf.evidence.map((e) => e.name)).toEqual(["mtf 1m", "mtf 5m"])
-    expect(mtf.evidence.every((e) => e.source === "liveEO-buffers")).toBe(true)
-  })
+  // D2/AC-005: the "ExpertOption path" test is REMOVED with
+  // `proAnalyzeExpertOption` and expertoption.mjs. It drove the whole EO entry
+  // point through a mocked `connectSession` — asserting one session connect,
+  // one candles() call, one close(), and the layer wiring over those candles.
+  // Every one of those assertions named a deleted symbol, so none survives.
+  // The layer wiring itself is NOT lost: the identical `regimeLayer`/`mtfLayer`
+  // assertions run against `proAnalyzeSymbol` (Yahoo) in the test above, which
+  // exercises the same `proAnalyzeCandles` core.
 
   it("thin histories keep only the base plane — the sub-minimum aggregate is not smuggled in", async () => {
     // 45 daily bars: a valid report (>= 40), but the 5d sibling aggregates to

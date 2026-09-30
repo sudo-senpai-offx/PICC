@@ -1131,10 +1131,11 @@ export function browserImportProfile(
   return post(`/browser/import-profile`, { realProfilePath, profile })
 }
 
-/** Grab the active ExpertOption tab's live session token into the trading credentials. */
-export function browserCaptureSession(): Promise<{ ok: boolean; token: string; source: string }> {
-  return post(`/browser/capture-session`, {})
-}
+// D2/AC-005: `browserCaptureSession()` is REMOVED with the venue. It wrapped
+// `/api/browser/capture-session`, which existed only to pull the active
+// ExpertOption tab's session token into the trading credentials, and it had zero
+// callers left in the client tree. Leaving a wrapper pointing at a deleted route
+// is a latent 404, so the wrapper goes with the route.
 
 // ---------------------------------------------------------------------
 // Browser automation — PICC's safe read-only pass plus the optional

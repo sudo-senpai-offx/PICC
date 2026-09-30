@@ -1019,13 +1019,13 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
-    marker: 'if (path === "/api/trading/analyze" && req.method === "POST") {',
-    reason:
-      "Single-asset analysis over caller-supplied assetId. Reads market data, not user state. " +
-      "DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
-  {
+    // D2/AC-005: the `/api/trading/analyze` allowlist entry is REMOVED with the
+    // route. Its only implementation was `analyzeExpertOptionAsset`, deleted with
+    // the ExpertOption venue, so the dispatch line no longer exists and the
+    // entry would read as coverage while excusing nothing — which is exactly the
+    // rot this guard exists to prevent. It is deleted, not re-pointed: the
+    // surviving venue-agnostic analyses are `/api/trading/pro/analyze` and
+    // `/api/trading/predict`, both still allowlisted below.
     marker: 'if (path === "/api/trading/pro/analyze" && req.method === "POST") {',
     reason:
       "Pro-tier asset analysis over caller-supplied symbol. Reads market data, not user state. " +
@@ -1033,13 +1033,9 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
-    marker: 'if (path === "/api/trading/pro/expertoption" && req.method === "POST") {',
-    reason:
-      "ExpertOption bridged analysis for a caller-supplied asset. Reads market data, not user state. " +
-      "DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
-  {
+    // D2/AC-005: the `/api/trading/pro/expertoption` allowlist entry is REMOVED
+    // with the route. Its only implementation was `proAnalyzeExpertOption`,
+    // deleted with the venue.
     marker: 'if (path === "/api/trading/pro/narrative" && req.method === "POST") {',
     reason:
       "Narrative summary of a pro-analysis report the CALLER supplied in the body. It reads the " +
@@ -1047,15 +1043,15 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
-    marker: 'if (path === "/api/trading/feed-mode" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Feed preference read AND write: GET returns the mode plus live leg health, POST switches the " +
-      "mode between auto and studio. The POST is a persistent, instance-wide setting change with no " +
-      "gate. DECISION ITEM — and the strongest ungated case outside the two deletes, because it MUTATES " +
-      "shared state an anonymous caller can flip. RECOMMENDATION: gate the POST; the GET can stay.",
-    owner: "decision"
-  },
-  {
+    // D2/AC-005: the `/api/trading/feed-mode` allowlist entry is REMOVED with
+    // the route. It read and wrote the feed-mode preference and reported live-LEG
+    // health; every leg it described belonged to the deleted ExpertOption
+    // transport (liveEO.mjs owned getFeedMode/setFeedMode and the leg stats).
+    // The DECISION ITEM this entry recorded — "gate the POST, it MUTATES shared
+    // state an anonymous caller can flip" — is MOOT: the route no longer exists,
+    // so there is nothing left to gate. Recorded here rather than silently
+    // dropped, because losing the decision silently would be the rot this file
+    // exists to prevent.
     marker: 'if (path === "/api/trading/news" && (req.method === "GET" || req.method === "POST")) {',
     reason:
       "News digest for a caller-supplied symbol or topic. Third-party content, no store read, no user " +
@@ -1525,15 +1521,12 @@ const DECLARED_PUBLIC = [
       "RECOMMENDATION: gate it, on the same cost-surface reasoning as /api/content/generate.",
     owner: "decision"
   },
-  {
-    marker: 'if (path === "/api/trading/demo" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "ExpertOption demo-account status: whether the account is marked demo and whether the bridged " +
-      "feed is live. DECISION ITEM — it discloses the demo/live rail, which is the same class of " +
-      "reconnaissance the sibling /api/trading/brokers route was gated for. RECOMMENDATION: gate it " +
-      "with the demo family.",
-    owner: "decision"
-  },
+  // D2/AC-005: the `/api/trading/demo` allowlist entry is DELETED entirely
+  // (not re-pointed, not stubbed). It served `expertOptionDemoStatus()` — an
+  // ExpertOption demo-account status read. Its recorded DECISION ITEM ("gate it
+  // with the demo family") is MOOT: the venue, and the route, are gone. A stale
+  // entry reads as coverage while excusing nothing, which is the exact rot this
+  // self-policing block exists to catch.
   {
     marker: 'if (path === "/api/trading/demo/place" && req.method === "POST") {',
     reason:
@@ -1556,6 +1549,17 @@ const DECLARED_PUBLIC = [
       "own trade record, ungated. RECOMMENDATION: gate it with the demo family.",
     owner: "decision"
   },
+  // D2/AC-005: the `/api/trading/demo` allowlist entry is DELETED entirely
+  // (not re-pointed, not stubbed). It served `expertOptionDemoStatus()` — an
+  // ExpertOption demo-account status read. Its recorded DECISION ITEM ("gate the
+  // GET once the session carries user state") is MOOT: the venue, and the route,
+  // are gone. A stale entry reads as coverage while excusing nothing, which is
+  // the exact rot this self-policing block exists to catch.
+  //
+  // Its SIBLINGS `/api/trading/demo/analytics` and `/api/trading/demo/deals` are
+  // UNCHANGED and still allowlisted: both read the local settled-deals ledger
+  // (`demoDeals` / `demoAnalytics`), not the removed venue, so they remain live
+  // routes with the same ungated DECISION ITEM they always carried.
   {
     marker: 'if (path === "/api/trading/autopilot/start" && req.method === "POST") {',
     reason:

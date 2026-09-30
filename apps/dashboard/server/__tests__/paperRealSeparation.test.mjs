@@ -30,11 +30,13 @@ const SRC = {
 }
 
 describe("paper ⊗ venue separation — no merged money total anywhere (B-PAP-4)", () => {
-  it("combinedTodayPnl keeps paper and expertoption as DISTINCT buckets", () => {
+  it("combinedTodayPnl keeps paper and demo as DISTINCT buckets", () => {
     const src = readFileSync(SRC.positionManager, "utf8")
     // Both buckets are built from their own store...
     expect(src).toMatch(/paper:\s*\{\s*pnl:\s*round2\(paperPnl\)/)
-    expect(src).toMatch(/expertoption:\s*\{\s*pnl:\s*round2\(demoPnl\)/)
+    // D2/AC-005: the second bucket key is `demo`, not the removed `expertoption`.
+    expect(src).toMatch(/demo:\s*\{\s*pnl:\s*round2\(demoPnl\)/)
+    expect(src).not.toMatch(/expertoption:\s*\{\s*pnl:/)
     // ...and the merged `total:` slice is deleted.
     const merge = (src.match(/total:\s*\{\s*pnl:\s*round2\(paperPnl\s*\+\s*demoPnl\)/) ?? []).length
     expect(merge).toBe(0)

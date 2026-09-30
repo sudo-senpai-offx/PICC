@@ -12,7 +12,13 @@ const canTouchDisk = () =>
   process.env.VITEST !== "true" || Boolean(process.env.PICC_COMMAND_CENTRE_DATA_DIR)
 
 export const STREAK_LIMIT = 50
-export const KNOWN_VENUE_CLASSES = ["ccxt-crypto", "hyperliquid-perps", "expertoption"]
+// D2/AC-005: the `expertoption` venue CLASS is removed with the venue. It was
+// the only binary-options class here, and it was also the only class with a
+// `platformVerification` seed — its entry existed to hold a platform
+// verification record for a venue PICC can no longer reach. The unlock
+// ceremony's honesty contract is unchanged for the two classes that remain:
+// an unknown class is still a named deny, never a silent skip.
+export const KNOWN_VENUE_CLASSES = ["ccxt-crypto", "hyperliquid-perps"]
 
 const emptyClass = () => ({
   windowOpenedAt: null,
@@ -27,7 +33,10 @@ const emptyStore = () => ({
   version: 1,
   classes: {},
   enablement: Object.fromEntries(KNOWN_VENUE_CLASSES.map((vk) => [vk, null])),
-  platformVerification: { expertoption: null },
+  // D2/AC-005: was `{ expertoption: null }`. `setPlatformVerification` is
+  // still generic and still works for any class a caller passes; the map just
+  // starts empty rather than seeding a record for a removed venue.
+  platformVerification: {},
   assetClasses: {}
 })
 

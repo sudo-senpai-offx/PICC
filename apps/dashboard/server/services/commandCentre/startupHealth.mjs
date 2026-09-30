@@ -12,7 +12,8 @@ const STORE_FILES = [
   { name: "trading-credentials.json", file: join(TRADING_DATA_DIR, "trading-credentials.json") },
   { name: "venue-credentials.json", file: join(VENUE_DATA_DIR, "venue-credentials.json") }
 ]
-const DAY_MS = 86_400_000
+// D2/AC-005: `DAY_MS` is removed with the ExpertOption expiry check, which was
+// its only consumer. Nothing else in this module measures a TTL in days.
 const DEFAULT_CCXT_VENUE = "HYPERLIQUID"
 const UNREADABLE = Symbol("startup-health-unreadable")
 
@@ -67,69 +68,13 @@ function credentialStoresCheck(stores) {
   return check("credential-stores", "ok", null, "credential stores decryptable")
 }
 
-function expiryTtl() {
-  const raw = process.env.PICC_CRED_EXPIRY_DAYS_EXPERTOPTION
-  if (raw === undefined || String(raw).trim() === "") return { skipped: true }
-  const days = Number(raw)
-  if (!Number.isFinite(days) || days <= 0) return { invalid: true }
-  return { days }
-}
-
-function expertoptionCheck(store, now) {
-  if (!store.present) {
-    return check("expertoption-expiry", "warning", null, "ExpertOption token unobserved: trading credential store unconfigured")
-  }
-  if (!store.readable) {
-    return check("expertoption-expiry", "warning", null, "ExpertOption token unobserved: trading credential store unreadable")
-  }
-  const token = typeof store.value?.expertoptionToken === "string" ? store.value.expertoptionToken.trim() : ""
-  if (!token) return check("expertoption-expiry", "ok", null, "ExpertOption token not configured")
-  const ttl = expiryTtl()
-  if (ttl.skipped) {
-    return check(
-      "expertoption-expiry",
-      "warning",
-      null,
-      "ExpertOption expiry check skipped: PICC_CRED_EXPIRY_DAYS_EXPERTOPTION absent (token ****)"
-    )
-  }
-  if (ttl.invalid) {
-    return check(
-      "expertoption-expiry",
-      "warning",
-      null,
-      "ExpertOption expiry check skipped: PICC_CRED_EXPIRY_DAYS_EXPERTOPTION is invalid (token ****)"
-    )
-  }
-  const capturedAt = Date.parse(String(store.value?.expertoptionTokenCapturedAt ?? ""))
-  if (!Number.isFinite(capturedAt)) {
-    return check(
-      "expertoption-expiry",
-      "warning",
-      "suite:deny:credential-capture-date-missing (expertoption, rotation record absent — re-capture to record it)",
-      "ExpertOption token present as **** but capture date is unobserved"
-    )
-  }
-  // Compare timestamps, not a floored day count: `Math.floor(ageDays)` reported a token that is
-  // 30 days and 1 hour old as "age 30" and therefore `ok` under a 30-day TTL. D6 defines expiry as
-  // `capturedAt + TTL`, so compare directly and only floor for the human-readable string.
-  const ageMs = now - capturedAt
-  const ageDays = Math.floor(ageMs / DAY_MS)
-  if (now > capturedAt + ttl.days * DAY_MS) {
-    return check(
-      "expertoption-expiry",
-      "error",
-      `suite:deny:credential-expired (expertoption, age ${ageDays} days exceeds ${ttl.days})`,
-      "ExpertOption token is past the configured rotation window (token ****)"
-    )
-  }
-  return check(
-    "expertoption-expiry",
-    "ok",
-    null,
-    `ExpertOption token age ${ageDays} days; configured TTL ${ttl.days} days (token ****)`
-  )
-}
+// D2/AC-005: `expertoptionCheck` and its `expiryTtl` helper are REMOVED with the
+// venue. They existed only to age-check an `expertoptionToken` in the trading
+// credential store, and that field is no longer written or read. The check is
+// deleted rather than left reporting a permanently-absent token, which would be
+// the present-but-disabled shape AC-005 prohibits. The credential-store
+// readability check (`credentialStoresCheck`) is untouched and still covers the
+// same file, so the store is still proven readable at startup.
 
 function ccxtPairCheck() {
   const ids = ccxtKeyedExchangeIds()
@@ -177,11 +122,9 @@ function perpsRailCheck() {
 }
 
 export async function buildStartupHealthChecks({ now = Date.now() } = {}) {
-  const timestamp = nowMsOf(now)
   const stores = await Promise.all(STORE_FILES.map((entry) => readStore(entry.file)))
   return [
     credentialStoresCheck(stores),
-    expertoptionCheck(stores[0], timestamp),
     ccxtPairCheck(),
     perpsRailCheck()
   ]

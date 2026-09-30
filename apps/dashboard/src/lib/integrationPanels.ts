@@ -65,7 +65,10 @@ export interface AggregateDisplay {
   // B-PAP-2: two buckets, never a merged paper+demo total. Each entry is the
   // observed PnL for that bucket this trading day (0 trades is honest "nothing
   // traded yet", absent means the bucket has no store to read).
-  todayPnl: { paper: PnlSlice | null; expertoption: PnlSlice | null }
+  // D2/AC-005: the second bucket was keyed `expertoption`; the venue is removed,
+  // and the underlying data is venue-agnostic settled DEMO deals, so the key is
+  // `demo`. The paper/demo separation and the banned merged total are unchanged.
+  todayPnl: { paper: PnlSlice | null; demo: PnlSlice | null }
   riskCheck: {
     allowed: boolean
     warnings: string[]
@@ -80,7 +83,7 @@ export function aggregatePanelModel(res: AggregateResult): AggregateDisplay {
     venues: res.venues ?? [],
     todayPnl: {
       paper: res.todayPnl?.paper ?? null,
-      expertoption: res.todayPnl?.expertoption ?? null
+      demo: res.todayPnl?.demo ?? null
     },
     riskCheck: res.riskCheck
       ? {

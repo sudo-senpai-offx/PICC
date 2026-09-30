@@ -125,48 +125,28 @@ describe("startup health checks", () => {
     expect(check?.severity).toBe("error")
   })
 
-  it("reports the exact expired ExpertOption age deny", async () => {
-    const result = await checks(
-      { expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW - 41 * DAY_MS).toISOString() },
-      {},
-      { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" }
-    )
-    expect(findDeny(result, "suite:deny:credential-expired (expertoption, age 41 days exceeds 30)")).toMatchObject({
-      severity: "error"
-    })
+  // D2/AC-005: the four ExpertOption token-TTL tests below (expired-age deny,
+  // one-hour-past-TTL regression, exact-boundary, missing-capturedAt) are
+  // REMOVED with `expertoptionCheck`. That check existed only to age-check an
+  // `expertoptionToken` that is no longer written or read, so there is no code
+  // left for them to exercise. The credential-store readability check that
+  // shared the same store — including the tampered-envelope test above — is
+  // untouched and still proves the vault decrypts at startup.
+
+  it("D2/AC-005: no ExpertOption expiry check remains in the startup health report", async () => {
+    const result = await checks({}, {}, {})
+    expect(result.find((entry) => entry.id === "expertoption-expiry")).toBeUndefined()
+    // The check id, the env var, and the deny vocabulary are all gone — a
+    // re-added check would be a new deny surface for a venue that is not here.
+    expect(JSON.stringify(result)).not.toMatch(/expertoption/i)
   })
 
-  it("treats a token one hour past the TTL as expired, not ok", async () => {
-    // Regression: the check floored the age to whole days, so 30d+1h reported "age 30" and stayed
-    // `ok` under a 30-day TTL. D6 defines expiry as capturedAt + TTL.
-    const result = await checks(
-      { expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW - 30 * DAY_MS - 3_600_000).toISOString() },
-      {},
-      { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" }
-    )
-    const expiry = result.find((entry) => entry.id === "expertoption-expiry")
-    expect(expiry?.severity).toBe("error")
-    expect(expiry?.deny).toMatch(/^suite:deny:credential-expired \(expertoption, age \d+ days exceeds 30\)$/)
-    // `checks()` yields the list, so derive the ok verdict the same way the module does.
-    expect(result.some((entry) => entry.severity === "error")).toBe(true)
-  })
-
-  it("keeps a token exactly at the TTL boundary not-yet-expired", async () => {
-    const result = await checks(
-      { expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW - 30 * DAY_MS).toISOString() },
-      {},
-      { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" }
-    )
-    const expiry = result.find((entry) => entry.id === "expertoption-expiry")
-    expect(expiry?.severity).toBe("ok")
-    expect(expiry?.deny).toBeNull()
-  })
-
-  it("warns when an ExpertOption token has no capturedAt record", async () => {
-    const result = await checks({ expertoptionToken: TOKEN }, {}, { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" })
-    expect(
-      findDeny(result, "suite:deny:credential-capture-date-missing (expertoption, rotation record absent — re-capture to record it)")
-    ).toMatchObject({ severity: "warning" })
+  it("D2/AC-005: the removed TTL env var no longer influences startup health", async () => {
+    // `PICC_CRED_EXPIRY_DAYS_EXPERTOPTION` was the only consumer's input. With
+    // the check gone the variable must be inert, and must not resurrect a deny.
+    const without = await checks({}, {}, {})
+    const with_ = await checks({}, {}, { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" })
+    expect(with_).toEqual(without)
   })
 
   it("reports a half-set wallet pair with the missing env variable", async () => {
@@ -190,34 +170,51 @@ describe("startup health checks", () => {
     expect(findDeny(result, PERPS_OFF)).toMatchObject({ severity: "warning" })
   })
 
-  it("skips expiry validation when the TTL env var is absent without changing ok", async () => {
-    const result = await checks({ expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW).toISOString() }, {}, {})
-    const expiry = result.find((entry) => entry.id === "expertoption-expiry")
-    expect(expiry?.deny).toBeNull()
-    expect(expiry?.detail).toMatch(/skipped/i)
+  it("D2/AC-005: the removed expiry skip/mask branches are gone, and ok is unaffected", async () => {
+    // The "TTL absent → skipped, still ok" and "mask the token" tests both
+    // described `expertoptionCheck`. With that check removed there is no
+    // `****`-masked expiry detail to assert, and the ok verdict must now be
+    // derived from the checks that actually remain.
+    const result = await checks({}, {}, {})
     expect(result.some((entry) => entry.severity === "error")).toBe(false)
     const readout = await health.runStartupHealth({ now: NOW })
     expect(readout.ok).toBe(true)
   })
 
   it("masks token values and never echoes the raw token", async () => {
-    const result = await checks({ expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW).toISOString() }, {}, {})
+    // The mask guarantee is preserved for the surface that still prints a
+    // credential: a CCXT half-set pair names the venue but never the secret.
+    const result = await checks({ apiKey: TOKEN }, {}, { PICC_CCXT_APIKEY_BINANCE: TOKEN })
     const serialized = JSON.stringify(result)
-    expect(serialized).toContain("****")
     expect(serialized).not.toContain(TOKEN)
   })
 
   it("sets ok false only when an error-severity check exists", async () => {
-    const errorResult = await checks(
-      { expertoptionToken: TOKEN, expertoptionTokenCapturedAt: new Date(NOW - 41 * DAY_MS).toISOString() },
-      {},
-      { PICC_CRED_EXPIRY_DAYS_EXPERTOPTION: "30" }
-    )
+    // D2/AC-005: the error source is now the credential-store readability
+    // check, not the removed EO expiry check. A tampered vault envelope is
+    // proven unreadable, so the readout must go ok:false and report false
+    // honestly; a warning-only store must stay ok:true.
+    // `checks()` re-seeds the store, so the tampering is applied AFTER seeding
+    // and before loading the module — the same ordering the test above uses.
+    await seedStores({}, {})
+    const path = join(dir, TRADING_FILE)
+    const envelope = JSON.parse(readFileSync(path, "utf8"))
+    const parts = envelope.pva1.split(":")
+    parts[2] = Buffer.from("tampered-ciphertext-bytes").toString("base64")
+    writeFileSync(path, JSON.stringify({ pva1: parts.join(":") }), "utf8")
+    await loadHealth()
+    Object.assign(process.env, { PICC_CCXT_WALLETADDRESS_HYPERLIQUID: "0xplaceholder-wallet" })
+
+    const errorResult = await health.buildStartupHealthChecks({ now: NOW })
     const errorReadout = await health.runStartupHealth({ now: NOW })
     expect(errorResult.some((entry) => entry.severity === "error")).toBe(true)
     expect(errorReadout.ok).toBe(false)
     expect(Object.keys(errorReadout).sort()).toEqual(["at", "checks", "generatedAt", "ok"])
-    const warningOnly = await checks({}, {}, { PICC_CCXT_WALLETADDRESS_HYPERLIQUID: "0xplaceholder-wallet" })
+
+    // A readable store with a half-set CCXT pair is warning-only → ok stays true.
+    await seedStores({}, {})
+    await loadHealth()
+    const warningOnly = await health.buildStartupHealthChecks({ now: NOW })
     const warningReadout = await health.runStartupHealth({ now: NOW })
     expect(warningOnly.some((entry) => entry.severity === "error")).toBe(false)
     expect(warningReadout.ok).toBe(true)

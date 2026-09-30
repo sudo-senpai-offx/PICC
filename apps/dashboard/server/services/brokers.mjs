@@ -9,7 +9,6 @@
 // Capability vocabulary (kept deliberately coarse so heterogeneous venues
 // compare cleanly):
 //   market-data    read-only candles/quotes
-//   binary-options fixed-payout call/put orders (ExpertOption-style)
 //   spot-orders    buy/sell at quote price (exchange-style)
 //   demo-trading   executable DEMO order path wired end-to-end
 //   close-position early exit of an open position
@@ -35,26 +34,13 @@ export async function listBrokers() {
   const creds = await getCredentials()
   const brokers = []
 
-  // ── ExpertOption — binary options, DEMO-only executor ────────────────────
-  let eo = { configured: Boolean(creds.expertoptionToken), connected: false, sessionLive: null }
-  try {
-    const { getDemoSession, cachedSessionLive } = await import("./autopilot.mjs")
-    const session = getDemoSession()
-    eo.connected = Boolean(session?.connected)
-    eo.sessionLive = cachedSessionLive().sessionLive ?? null
-  } catch { /* autopilot module unavailable — stay honest about it */ }
-  brokers.push({
-    slug: "expertoption",
-    label: "ExpertOption",
-    category: "binary",
-    capabilities: ["market-data", "account", "positions", "close-position", "demo-trading", "binary-options"],
-    timeframes: [60, 300, 900, 3600], // live push builds 1m..1h buffers; 5s requests resolve up to 1m, 4h is declined (T5)
-    configured: eo.configured,
-    connected: eo.connected,
-    sessionLive: eo.sessionLive,
-    demoOnly: true,
-    notes: "WebSocket gateway client; execution hard-gated to demo accounts."
-  })
+  // D2/AC-005: the ExpertOption row and the `getDemoSession()` call are removed
+  // together. That call was one of the four dead call sites: `getDemoSession` is
+  // defined NOWHERE in the server tree, so `getDemoSession()` threw and the throw
+  // was swallowed by the `catch` above — `eo.connected` could only ever be false.
+  // The row is gone rather than left present-but-disabled (AC-005 prohibits
+  // "present-but-disabled"), and the four-call-site count drops 4 → 3 (the other
+  // three are removed in autopilot.mjs, positionManager.mjs and trading.mjs).
 
   // ── CCXT exchanges — multi-exchange MARKET DATA (read-only today) ────────
   const pairs = Array.isArray(creds.ccxtExchanges) ? creds.ccxtExchanges : []
@@ -95,15 +81,18 @@ export async function listBrokers() {
     label: "Paper engine",
     category: "simulation",
     capabilities: ["market-data", "paper-trading", "positions", "close-position", "account"],
-    timeframes: [60, 300, 900, 3600], // simulation standard; paper serves no candles — data flows from EO/CCXT/Yahoo
+    timeframes: [60, 300, 900, 3600], // simulation standard; paper serves no candles — data flows from CCXT/Yahoo
     configured: true,
     connected: true,
     demoOnly: true,
     notes: "Local ledger with Yahoo mark-to-market; the safe default executor for simulations."
   })
 
-  // The venue that currently owns real (demo) order execution.
-  const activeExecutor = eo.configured ? "expertoption" : "paper"
+  // The venue that currently owns real (demo) order execution. D2/AC-005 removed
+  // the ExpertOption executor, so the paper engine is the only executor and
+  // `activeExecutor` is unconditionally "paper" — it is no longer derived from
+  // a token that no longer selects anything.
+  const activeExecutor = "paper"
 
   return {
     ok: true,
