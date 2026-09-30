@@ -39,11 +39,11 @@ export const STREAM_CATEGORY_LABELS: Record<string, string> = {
 }
 
 export const CRYPTO_APPS: CatalogEntry[] = [
-  { id: "luno", name: "Luno", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://www.luno.com/my", note: "Buy & hold BTC/ETH; no local staking product — log gains as manual balance. PICC asserts no regulatory status for this venue." },
-  { id: "mx-global", name: "MX Global", category: "crypto", residential: false, vps: false, payout: "Bank, FPX", url: "https://mxglobal.com.my", note: "BTC/ETH/USDT spot pairs. PICC asserts no regulatory status for this venue." },
-  { id: "hata", name: "HATA Digital", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://www.hata.io", note: "Crypto exchange. PICC asserts no regulatory status for this venue." },
-  { id: "sinegy", name: "SINEGY DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://sinegy.com", note: "Crypto exchange based in Penang. PICC asserts no regulatory status for this venue." },
-  { id: "kinetic", name: "Kinetic DAX", category: "crypto", residential: false, vps: false, payout: "Bank", url: "https://kineticdax.com", note: "Crypto exchange based in Kuala Lumpur. PICC asserts no regulatory status for this venue." },
+  { id: "interactive-brokers", name: "Interactive Brokers", category: "crypto", residential: false, vps: false, payout: "Bank transfer", url: "https://www.interactivebrokers.com", note: "Crypto broker ranked #1 by BrokerChooser for Malaysia in 2026: 20 cryptocurrencies, $1.75 spot fee on a $1,000 trade, crypto wallet available, deposit and withdrawal by bank transfer. PICC asserts no regulatory status for this venue." },
+  { id: "webull", name: "Webull", category: "crypto", residential: false, vps: false, payout: "Bank transfer", url: "https://www.webull.com", note: "Crypto broker ranked #2 by BrokerChooser for Malaysia in 2026: 70 cryptocurrencies, $10.00 spot fee on a $1,000 trade, crypto wallet available, deposit and withdrawal by bank transfer. PICC asserts no regulatory status for this venue." },
+  { id: "swissquote", name: "Swissquote", category: "crypto", residential: false, vps: false, payout: "Bank transfer", url: "https://www.swissquote.com", note: "Crypto broker ranked #3 by BrokerChooser for Malaysia in 2026: 52 cryptocurrencies, $10.00 spot fee on a $1,000 trade, crypto wallet available, deposits by bank transfer or card, withdrawals by bank transfer. PICC asserts no regulatory status for this venue." },
+  { id: "oanda", name: "Oanda", category: "crypto", residential: false, vps: false, payout: "Bank transfer, card, PayPal, Skrill, Neteller", url: "https://www.oanda.com", note: "Crypto broker ranked #6 by BrokerChooser for Malaysia in 2026: 9 cryptocurrencies, $2.50 spot fee on a $1,000 trade, no crypto wallet. PICC asserts no regulatory status for this venue." },
+  { id: "alpaca", name: "Alpaca Trading", category: "crypto", residential: false, vps: false, payout: "Bank transfer", url: "https://alpaca.markets", note: "Crypto broker ranked #7 by BrokerChooser for Malaysia in 2026: 25 cryptocurrencies, $2.50 spot fee on a $1,000 trade, crypto wallet available, withdrawals by bank transfer or Airwallex. PICC asserts no regulatory status for this venue." },
   { id: "staking-defi", name: "Staking / DeFi yield", category: "crypto", residential: false, vps: false, payout: "Crypto", url: "https://www.stakingrewards.com", note: "On-chain staking (ETH ~2–3.5%, SOL ~5–6% mid-2026). Self-custody and smart-contract risk apply — use at your own risk." }
 ]
 
@@ -60,14 +60,8 @@ export const NFT_APPS: CatalogEntry[] = [
 ]
 
 export const P2P_APPS: CatalogEntry[] = [
-  { id: "funding-circle", name: "Funding Societies", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.fundingsocieties.com.my", note: "P2P SME lending; ~7–13% target returns with default risk. Auto-reinvest available." },
-  { id: "selangor-kuasa", name: "Selangor Kuasa (SKS)", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.selangorkuasa.com", note: "P2P Islamic financing platform. PICC asserts no regulatory status for this venue." },
-  { id: "pitik", name: "Pitik.ai", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://pitik.ai", note: "Agritech P2P for poultry/livestock financing. PICC asserts no regulatory status for this venue." },
-  { id: "stashaway", name: "StashAway Simple", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.stashaway.sg", note: "Not P2P but fixed-income cash management (~3–4% p.a.) — a low-effort parking yield." },
-  { id: "peerberry", name: "PeerBerry", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://peerberry.com", note: "EU P2P lending marketplace; €10M+ interest paid out historically. Default risk applies." },
-  { id: "brdge", name: "BRDGE", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://brdge.co", note: "Singapore-based SME lending marketplace." },
-  { id: "8lends", name: "8lends", category: "p2p", residential: false, vps: false, payout: "Crypto (USDC)", url: "https://8lends.com", note: "Web3 crowdlending — real-world business loans settled on-chain." },
-  { id: "prosper", name: "Prosper", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.prosper.com", note: "US P2P lending marketplace." }
+  { id: "mintos", name: "Mintos", category: "p2p", residential: false, vps: false, payout: "Bank transfer", url: "https://www.mintos.com", note: "European investment platform whose core product is loan notes from third-party lenders. Its own fees page states same-day withdrawal with no fee; secondary-market sales carry a 0.85% fee. Default risk applies. PICC asserts no regulatory status for this venue." },
+  { id: "debitum", name: "Debitum Investments", category: "p2p", residential: false, vps: false, payout: "Bank transfer (SEPA)", url: "https://debitum.investments", note: "Business-loan investment marketplace. Its own help centre requires a bank account on file before any withdrawal, states withdrawals are usually processed within 3 business days with no fee, and states only uninvested balance is withdrawable. Default risk applies. PICC asserts no regulatory status for this venue." }
 ]
 
 export const AGENT_APPS: CatalogEntry[] = [

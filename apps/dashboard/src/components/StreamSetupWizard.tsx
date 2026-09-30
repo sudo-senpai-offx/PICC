@@ -68,7 +68,7 @@ const STEPS: StepDef[] = [
     title: "P2P lending",
     description:
       "Lend money to borrowers through peer-to-peer platforms for higher yield — at higher risk. Capital can be locked up.",
-    examples: ["Funding Societies", "Lendela", "Marketplace lenders"],
+    examples: ["Mintos loan notes", "Debitum business loans", "Marketplace lenders"],
     defaultName: "P2P lending",
     setupHint:
       "Only lend money you can afford to lose. Track the outstanding balance and log each repayment as earnings."
@@ -78,10 +78,10 @@ const STEPS: StepDef[] = [
     title: "Crypto staking & DeFi yield",
     description:
       "Yield on crypto you hold — on-chain staking (ETH, SOL), stablecoin savings, or exchange earn products. Higher risk, higher volatility.",
-    examples: ["ETH staking (Lido ~2–3.5%)", "SOL staking (Jito ~5–6%)", "USDT / USDC savings", "Luno holdings"],
+    examples: ["ETH staking (Lido ~2–3.5%)", "SOL staking (Jito ~5–6%)", "USDT / USDC savings", "Crypto broker spot trading"],
     defaultName: "Crypto staking",
     setupHint:
-      "Malaysia: on-ramp via exchanges (Luno, MX Global); on-chain staking carries smart-contract risk — use at your own risk. Set est $/day ≈ (staked amount × APY) ÷ 365."
+      "Malaysia: a broker comparison (brokerchooser.com, 2026) covers Interactive Brokers, Webull, Swissquote, Oanda and Alpaca for crypto access; on-chain staking carries smart-contract risk — use at your own risk. Set est $/day ≈ (staked amount × APY) ÷ 365."
   },
   {
     category: "agent",
