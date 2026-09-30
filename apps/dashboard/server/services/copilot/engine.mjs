@@ -16,24 +16,31 @@
 // WHAT THIS FILE DELIBERATELY DOES NOT DO, per the task boundaries:
 //   - No model. T13 owns the sentiment input and the explanation layer.
 //   - No routing. T13 owns the D16 cloud-routing predicate (`routing.mjs`).
-//   - No conflicts. T12 owns C1/C2/C3 (`conflicts/`), and `conflictOverrides` is
-//     therefore always the empty array here.
 //   - No retention classes beyond the veto tag. T15 owns `retention.mjs`.
 //   - No authority model. T16 owns `authority/`.
 //
+// T12's C1/C2/C3 (`conflicts/`) ARE wired here, and were when this file was
+// written — see `evaluateCopilot`'s `conflicts` option and the header on
+// `conflicts/index.mjs`. The wiring is OPTIONAL: omit `conflicts` and this
+// function is byte-identical to its T11 form, which a test asserts with
+// `JSON.stringify`. That is what makes T12 independently revertible: deleting
+// `conflicts/` leaves the default path untouched.
+//
 // SHIPS DARK, ENABLED PER ROOM (spec :1298: "It can ship dark and be enabled
 // per room"). `isEngineEnabledForRoom` defaults to DISABLED for every room. The
-// rooms themselves are T7-T10's and T11 does not touch them; this predicate is
-// the seam a room or a config owner consults, and it is closed until someone
-// deliberately opens a specific room.
+// rooms themselves are T7-T10's and this task does not touch them; this
+// predicate is the seam a room or a config owner consults, and it is closed
+// until someone deliberately opens a specific room.
 
 import { ENGINE_VERSION, evaluateConfluence } from "./confluence.mjs"
+import { evaluateConflicts } from "./conflicts/index.mjs"
 import { deriveMarketState } from "./marketState.mjs"
 import { createVetoIndex, evaluateAllVetoes, firedVetoes } from "./vetoIndex.mjs"
 import { tierFor } from "./tiers.mjs"
 
 /**
- * The full evaluation: confluence, vetoes, veto records, tier.
+ * The full evaluation: conflict resolutions, confluence, vetoes, veto records,
+ * tier.
  *
  * @param {object} params
  * @param {object} params.marketState The caller's state (see `deriveMarketState`).
@@ -44,9 +51,18 @@ import { tierFor } from "./tiers.mjs"
  *   Omit for a throwaway in-memory one.
  * @param {boolean} [params.recordVetoes] Default true. Every evaluation appends
  *   its six records, because D7's guarantee is that a record survives the call.
- * @returns {object} `{ confluence, vetoes, tier, vetoIndex, engineVersion }`
+ * @param {object|null} [params.conflicts] T12's conflict-resolution options, or
+ *   `null`/omitted for none. See `conflicts/index.mjs`'s `evaluateConflicts`.
+ * @returns {object} `{ confluence, vetoes, tier, vetoIndex, conflicts,
+ *   engineVersion }`
  */
-export function evaluateCopilot({ marketState, broker = {}, vetoIndex = null, recordVetoes = true } = {}) {
+export function evaluateCopilot({
+  marketState,
+  broker = {},
+  vetoIndex = null,
+  recordVetoes = true,
+  conflicts = null
+} = {}) {
   if (marketState === null || marketState === undefined) {
     throw new TypeError("copilot: evaluateCopilot requires a marketState")
   }
@@ -54,9 +70,19 @@ export function evaluateCopilot({ marketState, broker = {}, vetoIndex = null, re
   const state = isDerived(marketState) ? marketState : deriveMarketState(marketState)
   const index = vetoIndex ?? createVetoIndex()
 
+  // T12's resolutions FIRST, because two of them (C1, C3) change the score the
+  // confluence computes. The conflict layer needs the derived state, and it
+  // returns the overlay the confluence takes as its optional second argument —
+  // so the score arithmetic stays in exactly one place (`confluence.mjs`) and a
+  // conflict rule has no arithmetic of its own.
+  const resolved = conflicts === null ? null : evaluateConflicts(state, conflicts)
+
   // Regime first — the experts read it (Unicorn) and it decides whether a score
   // exists at all. Both come out of the confluence call.
-  const confluence = evaluateConfluence(state)
+  const confluence = evaluateConfluence(
+    state,
+    resolved === null ? {} : { adjustments: resolved.adjustments, conflictOverrides: resolved.conflictOverrides }
+  )
 
   const vetoes = evaluateAllVetoes(state)
   if (recordVetoes) index.recordAll(vetoes)
@@ -73,9 +99,25 @@ export function evaluateCopilot({ marketState, broker = {}, vetoIndex = null, re
     firedVetoes: firedVetoes(vetoes),
     tier,
     vetoIndex: index,
+    conflicts: resolved ?? NO_CONFLICTS,
     engineVersion: ENGINE_VERSION
   }
 }
+
+/**
+ * The reading for an evaluation that supplied no conflict options. It says the
+ * same thing an empty `evaluateConflicts` would — no rule was even considered —
+ * but distinguishes "not asked" from "asked, and none applied", which is the
+ * same distinction `marketState.mjs:212-222` makes for `null` versus `[]`.
+ */
+const NO_CONFLICTS = Object.freeze({
+  conflictOverrides: Object.freeze([]),
+  adjustments: Object.freeze([]),
+  resolutions: Object.freeze([]),
+  precedence: Object.freeze([]),
+  precedenceVersion: null,
+  notEvaluated: true
+})
 
 /**
  * Is the Copilot enabled for a room?

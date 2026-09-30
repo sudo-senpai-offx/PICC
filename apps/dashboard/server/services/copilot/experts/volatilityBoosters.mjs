@@ -47,6 +47,32 @@ export const BOOSTER_IDS = Object.freeze([
   "booster4MtfConfluence"
 ])
 
+/**
+ * PUBLIC ID -> LEG KEY. The two vocabularies differ, and the difference was a
+ * live defect.
+ *
+ * `BOOSTER_IDS` and `BOOSTER_DELTAS` are keyed by the spec's descriptive names
+ * (`booster1EmaCross`); the `legs` object this module returns is keyed by short
+ * ordinal names (`booster1`). `activeBoostersOf` used to index `legs` with
+ * `BOOSTER_IDS`, so `result.legs["booster1EmaCross"]` was always `undefined`,
+ * every `?.fired === true` was false, and **`activeBoosters` was always
+ * `[]`** — `ConfluenceScore.activeBoosters` (spec §4.3:618) could never name a
+ * booster, and the only entry it could ever emit was `unicorn`.
+ *
+ * T12's C1 is specified in terms of "Booster1 AND Booster2 both fire"
+ * (§4.4:699) and reads `activeBoosters`, so AC-027 was unimplementable until
+ * this was fixed. Found while building C1; see the T12 changelog entry.
+ *
+ * Declared as DATA, and pinned by a test in both directions, so a future rename
+ * on either side fails a test rather than silently emptying the array again.
+ */
+export const BOOSTER_LEG_KEYS = Object.freeze({
+  booster1EmaCross: "booster1",
+  booster2BbwExpanding: "booster2",
+  booster3DivergenceRangeOnly: "booster3",
+  booster4MtfConfluence: "booster4"
+})
+
 export function evaluate(state, { regime = null } = {}) {
   const ema20 = lastValue(state.series.ema20)
   const ema50 = lastValue(state.series.ema50)
@@ -134,7 +160,7 @@ export function evaluate(state, { regime = null } = {}) {
 /** Which boosters fired, in §4.4:686's order — the `activeBoosters` array. */
 export function activeBoostersOf(result) {
   if (result === null || result.available !== true || result.legs === null) return []
-  const fired = BOOSTER_IDS.filter((id) => result.legs[id]?.fired === true)
+  const fired = BOOSTER_IDS.filter((id) => result.legs[BOOSTER_LEG_KEYS[id]]?.fired === true)
   if (result.legs.unicorn?.fired === true) fired.push("unicorn")
   return fired
 }

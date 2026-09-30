@@ -228,15 +228,47 @@ const NO_TRADE_REGIME = "deadZone"
  *   3. NOTHING IS ROUNDED. AC-023:953 prohibits a value between 84 and 85 being
  *      rounded into A+, so the score reaches `tiers.mjs` at full precision.
  *
+ * ---------------------------------------------------------------------------
+ * THE CONFLICT-ADJUSTMENT SEAM (WS-7 T12, additive)
+ * ---------------------------------------------------------------------------
+ *
+ * T12 owns C1/C2/C3 (spec :1300-1307) and §4.3:619 puts `conflictOverrides` on
+ * this score. So this function takes an OPTIONAL second argument:
+ *
+ *   context.adjustments      [{ expert, rawDelta?, weightPct?, rule, reason, … }]
+ *   context.conflictOverrides ["C1" | "C2" | "C3", …]
+ *
+ * The defaults are empty, and with empty context the output is BYTE-IDENTICAL to
+ * the T11 shape — a test asserts that with `JSON.stringify`. That is what makes
+ * T12 independently revertible: deleting the three conflict modules leaves this
+ * function and every existing test untouched.
+ *
+ * The arithmetic does NOT move. A C1 `rawDelta` is mapped to a sub-score by the
+ * SAME `bandToScore` and the SAME expert band the expert itself used, and a C3
+ * `weightPct` reaches the same `weightedPointsOf`. There is no second scoring
+ * path for a rule to take, which is Risk 6 of plan v1 §2.
+ *
+ * `contributions[].weightPct` is left as the DECLARED weight on purpose:
+ * contracts.ts:162-164 types it as a literal union of the six declared values,
+ * and T11's `expertDegradation.test.mjs:63-64` pins the exact key set of a
+ * contribution. The reallocation is therefore carried in `effectiveWeights`,
+ * which is the display surface AC-029:1002 asks for — "the displayed weights
+ * must show the reallocation" — rather than by rewriting a field whose type
+ * says it cannot hold 0.
+ *
  * @param {object} rawState The caller's market state (see `deriveMarketState`),
  *   or an already-derived one.
+ * @param {object} [context] The conflict-resolution overlay. See above.
  * @returns {object} A `ConfluenceScore` per contracts.ts:193-202, plus
- *   `coveragePct` and `expertScores`, which are derived facts a room displays and
- *   which any caller can recompute from the six contributions.
+ *   `coveragePct`, `expertScores`, `effectiveWeights`, `effectiveWeightSum` and
+ *   `regimeDetail`, which are derived facts a room displays and which any caller
+ *   can recompute from the six contributions.
  */
-export function evaluateConfluence(rawState) {
+export function evaluateConfluence(rawState, context = {}) {
   const state = isDerivedState(rawState) ? rawState : deriveMarketState(rawState)
   const classification = classifyRegime(state)
+  const adjustments = indexAdjustments(context?.adjustments)
+  const conflictOverrides = normaliseConflictOverrides(context?.conflictOverrides)
 
   // Each expert is evaluated EXACTLY ONCE. Re-evaluating would be three times
   // the work for the same answer, and a future expert with internal state would
@@ -261,8 +293,10 @@ export function evaluateConfluence(rawState) {
   const contributions = evaluated.map(({ expert, result, mod }) =>
     Object.freeze({
       expert,
-      // The WEIGHT, always — including when the expert is unavailable. The gap
-      // is the information; zeroing the weight would hide it.
+      // The DECLARED WEIGHT, always — including when the expert is unavailable
+      // and including when a conflict rule has reallocated it. The declared
+      // table is what §4.3:606 and contracts.ts:162-164 describe, and the
+      // reallocation is reported in `effectiveWeights` beside it.
       weightPct: mod.WEIGHT_PCT,
       rawDelta: result.available ? result.rawDelta : null,
       available: result.available,
@@ -272,11 +306,33 @@ export function evaluateConfluence(rawState) {
 
   const expertScores = evaluated.map(({ result, mod }, i) => {
     const c = contributions[i]
-    if (!c.available) return Object.freeze({ ...c, subScore: null, weightedPoints: 0 })
+    const adjustment = adjustments.get(c.expert) ?? null
+    const effectiveWeightPct = adjustment?.weightPct ?? c.weightPct
+
+    if (!c.available) {
+      return Object.freeze({
+        ...c,
+        subScore: null,
+        weightedPoints: 0,
+        effectiveWeightPct,
+        adjustedBy: adjustment?.rule ?? null
+      })
+    }
+
+    // A rule may replace the DELTA (C1 sets Trend_Score to max) and/or the
+    // WEIGHT (C3 zeroes Macro Bias). Both go through the same primitives the
+    // expert used, so an adjusted score is arithmetically identical to one the
+    // expert could have produced itself.
+    const rawDelta = adjustment?.rawDelta ?? c.rawDelta
+    if (adjustment?.rawDelta !== undefined) assertDeltaInBand(c.expert, adjustment.rawDelta, mod.BAND)
+    const subScore = adjustment === null ? result.subScore : bandToScore(rawDelta, mod.BAND)
     return Object.freeze({
       ...c,
-      subScore: result.subScore,
-      weightedPoints: weightedPointsOf(result.subScore, c.weightPct)
+      rawDelta,
+      subScore,
+      weightedPoints: weightedPointsOf(subScore, effectiveWeightPct),
+      effectiveWeightPct,
+      adjustedBy: adjustment?.rule ?? null
     })
   })
 
@@ -295,28 +351,158 @@ export function evaluateConfluence(rawState) {
   const confidence = score === null ? "unavailable" : confidenceOfCoverage(coveragePct)
   const activeBoosters = volatilityBoosters.activeBoostersOf(evaluated[4].result)
 
+  const effectiveWeights = Object.freeze(
+    expertScores.map((e) =>
+      Object.freeze({
+        expert: e.expert,
+        declaredWeightPct: e.weightPct,
+        effectiveWeightPct: e.effectiveWeightPct,
+        adjustedBy: e.adjustedBy,
+        reason: adjustments.get(e.expert)?.reason ?? null
+      })
+    )
+  )
+  const effectiveWeightSum = effectiveWeights.reduce((t, w) => t + w.effectiveWeightPct, 0)
+
   return Object.freeze({
     score,
     contributions: Object.freeze(contributions),
     confidence,
     regime: classification.regime,
     activeBoosters: Object.freeze(activeBoosters),
-    // T12 owns C1/C2/C3 (spec :1300-1307). T11 emits none: an empty array is
-    // the honest statement that no conflict resolution has been applied, not an
-    // empty placeholder for one that has.
-    conflictOverrides: Object.freeze([]),
+    // The conflict rules that were APPLIED to this score, in the spec's own
+    // vocabulary (§4.3:619 — `Array<"C1" | "C2" | "C3">`, strings only). Empty
+    // is the honest statement that no conflict resolution was applied, not an
+    // empty placeholder for one that was. The full record — including rules that
+    // were considered and did NOT apply — is `conflictResolutions`, which lives
+    // on the engine's return, not here: this object is the spec's shape.
+    conflictOverrides: Object.freeze(conflictOverrides),
     computedAt: state.computedAt,
     engineVersion: ENGINE_VERSION,
     // Derived, recomputable, and declared rather than left for the room to infer.
     coveragePct,
     expertScores: Object.freeze(expertScores),
-    regimeDetail: Object.freeze(classification)
+    regimeDetail: Object.freeze(classification),
+    // T12's display surface: what each expert is ACTUALLY worth on this
+    // evaluation, and the honest total. `effectiveWeightSum` is 80 rather than
+    // 100 while C3 is open, and it is deliberately not renormalised back —
+    // AC-029:1001 forbids hiding the change behind a rescale.
+    effectiveWeights,
+    effectiveWeightSum,
+    conflictAdjustments: Object.freeze([...adjustments.values()])
   })
 }
 
 /** A derived state has already had its series computed; a raw one has not. */
 function isDerivedState(candidate) {
   return candidate !== null && typeof candidate === "object" && "series" in candidate && "computedAt" in candidate
+}
+
+// ---------------------------------------------------------------------------
+// The T12 conflict-adjustment seam
+// ---------------------------------------------------------------------------
+
+/** §4.3:619 — `conflictOverrides: Array<"C1" | "C2" | "C3">`. Strings only. */
+const CONFLICT_RULE_IDS = Object.freeze(["C1", "C2", "C3"])
+
+/** An adjustment that changes nothing is not an adjustment; it is a no-op claim. */
+function assertAdjustment(adjustment, label) {
+  if (adjustment === null || typeof adjustment !== "object" || Array.isArray(adjustment)) {
+    throw new TypeError(`copilot: ${label} must be an adjustment object; received ${String(adjustment)}`)
+  }
+  if (!EXPERT_IDS.includes(adjustment.expert)) {
+    throw new TypeError(`copilot: ${label} names unknown expert ${String(adjustment.expert)}`)
+  }
+  if (typeof adjustment.rule !== "string" || !CONFLICT_RULE_IDS.includes(adjustment.rule)) {
+    throw new TypeError(
+      `copilot: ${label} must name its conflict rule as one of ${CONFLICT_RULE_IDS.join("/")}; received ${String(adjustment.rule)}`
+    )
+  }
+  if (typeof adjustment.reason !== "string" || adjustment.reason.length === 0) {
+    throw new Error(`copilot: ${label} must carry a non-empty reason — an unattributable adjustment is not inspectable`)
+  }
+  const changesDelta = adjustment.rawDelta !== undefined
+  const changesWeight = adjustment.weightPct !== undefined
+  if (!changesDelta && !changesWeight) {
+    throw new Error(`copilot: ${label} changes neither rawDelta nor weightPct, so it does nothing`)
+  }
+  if (changesWeight && (typeof adjustment.weightPct !== "number" || !Number.isFinite(adjustment.weightPct))) {
+    throw new TypeError(`copilot: ${label} weightPct must be a finite number; received ${String(adjustment.weightPct)}`)
+  }
+  if (changesWeight && adjustment.weightPct < 0) {
+    throw new RangeError(`copilot: ${label} weightPct may not be negative; received ${adjustment.weightPct}`)
+  }
+}
+
+/**
+ * Refuse an adjusted `rawDelta` that falls outside the expert's OWN declared band.
+ *
+ * `bandToScore` CLAMPS, and that is correct for an expert's own reading — a
+ * delta is computed from the data and cannot legitimately leave the band. It is
+ * NOT correct for a rule's: a rule asking for +9999 would be silently clamped to
+ * the band maximum, which is the very value it was trying to exceed, and the
+ * score would report back a number the rule never asked for. C1 asks for
+ * `BAND.max`; anything past the edge is a bug in the rule, and is thrown with
+ * the band it violated named.
+ *
+ * @param {string} expert
+ * @param {number} rawDelta
+ * @param {{min: number, max: number}} band
+ */
+function assertDeltaInBand(expert, rawDelta, band) {
+  if (typeof rawDelta !== "number" || !Number.isFinite(rawDelta)) {
+    throw new TypeError(`copilot: a conflict adjustment for ${expert} must supply a finite rawDelta; received ${String(rawDelta)}`)
+  }
+  if (rawDelta < band.min || rawDelta > band.max) {
+    throw new RangeError(
+      `copilot: a conflict adjustment set ${expert}'s rawDelta to ${rawDelta}, outside its declared band ` +
+        `[${band.min}, ${band.max}] (spec §4.4:682-687). Refusing rather than clamping: a clamp would report ` +
+        "back a value the rule never asked for."
+    )
+  }
+}
+
+/**
+ * Index the adjustments by expert, rejecting two rules fighting over one row.
+ *
+ * Two adjustments on the same expert is a conflict BETWEEN conflict rules, and
+ * the precedence table in `conflicts/precedence.mjs` is where that is settled.
+ * Two rules quietly sharing a row here would be ordering luck wearing a
+ * different hat, so it throws and names both rules.
+ */
+function indexAdjustments(adjustments) {
+  if (adjustments === undefined || adjustments === null) return new Map()
+  if (!Array.isArray(adjustments)) {
+    throw new TypeError(`copilot: context.adjustments must be an array when supplied; received ${typeof adjustments}`)
+  }
+  const index = new Map()
+  for (const adjustment of adjustments) {
+    assertAdjustment(adjustment, "a conflict adjustment")
+    const existing = index.get(adjustment.expert)
+    if (existing !== undefined) {
+      throw new Error(
+        `copilot: conflict rules ${existing.rule} and ${adjustment.rule} both adjust ${adjustment.expert}. ` +
+          "That collision belongs in the precedence table (conflicts/precedence.mjs), not in an array order."
+      )
+    }
+    index.set(adjustment.expert, Object.freeze({ ...adjustment }))
+  }
+  return index
+}
+
+function normaliseConflictOverrides(ids) {
+  if (ids === undefined || ids === null) return []
+  if (!Array.isArray(ids)) {
+    throw new TypeError(`copilot: context.conflictOverrides must be an array; received ${typeof ids}`)
+  }
+  return ids.map((id) => {
+    if (!CONFLICT_RULE_IDS.includes(id)) {
+      throw new TypeError(
+        `copilot: context.conflictOverrides may only name ${CONFLICT_RULE_IDS.join("/")} (§4.3:619); received ${String(id)}`
+      )
+    }
+    return id
+  })
 }
 
 /**
