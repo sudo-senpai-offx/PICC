@@ -574,11 +574,17 @@ apps/dashboard/server/services/notifications/
   webpush.mjs
   transport.mjs             # shared delivery + explicit failure states
 
+apps/dashboard/server/scripts/
+  absence-scope.mjs         # NEW - discovers order-capable modules
+                             # AMENDED 2026-09-29: this path, not root
+                             # scripts/. It lives INSIDE the server tree on
+                             # purpose - see the T0 deviation record in
+                             # changelog entry 0018.
+
 scripts/
   arm-probe.mjs             # EXISTS (c407964) - device evidence collector
   ram-ceiling-gate.mjs      # NEW - peak-RSS gate, fails build
   model-digest-gate.mjs     # NEW - SHA-256 + safetensors/.cact only
-  absence-scope.mjs         # NEW - discovers order-capable modules
 ```
 
 ### 4.3 Core data shapes
@@ -1165,7 +1171,7 @@ Owners are deliberately non-overlapping within a task. `WS-7+` is the literal ow
 ### T0 — **Amend the paper-only claim and make the absence scope machine-discovered** (Owner: WS-7+ · P0 · BLOCKS EVERYTHING)
 **Scope:** Make the paper-only claim true by **amending it** (D19 outcome B), and pin the real guarantee with a **discovered** guard scope. This is first because every subsequent task inherits a documented guarantee that the current guard test does not enforce.
 
-**Files:** `apps/dashboard/server/__tests__/executionAbsence.test.mjs` (scope mechanism, not assertion logic), new `apps/dashboard/server/__tests__/executionAbsenceScope.test.mjs`, new `scripts/absence-scope.mjs` (discovers order-capable modules), `PICC.md:25-38` (**rewrite** the claim per D19 outcome B, not a light touch), `docs/trading-logic/changelog/` (D19 decision record), this spec.
+**Files:** `apps/dashboard/server/__tests__/executionAbsence.test.mjs` (scope mechanism, not assertion logic), new `apps/dashboard/server/__tests__/executionAbsenceScope.test.mjs`, new `apps/dashboard/server/scripts/absence-scope.mjs` (discovers order-capable modules; **path AMENDED 2026-09-29** from `scripts/absence-scope.mjs` — the module is built and consumed, and it is deliberately located inside the server tree so the perps seam guard's whole-tree walk also covers the scanner; see changelog entry 0018 for the full deviation record), `PICC.md:25-38` (**rewrite** the claim per D19 outcome B, not a light touch), `docs/trading-logic/changelog/` (D19 decision record), this spec.
 
 **Acceptance:** AC-001, AC-002, AC-003, AC-004 pass. The four real rails are inside a **discovered** scope; ceremony gating is asserted on both rails; a written decision record carries the **ratified D19 outcome (B)** — `PICC.md:25-38` is amended to describe the gated, consent-locked, hard-capped rails and no "paper-only / no live order form" sentence survives — and the amended claim matches the enforced guarantee. The working order-lifecycle code stays. The `executionAbsence.test.mjs:43-52` assertion logic is unchanged.
 
