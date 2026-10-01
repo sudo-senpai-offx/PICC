@@ -10,43 +10,41 @@ import type { AtrObservation, DrawdownObservation, RiskLayerInput, ThreeStrikeOb
  *
  * T7's acceptance line is: "Risk surfaces ATR, the 2% drawdown disable, and
  * the 3-strike state with honest unavailability". All three are surfaced, as
- * three independent rows. The phrase "with honest unavailability" is doing real
- * work in that sentence: two of the three capabilities DO NOT EXIST in this
- * tree, so the specified behaviour today IS the honest-unavailability path, and
- * a room that quietly rendered them as working would be the defect.
+ * three independent rows, each carrying its OWN availability. The phrase "with
+ * honest unavailability" is doing real work in that sentence: a capability
+ * whose observation the caller has not supplied must render as an absence, and a
+ * room that quietly rendered it as working would be the defect.
  *
- *   - ATR(14) with the spec's 1.5x stop — REAL. `indicators.mjs:600-617` and
- *     `v32Context.mjs:185-213` implement it, so the room renders a live
- *     reading when one is supplied and an honest absence when it is not.
- *   - 2% daily drawdown disable — NOT IMPLEMENTED. Owned by the WS-7 T11 risk
- *     layer. The two nearby numbers that DO exist (a -2% session halt in
- *     `v32Copilot.mjs:28`, a -5% daily limit in `u4faRisk.mjs`) are
- *     deliberately not substituted; a near-match displayed under this label
- *     would read as a working safety rail.
- *   - 3-strike 24h key lock — NOT IMPLEMENTED. No strike counter and no
- *     key-lock store exist anywhere in the tree.
+ *   - ATR(14) with the spec's 1.5x stop — produced by `atrStop` in the WS-7 T11
+ *     risk layer, wired through `adapters/copilotReading.ts` (T7R-B).
+ *   - 2% daily drawdown disable — produced by `dailyDrawdownDisable`, likewise
+ *     wired. The two nearby numbers that DO exist in the tree (a -2% session
+ *     halt in `v32Copilot.mjs:28`, a -5% daily limit in `u4faRisk.mjs`) are
+ *     deliberately still not substituted; a near-match displayed under this
+ *     label would read as a working safety rail.
+ *   - 3-strike 24h key lock — produced by `createStrikeStore`, an append-only
+ *     counter. A `strikes: 0` with no store supplied is still rejected, because
+ *     it asserts a counter that was never read.
  *
- * ROUTE MOUNT, AND WHY IT IS THE FLAGGED PART OF THIS ROOM.
+ * ROUTE MOUNT — RESOLVED 2026-10-01 BY WS-7 T7R-A AND T7R-B.
  *
- * The room implementation and its tests are complete and self-contained, but
- * the room is NOT reachable at a URL, and that is a named gap rather than a
- * silent one. Reaching it would mean adding a nineteenth ministry room key, and
- * the WS-6 §0.3 room-key contract freezes the set at exactly eighteen:
+ * This room was committed at `857443e` complete and self-contained but
+ * UNREACHABLE: reaching it needed a nineteenth ministry room key, and the WS-6
+ * §0.3 room-key contract froze the set at eighteen. T7 recorded that as
+ * `route-unmounted` with `routeBlocker` naming the two frozen assertions, which
+ * was correct — a frozen characterisation test is exactly what may not be
+ * weakened to make a change land.
  *
- *   - `apps/dashboard/src/pages/__tests__/ministryRooms.test.tsx:165-177`
- *     pins the exact, ORDERED trading key list;
- *   - `:193-196` pins the cross-suite total at exactly 18;
- *   - `src/terminal/components/__tests__/TerminalShell.test.tsx:45-59` pins
- *     INNER_NAV and MINISTRY_ROOMS to the same key set in both directions, so a
- *     route added without a nav entry fails just as hard as a nav entry added
- *     without a route.
+ * The owner then ruled (2026-09-30) that Risk, Ceremony, Ministry and Strategy
+ * each take a new key, and T7R-A amended WS-6 §0.3 to 22 instances / 15 keys,
+ * moving the two assertions under that explicit authorisation. `risk` is now in
+ * both `INNER_NAV` and `MINISTRY_ROOMS`, so this room has a URL:
+ * `/suites/trading/risk`.
  *
- * Landing this room would mean moving two frozen characterisation assertions to
- * a nineteenth key, and a frozen characterisation test is exactly the thing
- * this workstream's rules forbid weakening to make a change land. The gap is
- * therefore FLAGGED, with the assertions named, rather than absorbed. The
- * amendment that would close it is a spec amendment to WS-6 §0.3's frozen room
- * keys — an owner decision, not an implementation detail.
+ * `routeBlocker` is DELETED rather than reworded. It is no longer true, and a
+ * record that names a resolved blocker as a live one is the unflagged drift
+ * AC-020 exists to prevent. The amendment that resolved it is recorded at
+ * `docs/trading-logic/changelog/entries/0027-T7RA_WS6_ROOM_KEY_AMENDMENT-v1-to-v2.md`.
  *
  * PRESENTATIONAL ONLY. No transport, no clock of its own, no credential. The
  * room takes its three observations as props.
@@ -83,23 +81,33 @@ export const RISK_COMPLETION = {
   room: "risk",
   d1Order: 2,
   /**
-   * NOT genuinely complete, on two independent counts, both named:
+   * GENUINELY COMPLETE. T7R-B discharged all three of T7's named gaps: the two
+   * producers it waited on exist (T11's risk layer, `a4fac35`), the room is
+   * mounted at a URL (T7R-A's amendment plus this task), and `routeBlocker` —
+   * which named the two frozen assertions as the obstacle — is deleted because
+   * it is no longer true.
    *
-   *  1. PRODUCER PENDING. Two of the three capabilities do not exist in this
-   *     tree. They are WS-7 T11 risk-layer work, in the same workstream.
-   *  2. ROUTE NOT MOUNTED. The room is implemented and tested but has no URL,
-   *     because mounting it requires a nineteenth ministry room key and the
-   *     WS-6 §0.3 room-key contract freezes the set at eighteen. The exact
-   *     frozen assertions are named in this file's header.
+   * WHAT "COMPLETE" MEANS HERE, PRECISELY, AND WHAT IT DOES NOT:
    *
-   * Neither is a WS-8 boundary: the risk layer and the room contract are both
-   * WS-7 scope. Recording them as a WS-8 handoff would be false, and
-   * recording neither would be the unflagged trim AC-020 prohibits.
+   *  - COMPLETE means the acceptance line is met: "Risk surfaces ATR, the 2%
+   *    drawdown disable, and the 3-strike state with honest unavailability." It
+   *    does. All three render, each with its OWN availability, and the room is
+   *    reachable at `/suites/trading/risk`.
+   *  - It does NOT mean all three are always live. Each is independently
+   *    nullable, and a caller that has supplied only some observations sees a
+   *    live row beside two named absences. That separation is the point: a live
+   *    ATR next to two silent rails must not read as "the risk layer is live",
+   *    and a 2% daily drawdown disable shown without an availability marker is a
+   *    safety rail that appears present and is not.
+   *  - What remains genuinely absent is OBSERVATION, not capability. Nothing
+   *    yet supplies this room candles, the daily drawdown figure, or a strike
+   *    store at runtime, so in the mounted room all three rows honestly report
+   *    that no observation was supplied, naming the supply chain that owns it.
+   *    The producers are built and tested; the input is not yet plumbed, and
+   *    that is recorded here rather than absorbed.
    */
-  verdict: "surface-complete, producer-pending, route-unmounted",
-  pendingScope: "WS-7 T11 - the risk layer (2% daily drawdown disable, 3-strike 24h key lock)",
-  routeBlocker:
-    "WS-6 spec 0.3 freezes 18 ministry room keys; adding `risk` requires moving the pinned assertions at src/pages/__tests__/ministryRooms.test.tsx:165-177 and :193-196, and breaking INNER_NAV/MINISTRY_ROOMS parity at src/terminal/components/__tests__/TerminalShell.test.tsx:45-59. Closing this needs a WS-6 spec amendment, not an edit to a frozen characterisation test.",
+  verdict: "complete",
   ws8Handoff: null,
-  reason: `No scope in this room logically belongs to WS-8. The unbuilt capabilities are owned by ${RISK_LAYER_OWNER}, inside WS-7.`
+  reason:
+    `No scope in this room logically belongs to WS-8. The ATR stop, the 2% daily drawdown disable and the 3-strike 24h key lock are all WS-7 risk-layer work: the producers shipped with T11 at a4fac35 and T7R-B wired this room to them through src/terminal/adapters/copilotReading.ts. The route blocker was resolved by the owner's 2026-09-30 ruling and the WS-6 §0.3 amendment recorded in changelog entry 0027, so ${RISK_LAYER_OWNER} is now the supply chain that would provide observations rather than a completed task. Recording a WS-8 handoff here would be false, and recording none while the wiring was missing would be the unflagged trim AC-020 prohibits.`
 } as const

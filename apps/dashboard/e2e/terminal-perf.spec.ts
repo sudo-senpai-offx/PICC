@@ -147,8 +147,30 @@ const MAX_RECORDS = 4000
  * timeout needs, is that a waiting panel shows a request in flight across the
  * click->marker window. `stalled` is exactly that.
  *
- * Seven, not six: MarketsRoom.tsx:19-36 renders PackRegistryStrip in addition to the
- * six panels named in the brief, and it fetches on mount, so it is in scope.
+ * Eight, not six or seven. Two additions, both by the same rule — the list tracks what
+ * the room ACTUALLY fetches, and an endpoint left off the list is a request that lands
+ * in the aggregate while belonging to no panel, which is the attribution defect this
+ * harness exists to prevent:
+ *
+ *   - `PackRegistryStrip` (`:150-151`) fetches `/api/packs/registry` on mount.
+ *   - `CopilotDecision` (WS-7 T7R-B, 2026-10-01) fetches `/api/trading/copilot` on
+ *     mount and on every asset change. That is the route which runs the deterministic
+ *     engine, so the room's decision surface is now backed by a real request rather
+ *     than by a rendered absence.
+ *
+ * WHY ONE REQUEST AND NOT FOUR. The engine needs a working-timeframe series, a 4H series
+ * and 400 daily closes. Those are three broker fetches made INSIDE the one authenticated
+ * server call (`server/services/copilot/decision.mjs`), so the room adds one measurable
+ * request rather than three. An earlier draft fetched `/api/trading/candles` from the
+ * page instead; that was reverted because it put the decision path in the browser.
+ *
+ * WHAT THIS DOES TO THE NUMBERS. One additional request inside the measured window, so
+ * the Markets transition's request count rises by one and its aggregate parse load rises
+ * accordingly. D21 already superseded the 250 ms x86 tier with a ~1800 ms p95 ARM
+ * re-baseline and recorded B1 as a KNOWN BREACH, so no ratified number is disturbed —
+ * T19 re-measures the whole room set anyway. What this change refuses to do is leave
+ * the request unattributed, which would make the re-measurement wrong rather than
+ * merely pessimistic.
  */
 const MARKETS_PANELS: { panel: string; endpoints: string[] }[] = [
   { panel: "PackRegistryStrip", endpoints: ["/api/packs/registry"] },
@@ -157,7 +179,8 @@ const MARKETS_PANELS: { panel: string; endpoints: string[] }[] = [
   { panel: "MarketIntelPanel", endpoints: ["/api/trading/intel"] },
   { panel: "CalendarPanel", endpoints: ["/api/trading/calendar"] },
   { panel: "SessionPanel", endpoints: ["/api/trading/sessions"] },
-  { panel: "ScreenerPanel", endpoints: ["/api/trading/screener", "/api/trading/watchlists"] }
+  { panel: "ScreenerPanel", endpoints: ["/api/trading/screener", "/api/trading/watchlists"] },
+  { panel: "CopilotDecision", endpoints: ["/api/trading/copilot"] }
 ]
 
 type ApiCall = {

@@ -4,27 +4,34 @@ import { unavailable } from "./availability"
 /**
  * WS-7 T7 — the Risk room's view of the spec §4.4 risk layer.
  *
- * THE THREE CAPABILITIES AND THEIR REAL STATUS IN THIS TREE, MEASURED:
+ * THE THREE CAPABILITIES AND THEIR REAL STATUS IN THIS TREE.
  *
- *  1. `atrStop` — ATR(14) with a 1.5x stop. REAL. `indicators.mjs:600-617`
- *     exposes `trueRange` and the Wilder-smoothed `atr(highs, lows, closes,
- *     period)`, and `v32Context.mjs:185-213` derives a volatility regime from
- *     ATR(14) with an explicit "insufficient candles" branch that returns
- *     `available: false` rather than a fabricated value. The room can therefore
- *     show a real ATR when the engine supplies one, and the upstream honest
- *     branch is the same shape this module uses.
+ * WS-7 T7R-B (2026-10-01): all three producers now EXIST, in
+ * `server/services/copilot/riskLayer.mjs` — `atrStop`, `dailyDrawdownDisable`
+ * and `createStrikeStore`. This module is the CONSUMER half: it turns what a
+ * producer observed into what the room may say about it. What follows is the
+ * per-capability contract, not a claim that anything is missing.
  *
- *  2. `drawdownDisable` — 2% daily drawdown disable. DOES NOT EXIST. The
- *     nearest thing in the tree is `v32Copilot.mjs:28`'s
- *     `SESSION_HALT_FLOOR_PCT = 2`, which is a -2% SESSION halt, not a 2%
- *     daily drawdown disable; and `u4faRisk.mjs` carries a -5% daily limit
- *     behind `checkProposalGate`. Neither is this capability, and rendering
- *     either under this row's label would be exactly the kind of near-match
- *     substitution the honesty rules forbid. Owned by the WS-7 T11 risk layer.
+ *  1. `atrStop` — ATR(14) with a 1.5x stop. Producer: `atrStop` in the server
+ *     risk layer. The stop distance is DERIVED here from the ATR, so a producer
+ *     cannot hand the room a stop that contradicts its own ATR, and an ATR that
+ *     has not warmed up yields `null` — never 0, which would mean a market with
+ *     no range.
  *
- *  3. `threeStrike` — 3-strike rule locking keys for 24h. DOES NOT EXIST.
- *     A tree-wide search for `threeStrike`, `3-strike`, `strikeCount`,
- *     `keyLock` and `keyLocked` returns nothing. Owned by WS-7 T11.
+ *  2. `drawdownDisable` — the 2% daily drawdown disable. Producer:
+ *     `dailyDrawdownDisable`, which evaluates the rail against the DAILY figure
+ *     only. The two nearby numbers that DO exist in the tree (a -2% session
+ *     halt in `v32Copilot.mjs:28`, a -5% daily limit in `u4faRisk.mjs`) are
+ *     still deliberately not substituted under this label; a near-match shown
+ *     as a working safety rail is the fabrication the rules forbid. A caller
+ *     holding only a session figure gets `null`, not a verdict computed from
+ *     the wrong number.
+ *
+ *  3. `threeStrike` — the 3-strike rule locking keys for 24h. Producer:
+ *     `createStrikeStore`, an append-only counter with no update, delete or
+ *     reset path. `strikes: 0` is REJECTED as a reading when no store was
+ *     supplied: zero strikes means "never struck", which is a claim about a
+ *     counter that does not exist.
  *
  * WHY EACH ROW CARRIES ITS OWN AVAILABILITY.
  *
@@ -49,8 +56,28 @@ export const RISK_LAYER_SPEC = {
   threeStrike: "3-strike rule locks keys for 24h"
 } as const satisfies Record<RiskCapabilityKey, string>
 
-/** The owner of the two capabilities that do not exist yet. A WS-7 task, not WS-8. */
-export const RISK_LAYER_OWNER = "WS-7 T11"
+/**
+ * Who owns an absent risk-layer observation.
+ *
+ * WS-7 T7R-B (2026-10-01): this was the literal `"WS-7 T11"`, and it feeds EVERY
+ * unavailability reason in the room. T11's risk layer has since shipped
+ * (`a4fac35`) and T7R-B wired the Risk room to it through
+ * `src/terminal/adapters/copilotReading.ts`, so this constant named a completed
+ * task as the owner of an absence. Plan §4 calls this out by name: the constant
+ * "is the T7→T11 back-reference in code form, and it must not still name a
+ * completed task as the owner of an absence".
+ *
+ * ALL THREE PRODUCERS NOW EXIST. `atrStop`, `dailyDrawdownDisable` and
+ * `createStrikeStore` all ship in `server/services/copilot/riskLayer.mjs`. What
+ * can still be absent is the OBSERVATION — the caller must supply candles, the
+ * daily drawdown figure, and a strike store — so the owner is the supply chain
+ * that would provide them.
+ *
+ * It stays a named owner rather than a generic string because
+ * `availability.ts` requires one, and "nobody owns this" must stay
+ * distinguishable from "someone owns this and has not supplied it".
+ */
+export const RISK_LAYER_OWNER = "WS-7 risk-observation supply"
 
 export type AtrObservation = {
   /** ATR(14). Null only when the producer has not observed it. */
@@ -139,15 +166,20 @@ export type DrawdownObservation = {
 }
 
 /**
- * The 2% daily drawdown disable — currently an honest absence, and the
- * absence is the deliverable.
+ * The 2% daily drawdown disable.
  *
- * The function is written in full, including the branch that would report the
- * disable as fired, so that wiring the producer is a data change and not a
- * design change. What it deliberately does NOT do is fall back to a similar
- * number that happens to exist: `v32Copilot.SESSION_HALT_FLOOR_PCT` is a
- * session halt and `u4faRisk`'s limit is 5% daily, and neither may be
- * substituted for "2% daily drawdown disable" under this label.
+ * WS-7 T7R-B: this no longer carries the "NOT IMPLEMENTED" branch T7 wrote. The
+ * branch that would report the disable as fired is now REACHABLE, because
+ * `server/services/copilot/riskLayer.mjs` ships `dailyDrawdownDisable` and T7R-B
+ * wires the Risk room to it through `adapters/copilotReading.ts`.
+ *
+ * What has not changed is the refusal to substitute. The function still returns
+ * an absence — with a reason — when the DAILY figure is unobservable, and it
+ * still refuses to evaluate the rail from a session number: a caller with ONLY
+ * a session figure is told the rail cannot be evaluated, rather than being
+ * handed the session number and a "disable fired" verdict computed from it.
+ * `v32Copilot.SESSION_HALT_FLOOR_PCT` (a -2% SESSION halt) and `u4faRisk`'s -5%
+ * daily limit remain inapplicable under this label.
  */
 export function drawdownDisableReading(observation: DrawdownObservation | null): RiskLayerReading {
   if (observation === null || observation.dailyDrawdownPct === null) {
@@ -162,7 +194,7 @@ export function drawdownDisableReading(observation: DrawdownObservation | null):
       specValue: RISK_LAYER_SPEC.drawdownDisable,
       value: null,
       detail:
-        "NOT IMPLEMENTED. The nearest existing rails are v32Copilot's -2% SESSION halt and u4faRisk's -5% daily limit; neither is this capability, and neither is displayed here as if it were."
+        "The daily drawdown figure cannot be observed for this day, so the 2% rail cannot be evaluated. Unavailable is not disarmed: a rail that could not be checked is not a rail that did not fire. A session-loss figure is NOT substituted for the daily one, and neither v32Copilot's -2% session halt nor u4faRisk's -5% daily limit is this capability."
     }
   }
   if (typeof observation.dailyDrawdownPct !== "number" || !Number.isFinite(observation.dailyDrawdownPct)) {
@@ -194,15 +226,17 @@ export type ThreeStrikeObservation = {
 }
 
 /**
- * The 3-strike 24h key lock — currently an honest absence, and the absence is
- * the deliverable.
+ * The 3-strike 24h key lock.
  *
- * There is no strike counter and no key-lock store anywhere in this tree, so
- * there is nothing to read. `strikes: 0` is REJECTED rather than accepted as a
- * reading: zero strikes means "this key is unlocked and has never been struck",
- * which is a claim about a counter that does not exist. A producer wired to
- * this surface must therefore supply a real counter, and until one exists the
- * room says the capability is unavailable.
+ * WS-7 T7R-B: the counter now EXISTS — `createStrikeStore` in the server risk
+ * layer is append-only, with no update, delete or reset path, so a strike that
+ * happened cannot be erased. The room can therefore render a real strike count
+ * and a real lock window.
+ *
+ * What has NOT changed is the refusal of `strikes: 0` as a reading when no
+ * counter was supplied. Zero strikes means "this key is unlocked and has never
+ * been struck", which is a claim about a counter that does not exist. A caller
+ * must hand this surface a real counter or the capability stays unavailable.
  */
 export function threeStrikeReading(observation: ThreeStrikeObservation | null): RiskLayerReading {
   if (observation === null || observation.strikes === null) {
@@ -217,7 +251,7 @@ export function threeStrikeReading(observation: ThreeStrikeObservation | null): 
       specValue: RISK_LAYER_SPEC.threeStrike,
       value: null,
       detail:
-        "NOT IMPLEMENTED. No strike counter and no 24h key-lock store exist in this tree, so the state is unknown rather than zero. Unavailable is not zero: 0 strikes would assert a counter that was never read."
+        "No strike counter has been supplied for this key, so the 3-strike lock cannot be evaluated. The counter exists (server createStrikeStore, append-only); what is missing is a store handed to this reading. Unavailable is not zero: 0 strikes would assert a counter that was never read."
     }
   }
   if (!Number.isInteger(observation.strikes) || observation.strikes < 0) {

@@ -23,7 +23,14 @@ const TRADING_ROOMS: Record<string, LazyExoticComponent<ComponentType>> = {
   // `strategy` are routed to their reserved bodies, which name the task that
   // owns each surface and show nothing; see reservedRooms.tsx for why they are
   // named absences rather than built rooms.
-  risk: lazy(() => import("@/terminal/routes/RiskRoom").then((m) => ({ default: m.RiskRoom }))),
+  //
+  // WS-7 T7R-B — `risk` now points at the PAGE composition, not the terminal room
+  // directly. `MinistryRoom` renders `<Room />` with no props, and the terminal
+  // Risk room is presentational by design, so routing at it directly mounted a
+  // room that rendered three unavailable rows forever. `pages/ministry/RiskRoom`
+  // is the caller that fetches the decision and supplies the observations;
+  // `terminal/routes/RiskRoom` stays prop-only and testable.
+  risk: lazy(() => import("./RiskRoom").then((m) => ({ default: m.RiskRoom }))),
   ceremony: lazy(() => import("./reservedRooms").then((m) => ({ default: m.CeremonyRoom }))),
   ministry: lazy(() => import("./reservedRooms").then((m) => ({ default: m.MinistryAuthorityRoom }))),
   strategy: lazy(() => import("./reservedRooms").then((m) => ({ default: m.StrategyRoom }))),

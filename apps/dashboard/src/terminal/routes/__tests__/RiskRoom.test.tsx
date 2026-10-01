@@ -56,15 +56,25 @@ describe("T7 room 2 - the risk layer reports each capability's own availability"
   it("refuses to display the -2% session halt or the -5% daily limit as the 2% daily rail", () => {
     // Both numbers exist in this tree and NEITHER is this capability. A
     // near-match shown under this label would read as a working safety rail.
+    //
+    // WS-7 T7R-B: this row no longer carries the "NOT IMPLEMENTED" string. The
+    // producer exists (`dailyDrawdownDisable`), so claiming the capability is
+    // unimplemented would be a false record. What must NOT change is the
+    // refusal, which is the part that was ever at risk: with no daily figure
+    // supplied, the row must still name both near-matches as rejected rather
+    // than adopting either.
     const html = renderToStaticMarkup(<RiskLayerSurface view={riskLayerView({ atr: null, drawdown: null, threeStrike: null })} />)
     const row = html.slice(html.indexOf('data-risk-capability="drawdownDisable"'))
     const rowEnd = row.indexOf("</li>")
     const drawdownRow = row.slice(0, rowEnd)
-    expect(drawdownRow).toContain("NOT IMPLEMENTED")
+    expect(drawdownRow).not.toContain("NOT IMPLEMENTED")
+    expect(drawdownRow).toContain("cannot be observed")
     expect(drawdownRow).toContain("v32Copilot")
     expect(drawdownRow).toContain("u4faRisk")
     // The live-looking figure must not appear as a value on this row.
     expect(drawdownRow).not.toContain('data-risk-value=')
+    // Unavailable must not read as disarmed.
+    expect(drawdownRow).toContain("not disarmed")
   })
 
   it("rejects a stop distance the producer invented rather than deriving one", () => {
@@ -175,15 +185,43 @@ describe("T7 room 2 - the room is read-only and honest about its own reachabilit
     expect(html).not.toMatch(/type="submit"/i)
   })
 
-  it("states a completeness verdict, names the pending scope, and names the route blocker", () => {
-    // AC-020's verification, and D27's flag-never-trim obligation. Three named
-    // gaps, not a silent "done".
-    expect(RISK_COMPLETION.verdict).toBe("surface-complete, producer-pending, route-unmounted")
-    expect(RISK_COMPLETION.verdict).not.toMatch(/^complete$/i)
-    expect(RISK_COMPLETION.pendingScope).toContain("WS-7 T11")
-    expect(RISK_COMPLETION.routeBlocker).toContain("18 ministry room keys")
-    expect(RISK_COMPLETION.routeBlocker).toContain("ministryRooms.test.tsx")
+  it("states a completeness verdict, and no longer carries a resolved blocker", () => {
+    // AC-020's verification, and D27's flag-never-trim obligation.
+    //
+    // WS-7 T7R-B flipped this verdict. T7 recorded
+    // "surface-complete, producer-pending, route-unmounted" with a
+    // `pendingScope` naming T11 and a `routeBlocker` naming the two frozen
+    // assertions. Both producers shipped (`a4fac35`) and the owner's
+    // 2026-09-30 ruling plus the WS-6 §0.3 amendment mounted the room, so both
+    // fields are GONE rather than reworded — a record that still names a
+    // resolved blocker as live is the unflagged drift AC-020 exists to prevent.
+    expect(RISK_COMPLETION.verdict).toBe("complete")
+    expect(RISK_COMPLETION).not.toHaveProperty("pendingScope")
+    expect(RISK_COMPLETION).not.toHaveProperty("routeBlocker")
     expect(RISK_COMPLETION.d1Order).toBe(2)
+  })
+
+  it("does not name the deleted route blocker, and names the amendment instead", () => {
+    // The direction that actually matters: after the amendment, nothing in this
+    // record may still assert that 18 keys is the frozen count or that the
+    // assertions stand in the way. Both were true when T7 wrote this and are
+    // false now.
+    const record = JSON.stringify(RISK_COMPLETION)
+    expect(record).not.toMatch(/routeBlocker/)
+    expect(record).not.toMatch(/freezes 18/)
+    expect(record).not.toMatch(/route-unmounted/)
+    expect(record).not.toMatch(/producer-pending/)
+    // It must point at where the resolution is recorded.
+    expect(RISK_COMPLETION.reason).toContain("0027")
+  })
+
+  it("no longer names T11 as pending, because T11 shipped its risk layer", () => {
+    // The T7→T11 back-reference in code form, named by plan §4 as something
+    // that must not survive. `RISK_LAYER_OWNER` is what feeds every
+    // unavailability reason in the room, so it is what had to change.
+    expect(RISK_LAYER_OWNER).not.toBe("WS-7 T11")
+    expect(RISK_LAYER_OWNER).toBeTruthy()
+    expect(JSON.stringify(RISK_COMPLETION)).not.toContain("WS-7 T11")
   })
 
   it("records the WS-8 boundary explicitly as none", () => {

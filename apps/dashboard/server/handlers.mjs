@@ -3095,6 +3095,44 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // -------------------------------------------------------------------
+  // WS-7 T7R-B — THE COPILOT DECISION.
+  //
+  // The first route that runs the deterministic Copilot engine. Until this
+  // landed, `evaluateCopilot` existed in `services/copilot/engine.mjs` and in
+  // tests, and NOTHING called it — a gap T12's entry 0023 handoff #2 and T13's
+  // entry 0025 handoff #6 both named and neither could close, because each was
+  // forbidden from touching `apps/dashboard/src/` and a room cannot fetch.
+  //
+  // GATED, NOT ALLOWLISTED. `requireAuth` sits in this block before anything is
+  // read or answered, so `ws7RouteAuthCoverageGuard.test.mjs` discovers a real
+  // gate in the route's own region. This route is deliberately NOT added to the
+  // declared-public allowlist and deliberately gets NO `owner: "decision"`
+  // entry: it exposes live engine state (regime, score, vetoes, conflict
+  // resolutions) and nothing in it is declared-public. The 86 unruled decision
+  // entries awaiting the owner are not a pool to draw from.
+  //
+  // ONE REQUEST. The client supplies an `assetId`, never candles. The server
+  // fetches its own working-timeframe, 4H and daily series through the same
+  // broker fan-in `/api/trading/candles` uses, derives the state, and evaluates
+  // — see `services/copilot/decision.mjs` for why the alternative was rejected,
+  // and for what stays absent (sentiment, news, proposals, broker permit, daily
+  // drawdown, strike store) and why each is reported rather than filled in.
+  // -------------------------------------------------------------------
+  if (path === "/api/trading/copilot" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
+    const assetId = String(body?.assetId ?? "").trim().toUpperCase()
+    if (!assetId) return writeJson(res, 400, { ok: false, error: "assetId required" })
+    try {
+      const { copilotDecisionForAsset } = await import("./services/copilot/decision.mjs")
+      writeJson(res, 200, await withTimeout(copilotDecisionForAsset({ assetId, source: body?.source }), 30000))
+    } catch (err) {
+      console.warn(`[picc] copilot decision failed for ${assetId}:`, err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/readiness" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
     try {

@@ -15,7 +15,6 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { MarketsRoom, MARKETS_COMPLETION, MARKETS_NO_READING_REASON, buildMarketsDecision } from "../MarketsRoom"
 import { CopilotScoreSurface } from "../../components/CopilotScoreSurface"
 import {
-  COPILOT_ENGINE_OWNER,
   EXPERT_WEIGHTS,
   EXPERT_WEIGHT_SUM,
   VETO_RULE_IDS,
@@ -24,6 +23,12 @@ import {
   tierFor
 } from "../../domain/copilotDecision"
 import type { ConfluenceScore, VetoOutcome } from "../../contracts"
+// WS-7 T7R-B: the seam. Imported here so this file can prove the room renders
+// the REAL engine's output rather than only hand-built fixtures: the decision
+// service is the same one `POST /api/trading/copilot` calls, and `projectDecision`
+// is the same projection the adapter applies to its response.
+import { projectDecision } from "../../adapters/copilotReading"
+import { copilotDecisionForAsset } from "../../../../server/services/copilot/decision.mjs"
 
 const ALL_AVAILABLE: ConfluenceScore["contributions"] = EXPERT_WEIGHTS.map((e) => ({
   expert: e.expert,
@@ -221,13 +226,18 @@ describe("T7 room 1 - the engine's absence is reported, not filled in", () => {
     expect(view.tier).toBeNull()
     // And no contribution may smuggle a delta through the empty-state path.
     for (const c of view.contributions) expect(c.rawDelta).toBeNull()
-    expect(view.unavailableReason).toContain(COPILOT_ENGINE_OWNER)
+    // WS-7 T7R-B: this used to assert the reason contains `COPILOT_ENGINE_OWNER`
+    // ("WS-7 T11"), which asserted that a COMPLETED task was named as the owner
+    // of an absence. The reason now names the engine version instead, so the
+    // assertion follows the truth rather than the old wording.
+    expect(view.unavailableReason).toBe(MARKETS_NO_READING_REASON)
+    expect(view.unavailableReason).toContain("copilot-engine/1.0.0")
   })
 
-  it("the live markets room mounts the surface with no reading and names the owner", () => {
+  it("the live markets room mounts the surface with no reading and says why", () => {
     const html = renderToStaticMarkup(<MarketsRoom confluence={null} />)
     expect(html).toContain('data-copilot-decision="unavailable"')
-    expect(html).toContain(COPILOT_ENGINE_OWNER)
+    expect(html).toContain("copilot-engine/1.0.0")
     // The room frame and the surface must both be present; a room that
     // rendered nothing would satisfy "no fabricated number" trivially.
     expect(html).toContain('data-room-key="markets"')
@@ -289,15 +299,186 @@ describe("T7 room 1 - the engine's absence is reported, not filled in", () => {
   })
 })
 
+describe("T7R-B - the room renders REAL engine output through the seam", () => {
+  // The anti-goal this exists to prevent: flipping the verdict to `complete`
+  // WITHOUT actually wiring the room to its producer. Every test above feeds the
+  // room a hand-built score. This block runs the REAL WS-7 T11 engine — through
+  // the REAL decision service, then through the REAL projection, then renders
+  // whatever comes out — so the verdict's claim is backed by the engine rather
+  // than by a fixture.
+  //
+  // The path under test is exactly the one the room uses in production:
+  //   decision.mjs (fetches -> deriveMarketState -> evaluateCopilot)
+  //     -> projectDecision (the adapter's pure projection)
+  //       -> <MarketsRoom />
+  // with the broker as the only injected leaf.
+  const AT = Date.UTC(2023, 10, 14, 13, 0, 0)
+
+  function ramp(n: number, { start = 1.08, step = 0.0004 } = {}) {
+    const out: Array<{ open: number; high: number; low: number; close: number; volume: number; time: number }> = []
+    for (let i = 0; i < n; i++) {
+      const close = start + step * i
+      const open = close - step / 2
+      out.push({
+        open,
+        high: close + Math.abs(step),
+        low: close - Math.abs(step),
+        close,
+        volume: 1000,
+        time: AT - (n - 1 - i) * 60_000
+      })
+    }
+    return out
+  }
+
+  /** The REAL server decision, with only the broker injected. */
+  function realDecision(over: Record<string, number> = {}) {
+    const counts = { working: 240, h4: 200, daily: 420, ...over }
+    return copilotDecisionForAsset({
+      assetId: "EURUSD",
+      fetchCandles: async (_id: string, { timeframe }: { timeframe: number }) => {
+        if (timeframe === 14400) return { candles: ramp(counts.h4), source: "test-broker" }
+        if (timeframe === 86400) return { candles: ramp(counts.daily, { step: 0.002 }), source: "test-broker" }
+        return { candles: ramp(counts.working), source: "test-broker" }
+      }
+    })
+  }
+
+  it("renders the engine's own score, version and vetoes, not a fixture's", async () => {
+    const decision = await realDecision()
+    expect(decision.confluence, "the engine must produce a score").not.toBeNull()
+
+    const reading = projectDecision("EURUSD", decision as never)
+    expect(reading.confluence).not.toBeNull()
+
+    const html = renderToStaticMarkup(
+      <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+    )
+    expect(html).toContain('data-copilot-decision="live"')
+    // The score the ROOM shows is the engine's own number, copied not restated.
+    expect(html).toContain(`data-score="${reading.confluence!.score}"`)
+    expect(html).toContain(decision.engineVersion)
+    // And it is the SAME number the engine produced, not a rounded fixture value.
+    expect(reading.confluence!.score).toBe(decision.confluence!.score)
+  })
+
+  it("renders every veto the engine actually fired, each naming what it suppressed", async () => {
+    const decision = await realDecision()
+    const reading = projectDecision("EURUSD", decision as never)
+    expect(reading.vetoes.length, "the engine must fire at least one veto for this test to mean anything").toBeGreaterThan(0)
+
+    const html = renderToStaticMarkup(
+      <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+    )
+    for (const v of reading.vetoes) {
+      // The surface's own attribute is `data-veto`; `data-veto-id` is the inner
+      // span's class hook. Asserting on the attribute the component actually
+      // emits is what makes this a real check rather than a string match.
+      expect(html, `${v.ruleId} must be rendered`).toContain(`data-veto="${v.ruleId}"`)
+      expect(html, `${v.ruleId} must name what it suppressed`).toContain(`suppressed: ${v.suppressed}`)
+    }
+    // The `sessionOpen` veto is the one this timestamp makes deterministic: 13:00
+    // UTC is minutes since the New York open, so it fires and names `entry`.
+    expect(reading.vetoes.map((v) => v.ruleId)).toContain("sessionOpen")
+    expect(html).not.toContain('data-vetoes="none"')
+  })
+
+  it("names every expert contribution the engine produced, including the cold one", async () => {
+    const decision = await realDecision()
+    const reading = projectDecision("EURUSD", decision as never)
+
+    const html = renderToStaticMarkup(
+      <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+    )
+    for (const c of reading.confluence!.contributions) {
+      expect(html, `${c.expert} must be rendered`).toContain(`data-expert="${c.expert}"`)
+    }
+    // The 5% Sentiment expert is genuinely cold and must be shown AS cold, with
+    // the engine's own reason, rather than dropped or rendered as a zero.
+    const sentiment = reading.confluence!.contributions.find((c) => c.expert === "sentiment")
+    expect(sentiment?.available).toBe(false)
+    expect(html).toContain('data-available="false"')
+    expect(html).toContain("T13")
+  })
+
+  it("reports the dead zone honestly when the engine refuses to score", async () => {
+    // The engine ran and found the frozen dead zone, which returns a `null`
+    // score. The room must render that as an absence and must NOT print a 0.
+    const decision = await realDecision()
+    const score = decision.confluence!.score
+    const reading = projectDecision("EURUSD", {
+      ...decision,
+      confluence: { ...decision.confluence, regime: "deadZone", score: null }
+    } as never)
+
+    if (score === null) {
+      expect(reading.confluence).toBeNull()
+      expect(reading.reason).toBeTruthy()
+    } else {
+      expect(reading.confluence?.regime).toBe("deadZone")
+      expect(reading.confluence?.score).toBeNull()
+    }
+
+    const html = renderToStaticMarkup(
+      <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+    )
+    expect(html).toContain('data-score="unscoreable"')
+    expect(html).toContain("deadZone")
+    // Never a zero dressed as a score.
+    expect(html).not.toContain('data-score="0"')
+  })
+
+  it("still exposes no write affordance now that a live tier can be rendered", async () => {
+    // The room grew a reachable live reading. A live `A+` tier must still not
+    // come with a button: T9's Paper/Live room owns the rails, and a control
+    // here would be a scope change nobody notices.
+    const reading = projectDecision("EURUSD", (await realDecision()) as never)
+    const html = renderToStaticMarkup(
+      <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+    )
+    expect(html).not.toMatch(/<button/i)
+    expect(html).not.toMatch(/<input/i)
+    expect(html).not.toMatch(/<form/i)
+    expect(html).not.toMatch(/type="submit"/i)
+  })
+})
+
 describe("T7 room 1 - the D27 verdict is present, explicit, and not a trim", () => {
-  it("states a completeness verdict and names the pending scope", () => {
+  it("states a completeness verdict, and no longer names a discharged gap", () => {
     // AC-020's verification is "assert the completion record contains an
     // explicit completeness verdict". This is that assertion.
-    expect(MARKETS_COMPLETION.verdict).toBe("surface-complete, producer-pending")
-    expect(MARKETS_COMPLETION.verdict).not.toMatch(/^complete$/i)
-    expect(MARKETS_COMPLETION.pendingScope).toContain("WS-7 T11")
+    //
+    // WS-7 T7R-B flipped this verdict. T7 recorded
+    // "surface-complete, producer-pending" with a `pendingScope` naming WS-7 T11;
+    // T11 has since landed (`a4fac35`) and T7R-B wired the room to it through
+    // `adapters/copilotReading.ts`, so both clauses are discharged.
+    //
+    // The verdict is now `complete` AND `pendingScope` is GONE rather than
+    // emptied. A retained-but-empty `pendingScope` would leave a field whose
+    // only meaning is "something is still owed", which is the ambiguity AC-020
+    // exists to prevent.
+    expect(MARKETS_COMPLETION.verdict).toBe("complete")
+    expect(MARKETS_COMPLETION).not.toHaveProperty("pendingScope")
+    expect(MARKETS_COMPLETION).not.toHaveProperty("routeBlocker")
     expect(MARKETS_COMPLETION.d1Order).toBe(1)
     expect(MARKETS_COMPLETION.reason.trim().length).toBeGreaterThan(40)
+  })
+
+  it("no longer names T11 as a pending task, because T11 has run", () => {
+    // The unflagged-drift direction: a verdict that still says "producer
+    // pending" after the producer landed is a record naming a resolved gap as
+    // live. The REASON may still mention T11 — it does, to name what the room
+    // now consumes — but it must not present T11 as owed.
+    const record = JSON.stringify(MARKETS_COMPLETION)
+    expect(record).not.toMatch(/producer-pending/)
+    expect(record).not.toMatch(/pendingScope/)
+    expect(MARKETS_COMPLETION.reason).toContain("a4fac35")
+  })
+
+  it("still names the one capability that is absent BY DESIGN", () => {
+    // "complete" must not mean "everything is live". The 5% Sentiment expert's
+    // model input is genuinely absent, and the record has to keep saying so.
+    expect(MARKETS_COMPLETION.reason).toContain("Sentiment")
   })
 
   it("records the WS-8 boundary explicitly rather than leaving it implicit", () => {
@@ -307,5 +488,15 @@ describe("T7 room 1 - the D27 verdict is present, explicit, and not a trim", () 
     // later change starts quietly leaving the field out.
     expect(MARKETS_COMPLETION).toHaveProperty("ws8Handoff")
     expect(MARKETS_COMPLETION.ws8Handoff).toBeNull()
+  })
+
+  it("does not display a stale 'T11 is pending' reason to a reader", () => {
+    // `MARKETS_NO_READING_REASON` is what a user READS when no score is shown.
+    // Before T7R-B it named T11 as a pending task, which had stopped being true.
+    expect(MARKETS_NO_READING_REASON).not.toMatch(/is not built/)
+    expect(MARKETS_NO_READING_REASON).not.toMatch(/WS-7 task T11/)
+    expect(MARKETS_NO_READING_REASON).toMatch(/BUILT/)
+    // It must still be a reason, not a shrug.
+    expect(MARKETS_NO_READING_REASON.trim().length).toBeGreaterThan(80)
   })
 })

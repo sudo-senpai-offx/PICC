@@ -1195,7 +1195,7 @@ function connectorsSiteIsGated(lines, index) {
     const lines = SRC.split("\n").length
 
     expect(statics, "static import statements in handlers.mjs").toBe(72)
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(80)
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(81)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1263,7 +1263,24 @@ function connectorsSiteIsGated(lines, index) {
     // the "structure changed" signal the canary is designed to distinguish from
     // "grew", and it is why the figure is moved to the new true value rather
     // than loosened.
-    expect(lines, "lines in handlers.mjs").toBe(6088)
+    //
+    // WS-7 T7R-B, the same protocol: 6,088 -> 6,126, +38 lines, all of them one
+    // new route. The dynamic count MOVES 80 -> 81 for exactly one `await
+    // import("./services/copilot/decision.mjs")`, and the static count is
+    // UNCHANGED at 72 because the decision service is reached dynamically, the
+    // way every other copilot-shaped service in this file is — the Copilot is
+    // not on the boot path and must not become a reason to load it. The +38 are
+    // the `/api/trading/copilot` block: its unconditional `requireAuth(` gate,
+    // the `assetId` precondition, the `withTimeout`'d call, and the reasoning
+    // that records WHY this route is gated rather than allowlisted, why the
+    // client supplies no candles, and why the 86 unruled `owner: "decision"`
+    // entries are not a pool to draw a route from.
+    //
+    // The line figure moves and the import figure moves TOGETHER, which is the
+    // point of pinning both: a route added with a STATIC import would move the
+    // other number, and the pair is what distinguishes "grew" from "structure
+    // changed".
+    expect(lines, "lines in handlers.mjs").toBe(6126)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

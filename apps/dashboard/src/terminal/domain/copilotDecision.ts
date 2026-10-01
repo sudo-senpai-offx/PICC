@@ -20,11 +20,17 @@ import type {
  *
  * It is NOT the engine. The deterministic engine — regime classifier, six
  * weighted experts, confluence, tiers, six vetoes, four boosters, and the risk
- * layer — is WS-7 T11, and it is not built. Nothing here fabricates a score to
- * stand in for it. `copilotUnavailable()` is the only way to represent the
- * engine's absence, and it produces NO numeric value at all, which is the
- * shape the constitution requires (`availability.ts`: "an unobservable value is
- * `unavailable` with a named reason and an owning workstream… NEVER a zero").
+ * layer — is WS-7 T11, and it SHIPS (`a4fac35`, plus T12's conflict layer at
+ * `8ff9e63`). This module remains the CONSUMER half: given a score the engine
+ * produced, it decides what the room is allowed to say about it. It never
+ * computes one.
+ *
+ * `copilotUnavailable()` is the only way to represent the absence of a reading,
+ * and it produces NO numeric value at all, which is the shape the constitution
+ * requires (`availability.ts`: "an unobservable value is `unavailable` with a
+ * named reason and an owning workstream… NEVER a zero"). With the engine built,
+ * an absent reading means the caller supplied no market state — see
+ * `COPILOT_ENGINE_OWNER` below for why that owner is no longer a task id.
  *
  * It is also NOT the remote explanation. `domain/copilot.ts` holds
  * `CopilotExplanation`, which is remote LLM prose and is never admissible as a
@@ -71,12 +77,23 @@ export const VETO_RULE_IDS: readonly VetoRuleId[] = [
 ] as const
 
 /**
- * The owner of the deterministic engine, named in every honest-unavailability
- * the Markets room shows. It is a WS-7 task, not WS-8, and saying so is the
- * point: a reader must be able to tell "nobody owns this" from "WS-7 T11 owns
- * this and has not run".
+ * Who owns an absent Copilot reading.
+ *
+ * WS-7 T7R-B (2026-10-01): this constant was the literal `"WS-7 T11"`, and it fed
+ * every honest-unavailability the Markets room showed. T11 has run — the engine
+ * ships at `a4fac35` and T7R-B wired the room to it through
+ * `src/terminal/adapters/copilotReading.ts` — so naming T11 as the owner of an
+ * absence was a record naming a resolved blocker as live. That is the unflagged
+ * drift AC-020 exists to prevent.
+ *
+ * What is absent now is never the ENGINE. It is the room caller's market state,
+ * so the owner is the supply chain that would provide one. The value keeps the
+ * "a reader must be able to tell nobody owns this from someone owns this" point
+ * the original comment made, and adds a second one: a reader must be able to
+ * tell a missing INPUT from a missing ENGINE. That distinction is why this is
+ * no longer a task id.
  */
-export const COPILOT_ENGINE_OWNER = "WS-7 T11"
+export const COPILOT_ENGINE_OWNER = "WS-7 market-state supply"
 
 export type CopilotDecisionView = {
   /** `false` when the engine has produced no reading. Nothing numeric is shown. */

@@ -134,9 +134,11 @@ export type TerminalCapability<T> = {
 //
 // A renderer that merged the two would let remote text acquire a score, which
 // AC-014 names as a prohibited side effect. The engine that produces
-// `ConfluenceScore` is WS-7 T11 and is not built yet; until it is, these types
-// are the contract the Markets room renders and the room reports the engine's
-// absence honestly rather than synthesizing a score.
+// `ConfluenceScore` is WS-7 T11 and it SHIPS (`a4fac35`). These types are the
+// contract the Markets room renders; since T7R-B the room obtains real readings
+// through `adapters/copilotReading.ts`, and where a caller supplies no market
+// state it reports that ABSENCE with a named owner rather than synthesizing a
+// score.
 // ---------------------------------------------------------------------------
 
 /** The six weighted experts. T11 asserts the weight sum is exactly 100. */
@@ -217,13 +219,14 @@ export type ExecutionTier = {
 // ---------------------------------------------------------------------------
 // WS-7 T7 — the Risk room's render contract (spec §4.4 risk layer).
 //
-// ATR(14) with a 1.5x stop exists today (`indicators.mjs:614`,
-// `v32Context.mjs:185-213`). The 2% daily drawdown disable and the 3-strike
-// 24h key lock DO NOT exist anywhere in the tree and are owned by the same
-// WS-7 T11 risk layer. Each capability therefore carries its OWN availability
+// All three producers exist: `atrStop`, `dailyDrawdownDisable` and
+// `createStrikeStore` ship in `server/services/copilot/riskLayer.mjs` (WS-7 T11,
+// `a4fac35`), and T7R-B wired the Risk room to them via
+// `adapters/copilotReading.ts`. Each capability carries its OWN availability
 // rather than one shared flag, because "ATR is real" must never render as
 // "the whole risk layer is real" — a 2% disable shown next to a live ATR and
-// no availability marker is the fabrication the constitution forbids.
+// no availability marker is the fabrication the constitution forbids. What
+// remains per-capability nullable is the OBSERVATION, not the capability.
 // ---------------------------------------------------------------------------
 
 export type RiskCapabilityKey = "atrStop" | "drawdownDisable" | "threeStrike"
