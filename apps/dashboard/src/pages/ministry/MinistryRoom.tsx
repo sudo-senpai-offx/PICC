@@ -18,6 +18,15 @@ const StudioRoomComponent: LazyExoticComponent<ComponentType> = lazy(() =>
 const TRADING_ROOMS: Record<string, LazyExoticComponent<ComponentType>> = {
   dashboard: lazy(() => import("./DashboardRoom").then((m) => ({ default: m.DashboardRoom }))),
   markets: lazy(() => import("./MarketsRoom").then((m) => ({ default: m.MarketsRoom }))),
+  // WS-7 T7R-A — the four keys authorised by the 2026-09-30 amendment to WS-6
+  // §0.3 (18/11 -> 22/15). `risk` has a real room. `ceremony`, `ministry` and
+  // `strategy` are routed to their reserved bodies, which name the task that
+  // owns each surface and show nothing; see reservedRooms.tsx for why they are
+  // named absences rather than built rooms.
+  risk: lazy(() => import("@/terminal/routes/RiskRoom").then((m) => ({ default: m.RiskRoom }))),
+  ceremony: lazy(() => import("./reservedRooms").then((m) => ({ default: m.CeremonyRoom }))),
+  ministry: lazy(() => import("./reservedRooms").then((m) => ({ default: m.MinistryAuthorityRoom }))),
+  strategy: lazy(() => import("./reservedRooms").then((m) => ({ default: m.StrategyRoom }))),
   paper: lazy(() => import("./PaperRoom").then((m) => ({ default: m.PaperRoom }))),
   autopilot: lazy(() => import("./AutopilotRoom").then((m) => ({ default: m.AutopilotRoom }))),
   "command-centre": lazy(() => import("./CommandCentreRoom").then((m) => ({ default: m.CommandCentreRoom }))),

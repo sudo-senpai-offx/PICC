@@ -56,6 +56,28 @@ describe("room-key parity — INNER_NAV vs MINISTRY_ROOMS", () => {
     const servedTotal = Object.values(MINISTRY_ROOMS).reduce((n, rooms) => n + Object.keys(rooms).length, 0)
     expect(servedTotal).toBe(navTotal)
   })
+
+  // WS-7 T7R-A. This file is the PARITY guard and carries no literal, so the
+  // 2026-09-30 amendment (18/11 -> 22/15) needed no value change here — the
+  // two assertions above pass unchanged once all four authorised keys are
+  // present in BOTH surfaces. That is this guard working, not a gap in it.
+  //
+  // But "no value change" must not become "no evidence". A parity guard proves
+  // the two surfaces AGREE; it cannot prove they agree on the RIGHT thing, so
+  // this file adds the third-file consistency the amendment requires: the four
+  // keys are named here, in the surface that actually serves them.
+  it("serves all four keys authorised by the 2026-09-30 WS-6 §0.3 amendment", () => {
+    for (const key of ["risk", "ceremony", "ministry", "strategy"] as const) {
+      expect(INNER_NAV.trading.map((e) => e.to), `${key} must be advertised by INNER_NAV`).toContain(key)
+      expect(Object.keys(MINISTRY_ROOMS.trading ?? {}), `${key} must be served by MINISTRY_ROOMS`).toContain(key)
+    }
+    // 22 across the nav, 22 served, 15 distinct — the numbers the amendment
+    // records, asserted where parity lives rather than only where a literal is.
+    const navTotal = Object.values(INNER_NAV).reduce((n, e) => n + e.length, 0)
+    const servedTotal = Object.values(MINISTRY_ROOMS).reduce((n, rooms) => n + Object.keys(rooms).length, 0)
+    const distinct = new Set(Object.values(INNER_NAV).flatMap((entries) => entries.map((e) => e.to))).size
+    expect({ navTotal, servedTotal, distinct }).toEqual({ navTotal: 22, servedTotal: 22, distinct: 15 })
+  })
 })
 
 describe("MinistryRoom — unmapped room is honest, not blank", () => {

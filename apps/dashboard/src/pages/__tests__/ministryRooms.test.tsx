@@ -156,16 +156,38 @@ describe("ministry room routes (SP-1 T1.3)", () => {
  * below are transcribed from `MinistryShell.tsx:5-29` and are expected to pass
  * without any production change. If a test here fails, the migration has
  * broken routing compatibility and must be reverted or the spec amended.
+ *
+ * AMENDED 2026-09-30 (WS-7 T7R-A) — see the header line above: the spec WAS
+ * amended. The owner authorised four new keys (`risk`, `ceremony`, `ministry`,
+ * `strategy`), taking the inventory from 18 instances / 11 distinct keys to
+ * 22 / 15. Two values below are MOVED to their new true values as a result —
+ * the ordered `trading` list (9 -> 13) and the cross-suite total (18 -> 22).
+ * Neither was deleted, skipped, or weakened, and the ordered list remains an
+ * exact pin rather than a length check.
+ *
+ * The amendment is recorded at
+ * `docs/specs/PICC_TRADING_SUITE_WS6_TERMINAL_UI_REBUILD_v1.md` §0.3 "Room
+ * keys" and in
+ * `docs/trading-logic/changelog/entries/0027-T7RA_WS6_ROOM_KEY_AMENDMENT-v1-to-v2.md`.
  */
-describe("WS-6 T0 — ministry room keys are frozen (spec §0.3)", () => {
+describe("WS-6 T0 — ministry room keys are frozen (spec §0.3, amended 2026-09-30)", () => {
   it("exposes exactly three suites", () => {
     expect(Object.keys(INNER_NAV).sort()).toEqual(["earnings", "intelligence", "trading"])
   })
 
   it("freezes the trading suite room keys, in order", () => {
+    // MOVED 2026-09-30: 9 keys -> 13. The four authorised keys sit at their D1
+    // order positions (Markets -> Risk -> Ceremony -> Ministry -> Strategy ->
+    // Paper/Live, `...MATURITY_v1.md:97`), so `markets` is entry 2 and `paper`
+    // is entry 7. Still an exact ordered `toEqual`, not a length or membership
+    // check: the order is the part that would drift silently.
     expect(INNER_NAV.trading.map((e) => e.to)).toEqual([
       "dashboard",
       "markets",
+      "risk",
+      "ceremony",
+      "ministry",
+      "strategy",
       "paper",
       "autopilot",
       "command-centre",
@@ -190,9 +212,26 @@ describe("WS-6 T0 — ministry room keys are frozen (spec §0.3)", () => {
     ])
   })
 
-  it("keeps the total room-key count at 18 across all suites", () => {
+  it("keeps the total room-key count at 22 across all suites", () => {
+    // MOVED 2026-09-30: 18 -> 22. trading 13 + earnings 4 + intelligence 5.
     const total = Object.values(INNER_NAV).reduce((n, entries) => n + entries.length, 0)
-    expect(total).toBe(18)
+    expect(total).toBe(22)
+  })
+
+  it("carries 15 distinct keys across 22 instances, so the total is not a free-floating 22", () => {
+    // The count above is only meaningful beside the distinct-key count, and
+    // neither number is meaningful unless the FOUR keys that caused the move are
+    // actually present. A `22` reached by some other combination — a rename, a
+    // duplicate, an unrelated addition — would satisfy a bare total, so the
+    // four authorised keys are asserted by name here.
+    const instances = Object.values(INNER_NAV).flatMap((entries) => entries.map((e) => e.to))
+    expect(instances).toHaveLength(22)
+    expect(new Set(instances).size, "22 instances across 15 distinct keys").toBe(15)
+
+    const trading = new Set(INNER_NAV.trading.map((e) => e.to))
+    for (const key of ["risk", "ceremony", "ministry", "strategy"] as const) {
+      expect(trading.has(key), `the authorised key "${key}" must be present in the trading suite`).toBe(true)
+    }
   })
 
   it("keeps every room key unique within its suite", () => {

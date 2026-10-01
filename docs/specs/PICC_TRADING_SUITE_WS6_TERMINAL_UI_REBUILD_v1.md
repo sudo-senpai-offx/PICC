@@ -65,11 +65,69 @@ the inner-nav card grid at `:42-55` when no valid history exists.
 `Suites.tsx:58-60`: bare `/suites` redirects to `/suites/trading`, **preserving
 the query string**.
 
-**Room keys (frozen).** `MinistryShell.tsx:5-29` defines three suites and 18
-room keys: `trading` → dashboard, markets, paper, autopilot, command-centre,
-dispatch, simulator, studio, settings (9); `earnings` → dashboard, simulator,
-studio, settings (4); `intelligence` → dashboard, governor, guidance, studio,
-settings (5).
+**Room keys.** `MinistryShell.tsx:5-29` defines three suites and, **as amended
+2026-09-30**, 22 room keys: `trading` → dashboard, markets, risk, ceremony,
+ministry, strategy, paper, autopilot, command-centre, dispatch, simulator,
+studio, settings (13); `earnings` → dashboard, simulator, studio, settings (4);
+`intelligence` → dashboard, governor, guidance, studio, settings (5). That is
+**22 instances across 15 distinct room keys**.
+
+> **AMENDMENT 2026-09-30 — 18/11 → 22/15. Owner-ruled. Authorised widening, not
+> a relaxation of a safety invariant.**
+>
+> **Prior value:** 18 instances / 11 distinct keys, as originally frozen above.
+> **New value:** **22 instances / 15 distinct keys**. **Decided by:** the owner.
+> **Date:** 2026-09-30. **Authorising task:** WS-7 T7R-A.
+>
+> **Four new keys are authorised:** `risk`, `ceremony`, `ministry`, `strategy`.
+> All four default to the **`trading`** suite, because WS-7 spec
+> `PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1.md:524-530` draws every one
+> of them on the Copilot→execution path (`SCORE --> MKT`, `TIERS --> LIVE`,
+> `EXEC --> LIVE`), and Risk, Ceremony and Strategy are trade-execution concerns.
+> The default is a stated default, not a per-room ruling: moving any one of the
+> four to another suite is a one-line change to each ordered list.
+>
+> **Why the count was wrong, not merely incomplete.** WS-7's D1 completion order
+> (`…MATURITY_v1.md:97`) names six rooms — Markets, Risk, Ceremony, Ministry,
+> Strategy, Paper/Live — but only `markets` and `paper` bound to a key that
+> existed. Risk, Ceremony, Ministry and Strategy had **no key at all**. The
+> freeze pinned the set of keys that existed; it did not authorise the absence
+> of the four rooms the order requires, which is why those rooms could be built
+> and then be unreachable at any URL.
+>
+> **Two frozen assertions move; a third does not.**
+>
+> 1. `apps/dashboard/src/pages/__tests__/ministryRooms.test.tsx:165-177` — the
+>    exact ordered `trading` key list moves from 9 keys to **13**, with the four
+>    new keys inserted at their D1 order positions. **Moved, not deleted, not
+>    weakened.**
+> 2. `apps/dashboard/src/pages/__tests__/ministryRooms.test.tsx:193-196` — the
+>    cross-suite total moves from `18` to **`22`**. **Moved, not deleted, not
+>    weakened.**
+> 3. `apps/dashboard/src/terminal/components/__tests__/TerminalShell.test.tsx:45-59`
+>    — **no value change.** It is a *parity* guard (`INNER_NAV`'s key set equals
+>    `MINISTRY_ROOMS`'s key set; both totals equal) and carries no literal, so it
+>    passes unchanged once all four keys are present in both surfaces. All three
+>    files must nonetheless agree: only two of the three carry a number.
+>
+> **This amendment is the authorisation the assertion header asked for.**
+> `ministryRooms.test.tsx:157-158` states, in the frozen block's own words, that
+> a failure "must be reverted or **the spec amended**". This is that amendment.
+>
+> **What this does NOT change.** The freeze exists so the strangler migration
+> cannot silently rename, drop, or repoint a room key, and so WS-6's
+> `data-room` hooks stay addressable. This amendment adds four keys and moves
+> one ordered list; it renames nothing, drops nothing, and repoints nothing. No
+> safety invariant, availability contract, or execution boundary is relaxed —
+> the room keys are a **navigation and routing** contract, not a safety one. A
+> reader who takes "22" as licence to fabricate four rooms would be misreading
+> it: each of the four renders the honest reserved/unavailable state naming its
+> owning task until that task builds it, which is what
+> `…MATURITY_v1.md` D27 and AC-020 require.
+>
+> **Prior value is retained above, not deleted** (D20, `…MATURITY_v1.md:268-275`).
+> Changelog record:
+> `docs/trading-logic/changelog/entries/0027-T7RA_WS6_ROOM_KEY_AMENDMENT-v1-to-v2.md`.
 
 **Realtime subscription count (frozen — already correct).**
 `useRealtimeSuite.ts:140-142` installs exactly one `SuiteStreamManager` on
@@ -342,7 +400,7 @@ Each requirement names its task(s). “Testable” means it has a criterion in �
 ### R2 — Room and terminal information architecture (D1/D3/D17) — T2
 - R2.1 Each room has a stable route key, heading, owner, source/status summary, and a bounded main work area.
 - R2.2 The 1280×800 layout has no horizontal page scroll, clipped controls, or inaccessible primary action.
-- R2.3 Navigation preserves the existing ministry room keys and `data-room` hooks used by tests and Browser Studio.
+- R2.3 Navigation preserves the existing ministry room keys and `data-room` hooks used by tests and Browser Studio. **Amended 2026-09-30 (see "Room keys" above):** *preserves* is unchanged and still binding — no existing key is renamed, dropped, or repointed — and the key set is widened from 18 to 22 instances by owner ruling, adding `risk`, `ceremony`, `ministry`, `strategy`. The `data-room` hook obligation is untouched and applies to the four new keys exactly as it does to the existing eighteen.
 - R2.4 A room can be rendered with a reserved capability without constructing a fake loading success or zero-filled metric.
 
 ### R3 — Normalized realtime data contract (D5/D6/D14) — T1, T3
