@@ -73,6 +73,34 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # WS-7 T13 / D15 model supply-chain gate.
+  #
+  # SPEC WHITELIST POSITION: `.github/workflows/**` is NOT in the file-touch
+  # union at spec :73, which requires "a dated spec amendment" for a path
+  # outside it. T13:1312 nevertheless names "CI config" in its file list, so the
+  # two texts disagree. Resolution taken: the job lands, and the amendment is
+  # recorded as an open item in
+  # docs/trading-logic/changelog/entries/0025-T13_MODEL_LAYER_SUPPLY_CHAIN_ROUTING-v1-to-v2.md
+  # rather than the edit being made silently. It is called out here as well so a
+  # reviewer reading this file does not have to find the changelog first.
+  #
+  # This job is DELIBERATELY NOT `continue-on-error`. A gate that cannot fail a
+  # build is not a gate, and D15:223 says the rule is "enforced as a CI gate".
+  # `--fetch` obtains the pinned artifact and verifies the download against the
+  # manifest's SHA-256 BEFORE the verification pass, so a corrupt download
+  # deletes itself and fails here rather than being accepted and re-verified
+  # later. Without `--fetch` the same job fails on an absent artifact, which is
+  # the required behaviour for a developer running it locally.
+  model-supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Model digest + format gate (D15 / AC-032)
+        run: node scripts/model-digest-gate.mjs --fetch
+
   smoke-trading:
     runs-on: ubuntu-latest
     needs: test

@@ -1,0 +1,21 @@
+// WS-7 T13 — the model artifact directory holds BYTES ONLY, and they are never
+// tracked.
+//
+// The 35 MB `needle3.cact` is a downloaded third-party artifact, not source.
+// `.gitignore` (root) is outside this task's file-touch whitelist (spec :73),
+// so the exclusion is expressed in a `.gitignore` INSIDE the directory it
+// governs — which git honours, and which needs no amendment.
+//
+// `!README.md` and `!.gitignore` are re-included so the directory survives a
+// clone with its instructions intact. Everything else in here is ignored.
+
+# The verified artifact. Present locally and in CI (fetched by the gate), never
+# committed. D15 requires it be SHA-256 pinned; modelManifest.mjs carries the pin.
+needle3.cact
+needle3.safetensors
+
+# Any other artifact is equally untracked: the model directory is a download
+# target, not a source directory. The digest gate is what admits a file here.
+*
+!.gitignore
+!README.md
