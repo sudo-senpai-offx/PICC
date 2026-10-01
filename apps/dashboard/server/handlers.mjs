@@ -3184,6 +3184,52 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // -------------------------------------------------------------------
+  // WS-7 T9 — the PAPER/LIVE permit readout: D6's ladder vocabulary and
+  // the D5 `automationPermitted` state of every real broker record. This is
+  // the route T16 entry 0024 handoff #4 pointed at and could not build,
+  // because BS-2 forbade touching `apps/dashboard/src/`.
+  //
+  // WHY A NEW ROUTE AND NOT A REUSE OF THE MINISTRY READOUT ABOVE. That
+  // route already reads the permit store, but its store holds ZERO brokers by
+  // construction and `ministryGovernanceRoute.test.mjs` pins that. Reading it
+  // would report "nothing is known" — true of that store and false of one
+  // seeded with the brokers in `services/brokers.mjs`. It would also couple two
+  // rooms at the transport seam, which both their bisect lines forbid. And a
+  // second route over one store is the defect T8 refused to create for the
+  // ceremony store, so this is ONE store seeded with real broker records,
+  // answering the broker-permission question only.
+  //
+  // IT SERVES NOTHING ELSE. The ceremony rails are read from the pre-existing
+  // `GET /api/command-centre/ceremony` and the consent rails from the
+  // pre-existing `GET /api/command-centre/overview`; the current ladder rung is
+  // read from the pre-existing `GET /api/trading/brokers`. Bundling them here
+  // would put one store behind two routes, which is the defect named above.
+  //
+  // GATED, AND DELIBERATELY NOT ALLOWLISTED. The payload names broker ids and
+  // every refusal reason the permit write path can produce. None of it is
+  // declared-public, so it gets NO allowlist entry and no unruled owner entry:
+  // the decision entries awaiting the owner are not a pool to draw from.
+  //
+  // NO TIER LOGIC AND NO CLOCK OF ITS OWN. `at` is a caller-supplied argument to
+  // the permit store (`brokerAutomationPermit.mjs:166-172`) and with no broker
+  // ever granted there is no change event and so no time to invent. `ok: true`
+  // means THE READOUT EXECUTED; it never means automation was permitted, and
+  // the per-broker verdict is a separate field precisely so the two cannot be
+  // read as one.
+  // -------------------------------------------------------------------
+  if (path === "/api/trading/paper-live/permits" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      const { paperLivePermit } = await import("./services/authority/paperLivePermit.mjs")
+      writeJson(res, 200, paperLivePermit())
+    } catch (err) {
+      console.warn("[picc] paper/live permit readout failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/readiness" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
     try {

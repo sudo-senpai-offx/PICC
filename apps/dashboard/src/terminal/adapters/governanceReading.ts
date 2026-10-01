@@ -148,3 +148,105 @@ export async function fetchMinistryGovernance(
   }
   return { readout: body as GovernanceResponse, error: null }
 }
+
+/* ============================================================================
+   WS-7 T9 — the Paper/Live room's transport.
+   ============================================================================
+   THREE of the FOUR reads are REUSES of routes that already existed and were
+   already gated. Only the permit readout is new, and it is new because no route
+   served a broker-wired permit store — not because this room preferred its own.
+
+     current rung   -> GET /trading/brokers          (pre-existing; `activeExecutor`)
+     consent rails  -> GET /command-centre/overview  (pre-existing; per-site gates)
+     ceremony rails -> GET /command-centre/ceremony  (pre-existing; `fetchCeremonyReadout`)
+     the permit     -> GET /trading/paper-live/permits (added by T9)
+
+   FOUR CALLS RATHER THAN ONE BUNDLED RESPONSE, and the reason is the same reason
+   T8 gave for adding no second ceremony route: one store behind two routes gives
+   that store two answers taken at two moments. Bundling would put the ceremony
+   store behind this room's route as well as its own. The cost of four calls is
+   that they can fail independently — which is why the room's projection reports
+   WHICH input is unobserved rather than collapsing all four into one error.
+
+   NO `credentials` OPTION, for the reason in this file's header: the URLs are
+   relative, so every request is same-origin and `fetch`'s default already sends
+   the session cookie.
+   */
+
+type PaperLivePermitResponse = {
+  ok?: boolean
+  version?: string | null
+  ladder?: { rungs?: unknown; rule?: unknown } | null
+  brokers?: unknown
+  residual?: unknown
+  absences?: unknown
+}
+
+type BrokerRegistryResponse = {
+  ok?: boolean
+  activeExecutor?: unknown
+}
+
+type OverviewResponse = {
+  ok?: boolean
+  sites?: unknown
+}
+
+/**
+ * The Paper/Live room's permit readout.
+ *
+ * NEVER THROWS. A failure is a `null` readout plus a reason, and the room then
+ * renders `unknown` — which is deliberately NOT the same state as a derived
+ * "no live affordance". An unreadable store is not a verified denial.
+ */
+export async function fetchPaperLivePermit(
+  options: { signal?: AbortSignal; base?: string; fetchImpl?: typeof fetch } = {}
+): Promise<{ readout: PaperLivePermitResponse | null; error: string | null }> {
+  const { body, error } = await getJson("/trading/paper-live/permits", "The Paper/Live permit readout", options)
+  if (error !== null) return { readout: null, error }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { readout: null, error: "The Paper/Live permit readout returned a body that is not an object." }
+  }
+  return { readout: body as PaperLivePermitResponse, error: null }
+}
+
+/**
+ * The broker registry, whose `activeExecutor` is the real current-rung producer.
+ *
+ * REUSED, NOT ADDED. `handlers.mjs:4120` already serves this and already gates
+ * it — with `requireSessionOrFirstRun`, not `requireAuth`, which is a weaker gate
+ * this room does not choose and cannot change. That is recorded as a named
+ * dependency risk rather than glossed: on an install with an EMPTY user store the
+ * bootstrap branch admits the caller, so this rung source is only as protected as
+ * that gate. The room's fail-closed verdict does not depend on it alone, and
+ * `PaperLiveRoom.test.tsx` asserts that a missing registry degrades to `unknown`.
+ */
+export async function fetchBrokerRegistry(
+  options: { signal?: AbortSignal; base?: string; fetchImpl?: typeof fetch } = {}
+): Promise<{ readout: BrokerRegistryResponse | null; error: string | null }> {
+  const { body, error } = await getJson("/trading/brokers", "The broker registry", options)
+  if (error !== null) return { readout: null, error }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { readout: null, error: "The broker registry returned a body that is not an object." }
+  }
+  return { readout: body as BrokerRegistryResponse, error: null }
+}
+
+/**
+ * The command-centre gate set, whose per-site gates carry the consent and
+ * automation-opt-in notes this room displays VERBATIM.
+ *
+ * REUSED, NOT ADDED — `handlers.mjs:1779`, already `requireAuth`-gated. Note the
+ * asymmetry with `fetchBrokerRegistry` above: this one is the stricter gate, so
+ * the room's consent rails are the better-protected of its two reused sources.
+ */
+export async function fetchCommandCentreOverview(
+  options: { signal?: AbortSignal; base?: string; fetchImpl?: typeof fetch } = {}
+): Promise<{ readout: OverviewResponse | null; error: string | null }> {
+  const { body, error } = await getJson("/command-centre/overview", "The command-centre gate set", options)
+  if (error !== null) return { readout: null, error }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { readout: null, error: "The command-centre gate set returned a body that is not an object." }
+  }
+  return { readout: body as OverviewResponse, error: null }
+}

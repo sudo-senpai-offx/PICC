@@ -257,3 +257,145 @@ describe("WS-7 T8 — the bisect line: neither room depends on the other to rend
     expect(ceremonyAbsent).not.toContain(ministryAbsent.split('data-room-key="ministry"')[1].slice(0, 200))
   })
 })
+
+/* ==========================================================================
+   WS-7 T9 — the same bisect line for D1's rooms 5 and 6.
+
+   Spec :1280 — "The Paper/Live room is the highest-risk room; it must be
+   revertible independently and must fail closed."
+
+   A SEPARATE `describe`, not an extension of T8's, because the two pairs are
+   independent commitments about different rooms and T8's file is already about
+   Ceremony-vs-Ministry. Merging them would make a failure ambiguous: which pair
+   broke?
+   ========================================================================== */
+
+const T9_SIBLINGS = {
+  /** The Strategy room's whole rendering. It is a reserved body, which is the point. */
+  strategy: "../../../pages/ministry/reservedRooms",
+  paperLive: "../../routes/PaperLiveRoom"
+} as const
+
+describe("WS-7 T9 — Strategy and Paper/Live are independently revertible", () => {
+  it("Paper/Live renders with the Strategy room UNLOADABLE", async () => {
+    // The sibling is replaced with a factory that throws on evaluation. If the
+    // Paper/Live room — or anything it imports — reaches for the Strategy room, this
+    // render fails. Same mechanism as T8's two directions, for T9's pair.
+    vi.doMock(T9_SIBLINGS.strategy, () => {
+      throw new Error("bisect: the Paper/Live room must not import the Strategy room")
+    })
+    try {
+      vi.resetModules()
+      const { PaperLiveRoom } = await import(T9_SIBLINGS.paperLive)
+
+      const html = renderToStaticMarkup(
+        <PaperLiveRoom
+          readouts={{
+            permit: {
+              ok: true,
+              ladder: { rungs: ["paper", "demo", "live"], rule: "one-directional" },
+              brokers: [
+                {
+                  brokerId: "paper",
+                  automationPermitted: false,
+                  recordedFlag: false,
+                  provenanceResolves: false,
+                  permitChangedAt: null,
+                  permitChangedByAuthorityId: null,
+                  ceremonyUnlocked: false,
+                  changeCount: 0,
+                  verdictReason: "never granted"
+                }
+              ],
+              residual: "recorded residual",
+              absences: []
+            },
+            brokers: { ok: true, activeExecutor: "paper" },
+            overview: { ok: true, sites: [] },
+            ceremony: { ok: true, classes: [{ venueClass: "ccxt-crypto", enablement: null }] }
+          }}
+        />
+      )
+
+      // Its OWN room key and its own four obligations.
+      expect(html).toContain('data-room-key="paper"')
+      expect(html).toContain("D6 escalation ladder")
+      expect(html).toContain("automationPermitted, per broker record (D5)")
+      expect(html).toContain("Ceremony rails")
+      // And nothing from the sibling's vocabulary leaked in. Strategy renders a
+      // reserved state, so the word to check for is the reservation itself.
+      expect(html).not.toContain("reserved")
+      expect(html).not.toContain("Strategy")
+    } finally {
+      vi.doUnmock(T9_SIBLINGS.strategy)
+      vi.resetModules()
+    }
+  })
+
+  it("Strategy renders with the Paper/Live room UNLOADABLE", async () => {
+    vi.doMock(T9_SIBLINGS.paperLive, () => {
+      throw new Error("bisect: the Strategy room must not import the Paper/Live room")
+    })
+    try {
+      vi.resetModules()
+      const { StrategyRoom } = await import(T9_SIBLINGS.strategy)
+
+      const html = renderToStaticMarkup(<StrategyRoom />)
+      expect(html).toContain('data-room-key="strategy"')
+      expect(html).toContain("WS-7+")
+      // Nothing from Paper/Live's vocabulary, in either direction.
+      expect(html).not.toContain("automationPermitted")
+      expect(html).not.toContain("ladder")
+      expect(html).not.toContain("permit")
+    } finally {
+      vi.doUnmock(T9_SIBLINGS.paperLive)
+      vi.resetModules()
+    }
+  })
+
+  it("no module in either room's graph imports the other", () => {
+    // The static half, over each room's FULL graph.
+    const paperLiveGraph = [
+      "../../routes/PaperLiveRoom.tsx",
+      "../../domain/paperLive.ts",
+      "../../components/PaperLiveSurface.tsx",
+      "../../adapters/governanceReading.ts",
+      "../../../pages/ministry/PaperRoom.tsx"
+    ]
+    const strategyGraph = ["../../../pages/ministry/reservedRooms.tsx"]
+
+    for (const file of paperLiveGraph) {
+      const code = readCode(file)
+      expect(code, `${file} must not import the Strategy room`).not.toMatch(/reservedRooms|StrategyRoom/)
+    }
+    for (const file of strategyGraph) {
+      const code = readCode(file)
+      expect(code, `${file} must not import Paper/Live`).not.toMatch(/PaperLive|paperLive/)
+      expect(code, `${file} must not import the permit readout`).not.toMatch(/paperLivePermit|automationPermitted/)
+    }
+  })
+
+  it("only Paper/Live fetches, and it fetches no Strategy endpoint because none exists", () => {
+    // The transport half. Strategy has no producer, so it must have NO fetch at all —
+    // which is the strongest possible statement that it depends on nothing.
+    const strategyCaller = readCode("../../../pages/ministry/reservedRooms.tsx")
+    expect(strategyCaller, "the Strategy room must open no transport").not.toMatch(/fetch\(|useEffect/)
+
+    const paperCaller = readCode("../../../pages/ministry/PaperRoom.tsx")
+    expect(paperCaller).toMatch(/fetchPaperLivePermit/)
+    expect(paperCaller).not.toMatch(/reservedRooms|StrategyRoom/)
+  })
+
+  it("Paper/Live degrades to its OWN absent state with every readout absent", async () => {
+    vi.resetModules()
+    const { PaperLiveRoom } = await import(T9_SIBLINGS.paperLive)
+    const html = renderToStaticMarkup(
+      <PaperLiveRoom readouts={{ permit: null, brokers: null, overview: null, ceremony: null }} />
+    )
+    expect(html).toContain('data-room-key="paper"')
+    // The fail-closed state, which is the bisect requirement stated as a rendering:
+    // an absent producer yields `unknown`, never a permissive verdict.
+    expect(html).toContain('data-paper-live-verdict="unknown"')
+    expect(html).not.toContain("Strategy")
+  })
+})

@@ -1201,7 +1201,13 @@ function connectorsSiteIsGated(lines, index) {
     // is a route and its reasoning rather than a new module-level dependency. The
     // line figure moves with it; see the accounting at the `lines` assertion
     // below, which is the authoritative account of what those +51 lines are.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(82)
+    //
+    // 82 -> 83 in WS-7 T9, the same protocol: ONE new route —
+    // GET /api/trading/paper-live/permits — with ONE dynamic import
+    // (`./services/authority/paperLivePermit.mjs`) and statics UNCHANGED at 72.
+    // The reach is unchanged for the same reason T7R-B's and T8's were: the permit
+    // readout belongs to the authority model, which is not on the boot path.
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(83)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1306,7 +1312,29 @@ function connectorsSiteIsGated(lines, index) {
     // site, which is the same class `ws7RouteAuthCoverageGuard.test.mjs`
     // documents for gate names appearing in comments. The fix was to word the
     // comment accurately, NOT to widen the window or relax the assertion.
-    expect(lines, "lines in handlers.mjs").toBe(6177)
+    //
+    // 6,177 -> 6,223 in WS-7 T9, the same protocol: +46 lines and ONE dynamic
+    // import (82 -> 83), with statics UNCHANGED at 72. Every line is accounted
+    // for rather than absorbed. They are the `GET /api/trading/paper-live/permits`
+    // route: the unconditional `requireAuth()` gate as its FIRST statement, the
+    // `await import("./services/authority/paperLivePermit.mjs")`, the `writeJson`,
+    // the 502 branch, and ~30 lines of reasoning recording why the route is gated
+    // rather than allowlisted and why it is a NEW route rather than a reuse of the
+    // Ministry readout's permit block.
+    //
+    // THAT REASONING IS THE POINT OF THE +46, and it is why the figure is 83 and
+    // not 82. T9 could have added NO route at all and had the Paper/Live room read
+    // the permit state out of `GET /api/trading/ministry` — that route already
+    // reads the permit store. It was rejected for three reasons recorded at the
+    // route: that readout's store holds ZERO brokers by construction and
+    // `ministryGovernanceRoute.test.mjs:244-252` pins it, so it cannot answer the
+    // broker-permission question; reading it would couple two rooms at the
+    // transport seam, which both rooms' bisect lines forbid; and two routes over
+    // one store give that store two answers taken at two moments, which is the
+    // defect T8 declined to create for the ceremony store. The comment is the
+    // evidence for a decision that is otherwise invisible in a diff, which is the
+    // same reason T8's 40 comment lines were accounted for individually.
+    expect(lines, "lines in handlers.mjs").toBe(6223)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
