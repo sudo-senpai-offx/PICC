@@ -335,7 +335,9 @@ second is decisive.
 for 19 (Risk only) on a reading that came from T7's per-room verdicts rather than the route table.
 Checking `INNER_NAV` against D1's order at `:97` shows **four** of the six rooms D1 names — Risk,
 Ceremony, Ministry, Strategy — have no key at all; only `markets` and `paper` do. The count is
-therefore 18 + 4 = **22 instances / 15 distinct keys**, and T10's remainder falls from 14 to **12**.
+therefore 18 + 4 = **22 instances / 15 distinct keys**, and T10's remainder is **16** (22 total, minus
+the 6 rooms T7–T9 cover). An earlier draft of this line said 12; that was wrong — 12 is what the
+never-taken 19-room branch would have produced. See §5's resolution note and the BS-3 task table.
 
 The amendment therefore authorises **four** new ministry room keys — `risk`, `ceremony`,
 `ministry`, `strategy` — and records that the count moved from 18/11 to 22/15 by owner decision,
