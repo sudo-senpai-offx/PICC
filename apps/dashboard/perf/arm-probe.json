@@ -1,0 +1,78 @@
+{
+  "schema": "picc-arm-probe-record/1",
+  "probeSchema": "picc-arm-probe/1",
+  "probe": {
+    "schema": "picc-arm-probe/1",
+    "timestamp": "2026-10-01T18:08:51.862Z",
+    "platform": "win32-x64",
+    "cpu_model": "Intel(R) Core(TM) 5 120U",
+    "cpu_cores": "12",
+    "cpu_speed_mhz": "2496",
+    "total_ram_mb": "16025",
+    "free_ram_mb": "6477",
+    "node_version": "v24.18.0",
+    "heap_total_mb": "6",
+    "bench_ms": "644.9691",
+    "bench_checksum": "2095.419",
+    "jitter_p50_ms": "13.98",
+    "jitter_p95_ms": "14.73",
+    "jitter_max_ms": "14.73",
+    "python": "Python 3.10.11"
+  },
+  "host": {
+    "platform": "win32-x64",
+    "isArm64": false,
+    "cpuModel": "Intel(R) Core(TM) 5 120U",
+    "node": "v24.18.0"
+  },
+  "rows": {
+    "B9": {
+      "budget": "ARM jitter p50 / p95 / max",
+      "measuredOnThisHost": null,
+      "verdict": "UNVERIFIED",
+      "reason": "No ARM64 device is attached to this host (platform=win32-x64). An x86 host cannot produce an ARM jitter figure: the whole point of arm-probe.mjs:2-6 is that CPU throttling on x86 proves a PERFORMANCE gate and can never prove an ARCHITECTURE gate. The owner's relayed ARM jitter (p50 0.84 / p95 4.47 / max 7.71 ms) is retained verbatim under ownerRelayed and is NOT restated as measured by this repository.",
+      "ownerRelayed": {
+        "p50": 0.84,
+        "p95": 4.47,
+        "max": 7.71
+      }
+    },
+    "B12": {
+      "budget": "Deterministic bench parity across machines",
+      "measuredOnThisHost": {
+        "benchMs": 644.9691,
+        "benchChecksum": "2095.419"
+      },
+      "verdict": "PARTIAL_VERIFICATION",
+      "reason": "Two separable claims sit in this row and they do not stand or fall together. (1) CHECKSUM IDENTITY — corroborated: this independent x86 host computed bench_checksum=2095.419, which matches the owner-relayed value 2095.419 exactly, so the bench is deterministic across machines as claimed. (2) THE 7.18x RATIO — not reproduced: the owner relayed x86 bench_ms 419.48, and this host measures 644.9691 ms, which is outside a 10% band. Had the relayed ARM figure of 3012.39 ms held, the ratio against THIS host would be about 4.67x, not 7.18x. A CPU-only ratio that varies by host cannot be carried onto a render-bound transition budget.",
+      "crossChecks": {
+        "checksumIdentityCorroborated": true,
+        "x86BenchReproduced": false,
+        "ownerX86BenchMs": 419.48,
+        "thisHostBenchMs": 644.9691,
+        "impliedRatioIfArmFigureHeld": 4.67
+      },
+      "ownerRelayed": {
+        "arm": 3012.39,
+        "x86": 419.48,
+        "ratio": 7.18
+      }
+    }
+  },
+  "ownerRelayed": {
+    "source": "spec §4.6:730 (B9) and §4.6:733 (B12), relayed by the owner from scripts/arm-probe.mjs",
+    "benchMs": {
+      "arm": 3012.39,
+      "x86": 419.48,
+      "ratio": 7.18
+    },
+    "benchChecksum": "2095.419",
+    "jitterMs": {
+      "p50": 0.84,
+      "p95": 4.47,
+      "max": 7.71
+    },
+    "device": "Snapdragon 680 (declared ARM floor class)"
+  },
+  "provenance": "WS-7 T19 — closes spec §4.6:741 and honesty note 25 (`:1487`): the arm-probe.mjs OUTPUT artifact was absent from the repository while the script was present. This is that artifact, produced by running the probe on THIS host. It is NOT an ARM device run: platform=win32-x64, isArm64=false. B9 therefore stays UNVERIFIED rather than being filled in from an x86 proxy."
+}

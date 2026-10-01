@@ -1,0 +1,49 @@
+{
+  "schema": "picc-ram-ceiling/1",
+  "budget": "B10",
+  "ceilingMb": 2048,
+  "ceilingIsFrozen": true,
+  "measured": {
+    "peakMb": 372.1,
+    "samples": 17,
+    "sampleIntervalMs": 400,
+    "warmupMs": 4000,
+    "durationMs": 20000,
+    "stackReady": true,
+    "readinessStatus": "200 via http://localhost:5199/"
+  },
+  "verdict": "pass",
+  "rawSamplesMb": [
+    372.1,
+    372.1,
+    372.1,
+    231.1,
+    187,
+    187,
+    187,
+    187,
+    187,
+    187,
+    187,
+    187,
+    187.1,
+    194.3,
+    206.1,
+    210,
+    210
+  ],
+  "peakProcesses": [
+    "node.exe#14768=339.7",
+    "conhost.exe#28720=7.6",
+    "esbuild.exe#26932=24.8"
+  ],
+  "host": {
+    "cpu": "Intel(R) Core(TM) 5 120U",
+    "cores": 12,
+    "totalRamMb": 16025,
+    "node": "v24.18.0",
+    "platform": "win32-x64"
+  },
+  "method": "vite dev server booted in apps/dashboard with every PICC_* store variable redirected into a temp root and PICC_VAULT_KEY supplied so vault.mjs:49-53 short-circuits before the hardcoded server/data/picc-vault.key. WorkingSetSize summed across the whole process tree at the sample interval, peak taken over the window. NOT the browser tab heap.",
+  "provenance": "WS-7 T19 — first measurement for spec §4.6:731 row B10, previously UNMEASURED with the gate itself proposed but absent."
+}
