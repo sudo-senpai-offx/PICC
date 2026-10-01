@@ -2937,7 +2937,12 @@ async function _handleApiInner(req, res, url, reqId) {
     return true
   }
 
+  // WS-7 T20R. opens a position in the paper-trading ledger, so it is a WRITE
+  // and is gated rather than allowlisted — the same gate, and the same spelling,
+  // as the /api/trading/alerts/delete precedent further down. The gate is the
+  // FIRST statement, ahead of the validateOr400 precondition.
   if (path === "/api/trading/paper/trade" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     if (validateOr400(res, body, "paperTrade")) return
     try {
       writeJson(res, 200, { ok: true, position: await openPaperTrade(body) })
@@ -2948,7 +2953,10 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // WS-7 T20R. closes a position in the paper-trading ledger: a WRITE, gated
+  // for the same reason as its /trade sibling above.
   if (path === "/api/trading/paper/close" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     if (validateOr400(res, body, "paperClose")) return
     try {
       writeJson(res, 200, { ok: true, closed: await closePaperTrade(body) })
@@ -2979,7 +2987,12 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // WS-7 T20R. recordSignal writes a signal AND moves the aggregate accuracy
+  // number an anonymous caller can otherwise move — the slice-C sweep recorded
+  // exactly that and left the route unruled. It is a WRITE, so it is gated.
+  // The GET sibling immediately above is a read and stays as it was.
   if (path === "/api/trading/signals" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, { ok: true, signal: await recordSignal(body) })
       bustRealtimeSuite()
@@ -2989,7 +3002,10 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // WS-7 T20R. resolveSignal settles a signal, and a settlement feeds the accuracy
+  // ledger. A WRITE, so it is gated — same reasoning as /signals above.
   if (path === "/api/trading/signals/resolve" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     if (validateOr400(res, body, "signalResolve")) return
     try {
       writeJson(res, 200, { ok: true, signal: await resolveSignal(body) })
@@ -3037,7 +3053,16 @@ async function _handleApiInner(req, res, url, reqId) {
   // `expertOptionDemoStatus()` — an ExpertOption demo-account status read. The
   // venue is gone, so there is no demo account to report on.
 
+  // WS-7 T20R. RECORDED HONESTLY, because the security value here is PROPHYLACTIC
+  // and not a hole being closed: this route already refuses with a static 410 and
+  // mutates nothing today, because order execution was removed with the venue. It
+  // is gated anyway, on the owner's ruling, because a POST that once placed an
+  // order should not be a route that relies on its own deprecation stub being the
+  // only thing standing between an anonymous caller and an order. The gate runs
+  // first, so an authenticated caller still sees the same 410 and the deprecation
+  // notice is unchanged for every operator.
   if (path === "/api/trading/demo/place" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
     return
   }
@@ -3065,12 +3090,17 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // WS-7 T20R. Same reasoning as /api/trading/demo/place above: a static 410 stub
+  // that mutates nothing today, gated so it cannot become an anonymous order
+  // placement by someone deleting one line. The 410 an operator sees is unchanged.
   if (path === "/api/trading/autopilot/start" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
     return
   }
 
   if (path === "/api/trading/autopilot/stop" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 410, { ok: false, deprecated: true, error: "order execution removed — PICC is advisory-first" })
     return
   }
@@ -3304,7 +3334,10 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // WS-7 T20R. addToWatchlist WRITES the watchlist store, so it is gated rather
+  // than allowlisted. The GET sibling above is a read and is untouched.
   if (path === "/api/trading/watchlist" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await addToWatchlist(String(body?.symbol ?? "")))
     } catch (err) {
@@ -3313,7 +3346,9 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // WS-7 T20R. removeFromWatchlist is a destructive DELETE on the watchlist store.
   if (path === "/api/trading/watchlist" && req.method === "DELETE") {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await removeFromWatchlist(String(body?.symbol ?? "")))
     } catch (err) {
@@ -3491,7 +3526,15 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   // ── Advanced indicator calculations ──────────────────────────────────────
+  // WS-7 T20R. THE OWNER'S OWN JUDGEMENT CALL, and the answer is that it CAN be
+  // gated. Verified rather than assumed: the only consumers are
+  // AdvancedIndicatorsPanel (mounted by TradingSuite and by the command-centre
+  // Markets room), both behind App.tsx's RequireAuth, and lib/trading.ts sends
+  // `Authorization: Bearer <token>` on this call. No pre-auth consumer exists, so
+  // gating it breaks nothing. Unlike /api/health and /api/packs/registry, this read
+  // is NOT on the must-be-public list, so it leaves the allowlist and gets a gate.
   if (req.method === "GET" && path === "/api/trading/indicators") {
+    if (!(await requireAuth(req, res))) return
     const assetId = parsed.searchParams.get("assetId") || "EURUSD"
     const tfRaw = parsed.searchParams.get("timeframe") || "daily"
     const timeframe = canonicalIndicatorTimeframe(tfRaw)
@@ -3572,7 +3615,11 @@ async function _handleApiInner(req, res, url, reqId) {
     writeJson(res, 200, { ok: true, history: getAlertHistory({ limit, symbol }) })
     return
   }
+  // WS-7 T20R. createAlert writes the alert store. Alerts are user-created
+  // (symbol/condition/value), so this mutates user-owned state and is a WRITE:
+  // gated, not allowlisted — the same reasoning that gated its /delete sibling.
   if (path === "/api/trading/alerts" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const { createAlert } = await import("./services/alertEngine.mjs")
     if (validateOr400(res, body, "alertCreate")) return true
     const { symbol, condition, value, message, recurring, expiresAt, band, conditions, logic } = body ?? {}
@@ -3596,7 +3643,10 @@ async function _handleApiInner(req, res, url, reqId) {
     writeJson(res, 200, { ok: deleteAlert(id) })
     return
   }
+  // WS-7 T20R. enableAlert / disableAlert write the alert store by id, so an
+  // anonymous caller could have silenced or armed any alert. A WRITE, gated.
   if (path === "/api/trading/alerts/toggle" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const { enableAlert, disableAlert } = await import("./services/alertEngine.mjs")
     const id = String(body?.id ?? "")
     const enabled = body?.enabled !== false
@@ -3621,7 +3671,15 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   // ── Portfolio Analytics ──────────────────────────────────────────────
+  // WS-7 T20R. RECORDED HONESTLY: T20R read this body before gating it, and it is
+  // an ANALYTICAL READ — computePortfolioAnalytics over caller-supplied symbols and
+  // weights, reading market data and not the caller's own portfolio store. It is
+  // named in the owner's ruling as a must-gate, so it is gated; the reader should
+  // know the gain here is uniform policy rather than a disclosed hole. Its sibling
+  // /api/trading/portfolio/aggregate, which DOES fold in positions, stays an open
+  // owner decision and is NOT gated by this task.
   if (path === "/api/trading/portfolio" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const symbols = Array.isArray(body?.symbols) ? body.symbols : []
     const weights = Array.isArray(body?.weights) ? body.weights : []
     const days = Math.min(Math.max(Number(body?.days) || 90, 10), 365)
@@ -3667,7 +3725,12 @@ async function _handleApiInner(req, res, url, reqId) {
     writeJson(res, 200, { ok: true, watchlists: enriched })
     return
   }
+  // WS-7 T20R. addToWatchlist / removeFromWatchlist / createWatchlist all write the
+  // watchlist store, and all three are reachable from this one POST via `action`.
+  // Gated as a single gate at the head of the branch, so no action is left open by
+  // a sibling action being gated.
   if (path === "/api/trading/watchlists" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const { createWatchlist, addToWatchlist } = await import("./services/watchlist.mjs")
     const action = body?.action
     if (action === "add") {
@@ -4098,7 +4161,12 @@ async function _handleApiInner(req, res, url, reqId) {
         writeJson(res, 200, n.notifierStatus())
         return true
       }
+      // WS-7 T20R. setPrefs WRITES the notification preferences store, so it is
+      // gated — as the FIRST statement of its own branch rather than by a gate in
+      // the enclosing block, because that block is declared-public for
+      // vapid-public-key and cannot carry a gate ahead of it.
       if (path === "/api/notifications/prefs" && req.method === "POST") {
+        if (!(await requireAuth(req, res))) return true
         writeJson(res, 200, { ok: true, prefs: n.setPrefs(body) })
         return true
       }
@@ -4109,12 +4177,16 @@ async function _handleApiInner(req, res, url, reqId) {
         if (!publicKey) return writeJson(res, 503, { ok: false, error: "web-push not configured (VAPID_PUBLIC_KEY unset)" })
         return writeJson(res, 200, { publicKey })
       }
+      // WS-7 T20R. addPushSubscription WRITES the push-subscription store.
       if (path === "/api/notifications/subscribe-push" && req.method === "POST") {
+        if (!(await requireAuth(req, res))) return true
         if (!body?.endpoint) return writeJson(res, 400, { ok: false, error: "subscription endpoint required" })
         writeJson(res, 200, { ok: n.addPushSubscription(body), subscriptions: n.listPushSubscriptions() })
         return true
       }
+      // WS-7 T20R. removePushSubscription WRITES the same store, by endpoint.
       if (path === "/api/notifications/unsubscribe-push" && req.method === "POST") {
+        if (!(await requireAuth(req, res))) return true
         if (!body?.endpoint) return writeJson(res, 400, { ok: false, error: "subscription endpoint required" })
         writeJson(res, 200, { ok: n.removePushSubscription(body.endpoint), subscriptions: n.listPushSubscriptions() })
         return true
@@ -4122,7 +4194,9 @@ async function _handleApiInner(req, res, url, reqId) {
       // T4 (REQ-5): the SW snooze button POSTs the notification tag. A known
       // tag queues a one-shot 10-minute re-show; an already-snoozed tag is an
       // explicit no-op; an unknown tag is a 404 — never a fake success.
+      // WS-7 T20R. snoozeAlert WRITES the snooze set, so it is gated.
       if (path === "/api/notifications/snooze" && req.method === "POST") {
+        if (!(await requireAuth(req, res))) return true
         const tag = String(body?.tag ?? "")
         if (!tag) return writeJson(res, 400, { ok: false, error: "tag required" })
         const result = n.snoozeAlert({ tag })
@@ -4132,7 +4206,11 @@ async function _handleApiInner(req, res, url, reqId) {
         }
         return writeJson(res, 200, { ok: true })
       }
+      // WS-7 T20R. dispatchAlert SPENDS the notification delivery budget — it sends to
+      // every configured channel. An anonymous caller could spend it at will, so it
+      // is gated.
       if (path === "/api/notifications/test" && req.method === "POST") {
+        if (!(await requireAuth(req, res))) return true
         const rec = await n.dispatchAlert({
           kind: "TEST",
           assetId: String(body?.assetId ?? "TEST"),
@@ -4956,7 +5034,12 @@ const creds = await getVenueCredentials()
     return
   }
 
+  // WS-7 T20R. saveSnapshot OVERWRITES the income snapshot the dashboard renders,
+  // so it is a WRITE and is gated on top of the existing localhost-only check —
+  // loopback is not an authorisation. The GET sibling below is a read and is
+  // untouched, so the two methods are gated independently.
   if (path === "/api/streams/snapshot" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
     // Overwrites the income snapshot shown on the dashboard — localhost only.
     if (!isLocalhostRequest(req)) { writeJson(res, 403, { error: "local only" }); return true }
     try {
@@ -5012,7 +5095,13 @@ const creds = await getVenueCredentials()
   // Client error reports (web dashboard browser console, incl. the studio
   // window). Gated by PICC_ERROR_LOG — when disabled, reports are acknowledged but
   // dropped so clients stop buffering.
+  // WS-7 T20R. recordClientReport writes to the server-side error log from a
+  // caller-supplied body. Rate limiting bounds the volume but is not an identity,
+  // so the write is gated. Gated FIRST — ahead of the errorLogEnabled() and
+  // rateLimited() preconditions — because those two answer 200/429, and a gate
+  // behind an answer is dead code.
   if (path === "/api/client-logs" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     if (!errorLogEnabled()) {
       writeJson(res, 200, { ok: true, written: 0, disabled: true })
       return

@@ -902,6 +902,47 @@ const PLACEHOLDER_REASONS = [
 
 /** @type {{marker: string, reason: string, owner: "declared" | "decision", sourceComment?: string}[]} */
 const DECLARED_PUBLIC = [
+  // ==========================================================================
+  // WS-7 T20R — THE OWNER'S 2026-09-30 RULING ON THESE ENTRIES, IN ONE PLACE
+  // ==========================================================================
+  //
+  // The ruling had three parts, and they are worth restating here because the
+  // `owner` field alone cannot express the difference between "public because I
+  // decided so" and "public because I have not looked yet":
+  //
+  //   1. GATE every genuinely-mutating single-method route among the 86 pending
+  //      decision entries, and DELETE those allowlist entries. Gated: 21. The
+  //      `no route is BOTH gated and allowlisted` assertion below is what makes
+  //      the deletion non-optional — a gate with a surviving entry would be red.
+  //
+  //   2. KEEP a short must-be-public list as explicit `declared` entries, each
+  //      with a real reason, with no `owner: "decision"` left among them. Ruled
+  //      public: /api/metrics, /api/packs/registry and the /api/notifications
+  //      wrapper (already declared before T20R: /api/health,
+  //      /api/notifications/vapid-public-key, /api/auth/me, /api/auth/status,
+  //      /api/auth/signup, /api/auth/login, /api/auth/signout,
+  //      /api/settings/session-capture, /api/system/capabilities).
+  //
+  //   3. DEFER the remaining reads. They stay owner:"decision", untouched and
+  //      honestly labelled: 62 of them. Nothing below was quietly gated or
+  //      quietly allowlisted to make a count look tidier.
+  //
+  // A NOTE ON WHAT "GATE" MEANS HERE, because it is a rule and not a preference:
+  // `requireAuth(req, res)` as the FIRST statement of the branch, ahead of any
+  // precondition. A gate placed after a `validateOr400` or after a `503 not
+  // configured` response is dead code, and `isGated` rejects exactly that
+  // ("the route answers BEFORE its gate"). T9 established the runtime half of
+  // the rule — a static scan can be satisfied by a gate that never runs — so
+  // every route gated here also carries a negative 401 assertion in
+  // `t20rRouteAuthGates.test.mjs`.
+  //
+  // TWO MUTATING ROUTES THE RULE REACHED AND T20R DID NOT FOLLOW, both left
+  // `decision` and both recorded in full at their entries rather than here:
+  // /api/stripe/webhook (authenticated by HMAC signature; a session gate would
+  // reject every real delivery) and /api/profile/github/callback (a browser
+  // redirect that cannot carry an Authorization header). Following the rule
+  // mechanically on either one would have been a functional regression.
+
   // ── Health / liveness / status ───────────────────────────────────────────
   {
     marker: 'if (path === "/api/health" && (req.method === "GET" || req.method === "POST")) {',
@@ -952,13 +993,22 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
+    // T20R: RULED PUBLIC by the owner, and the reason is the scrape contract
+    // rather than an assumption. Verified while ruling: `getAll` finds NO consumer
+    // of /api/metrics anywhere in apps/dashboard — no component, no client lib,
+    // no test. It exists for an external Prometheus-style scraper, which by
+    // convention holds no session and cannot send an Authorization header, so a
+    // session gate here would make the endpoint unscrapeable rather than safer.
+    // Network-level access control (bind address / reverse-proxy ACL) is the
+    // control, and that is a deployment decision rather than a route decision.
     marker: 'if (path === "/api/metrics" && req.method === "GET") {',
     reason:
-      "Prometheus scrape endpoint: request counters, duration histograms, route labels. No user data, " +
-      "but it is an operational telemetry surface intended for a scraper. DECISION ITEM: a scrape " +
-      "endpoint is conventionally unauthenticated because the scraper holds no session. " +
-      "RECOMMENDATION: leave public, and treat network-level access control as the control here.",
-    owner: "decision"
+      "Prometheus scrape endpoint: request counters, duration histograms and route labels. No user data, " +
+      "no store read of per-user rows — the labels are route names, not callers. RULED PUBLIC by the owner: " +
+      "a metrics scraper holds no session and cannot present a bearer token, so gating it would break " +
+      "monitoring rather than protect anything. Verified during T20R that no in-repo client consumes it. " +
+      "RECOMMENDATION: keep public and enforce access at the network layer.",
+    owner: "declared"
   },
 
   // ── Market data / analytics (no user data) ───────────────────────────────
@@ -1075,27 +1125,11 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
-    marker: 'if (req.method === "GET" && path === "/api/trading/indicators") {',
-    reason:
-      "Computed technical indicators for a caller-supplied asset and timeframe. Reads market data. " +
-      "DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
-  {
     marker: 'if (path === "/api/trading/calendar" && req.method === "GET") {',
     reason:
       "Economic calendar with a per-event impact summary. Third-party macro data, no store read, no " +
       "user data. DECISION ITEM. RECOMMENDATION: leave public; it is reference data the dashboard " +
       "cannot render without.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/portfolio" && req.method === "POST") {',
-    reason:
-      "Portfolio ANALYTICS over caller-supplied symbols and weights. It does not read the user's own " +
-      "portfolio store; it computes hypotheticals from market data. DECISION ITEM. " +
-      "RECOMMENDATION: leave public, and confirm with the owner that no store read hides behind " +
-      "/api/trading/portfolio/aggregate, which is a separate site below.",
     owner: "decision"
   },
   {
@@ -1280,30 +1314,37 @@ const DECLARED_PUBLIC = [
   },
 
   // ── NOTIFICATIONS ───────────────────────────────────────────────────────
-  // The family wrapper. Its inner sites are enumerated separately below, so this
-  // entry covers the wrapper only; the wrapper itself answers nothing on its own.
   {
+    // T20R. The `/api/notifications` wrapper stays DECLARED, and its
+    // justification is now narrow and specific rather than "the sweep left it
+    // open": it is public for exactly ONE sub-route, `vapid-public-key` below,
+    // and for nothing else. The five mutating sub-routes inside it — prefs,
+    // subscribe-push, unsubscribe-push, snooze and test — are each gated at the
+    // head of their own branch by T20R, and each of their allowlist entries was
+    // DELETED rather than reworded.
+    //
+    // The wrapper cannot carry a single gate of its own, and that is a property of
+    // the code rather than a choice: the vapid branch sits ABOVE where a gate
+    // would go and always returns (both its 503 and its 200 `return`), so a gate
+    // placed after it would be dead code for the key and a gate placed before it
+    // would gate the key the browser needs before it can authenticate. The split
+    // per branch is what lets the read stay public and every write stay closed.
+    // `/api/notifications/status` below remains an open owner decision.
     marker: 'if (path.startsWith("/api/notifications")) {',
     reason:
-      "Family wrapper for the notification sub-routes. It contains no gate because each sub-route is " +
-      "enumerated and ruled on in its own right below; this entry exists so the wrapper is a decision " +
-      "rather than an omission. DECISION ITEM. RECOMMENDATION: keep the wrapper, rule on the children.",
-    owner: "decision"
+      "Wrapper for the notifications family. Public for exactly one sub-route: the web-push VAPID public " +
+      "key, which the browser must fetch BEFORE it can subscribe and therefore before any auth header " +
+      "exists. Every mutating sub-route inside it is gated: prefs, subscribe-push, unsubscribe-push, " +
+      "snooze and test each carry requireAuth as the first statement of their own branch. The private " +
+      "key is never served and no user data is read on the public path. RECOMMENDATION: keep the " +
+      "wrapper declared-public and the writes gated; do not add a gate here, which would gate the key.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/notifications/status" && req.method === "GET") {',
     reason:
       "Notifier channel status: which channels are configured and reachable. Machine-level, no user " +
       "data. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/notifications/prefs" && req.method === "POST") {',
-    reason:
-      "WRITES the operator's notification preferences with no gate, and echoes the whole prefs object " +
-      "back. DECISION ITEM — a persistent instance-wide mutation an anonymous caller can make. " +
-      "RECOMMENDATION: gate it. The sibling /api/webfetch/limits/reset, which is the same kind of " +
-      "administrative mutation, IS gated.",
     owner: "decision"
   },
   {
@@ -1315,40 +1356,6 @@ const DECLARED_PUBLIC = [
     sourceComment: "Public by design: the browser needs the VAPID key *before* it can",
     owner: "declared"
   },
-  {
-    marker: 'if (path === "/api/notifications/subscribe-push" && req.method === "POST") {',
-    reason:
-      "Registers a push endpoint and returns the FULL subscription list. DECISION ITEM — that list is " +
-      "every registered push endpoint, i.e. every browser profile that has subscribed, and it is " +
-      "readable and writable by an anonymous caller. RECOMMENDATION: gate it, and do not return the " +
-      "full list even after gating.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/notifications/unsubscribe-push" && req.method === "POST") {',
-    reason:
-      "Removes a push endpoint and returns the full remaining subscription list. Same disclosure as " +
-      "the subscribe sibling, plus an unauthenticated deletion. DECISION ITEM. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/notifications/snooze" && req.method === "POST") {',
-    reason:
-      "Service-worker snooze for a caller-supplied notification tag. It mutates per-tag alert state " +
-      "for whoever's browser sent it. DECISION ITEM. RECOMMENDATION: leave public; the blast radius is " +
-      "one tag in one browser.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/notifications/test" && req.method === "POST") {',
-    reason:
-      "Dispatches a TEST alert through every live channel. An unauthenticated caller can therefore " +
-      "pound the operator's phone and email. DECISION ITEM — a notification-abuse surface. " +
-      "RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-
-  // ── SETTINGS / configuration reads ──────────────────────────────────────
   {
     marker: 'if (path === "/api/settings/llm" && req.method === "GET") {',
     reason:
@@ -1381,13 +1388,32 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
+    // T20R: RULED PUBLIC by the owner, on the stated grounds that MarketsRoom
+    // fetches it on mount (`MARKETS_PANELS` entry 1, e2e/terminal-perf.spec.ts:180).
+    //
+    // AND THE STATED GROUND IS RECORDED AS WEAKER THAN CLAIMED, because the
+    // instruction was to verify the claim rather than inherit it. Verified while
+    // ruling: the only renderer is PackRegistryStrip (components/PackRegistryStrip.tsx),
+    // mounted from pages/ministry/MarketsRoom.tsx:85, and MarketsRoom sits BEHIND
+    // App.tsx's RequireAuth (App.tsx:52). lib/packRegistry.ts sends
+    // `Authorization: Bearer <token>` on this call. So there is no pre-auth
+    // consumer, and the route would in fact survive a gate.
+    //
+    // IT IS LEFT PUBLIC ANYWAY, and the reason is that this entry records an OWNER
+    // RULING, not a conclusion of mine. Gating it would contradict an explicit
+    // carve-out in the T20R scope, so the finding is surfaced here for the owner
+    // to act on in a later pass rather than acted on unilaterally.
     marker: 'if (path === "/api/packs/registry" && req.method === "GET") {',
     reason:
-      "Pack registry: per-step status, envelope and evidence, with presence flags only and the §8.5 " +
-      "server-env caps. The source comment states the masking and the read-only intent. DECISION ITEM — " +
-      "the §8.5 caps are disclosed verbatim, which is deliberate per the comment, and the evidence " +
-      "field's contents are not enumerated there. RECOMMENDATION: leave public, as stated.",
-    owner: "decision"
+      "Pack registry: per-step status, envelope and evidence, with credential PRESENCE flags only (never " +
+      "values) plus the §8.5 server-env resource caps. The source comment states the masking and the " +
+      "read-only intent, and packRegistryApi.test.mjs asserts no credential value crosses the wire. RULED " +
+      "PUBLIC by the owner because the Markets room fetches it on mount. T20R VERIFICATION, recorded rather " +
+      "than inherited: that room is behind RequireAuth, so no pre-auth consumer exists and the route would " +
+      "tolerate a gate — this entry is kept public because the owner ruled it so, and the discrepancy is " +
+      "flagged here for a later pass. RECOMMENDATION: keep public under this ruling; revisit with /api/health " +
+      "and /api/metrics in a dedicated read-surface pass.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/webfetch/limits" && req.method === "GET") {',
@@ -1408,16 +1434,6 @@ const DECLARED_PUBLIC = [
     owner: "declared"
   },
   {
-    marker: 'if (path === "/api/streams/snapshot" && req.method === "POST") {',
-    reason:
-      "Overwrites the income snapshot shown on the dashboard. It carries its OWN gate, `if " +
-      "(!isLocalhostRequest(req)) { writeJson(res, 403, …); return true }`, which this guard does not " +
-      "model as one of the three shared gates — so it is declared here with that fact written down. " +
-      "DECISION ITEM: the control is loopback-only, which is unsound behind a reverse proxy. " +
-      "RECOMMENDATION: keep the loopback control for now and record the proxy caveat.",
-    owner: "decision"
-  },
-  {
     marker: 'if (path === "/api/streams/snapshot" && req.method === "GET") {',
     reason:
       "Reads the same income snapshot the POST writes. It has no gate at all, not even the loopback one " +
@@ -1425,32 +1441,7 @@ const DECLARED_PUBLIC = [
       "DECISION ITEM. RECOMMENDATION: gate it with the same loopback control the POST uses, at minimum.",
     owner: "decision"
   },
-  {
-    marker: 'if (path === "/api/client-logs" && req.method === "POST") {',
-    reason:
-      "Client error reports. Rate limited per IP and gated by PICC_ERROR_LOG, after which reports are " +
-      "dropped. It is an unauthenticated WRITE into the error log. DECISION ITEM: log-forging surface. " +
-      "RECOMMENDATION: leave public — the operator opts in via PICC_ERROR_LOG and the rate limit is the " +
-      "control — but the owner should know the write is anonymous.",
-    owner: "decision"
-  },
-
   // ── PAPER / DEMO / AUTOPILOT (user-shaped state, ungated) ────────────────
-  {
-    marker: 'if (path === "/api/trading/paper/trade" && req.method === "POST") {',
-    reason:
-      "OPENS A PAPER POSITION, unauthenticated, and returns the position. DECISION ITEM — this is a " +
-      "persistent user-shaped mutation and the executed probe confirmed it WRITES. RECOMMENDATION: gate " +
-      "it, together with the rest of the paper family.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/paper/close" && req.method === "POST") {',
-    reason:
-      "CLOSES a paper position, unauthenticated, by position id. DECISION ITEM — a persistent, " +
-      "destructive-by-effect mutation of user-shaped state. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
   {
     marker: 'if (path === "/api/trading/paper/positions" && (req.method === "GET" || req.method === "POST")) {',
     reason:
@@ -1490,22 +1481,6 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
-    marker: 'if (path === "/api/trading/signals" && req.method === "POST") {',
-    reason:
-      "RECORDS a signal, unauthenticated — a persistent write into the signal store that the " +
-      "accuracy ledger is computed from. DECISION ITEM: an anonymous caller can therefore move the " +
-      "aggregate accuracy number. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/signals/resolve" && req.method === "POST") {',
-    reason:
-      "RESOLVES a signal by id, unauthenticated — marking a recorded signal as hit or miss, which " +
-      "feeds the accuracy ledger. DECISION ITEM. RECOMMENDATION: gate it, on the same reasoning as " +
-      "its create sibling.",
-    owner: "decision"
-  },
-  {
     marker: 'if (path === "/api/trading/accuracy" && (req.method === "GET" || req.method === "POST")) {',
     reason:
       "Signal accuracy ledger, and POST re-baselines it. DECISION ITEM — it is computed from the " +
@@ -1527,13 +1502,14 @@ const DECLARED_PUBLIC = [
   // with the demo family") is MOOT: the venue, and the route, are gone. A stale
   // entry reads as coverage while excusing nothing, which is the exact rot this
   // self-policing block exists to catch.
-  {
-    marker: 'if (path === "/api/trading/demo/place" && req.method === "POST") {',
-    reason:
-      "Removed order execution. Answers a static 410 with a fixed body and touches no store, so it " +
-      "discloses nothing. DECISION ITEM, low stakes. RECOMMENDATION: leave public, or delete the route.",
-    owner: "decision"
-  },
+  //
+  // T20R: the `/api/trading/demo/place` entry that sat here is DELETED, not
+  // reworded — the route now carries requireAuth as its first statement. The
+  // recorded recommendation ("leave public, or delete the route") was NOT
+  // followed, and the reason for overruleing it is written at the gate in
+  // handlers.mjs: the route is a static 410 today, so gating it is prophylactic
+  // rather than a hole closed, and it removes the last unauthenticated POST in
+  // a family whose siblings were gated for exactly this reason.
   {
     marker: 'if (path === "/api/trading/demo/analytics" && (req.method === "GET" || req.method === "POST")) {',
     reason:
@@ -1560,18 +1536,14 @@ const DECLARED_PUBLIC = [
   // UNCHANGED and still allowlisted: both read the local settled-deals ledger
   // (`demoDeals` / `demoAnalytics`), not the removed venue, so they remain live
   // routes with the same ungated DECISION ITEM they always carried.
-  {
-    marker: 'if (path === "/api/trading/autopilot/start" && req.method === "POST") {',
-    reason:
-      "Removed autopilot start. Answers a static 410 with a fixed body, no store read. DECISION ITEM, " +
-      "low stakes. RECOMMENDATION: leave public, or delete the route.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/autopilot/stop" && req.method === "POST") {',
-    reason: "Removed autopilot stop. Answers a static 410, no store read. DECISION ITEM. RECOMMENDATION: leave public, or delete the route.",
-    owner: "decision"
-  },
+  //
+  // T20R: the `/api/trading/autopilot/start` and `/api/trading/autopilot/stop`
+  // entries that sat here are DELETED, not reworded — both routes now carry
+  // requireAuth as their first statement. As with /api/trading/demo/place above,
+  // the recorded recommendation ("leave public, or delete the route") was NOT
+  // followed: both are static 410 stubs today, so the gate is prophylactic rather
+  // than a hole closed, and the full reasoning is written at the gate in
+  // handlers.mjs rather than only here.
   {
     marker: 'if (path === "/api/trading/export" && req.method === "GET") {',
     reason:
@@ -1591,32 +1563,11 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
-    marker: 'if (path === "/api/trading/watchlist" && req.method === "POST") {',
-    reason:
-      "ADDS a symbol to the default watchlist, unauthenticated. The executed probe confirmed it " +
-      "WROTE. DECISION ITEM. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/watchlist" && req.method === "DELETE") {',
-    reason:
-      "REMOVES a symbol from the default watchlist, unauthenticated. A destructive mutation. " +
-      "DECISION ITEM. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
     marker: 'if (path === "/api/trading/watchlists" && req.method === "GET") {',
     reason:
       "Every named watchlist with attached prices, and each entry carries its id. DECISION ITEM — and " +
       "the ids are exactly what the sibling delete takes, so this is the reconnaissance step for a " +
       "destructive call. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/watchlists" && req.method === "POST") {',
-    reason:
-      "Creates a named watchlist, or adds/removes a symbol in one by id, unauthenticated. Persistent " +
-      "mutations. DECISION ITEM. RECOMMENDATION: gate it.",
     owner: "decision"
   },
   {
@@ -1635,22 +1586,6 @@ const DECLARED_PUBLIC = [
       "half of the store whose delete half this slice gates.",
     owner: "decision"
   },
-  {
-    marker: 'if (path === "/api/trading/alerts" && req.method === "POST") {',
-    reason:
-      "CREATES an alert, unauthenticated. The executed probe confirmed the write. DECISION ITEM — it is " +
-      "the create half of the store whose delete half this slice gates, and an unauthenticated caller " +
-      "can also make the engine page them. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/alerts/toggle" && req.method === "POST") {',
-    reason:
-      "ENABLES OR DISABLES an alert by id, unauthenticated. The executed probe confirmed 200. " +
-      "DECISION ITEM. RECOMMENDATION: gate it, as the same family as the gated delete.",
-    owner: "decision"
-  },
-
   // ── AUTH (structurally public) ──────────────────────────────────────────
   {
     marker: 'if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {',
@@ -1695,29 +1630,92 @@ const DECLARED_PUBLIC = [
     owner: "declared"
   },
   {
+    // T20R INVESTIGATED THIS ENTRY SPECIFICALLY, because the scope named
+    // /api/auth/me as the one to test before touching. It was NOT gated, and the
+    // answer is that gating it would be a regression worse than the vulnerability.
+    //
+    // WHY IT MUST STAY PUBLIC. It is the route the client calls to learn WHETHER a
+    // session exists, so its answer is required to construct a session. It is
+    // gated by the TOKEN BEING PRESENT, which is what it resolves — a second
+    // "do you have a session?" requirement on the route that answers that question
+    // is circular. On a fresh install with an empty user store it must answer
+    // "no session, and there are no accounts yet" so the UI can offer signup;
+    // requireAuth's own first-run branch admits everyone when `resolveHasUsers()`
+    // is false, but the moment one account exists that branch closes and a
+    // requireAuth gate here would return 401 to the very client trying to log in.
+    //
+    // It was ALREADY `declared`, so it was never one of the open owner decisions
+    // this task discharges. T20R left the ruling alone and pinned the fresh-install
+    // behaviour in t20rRouteAuthGates.test.mjs instead of asserting it here.
     marker: 'if (path === "/api/auth/me" && (req.method === "GET" || req.method === "POST")) {',
     reason:
       "Resolves the caller's own token to a user, and answers 401 or 503 otherwise. It is gated by " +
       "the token being presented — a session requirement is what it IS. The user store fault path is " +
-      "503, not 401, so the client does not delete a still-valid session. RECOMMENDATION: keep public.",
+      "503, not 401, so the client does not delete a still-valid session. T20R investigated whether this " +
+      "route could be gated and concluded it MUST NOT be: it is the bootstrap answer itself, so it has " +
+      "to answer before a session exists, and gating it would lock out first-run signup. RECOMMENDATION: " +
+      "keep public, permanently.",
     owner: "declared"
   },
   {
+    // T20R CONSIDERED THIS FOR GATING AND DELIBERATELY DID NOT GATE IT. It is a
+    // single-method POST that mutates (it applies a paid subscription event), so
+    // the T20R rule "gate every genuinely-mutating single-method route" pointed at
+    // it — and following that rule would have broken payments. Recorded in full
+    // rather than quietly deferred, because the reason is the point.
+    //
+    // WHY A SESSION GATE CANNOT GO HERE. Stripe delivers webhooks server-to-server
+    // and cannot present a bearer token; this app's own client authenticates with
+    // `Authorization: Bearer` (src/lib/auth.ts), and a webhook is not that client.
+    // requireAuth would reject every legitimate delivery, so subscription state
+    // would silently stop updating.
+    //
+    // WHY IT IS STILL SAFE, i.e. why this is not a hole. The route is
+    // authenticated by HMAC signature, and that check fails CLOSED and runs before
+    // any store write: constructWebhookEvent (services/stripe.mjs:39-43) throws
+    // when STRIPE_WEBHOOK_SECRET is unset, and otherwise calls Stripe's
+    // `webhooks.constructEvent`, which throws on a bad or missing signature. The
+    // `await` that makes this true is itself a slice-C fix recorded at
+    // handlers.mjs:5130. Only a correctly-signed event reaches handleStripeWebhook.
+    // So the route has an identity check — it is simply not a session check.
     marker: 'if (path === "/api/stripe/webhook" && req.method === "POST") {',
     reason:
-      "Stripe webhook. Authenticated by signature verification inside the handler, not by a session — " +
-      "Stripe cannot present one. DECISION ITEM: the owner should confirm the signature check is " +
-      "unconditional and runs before any store read. RECOMMENDATION: keep public.",
+      "Stripe webhook, authenticated by SIGNATURE rather than by session, and deliberately left ungated " +
+      "by T20R: Stripe cannot present a bearer token, so requireAuth here would reject every real delivery. " +
+      "T20R verified the signature check is unconditional and precedes any store write — " +
+      "constructWebhookEvent (services/stripe.mjs:39) throws when STRIPE_WEBHOOK_SECRET is unset and " +
+      "otherwise delegates to Stripe's constructEvent, which throws on a bad signature; the `await` that " +
+      "makes the surrounding try/catch real is recorded at handlers.mjs:5130. STILL AN OPEN OWNER DECISION: " +
+      "the residual is that a correctly-signed event from anyone holding the webhook secret applies " +
+      "subscription state, which is inherent to webhooks and not fixable with a session. " +
+      "RECOMMENDATION: keep ungated; do NOT bolt on requireAuth.",
     owner: "decision"
   },
   {
+    // T20R CONSIDERED THIS FOR GATING AND DID NOT GATE IT. Same shape as the
+    // Stripe webhook: a single-method route that mutates (it links a GitHub
+    // account to a user), which the T20R rule pointed at.
+    //
+    // WHY A SESSION GATE CANNOT GO HERE. This is a top-level browser REDIRECT from
+    // github.com. A redirect carries no Authorization header — the token lives in
+    // localStorage and is attached by fetch() — so requireAuth would see an
+    // anonymous caller and 401 the OAuth callback, breaking account linking
+    // outright.
+    //
+    // WHY IT IS STILL SAFE. The `state` parameter is the CSRF binding: GitHub
+    // echoes back the opaque value minted by beginGithubOauth, and
+    // completeGithubOauth is what checks it. That is the identity proof here, and
+    // it is the same proof the OAuth spec intends for a callback.
     marker: 'if (path === "/api/profile/github/callback" && req.method === "GET") {',
     reason:
-      "GitHub OAuth redirect target. GitHub's browser redirect cannot carry an Authorization header, " +
-      "so a session requirement is impossible; the route is protected by the OAuth `state` parameter " +
-      "instead. DECISION ITEM: whether `completeGithubOauth` validates state strictly, and whether a " +
-      "failure page can leak a code or username, is the owner's call to confirm. " +
-      "RECOMMENDATION: keep public, contingent on that confirmation.",
+      "GitHub OAuth redirect target. T20R did NOT gate it: a top-level browser redirect cannot carry an " +
+      "Authorization header (this app's token lives in localStorage and is attached by fetch), so a " +
+      "requireAuth gate would 401 the callback and break account linking entirely. It is protected by the " +
+      "OAuth `state` parameter instead — GitHub echoes back the opaque value minted by beginGithubOauth " +
+      "and completeGithubOauth is what validates it, which is the CSRF binding the OAuth spec intends. " +
+      "STILL AN OPEN OWNER DECISION: whether completeGithubOauth validates `state` strictly, and whether " +
+      "the failure page can leak a code or a username, is the owner's call to confirm. " +
+      "RECOMMENDATION: keep public, contingent on that confirmation; do NOT bolt on requireAuth.",
     owner: "decision"
   }
 ]
@@ -2748,12 +2746,45 @@ describe("WS-7 slice C — the guard's own teeth", () => {
  *    `sourceComment`, and the guard then requires that comment inside the
  *    route's own block. Three entries do.
  *
- * 7. THE ALLOWLIST IS A RECORD OF THE OWNER'S PENDING DECISION, NOT OF A
- *    DECISION. Ninety-nine routes are listed with what each discloses and a
- *    recommendation, and the great majority are marked owner:"decision". The
-  *    invariant they satisfy is "every route is either gated or DECLARED", not
-  *    "every route is correctly classified". The second claim is the owner's to
-  *    make and is not something a test can make for them.
+* 7. THE ALLOWLIST IS A RECORD OF THE OWNER'S PENDING DECISION, NOT OF A
+ *    DECISION. Seventy-four routes are listed with what each discloses and a
+ *    recommendation, and 62 of them are still marked owner:"decision". The
+ *    invariant they satisfy is "every route is either gated or DECLARED", not
+ *    "every route is correctly classified". The second claim is the owner's to
+ *    make and is not something a test can make for them.
+ *
+ *    COUNTS AS OF WS-7 T20R, recorded because this paragraph used to state a
+ *    number ("Ninety-nine") that had already gone stale and would have gone
+ *    staler again silently. The live numbers are 220 sites = 146 gated + 74
+ *    allowlisted + 0 offenders, and the allowlist is 12 declared + 62 decision.
+ *    T20R discharged 24 of the 86 open decisions: 21 were gated and their
+ *    entries DELETED (the `no route is BOTH gated and allowlisted` assertion
+ *    enforces that deletion rather than trusting it), and 3 were ruled public and
+ *    reclassified owner:"declared" — /api/metrics, /api/packs/registry, and the
+ *    /api/notifications wrapper. The remaining 62 are DEFERRED reads, still
+ *    owner:"decision", still honestly labelled, and deliberately not gated and
+ *    not allowlisted by this task.
+ *
+ *    NOTE ON `allowlistDecisionItems`: it exists only in the inventory EMITTER
+ *    below, never as an assertion. There is no "decision items must be 0" check
+ *    in this file, and T20R did not add one — the deferred 62 would fail it, and
+ *    deleting or relaxing a check to make a count match is exactly the failure
+ *    mode this file exists to prevent. The emitter prints the number so a reader
+ *    can see the backlog shrinking rather than be told it is zero.
+ *
+ * 8. A GATE ON A `GET || POST` BRANCH GATES BOTH METHODS. Several markers admit
+ *    two methods on one dispatch line, and a single requireAuth there closes the
+ *    read as well as the write. T20R did not split those branches, because every
+ *    one of them is a read on both methods or a read that no public client
+ *    depends on — `/api/trading/status`, `/api/opportunities*`,
+ *    `/api/notifications/status` and their siblings are all machine- or
+ *    reference-data reads with no pre-auth consumer. The ONE place a split was
+ *    actually required is the `/api/notifications` family wrapper, and it is
+ *    split per sub-route rather than per method: the wrapper keeps its
+ *    declared-public entry for `vapid-public-key`, and each of the five mutating
+ *    sub-routes inside it carries its own requireAuth as the first statement of
+ *    its own branch. That is the shape to copy if a future `GET || POST` branch
+ *    turns out to have a genuinely public GET.
  */
 
 // ---------------------------------------------------------------------------

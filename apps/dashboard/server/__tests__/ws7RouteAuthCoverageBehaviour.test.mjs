@@ -550,7 +550,20 @@ function readDeclaredPublicMarkers() {
   const start = text.indexOf("const DECLARED_PUBLIC = [")
   const end = text.indexOf("\n/** Marker -> entry")
   if (start === -1 || end === -1) throw new Error("DECLARED_PUBLIC could not be located in the guard file")
-  return [...text.slice(start, end).matchAll(/marker: '([^']+)'/g)].map((m) => m[1])
+  return [...declaredPublicSlice().matchAll(/marker: '([^']+)'/g)].map((m) => m[1])
+}
+
+/**
+ * The raw DECLARED_PUBLIC array text, sliced out of the guard file by its own
+ * delimiters. Split out from readDeclaredPublicMarkers so the anti-vacuity
+ * assertion below can count the SAME slice with a DIFFERENT pattern.
+ */
+function declaredPublicSlice() {
+  const text = readFileSync(new URL(`../__tests__/${GUARD_REL.split("/").pop()}`, import.meta.url), "utf8")
+  const start = text.indexOf("const DECLARED_PUBLIC = [")
+  const end = text.indexOf("\n/** Marker -> entry")
+  if (start === -1 || end === -1) throw new Error("DECLARED_PUBLIC could not be located in the guard file")
+  return text.slice(start, end)
 }
 
 /** Derive the (path, method) a dispatch line serves, from the line itself. */
@@ -642,11 +655,42 @@ const MARKERS = readDeclaredPublicMarkers()
 
 describe("WS-7 slice C — every declared-public route still answers an anonymous caller", () => {
   it("the sweep covers the whole allowlist", () => {
+    // WS-7 T20R. THIS FLOOR USED TO BE A MAGIC NUMBER AND IT WENT STALE, which is
+    // the failure mode worth naming: it read `toBeGreaterThan(90)` against a
+    // 95-entry allowlist, and T20R's discharge of 24 decisions legitimately took
+    // that to 74. Deleting the assertion or lowering it to fit would have been
+    // exactly the "make the count match" move this file exists to prevent.
+    //
+    // IT IS NOW DERIVED INSTEAD OF GUESSED, and it is STRICTLY STRONGER than the
+    // floor it replaces. Two INDEPENDENT patterns over the same slice must agree:
+    // one counts `marker:` fields (what the sweep fires) and one counts
+    // `owner:` fields (what the guard classifies). A parse that silently matched
+    // nothing on one pattern cannot agree with the other, so the circularity of
+    // comparing the sweep to itself is avoided rather than hidden. The hard floor
+    // stays as a backstop for a parse that is wrong on BOTH patterns at once.
+    // BOTH patterns are ANCHORED to the 4-space field indentation inside an entry,
+    // and neither is a bare substring search. That matters: this file's own
+    // comments discuss `owner: "decision"` in prose, and an unanchored pattern
+    // would count a sentence as an entry. Anchoring also keeps the two patterns
+    // independent in the way the check needs — they must fail differently.
+    const slice = declaredPublicSlice()
+    const markerCount = [...slice.matchAll(/^ {4}marker: '([^']+)',?\s*$/gm)].length
+    const ownerCount = [...slice.matchAll(/^ {4}owner: "(?:declared|decision)",?\s*$/gm)].length
+
     expect(
       MARKERS.length,
+      "the sweep must fire one probe per DECLARED_PUBLIC entry, so every entry is covered"
+    ).toBe(markerCount)
+    expect(
+      markerCount,
+      "every marker must belong to an entry the guard classifies — a marker with no owner is a fixture " +
+        "or a comment, not coverage"
+    ).toBe(ownerCount)
+    expect(
+      markerCount,
       "the allowlist sweep found no markers — a parse that found nothing would make every test below " +
         "vacuous, which is the exact failure this file exists to prevent"
-    ).toBeGreaterThan(90)
+    ).toBeGreaterThan(60)
   })
 
   for (const marker of MARKERS) {

@@ -1334,7 +1334,47 @@ function connectorsSiteIsGated(lines, index) {
     // defect T8 declined to create for the ceremony store. The comment is the
     // evidence for a decision that is otherwise invisible in a diff, which is the
     // same reason T8's 40 comment lines were accounted for individually.
-    expect(lines, "lines in handlers.mjs").toBe(6223)
+    // 6,223 -> 6,312 in WS-7 T20R, the same protocol: +89 lines, and every one
+    // is accounted for rather than absorbed.
+    //
+    // THE ACCOUNTING IS 21 + 68, AND IT ADDS TO EXACTLY 89:
+    //
+    //   * 21 lines are `if (!(await requireAuth(req, res))) …`, one per gated
+    //     route. Counted independently rather than by eye: the `requireAuth(req,
+    //     res)` call-site count in handlers.mjs is 105 before and 126 after, so
+    //     +21 — one gate per route, no route gated twice, no gate quietly
+    //     removed. The five routes inside the `/api/notifications` wrapper use the
+    //     `return true` spelling (the wrapper's other arms already return true);
+    //     the other sixteen use whatever terminator their own branch already had,
+    //     which is why a textual count of the added lines under-reports the gates:
+    //     sixteen of the new lines are byte-identical to lines already elsewhere in
+    //     the file, so a set-difference over unique line text finds only five. The
+    //     call-site count is the figure that survives that, and it is the one used.
+    //
+    //   * 68 lines are the reasoning recorded beside each gate — why that route is
+    //     gated rather than allowlisted, what it wrote before the gate, and, for
+    //     the three deprecated order-execution stubs, the honest admission that
+    //     their security value is PROPHYLACTIC rather than a hole being closed.
+    //
+    // THE IMPORT PAIR IS UNCHANGED, and that is the load-bearing part of this
+    // entry rather than an incidental one: 72 static and 83 comment-stripped
+    // dynamic imports are the same figures before and after, so not one of the 89
+    // lines is a new module binding. That is exactly the distinction the pin
+    // exists to keep sharp — "this round grew gates and comments" is a different
+    // signal from "this round changed the module graph", and the import pair is
+    // what tells them apart. T20R deliberately reached every service the gated
+    // routes already imported: the notifications gates sit beside the wrapper's
+    // existing `await import("./services/notifier.mjs")`, and the alerts gates
+    // precede the branch's existing `alertEngine.mjs` import rather than hoisting
+    // it.
+    //
+    // THE RAW COUNTS ARE UNCHANGED TOO (72 static / 84 raw dynamic), which is the
+    // stripper being conservative in the right direction: the 68 new comment lines
+    // contain no occurrence of the word `import`, so the comment-stripped and raw
+    // figures did not diverge this round. That is a property of how these comments
+    // were written, not a general one, and the previous entry above records the
+    // round where they did diverge.
+    expect(lines, "lines in handlers.mjs").toBe(6312)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
