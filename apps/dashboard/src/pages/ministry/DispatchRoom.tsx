@@ -3,10 +3,16 @@ import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { fetchDispatch, markDispatchRead } from "@/lib/dispatch"
 import type { DispatchInbox } from "@/lib/dispatch"
 import { KIND_LABEL, SEVERITY_LABEL } from "@/lib/dispatch"
+import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
+import { useReadOnlyView } from "./useReadOnlyView"
 
 export function DispatchRoom() {
   const { snapshot, connected } = useRealtimeSuite()
   const [inbox, setInbox] = useState<DispatchInbox | null>(null)
+  // WS-7 T10 (d1Order 10) — the read-only record. This instance's own panel below
+  // keeps a "Mark read" button, which is the one pre-existing write affordance
+  // recorded for it; the read-only band above adds none.
+  const { view: readOnlyView } = useReadOnlyView("dispatch", "trading")
 
   useEffect(() => {
     let alive = true
@@ -23,6 +29,8 @@ export function DispatchRoom() {
 
   return (
     <div className="stack">
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="dispatch">
         <h2>Dispatch</h2>
         <p className="muted small">The copilot&apos;s notification spine — decisions, milestones, venue notices and system events.</p>

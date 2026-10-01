@@ -7,6 +7,8 @@ import { getEarnings, getStreams } from "@/lib/streams"
 import { SUITE_META } from "@/lib/suites"
 import { familyEntry, familyToSuite } from "@/lib/registry"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
+import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
+import { useReadOnlyView } from "./useReadOnlyView"
 
 import type { IncomeStream } from "@/lib/types"
 
@@ -16,10 +18,14 @@ import type { IncomeStream } from "@/lib/types"
 type DashboardTab = "overview" | "streams" | "catalog"
 
 export function EarningsDashboardRoom() {
+  // WS-7 T10 (d1Order 14) — the read-only record.
+  const { view: readOnlyView } = useReadOnlyView("dashboard", "earnings")
   const [tab, setTab] = useState<DashboardTab>("overview")
 
   return (
     <div className="stack stack-lg">
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="dashboard">
         <h2>Dashboard</h2>
         <p className="muted small">
@@ -260,8 +266,14 @@ function ChannelsTab() {
 }
 
 export function EarningsSettingsRoom() {
+  // WS-7 T10 (d1Order 17) — the read-only record. It reports the configured
+  // payment-channel count only when the health producer answered, because a buyer
+  // must never be shown "not configured" for a channel whose state was never read.
+  const { view: readOnlyView } = useReadOnlyView("settings", "earnings")
   return (
     <div className="stack stack-lg">
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="settings">
         <h2>Settings</h2>
         <p className="muted small">
@@ -393,6 +405,11 @@ function SuitePanel({ category }: { category: string }) {
 }
 
 export function EarningsSimulatorRoom() {
+  // WS-7 T10 (d1Order 15) — the read-only record. Unlike the trading Simulator,
+  // whose twin is write-only and therefore makes that instance `incomplete`, this
+  // one's producer answers, so "0 streams" here is a real zero the producer stated
+  // and is rendered as one.
+  const { view: readOnlyView } = useReadOnlyView("simulator", "earnings")
   const streams = getStreams()
   const [streamId, setStreamId] = useState<string | null>(() => streams[0]?.id ?? null)
   const stream = streams.find((s) => s.id === streamId) ?? null
@@ -400,6 +417,8 @@ export function EarningsSimulatorRoom() {
 
   return (
     <div className="stack stack-lg">
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="simulator">
         <h2>Simulator</h2>
         <p className="muted small">

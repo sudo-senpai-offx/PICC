@@ -5,6 +5,8 @@ import { ListingOptimizer } from "@/components/ListingOptimizer"
 import { ContentStudio } from "@/components/ContentStudio"
 import { Card } from "@/components/ui"
 import { isFeatureOn } from "@/lib/settings"
+import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
+import { useReadOnlyView } from "./useReadOnlyView"
 
 const TABS = [
   { id: "twin", label: "📊 Financial Twin", feature: "simulator" as const },
@@ -15,6 +17,12 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"]
 
 export function SimulatorRoom() {
+  // WS-7 T10 (d1Order 11) — the read-only record. THIS INSTANCE IS THE ONE
+  // `incomplete` VERDICT IN T10: its principal subject, the Financial Twin, is
+  // write-only (POST /api/twin/run with no GET twin route and no run store), so
+  // the read-only band below renders a permanent named absence rather than a run
+  // history. The panels below are unaffected.
+  const { view: readOnlyView } = useReadOnlyView("simulator", "trading")
   const visibleTabs = TABS.filter((t) => isFeatureOn(t.feature))
   const [tab, setTab] = useState<TabId>(() => {
     if (isFeatureOn("simulator")) return "twin"
@@ -23,6 +31,8 @@ export function SimulatorRoom() {
 
   return (
     <div className="stack stack-lg">
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="simulator">
         <h2>Simulator</h2>
         <p className="muted small">

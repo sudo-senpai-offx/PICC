@@ -6,6 +6,8 @@ import type { SuiteId } from "@/lib/suites"
 import { Badge } from "@/components/ui"
 import { fetchIntegrations } from "@/lib/integrations"
 import type { IntegrationEntry } from "@/lib/integrations"
+import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
+import { useReadOnlyView } from "./useReadOnlyView"
 
 const VALID_SUITES = new Set<string>(["trading", "earnings", "intelligence"])
 
@@ -18,6 +20,12 @@ function statusBadge(state: IntegrationEntry["state"]) {
 export function SettingsRoom() {
   const { suiteId: raw } = useParams<{ suiteId: string }>()
   const suiteId = VALID_SUITES.has(raw ?? "") ? (raw as SuiteId) : null
+
+  // WS-7 T10 (d1Order 13) — the read-only record. It reports the integration count
+  // only when /api/integrations answered, and reports nothing when it did not:
+  // "0 integrations" would read as a product with no data sources, which is a
+  // different and false claim.
+  const { view: readOnlyView } = useReadOnlyView("settings", suiteId === "earnings" || suiteId === "intelligence" ? suiteId : "trading")
 
   const [mode, setMode] = useState<AutopilotMode>("auto")
   const [threshold, setThreshold] = useState(0.6)
@@ -74,6 +82,8 @@ export function SettingsRoom() {
 
   return (
     <div className="stack">
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="settings">
         <h2>Settings</h2>
       </header>

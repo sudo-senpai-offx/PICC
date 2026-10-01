@@ -6,11 +6,15 @@ import { DispatchStrip } from "@/components/DispatchStrip"
 import { useRealtimeSuite } from "@/hooks/useRealtimeSuite"
 import { getTradingStatus } from "@/lib/trading"
 import type { PaperOverview } from "@/lib/trading"
+import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
+import { useReadOnlyView } from "./useReadOnlyView"
 
 export function DashboardRoom() {
   const [status, setStatus] = useState<{ paper: PaperOverview; riskPerTradePct: number } | null>(null)
   const lastLoadAt = useRef(0)
   const { snapshot } = useRealtimeSuite()
+  // WS-7 T10 (d1Order 7) — the read-only record for this instance.
+  const { view: readOnlyView } = useReadOnlyView("dashboard", "trading")
 
   useEffect(() => {
     let alive = true
@@ -28,6 +32,14 @@ export function DashboardRoom() {
 
   return (
     <div className="stack">
+      {/* WS-7 T10 — the read-only record, rendered first so a reader sees what
+          was OBSERVED before the panels below. It reports the risk figure as an
+          absence when the producer does not answer, which is the difference this
+          task exists to make: the panel band below still defaults it to 2, and
+          that default is recorded as a finding in this instance's completion
+          record rather than silently inherited or silently changed. */}
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="dashboard">
         <h2>Command Deck</h2>
         <p className="muted small">The copilot loop, end to end: watch → decide → dispatch → act. Every band below is honest to its data — stale is never passed off as live.</p>

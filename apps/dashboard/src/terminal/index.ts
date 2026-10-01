@@ -29,6 +29,44 @@ export { buildCommands, filterCommands } from "./components/CommandPalette"
 export { MarketsRoom, MARKETS_COMPLETION, MARKETS_NO_READING_REASON, buildMarketsDecision } from "./routes/MarketsRoom"
 export { RiskRoom, RISK_COMPLETION, buildRiskLayer } from "./routes/RiskRoom"
 
+// WS-7 T10 room instances 7-22 of D1's order: the remaining read-only rooms.
+// ONE surface and ONE projection for NINE keys across SIXTEEN instances, so the
+// exports are correspondingly small. The sixteen D27 verdicts are a single frozen
+// ARRAY rather than sixteen named constants, because T21's guard has to
+// enumerate every room's completion record (`:1386`) and a verdict reachable only
+// by a hand-written name is a verdict nobody looks at.
+export { ReadOnlyRoom } from "./routes/ReadOnlyRoom"
+export { ReadOnlyRoomSurface } from "./components/ReadOnlyRoomSurface"
+export { fetchReadOnlyView } from "./adapters/readOnlyReading"
+export {
+  READ_ONLY_AFFORDANCE_REASON,
+  READ_ONLY_INTERACTIVE_AFFORDANCES,
+  READ_ONLY_OWNER,
+  READ_ONLY_ROOM_KEYS,
+  READ_ONLY_VERDICTS,
+  buildReadOnlyRoomView,
+  readOnlySectionsFor
+} from "./domain/readOnlyRooms"
+export {
+  READ_ONLY_RESIDUAL_ORDER_BASIS,
+  READ_ONLY_RESIDUAL_ORDER_JUDGEMENT,
+  READ_ONLY_ROOM_COMPLETIONS,
+  readOnlyCompletion
+} from "./domain/readOnlyRoomCompletions"
+export type {
+  ReadOnlyAbsence,
+  ReadOnlyFact,
+  ReadOnlyRoomKey,
+  ReadOnlyRoomView,
+  ReadOnlySection,
+  ReadOnlySuiteId,
+  ReadOnlyVerdict
+} from "./domain/readOnlyRooms"
+export type {
+  ReadOnlyRoomCompletion,
+  ReadOnlyWriteAffordance
+} from "./domain/readOnlyRoomCompletions"
+
 export { useTerminalSnapshot } from "./hooks/useTerminalSnapshot"
 export { useMotionPreference } from "./hooks/useMotionPreference"
 

@@ -6,6 +6,8 @@ import { WalkForwardCard } from "@/components/WalkForwardCard"
 import { Badge, Button, Card, Spinner } from "@/components/ui"
 import { getAutopilotDecisions, whyAutopilot } from "@/lib/trading"
 import type { AutopilotDecisionEntry, AutopilotWhyResult } from "@/lib/trading"
+import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
+import { useReadOnlyView } from "./useReadOnlyView"
 
 type WhyState =
   | { status: "idle" }
@@ -184,8 +186,15 @@ function AutopilotDecisionsCard() {
 }
 
 export function AutopilotRoom() {
+  // WS-7 T10 (d1Order 8) — the read-only record. Its strongest finding is that
+  // the autopilot's own start and stop routes already answer HTTP 410, which is
+  // why the read-only band has no control and why offering one here would be a
+  // button that cannot succeed.
+  const { view: readOnlyView } = useReadOnlyView("autopilot", "trading")
   return (
     <div className="stack">
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="autopilot">
         <h2>Autopilot</h2>
         <p className="muted small">Automated demo-trading engine — configure scope and risk, monitor the engine, and inspect prediction and model confidence.</p>

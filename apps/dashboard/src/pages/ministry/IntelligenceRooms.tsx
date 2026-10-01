@@ -5,14 +5,40 @@ import type { HealthInfo } from "@/lib/api"
 import { useUser } from "@/hooks/useAuth"
 import { listData } from "@/lib/localdata"
 import type { AgentLog } from "@/lib/types"
-import { HonestScaffold } from "./HonestScaffold"
+import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
+import { useReadOnlyView } from "./useReadOnlyView"
 
+/**
+ * WS-7 T10 — the three intelligence instances that were `HonestScaffold`.
+ *
+ * `HonestScaffold` rendered the literal words "under development" and no data at
+ * all. That is a reserved placeholder, and AC-020:929 treats a reserved
+ * placeholder as FAILING the room-completion criterion, so these three could not
+ * stay as they were. Each is now the shared read-only room, and the read-only
+ * record for each one states in its own `absences` what its producer actually
+ * reports — which for the Governor and Settings rooms is service health and the
+ * agents service's configuration, and for a default installation means two named
+ * refusals rather than two figures.
+ *
+ * THE COMPONENT IS DELETED, NOT LEFT UNUSED, for the reason T8 gave when it
+ * deleted its own two reserved bodies: an unused export of a placeholder reads as
+ * a live fallback, and a later edit re-pointing the router at the import path
+ * would find a placeholder waiting rather than a missing module. Nothing else in
+ * the tree imports it — the grep is in the T10 test file.
+ */
 export function IntelligenceDashboardRoom() {
-  return <HonestScaffold suiteId="intelligence" room="Dashboard" slug="dashboard" />
+  const { view } = useReadOnlyView("dashboard", "intelligence")
+  return <ReadOnlyRoom view={view} />
 }
 
 export function IntelligenceGovernorRoom() {
-  return <HonestScaffold suiteId="intelligence" room="Governor" slug="governor" />
+  const { view } = useReadOnlyView("governor", "intelligence")
+  return <ReadOnlyRoom view={view} />
+}
+
+export function IntelligenceSettingsRoom() {
+  const { view } = useReadOnlyView("settings", "intelligence")
+  return <ReadOnlyRoom view={view} />
 }
 
 const AGENT_ROLES = [
@@ -24,6 +50,8 @@ const AGENT_ROLES = [
 
 export function IntelligenceGuidanceRoom() {
   const user = useUser()
+  // WS-7 T10 (d1Order 20) — the read-only record for this instance.
+  const { view: readOnlyView } = useReadOnlyView("guidance", "intelligence")
   const [logs, setLogs] = useState<AgentLog[]>([])
   const [loading, setLoading] = useState(true)
   const [health, setHealth] = useState<HealthInfo | null>(null)
@@ -68,6 +96,11 @@ export function IntelligenceGuidanceRoom() {
 
   return (
     <div className="stack stack-lg">
+      {/* WS-7 T10 (d1Order 20) — the read-only record. Rendered ABOVE the crew
+          panels so the three crew states — not configured, configured but
+          unreachable, reachable — are structural before they are prose. */}
+      <ReadOnlyRoom view={readOnlyView} />
+
       <header data-room="guidance">
         <h2>Guidance</h2>
         <p className="muted small">
@@ -156,8 +189,4 @@ export function IntelligenceGuidanceRoom() {
       </Card>
     </div>
   )
-}
-
-export function IntelligenceSettingsRoom() {
-  return <HonestScaffold suiteId="intelligence" room="Settings" slug="settings" />
 }
