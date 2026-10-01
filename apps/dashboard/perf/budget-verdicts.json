@@ -60,7 +60,7 @@
       "sampleAdequacy": "INSUFFICIENT_SINGLE_RUN",
       "ratifiedFigureMs": null,
       "reason": "BREACH, and the verdict is over-determined while the figure is not. The 250 ms x86-only tier is exceeded by every one of the 24 per-rate p95 values measured across five runs (1x: 207-597 ms; 4x: 4875-13781 ms; 6x: 7238 ms), so no plausible sample could make this row pass. The exact figure is NOT ratified: only 1 of 5 runs ever reached the 6x rate, so the 12 raw samples above come from that single run, and plan v1 §3.7 item 2 forbids ratifying a number from one run. rawSamplesMs is therefore the single surviving 6x sample set, and `ratifiedFigureMs` is null rather than quoting 7238 ms as the settled figure.",
-      "evidence": "apps/dashboard/test-results/terminal-perf-transition-evidence.json (survives a failing run); see changelog entry 0030 for the five-run table and the flake disposition.",
+      "evidence": "apps/dashboard/test-results/terminal-perf-transition-evidence.json (survives a failing run); see changelog entry 0033 for the five-run table and the flake disposition.",
       "note": "This is the DASHBOARD leg of the transition loop. terminal-perf.spec.ts:620-622 states outright that `elapsed` is 't0 -> the DASHBOARD marker only'; the markets leg is timed separately as marketsMarkerMs. Both legs are reported in the changelog because they are different measurements."
     },
     {

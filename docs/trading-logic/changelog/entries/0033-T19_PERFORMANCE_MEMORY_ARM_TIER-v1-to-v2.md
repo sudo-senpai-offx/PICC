@@ -1,11 +1,19 @@
-# 0030 - T19_PERFORMANCE_MEMORY_ARM_TIER v1 -> v2
+# 0033 - T19_PERFORMANCE_MEMORY_ARM_TIER v1 -> v2
 
 Execution record for WS-7 task T19: the B1-B12 verdicts, the B10 2 GB ceiling
 gate, and the checked-in ARM probe artifact.
 
+Numbering note: this record was originally written as `0030`, colliding with
+`0030-T8_CEREMONY_AND_MINISTRY_ROOMS-v1-to-v2.md`. The collision was mine - no
+number was assigned to T19 when its brief was written - and it was found by
+inspection rather than by a guard: `ws7RegulatoryClaimGuard.test.mjs` validates
+each entry's seven required header fields but does not enforce a gap-free
+sequence across the directory. Renumbered to 0033, the next free value. T8's
+0030 is untouched and no prose was changed.
+
 rule: T19_PERFORMANCE_MEMORY_ARM_TIER
 version: v1
-supersededBy: v2 (this record: docs/trading-logic/changelog/entries/0030-T19_PERFORMANCE_MEMORY_ARM_TIER-v1-to-v2.md)
+supersededBy: v2 (this record: docs/trading-logic/changelog/entries/0033-T19_PERFORMANCE_MEMORY_ARM_TIER-v1-to-v2.md)
 date: 2026-10-02
 historicalTradesAffected: none
 source: >-
