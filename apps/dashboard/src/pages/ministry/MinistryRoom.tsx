@@ -19,20 +19,23 @@ const TRADING_ROOMS: Record<string, LazyExoticComponent<ComponentType>> = {
   dashboard: lazy(() => import("./DashboardRoom").then((m) => ({ default: m.DashboardRoom }))),
   markets: lazy(() => import("./MarketsRoom").then((m) => ({ default: m.MarketsRoom }))),
   // WS-7 T7R-A — the four keys authorised by the 2026-09-30 amendment to WS-6
-  // §0.3 (18/11 -> 22/15). `risk` has a real room. `ceremony`, `ministry` and
-  // `strategy` are routed to their reserved bodies, which name the task that
-  // owns each surface and show nothing; see reservedRooms.tsx for why they are
-  // named absences rather than built rooms.
+  // §0.3 (18/11 -> 22/15). All four now have real rooms.
   //
-  // WS-7 T7R-B — `risk` now points at the PAGE composition, not the terminal room
+  // WS-7 T7R-B — `risk` points at the PAGE composition, not the terminal room
   // directly. `MinistryRoom` renders `<Room />` with no props, and the terminal
-  // Risk room is presentational by design, so routing at it directly mounted a
-  // room that rendered three unavailable rows forever. `pages/ministry/RiskRoom`
-  // is the caller that fetches the decision and supplies the observations;
-  // `terminal/routes/RiskRoom` stays prop-only and testable.
+  // rooms are presentational by design, so routing at a terminal room directly
+  // mounts one that renders its absences forever. Each `pages/ministry/*Room`
+  // is the caller that fetches the reading and supplies the prop;
+  // `terminal/routes/*Room` stays prop-only and testable.
+  //
+  // WS-7 T8 — `ceremony` and `ministry` were RESERVED bodies naming this task as
+  // their owner. They are now real page compositions, so their reserved entries
+  // are DELETED from this map rather than left alongside: two entries for one key
+  // is a map whose entries can silently disagree about which one wins.
+  // `reservedRooms.tsx` keeps only `StrategyRoom`, which is WS-7 T9.
   risk: lazy(() => import("./RiskRoom").then((m) => ({ default: m.RiskRoom }))),
-  ceremony: lazy(() => import("./reservedRooms").then((m) => ({ default: m.CeremonyRoom }))),
-  ministry: lazy(() => import("./reservedRooms").then((m) => ({ default: m.MinistryAuthorityRoom }))),
+  ceremony: lazy(() => import("./CeremonyRoom").then((m) => ({ default: m.CeremonyRoom }))),
+  ministry: lazy(() => import("./MinistryAuthorityRoom").then((m) => ({ default: m.MinistryAuthorityRoom }))),
   strategy: lazy(() => import("./reservedRooms").then((m) => ({ default: m.StrategyRoom }))),
   paper: lazy(() => import("./PaperRoom").then((m) => ({ default: m.PaperRoom }))),
   autopilot: lazy(() => import("./AutopilotRoom").then((m) => ({ default: m.AutopilotRoom }))),

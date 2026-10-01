@@ -1195,7 +1195,13 @@ function connectorsSiteIsGated(lines, index) {
     const lines = SRC.split("\n").length
 
     expect(statics, "static import statements in handlers.mjs").toBe(72)
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(81)
+    // 81 -> 82 in WS-7 T8, which added ONE route — GET /api/trading/ministry —
+    // importing its service with a dynamic import so the authority model stays
+    // off the boot path. Statics are UNCHANGED, which is what confirms the growth
+    // is a route and its reasoning rather than a new module-level dependency. The
+    // line figure moves with it; see the accounting at the `lines` assertion
+    // below, which is the authoritative account of what those +51 lines are.
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(82)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1280,7 +1286,27 @@ function connectorsSiteIsGated(lines, index) {
     // point of pinning both: a route added with a STATIC import would move the
     // other number, and the pair is what distinguishes "grew" from "structure
     // changed".
-    expect(lines, "lines in handlers.mjs").toBe(6126)
+    //
+    // 6,126 -> 6,177 in WS-7 T8, the same protocol: +51 lines and ONE dynamic
+    // import (81 -> 82), with statics UNCHANGED at 72. Every line is accounted
+    // for rather than absorbed. They are the `GET /api/trading/ministry` route:
+    // the unconditional `requireAuth()` gate as its FIRST statement, the
+    // `await import("./services/authority/governance.mjs")`, the `writeJson`,
+    // the 502 branch, and ~40 lines of reasoning recording why the route is gated
+    // rather than allowlisted, why it reads only `services/authority/`, and why
+    // its comment deliberately does not spell the allowlist marker.
+    //
+    // THAT LAST POINT IS WHY THE IMPORT FIGURE IS 82 AND NOT 83, and it is worth
+    // recording because a future reader will otherwise "fix" the comment. The
+    // sibling `copilotDecisionRoute.test.mjs` proves the route BEFORE this one is
+    // not allowlisted by slicing a fixed 1,400-character window forward from that
+    // route's dispatch line and asserting no allowlist marker appears in it. An
+    // earlier draft of T8's comment quoted the marker verbatim inside that
+    // window and turned the sibling test red — a prose mention read as a code
+    // site, which is the same class `ws7RouteAuthCoverageGuard.test.mjs`
+    // documents for gate names appearing in comments. The fix was to word the
+    // comment accurately, NOT to widen the window or relax the assertion.
+    expect(lines, "lines in handlers.mjs").toBe(6177)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

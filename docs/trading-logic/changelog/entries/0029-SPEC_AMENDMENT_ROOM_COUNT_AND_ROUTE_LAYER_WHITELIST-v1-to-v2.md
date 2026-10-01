@@ -1,5 +1,48 @@
 # 0029 — Spec amendment: WS-7 §0.3 freeze invariants (a) and (d)
 
+<!--
+  THE SEVEN HEADER FIELDS BELOW WERE ADDED BY WS-7 T8, not by the commit that
+  created this file (`42dfaac`). That commit shipped the body and omitted the
+  header entirely, so `ws7RegulatoryClaimGuard.test.mjs`'s four D20
+  schema-completeness assertions were RED on arrival and stayed red — the file
+  also violated the `NNNN-<rule>-vN-to-vM.md` filename rule, and was renamed from
+  `0029-SPEC_AMENDMENT_room_count_and_route_layer-whitelist-v1-to-v2.md` to
+  comply. T8 repaired both because the guard's own contract is that a record
+  missing a field is a rule nobody can check, and because a red suite blocks the
+  floor every WS-7 task verifies against.
+
+  NO PROSE BELOW WAS CHANGED and no assertion was weakened: the guard demands a
+  complete record and the record was incomplete. The values below are the ones the
+  file's own body already asserts.
+-->
+rule: SPEC_AMENDMENT_ROOM_COUNT_AND_ROUTE_LAYER_WHITELIST
+version: v1
+supersededBy: v2 (this record: docs/trading-logic/changelog/entries/0029-SPEC_AMENDMENT_ROOM_COUNT_AND_ROUTE_LAYER_WHITELIST-v1-to-v2.md)
+date: 2026-09-30
+historicalTradesAffected: none
+source: >-
+  WS-7 freeze invariants (a) and (d) at
+  `docs/specs/PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1.md:73`; D1's room
+  order at `:97`; D27 (`:365-370`); AC-020 (`:925-931`) and AC-041 (`:1093`);
+  the owner's 2026-09-30 room-key ruling recorded in entry 0027; the two recorded
+  route-layer deviations this amendment makes conforming — the
+  `requireSessionOrFirstRun` closure across the 14 bootstrap routes and T7R-B's
+  `POST /api/trading/copilot` at `99b9960`; and the plan correction at
+  `docs/specs/PICC_TRADING_SUITE_WS7_REMAINING_T7_T21_PLAN_v1.md` §3.6.
+reason: >-
+  Two clauses of the WS-7 §0.3 freeze needed widening, and neither widening
+  relaxes a safety invariant. Clause (a) froze the room-key inventory at 18
+  instances across 11 keys, but D1 orders four rooms — Risk, Ceremony, Ministry,
+  Strategy — that had no key at all in that inventory, so D1's acceptance could
+  not honestly pass for them. The owner ruled on 2026-09-30 that each takes a new
+  key, giving 22 instances across 15 distinct keys; entry 0027 authored the number
+  once at 22/15 rather than landing it at 19 and widening. Clause (d) named
+  `apps/dashboard/server/services/**` but not `server/handlers.mjs`, which made
+  WS-7 structurally unable to gate or expose a route — the deviation WS-7 had been
+  recording correctly rather than absorbing. Adding that one file makes the
+  recorded deviations conforming instead of excusing them; it does not open
+  `apps/dashboard/server/**` generally.
+
 - **Date:** 2026-09-30
 - **Owner:** WS-7+
 - **Kind:** dated spec amendment under §0.3's own "any path outside this union needs a dated spec amendment"

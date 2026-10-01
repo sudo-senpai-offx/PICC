@@ -3133,6 +3133,57 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // -------------------------------------------------------------------
+  // WS-7 T8 — the MINISTRY governance readout: the authority set, the
+  // separation-of-duties state for every frozen room key, and the permit
+  // store's change events. This is the route T16 entry 0024 handoff #1
+  // pointed at and could not build, because BS-2 forbade touching
+  // `apps/dashboard/src/`.
+  //
+  // GATED, AND DELIBERATELY NOT ALLOWLISTED. It exposes the governance
+  // vocabulary — authority ids, room keys, collision and refusal codes.
+  // Nothing in it is declared-public, so it gets NO `DECLARED_PUBLIC`
+  // entry and NO unruled `decision`-owner entry: the 86 decision entries
+  // awaiting the owner are not a pool to draw from. Three guards cover it,
+  // and the third exists because a static scan can be satisfied by a gate
+  // that never runs: the route-auth coverage scan, the bootstrap-gate
+  // guard, and `ministryGovernanceRoute.test.mjs`.
+  //
+  // THIS COMMENT DELIBERATELY DOES NOT SPELL THE ALLOWLIST MARKER. The
+  // sibling `copilotDecisionRoute.test.mjs` proves the route before this one
+  // is not allowlisted by slicing a fixed character window forward from that
+  // route's dispatch line and asserting no allowlist marker appears in it. A
+  // comment here that quoted the marker verbatim would fail that assertion —
+  // a prose mention read as a code site, the same class
+  // `ws7RouteAuthCoverageGuard.test.mjs` documents for gate names in
+  // comments. The fix is to word this accurately rather than to widen that
+  // window or relax its assertion.
+  //
+  // IT READS ITS OWN PRODUCER AND NOBODY ELSE'S. The route depends only on
+  // `services/authority/`. It reads no ceremony store and no market data,
+  // which is T8's bisect line (spec :1271) stated on the server: a Ceremony
+  // outage must not be able to take Ministry down, and the assertion that
+  // holds it is in `ministryGovernanceRoute.test.mjs`.
+  //
+  // NO CANDLES, NO CLOCK OF ITS OWN. The permit store takes `at` as a
+  // caller-supplied argument (`brokerAutomationPermit.mjs:166-172`), and
+  // with no broker record there is no change event and so no time to
+  // invent. `ok: true` means THE READOUT EXECUTED; it never means separation
+  // was verified, and `separation.ok` is a separate field precisely so the
+  // two cannot be read as one.
+  // -------------------------------------------------------------------
+  if (path === "/api/trading/ministry" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    try {
+      const { ministryGovernance } = await import("./services/authority/governance.mjs")
+      writeJson(res, 200, ministryGovernance())
+    } catch (err) {
+      console.warn("[picc] ministry governance readout failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/readiness" && req.method === "GET") {
     if (!(await requireAuth(req, res))) return true
     try {
