@@ -162,14 +162,27 @@ and `/stop` already answer HTTP 410** with the body "order execution removed —
 PICC is advisory-first" (`handlers.mjs:3068-3076`). A start/stop control in the
 Autopilot room would be a button that cannot succeed.
 
-### THE FINDING THAT MUST NOT BE HIDDEN: seven instances already have write affordances
+### THE FINDING THAT MUST NOT BE HIDDEN: instances already have write affordances
 
 D1's order calls these the **read-only rooms**, and this change contributes no
-write path to any of them. But the shipped page compositions of **seven** of the
+write path to any of them. But the shipped page compositions of some of the
 sixteen instances already contain write controls that **pre-date WS-7**. Calling
 those rooms "read-only" without saying so would be the misleading kind of
 verdict, so each instance's record carries a `preExistingWriteAffordances` list
 with routes and a token that must appear in that instance's own page source.
+
+> **CORRECTED 2026-10-02 by WS-7 T21 — this section originally read "seven".**
+> Tallying the records it describes gives **twelve** of the sixteen instances,
+> carrying **twenty-five** affordances. T20 found the discrepancy and recorded it
+> rather than rewriting this file (`cross-room-invariant-gate.mjs` §8, entry
+> `0034`); T21 owns the changelog and has resolved it here. Seven was an
+> undercount taken before T7–T9 landed, so it described the tree at the moment
+> T10 measured it and not the tree the paragraph is about. The measured figure is
+> pinned by `crossRoomInvariantGate.test.mjs` ("the instances carrying them -
+> TWELVE, not the seven the brief states") and is reported by T21's seam guard
+> as the `write-affordances-in-read-only-room` open item. Every affordance is
+> `blocking: false`: they are pre-existing, none was removed by T10, T20 or T21,
+> and the headline remains `trading/command-centre`'s order-execution pair.
 
 | instance | pre-existing write affordances | route |
 |---|---|---|
@@ -414,8 +427,9 @@ about producers and caller wiring elsewhere.
   routes. Owner decision on the access model; not closed here.
 - **`trading/command-centre` carries an order-execution affordance** inside a room
   D1 calls read-only. Owner decision on whether that belongs.
-- Seven instances carry pre-existing write affordances, all listed above with
-  routes and none removed.
+- **Twelve** instances carry pre-existing write affordances (**corrected
+  2026-10-02 by T21**; this bullet originally said "Seven" — see the correction
+  note above), all listed above with routes and none removed.
 
 ## Files
 

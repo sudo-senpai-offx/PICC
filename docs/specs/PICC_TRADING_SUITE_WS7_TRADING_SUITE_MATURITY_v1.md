@@ -51,7 +51,7 @@ This specification seals the gaps for trading-suite maturity. It does **not** au
 | Browser-camouflage tension unresolved | `browserBridge.mjs` strips automation signals vs `PICC.md:30-31`; `interventions.mjs` can click/type/submit | **RESOLVED 2026-09-26 (D22, D25):** the capability is retained as an *explicitly disclosed* policy and the typing invariant is amended to the real boundary. T4 implements the disclosure; the escape hatch for "undecided" is closed. |
 | 2 GB ceiling unmeasured; ARM floor worsens the WS-6 breach | `terminal-perf-manifest.json:31-32,38-39`; owner ARM probe 7.18× slower than x86 baseline | **RESOLVED 2026-09-26 (D21):** the ARM tier is **ratified at ~1800 ms** and 250 ms is retained as the **x86-only** tier. T19 still owes the direct on-device sample, and **B1 remains a KNOWN BREACH** — 2139 ms p95 exceeds both tiers. |
 | Registry counter drift | `PICC.md:430` claims 39 rows; the table holds 41 | Corrected in this change; the drift is recorded in honesty note 12. |
-| 18 rooms incomplete or unverified | WS-6 row `PICC.md:477`: "no room promoted to full parity yet" | T7–T10, one room at a time, each COMPLETE before the next begins (D1). |
+| 22 rooms incomplete or unverified | WS-6 row `PICC.md:477`: "no room promoted to full parity yet" | T7–T10, one room at a time, each COMPLETE before the next begins (D1). |
 
 ### 0.3 T0 baseline freeze (measured at `c407964`, 2026-09-25)
 
@@ -91,10 +91,10 @@ Each entry records **Context → Decision → Why → Consequence**. A consequen
 
 **D19 is now RESOLVED** by the 2026-09-26 owner decision set (outcome **(B)**, amended claim — see D19). D21–D27 record the resolutions that had no existing home. No decision in this section is pending owner input as of 2026-09-26.
 
-### D1 — All 18 rooms in WS-7, one at a time, in the owner's order
-**Context:** 18 route instances across 11 room keys (§0.3) exist as lazy seams, and `PICC.md:477` records that no room has reached full parity.
+### D1 — All 22 rooms in WS-7, one at a time, in the owner's order
+**Context:** 22 route instances across 15 room keys (§0.3) exist as lazy seams, and `PICC.md:477` records that no room has reached full parity.
 
-**Decision:** Every one of the 18 room instances is completed in WS-7, in this order: Markets/COP-22 → Risk → Ceremony → Ministry → Strategy → Paper/Live → remaining read-only rooms. Each room is COMPLETE before work moves to the next.
+**Decision:** Every one of the 22 room instances is completed in WS-7, in this order: Markets/COP-22 → Risk → Ceremony → Ministry → Strategy → Paper/Live → remaining read-only rooms. Each room is COMPLETE before work moves to the next.
 
 **Why:** Breadth without a per-room completion bar produces eighteen "reserved" placeholders, which is the exact state WS-6 shipped.
 
@@ -362,10 +362,10 @@ on-device sample is the only thing that can close it. B1's 250 ms remains the x8
 
 **Consequence:** The eight `streamCatalog.ts` note strings and the `browserStudio.mjs:505` OANDA note lose their licensing/KYC assertions, and each removal carries a D20 supersession record naming what was removed and why. T5 owns this. AC-049 (new). **Scope note:** the entries themselves are **not** removed — only the unverifiable claims are. Whether these venues should be listed at all is a separate question this decision does not answer.
 
-### D27 (owner, 2026-09-26) — All 18 rooms stay in scope, and WS-8 overlap is FLAGGED, never silently trimmed
-**Context:** D1 commits all 18 room instances to WS-7, but room boundaries against a not-yet-written WS-8 are not derivable from this spec.
+### D27 (owner, 2026-09-26) — All 22 rooms stay in scope, and WS-8 overlap is FLAGGED, never silently trimmed
+**Context:** D1 commits all 22 room instances to WS-7, but room boundaries against a not-yet-written WS-8 are not derivable from this spec.
 
-**Decision:** **Flag, never silently trim.** At each room, the implementer must explicitly state in that room's completion record whether the room is **genuinely complete** or whether **some scope logically belongs to WS-8**. All 18 rooms remain in WS-7 scope. **Silently trimming scope is prohibited.**
+**Decision:** **Flag, never silently trim.** At each room, the implementer must explicitly state in that room's completion record whether the room is **genuinely complete** or whether **some scope logically belongs to WS-8**. All 22 rooms remain in WS-7 scope. **Silently trimming scope is prohibited.**
 
 **Why:** The failure mode this guards against is the WS-6 outcome: eighteen rooms that look assigned and are partly placeholders. An implementer under delivery pressure will always be tempted to shave the hardest edge off a room and call it done; requiring the shavable edge to be *named* converts a silent scope reduction into a visible, reviewable statement. A flagged WS-8 handoff is a legitimate outcome; an unflagged one is a defect.
 
@@ -418,7 +418,7 @@ Each requirement names its task(s). "Testable" means it has a criterion in §5.
 - R7.2 Each room renders unavailable/reserved states rather than fabricated values.
 - R7.3 Each room meets the 1280×800 layout and WCAG AA obligations inherited from WS-6.
 - R7.4 Each room displays `WS-7+` for any unowned capability.
-- R7.5 (D27) Each room's completion record explicitly flags whether the room is genuinely complete or whether scope logically belongs to WS-8. All 18 rooms stay in scope; silent trimming is prohibited.
+- R7.5 (D27) Each room's completion record explicitly flags whether the room is genuinely complete or whether scope logically belongs to WS-8. All 22 rooms stay in scope; silent trimming is prohibited.
 
 ### R8 — Deterministic Copilot decision path (D5, D6, D7) — T11
 - R8.1 The decision path is a deterministic rule engine, not a model call.
@@ -465,7 +465,7 @@ Each requirement names its task(s). "Testable" means it has a criterion in §5.
 ### R16 — Cross-room invariants and working-tree truth (D1, D3, D18) — T1, T20, T21
 - R16.1 T1 records the floor, typecheck, audit chain, and E2E results with no result inherited as if freshly measured.
 - R16.2 The invariant gate covers safety/correctness as a hard gate and performance/UX as best-effort.
-- R16.3 The gate runs over all 18 room instances.
+- R16.3 The gate runs over all 22 room instances.
 
 ---
 
@@ -511,7 +511,7 @@ flowchart TB
     SAFE --> EXPL
   end
 
-  subgraph ROOMS[18 room instances - T7..T10]
+  subgraph ROOMS[22 room instances - T7..T10]
     MKT[Markets/COP-22]
     RISK[Risk]
     CEREM[Ceremony]
@@ -926,7 +926,7 @@ Every criterion contains **Scenario, Action, Expected observable result, Prohibi
 - **Scenario:** A room is reviewed at the end of its task.
 - **Action:** Apply the room-completion checklist and read the room's completion record.
 - **Expected observable result:** It renders real data with honest provenance, has no reserved placeholder that could be trivially filled later, meets 1280×800 and WCAG AA, shows `WS-7+` for any unowned capability, and its own invariants are green. The completion record **explicitly flags** whether the room is genuinely complete or whether scope logically belongs to WS-8, naming that scope.
-- **Prohibited side effect:** It may not be declared COMPLETE with a reserved block a later task was expected to fill, and — per D27 — **scope may not be silently trimmed**: a room whose edge was shaved to reach "done" without the trim being named fails this criterion. All 18 rooms stay in WS-7 scope; a flagged WS-8 handoff is a legitimate outcome, an unflagged one is a defect.
+- **Prohibited side effect:** It may not be declared COMPLETE with a reserved block a later task was expected to fill, and — per D27 — **scope may not be silently trimmed**: a room whose edge was shaved to reach "done" without the trim being named fails this criterion. All 22 rooms stay in WS-7 scope; a flagged WS-8 handoff is a legitimate outcome, an unflagged one is a defect.
 - **Verification:** Room checklist artifact plus the room's own tests; assert the completion record contains an explicit completeness verdict.
 - **Priority:** P1.
 
@@ -1139,7 +1139,7 @@ Every criterion contains **Scenario, Action, Expected observable result, Prohibi
 - **Priority:** P0.
 
 ### AC-047 — The cross-room invariant gate is a hard gate for safety (R16.2, R16.3)
-- **Scenario:** The cross-room gate runs over all 18 room instances.
+- **Scenario:** The cross-room gate runs over all 22 room instances.
 - **Action:** Evaluate.
 - **Expected observable result:** Safety/correctness invariant failures **block**; performance/UX findings are recorded as best-effort and do not block.
 - **Prohibited side effect:** A performance result may not be used to waive a safety invariant, or vice versa.
@@ -1249,8 +1249,8 @@ Approval artifact: `docs/trading-logic/changelog/entries/0016-EXPERTOPTION_VENUE
 
 **Bisect:** The lockfile decision precedes any new dependency install (T13/T14/T17); installing against an unresolved lockfile set compounds the split. With D24 the decision is no longer a branch point — it is a deletion plus a single-file truth.
 
-### T7–T10 — Room work (Owner: WS-7+ · P1) — **all 18 rooms in scope; flag WS-8 overlap, never trim (D27)**
-**Scope note applying to T7, T8, T9, and T10 alike:** every one of the 18 room instances stays in WS-7 scope. At each room the implementer must **explicitly flag** in the room's completion record whether the room is genuinely complete or whether scope logically belongs to WS-8, naming that scope. **Silently trimming scope is prohibited** (D27, R7.5, AC-020). A flagged WS-8 handoff is a legitimate outcome; an unflagged trim is a defect. The per-task acceptance lines below are unchanged; each gains the flagging obligation through AC-020.
+### T7–T10 — Room work (Owner: WS-7+ · P1) — **all 22 rooms in scope; flag WS-8 overlap, never trim (D27)**
+**Scope note applying to T7, T8, T9, and T10 alike:** every one of the 22 room instances stays in WS-7 scope. At each room the implementer must **explicitly flag** in the room's completion record whether the room is genuinely complete or whether scope logically belongs to WS-8, naming that scope. **Silently trimming scope is prohibited** (D27, R7.5, AC-020). A flagged WS-8 handoff is a legitimate outcome; an unflagged trim is a defect. The per-task acceptance lines below are unchanged; each gains the flagging obligation through AC-020.
 
 ### T7 — Rooms 1–2: Markets/COP-22, then Risk (Owner: WS-7+ · P1)
 **Scope:** The first two rooms, in the owner's order, each COMPLETE before the next.
@@ -1370,7 +1370,7 @@ Approval artifact: `docs/trading-logic/changelog/entries/0016-EXPERTOPTION_VENUE
 **Bisect:** The RAM gate is independent of any room and can be added to CI before the rooms are complete; it must not be softened to make a room pass.
 
 ### T20 — Cross-room invariant gate (Owner: WS-7+ · P0)
-**Scope:** The hard gate across all 18 room instances.
+**Scope:** The hard gate across all 22 room instances.
 
 **Files:** a new cross-room guard, the room surface, CI config.
 
@@ -1447,7 +1447,7 @@ BS-1 is a hard prerequisite for BS-2 and BS-3. BS-4 may not begin until the slic
 | RAM gate never fires | A gate that has only ever passed | Both branches exercised in CI | AC-043 |
 | Silent budget pass | An unmeasured budget reads as satisfied | A manifest schema that rejects a missing verdict | AC-044 |
 | WS-6 breaches are quietly dropped | B1/B3 disappear from the manifest | The manifest must still list them | AC-044 |
-| Rooms stall at "reserved" | 18 placeholders ship | A per-room completion gate plus an order check | AC-020, AC-041 |
+| Rooms stall at "reserved" | 22 placeholders ship | A per-room completion gate plus an order check | AC-020, AC-041 |
 | Docs re-diverge from code | Corrections are reverted by a later task | Supersession records are required for every change | AC-016, AC-017 |
 | Mid-workstream push | A half-migrated state is published | A single batch push at T21 | AC-048 |
 | Premature `SHIPPED` | The registry flips before the gate | T21 is last and owner-gated | §9 |
@@ -1492,7 +1492,7 @@ BS-1 is a hard prerequisite for BS-2 and BS-3. BS-4 may not begin until the slic
 
 **Resolution: WS-7 is the implementation-ready specification for trading-suite maturity, and it is not started.** The owner decision sets D1–D18 (2026-09-25) and D21–D27 (2026-09-26) are binding; D19–D20 are derived and labelled as such, and D19 is now **resolved** as outcome (B).
 
-**The ship gate is all of the following, and nothing less:** the paper-only claim amended to the gated rails that actually exist, enforced by a **discovered** absence scope (T0, D19-B); ExpertOption absent from code, catalog, docs, and machine (T2, **removal approved**); a real gated perps cancel member with the contract amended and the non-seam read-only blocklist intact (T3, D23); the security gaps closed with camouflage as a **disclosed** policy and the typing invariant stating the real boundary (T4, D22, D25); docs and user-facing catalogs that overstate nothing, including unverifiable third-party claims (T5, D26); one authoritative lockfile, npm only (T6, D24); all 18 room instances COMPLETE in the owner's order, each flagging any WS-8 boundary rather than trimming it (T7–T10, D27); a deterministic, veto-inspecting Copilot with all three conflict resolutions as tests (T11–T12); a digest-pinned, pickle-free, boundary-limited model layer (T13); both notification transports configured from the general Settings room (T14); the three retention classes enforced (T15); authorities with mechanical separation of duties (T16); the four-venue CCXT lifecycle behind existing rails (T17); licensed, labeled, provenance-carrying data sources (T18); every budget in §4.6 carrying a measured verdict or an explicit `UNMEASURED`, the ARM tier ratified at ~1800 ms with 250 ms retained as x86-only, and the 2 GB gate observed firing (T19, D21); the cross-room invariant gate green (T20); the full floor green at every commit (D18); and one batch push at the end (D3, T21).
+**The ship gate is all of the following, and nothing less:** the paper-only claim amended to the gated rails that actually exist, enforced by a **discovered** absence scope (T0, D19-B); ExpertOption absent from code, catalog, docs, and machine (T2, **removal approved**); a real gated perps cancel member with the contract amended and the non-seam read-only blocklist intact (T3, D23); the security gaps closed with camouflage as a **disclosed** policy and the typing invariant stating the real boundary (T4, D22, D25); docs and user-facing catalogs that overstate nothing, including unverifiable third-party claims (T5, D26); one authoritative lockfile, npm only (T6, D24); all 22 room instances COMPLETE in the owner's order, each flagging any WS-8 boundary rather than trimming it (T7–T10, D27); a deterministic, veto-inspecting Copilot with all three conflict resolutions as tests (T11–T12); a digest-pinned, pickle-free, boundary-limited model layer (T13); both notification transports configured from the general Settings room (T14); the three retention classes enforced (T15); authorities with mechanical separation of duties (T16); the four-venue CCXT lifecycle behind existing rails (T17); licensed, labeled, provenance-carrying data sources (T18); every budget in §4.6 carrying a measured verdict or an explicit `UNMEASURED`, the ARM tier ratified at ~1800 ms with 250 ms retained as x86-only, and the 2 GB gate observed firing (T19, D21); the cross-room invariant gate green (T20); the full floor green at every commit (D18); and one batch push at the end (D3, T21).
 
 If any of these is missing, the status remains `ACTIVE-DRAFT`, the missing item is reported as `UNMEASURED`, `UNVERIFIED`, or blocked with its evidence, and **no budget is reported as passed without a measurement**.
 
@@ -1510,7 +1510,7 @@ The six items this spec previously listed as open are all closed, and three furt
 | 6 | Lockfile source of truth | **npm only.** CI already consumes the root `package-lock.json`; the stale `apps/dashboard/pnpm-lock.yaml` (0 × ccxt/playwright/web-push) is **deleted**, not stubbed. One source of truth. | D24, AC-018, T6, R6.2 |
 | 7 | *(new)* `interventions.mjs` typing into the broker | **KEEP the capability, AMEND the invariant.** The honest boundary is per-action human approval plus credential non-possession — stronger where it counts than the absolute it replaces. | D25, AC-015, T4 |
 | 8 | *(new)* `streamCatalog.ts` licensing claims | **DELETE the unverifiable claims** rather than attempt verification: SC/DAX licensing for eight entries (`streamCatalog.ts:42-47,63-65`) and the OANDA "no KYC for demo" claim (`browserStudio.mjs:505`). Unverifiable regulatory claims in a user-facing catalog are the same dishonesty class as the paper-only gap. **Entries stay; claims go.** | D26, AC-049, T5, R5.4 |
-| 9 | *(new)* Room completeness reporting | **FLAG, never silently trim.** All 18 rooms stay in scope; each room's completion record must explicitly state whether it is genuinely complete or whether scope logically belongs to WS-8. | D27, AC-020, R7.5, T7–T10 |
+| 9 | *(new)* Room completeness reporting | **FLAG, never silently trim.** All 22 rooms stay in scope; each room's completion record must explicitly state whether it is genuinely complete or whether scope logically belongs to WS-8. | D27, AC-020, R7.5, T7–T10 |
 
 **Nothing was implemented in this round** (honesty note 24). Two owner framings did not survive contact with the code and were corrected rather than transcribed — the perps guard's `"cancelOrder"` entry and the location of the "never types into the broker" sentence (honesty notes 8, 15, and 23). Neither correction changes the owner's outcome; both make the recorded decision more accurate.
 

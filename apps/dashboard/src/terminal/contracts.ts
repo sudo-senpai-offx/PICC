@@ -127,7 +127,14 @@ export type TerminalCapability<T> = {
 //
 //   CopilotExplanation  - REMOTE prose from the LLM. May explain. May never be
 //                         a signal, a score, a risk input, a sizing value, or
-//                         an execution authorization (`isAdmissibleAsSignal`).
+//                         an execution authorization. That separation is
+//                         executable, not just asserted here: the gate is
+//                         `isAdmissibleAsSignal` at
+//                         `src/terminal/domain/copilot.ts:84`, re-exported from
+//                         `src/terminal/index.ts:81`, which returns the literal
+//                         `false` for every explanation (AC-014). WS-7 T21
+//                         corrected this reference, which until then named a
+//                         symbol with no resolvable location here.
 //   ConfluenceScore     - DETERMINISTIC output of a pure function of market
 //                         state, produced by the WS-7 T11 engine. It IS the
 //                         decision path. No model call occurs on it.

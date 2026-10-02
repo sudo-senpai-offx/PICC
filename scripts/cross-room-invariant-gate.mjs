@@ -34,27 +34,39 @@
 // to T11's `tierBoundaryFixture.mjs` - this gate creates no fixture of its own.
 //
 // ============================================================================
-// THE SPEC CONTRADICTION THIS GATE GATES ON 22, NOT 18
+// THE SPEC CONTRADICTION THIS GATE GATED ON, AND HOW IT WAS CLOSED
 // ============================================================================
 //
-// AC-047 `:1142` says "The cross-room gate runs over all 18 room instances",
-// D27 `:365`/`:368` and R7.5 `:421` say "All 18 rooms stay in scope", AC-020
-// `:929` says the same, and the T20 task block `:1373` says "The hard gate
-// across all 18 room instances". The inventory at `:73` was AMENDED to 22
-// instances / 15 keys, owner-ruled 2026-09-30.
+// AC-047 `:1142`, D27 `:365-368`, R7.5 `:421`, R16.3 `:468`, AC-020 `:929`, the
+// T20 block `:1373` and seven further places said "18 room instances" while the
+// inventory at `:73` had been **AMENDED to 22 instances / 15 keys, owner-ruled
+// 2026-09-30**.
 //
-// This is the same class of stale text T19 found for B2. It is RECORDED here
-// (see `STALE_INSTANCE_COUNT_IN_SPEC`, and changelog entry 0034) and the gate
-// gates on 22, because the amendment is the later owner ruling and gating on 18
-// would silently drop four rooms - Ceremony, Ministry, Strategy and Risk - from
-// a safety gate. Silently "fixing" the text would be the same defect in the
-// other direction: it would make a contradiction disappear without a record.
+// This is the same class of stale text T19 found for B2. It was RECORDED first
+// (changelog entry 0034, `STALE_INSTANCE_COUNT_IN_SPEC`, printed on every run)
+// and then CORRECTED by T21, which owns this spec. Both halves are kept: the
+// gate ran on 22 while the prose still said 18, so no room was ever dropped from
+// the safety gate; and the prose now says 22, so the contradiction no longer
+// needs a reader to hold both figures in their head.
+//
+// ON THE COUNT: T20 recorded SEVEN stale locations. That was an undercount -
+// the figure was stale in **eighteen**. The first cut of this record listed the
+// seven a reader of the ACs would notice and not the eleven in D1's heading and
+// context, R16.3, the mermaid diagram, the risk table, the T7-T10 heading and
+// scope note, the ship gate and honesty note 9. `wasStaleAt` below names all
+// eighteen, because a record that undercounts its own scope is the same defect
+// as no record.
+//
+// ON WHAT WAS NOT EDITED: `:73`'s "previously 18 instances across 11 keys" is
+// the amendment's own history and stays; `honesty note 18` at `:1476` is a
+// numbered list item and stays. Neither is a room count.
 
 export const STALE_INSTANCE_COUNT_IN_SPEC = Object.freeze({
   staleFigure: 18,
   currentFigure: 22,
   amendedAt: "spec:73, owner-ruled 2026-09-30",
-  staleAt: [
+  /** T20's recorded list - retained verbatim, including its UNDERCOUNT. */
+  recordedByT20: Object.freeze([
     "spec:1142 AC-047 scenario 'all 18 room instances'",
     "spec:365 D27 heading 'All 18 rooms stay in scope'",
     "spec:366 D27 context 'D1 commits all 18 room instances'",
@@ -62,12 +74,56 @@ export const STALE_INSTANCE_COUNT_IN_SPEC = Object.freeze({
     "spec:421 R7.5 'All 18 rooms stay in scope'",
     "spec:929 AC-020 prohibited side effect 'All 18 rooms stay in WS-7 scope'",
     "spec:1373 T20 scope 'The hard gate across all 18 room instances'"
-  ],
+  ]),
+  /** The full list, measured this session. Eighteen, not seven. */
+  wasStaleAt: Object.freeze([
+    "spec:54 risk table '18 rooms incomplete or unverified'",
+    "spec:94 D1 heading 'All 18 rooms in WS-7'",
+    "spec:95 D1 context '18 route instances across 11 room keys'",
+    "spec:97 D1 decision 'Every one of the 18 room instances'",
+    "spec:365 D27 heading 'All 18 rooms stay in scope'",
+    "spec:366 D27 context 'D1 commits all 18 room instances'",
+    "spec:368 D27 decision 'All 18 rooms remain in WS-7 scope'",
+    "spec:421 R7.5 'All 18 rooms stay in scope'",
+    "spec:468 R16.3 'The gate runs over all 18 room instances'",
+    "spec:514 mermaid diagram 'ROOMS[18 room instances - T7..T10]'",
+    "spec:929 AC-020 prohibited side effect 'All 18 rooms stay in WS-7 scope'",
+    "spec:1142 AC-047 scenario 'all 18 room instances'",
+    "spec:1252 T7-T10 heading 'all 18 rooms in scope'",
+    "spec:1253 T7-T10 scope note 'every one of the 18 room instances'",
+    "spec:1373 T20 scope 'The hard gate across all 18 room instances'",
+    "spec:1450 risk table '18 placeholders ship'",
+    "spec:1495 ship gate 'all 18 room instances COMPLETE'",
+    "spec:1513 honesty note 9 'All 18 rooms stay in scope'"
+  ]),
+  /** Kept for the field name T20's test reads; identical to `wasStaleAt`. */
+  staleAt: Object.freeze([
+    "spec:54 risk table",
+    "spec:94 D1 heading",
+    "spec:95 D1 context",
+    "spec:97 D1 decision",
+    "spec:365 D27 heading",
+    "spec:366 D27 context",
+    "spec:368 D27 decision",
+    "spec:421 R7.5",
+    "spec:468 R16.3",
+    "spec:514 mermaid diagram",
+    "spec:929 AC-020 prohibited side effect",
+    "spec:1142 AC-047 scenario",
+    "spec:1252 T7-T10 heading",
+    "spec:1253 T7-T10 scope note",
+    "spec:1373 T20 scope",
+    "spec:1450 risk table",
+    "spec:1495 ship gate",
+    "spec:1513 honesty note 9"
+  ]),
+  correctedAt: "WS-7 T21, 2026-10-02 - all eighteen sites now read 22; changelog entry 0035",
+  correctedFigure: 22,
   disposition:
-    "RECORDED, NOT SILENTLY CORRECTED. The gate enumerates 22. Gating on 18 would drop Ceremony, Ministry, " +
-    "Strategy and Risk - four instances - out of a safety gate, and the amendment at :73 is the later owner ruling. " +
-    "The prose is left as the owner wrote it so the contradiction stays visible to whoever reconciles the text; " +
-    "this constant is where the disagreement is recorded."
+    "RECORDED (T20, entry 0034), THEN CORRECTED (T21, entry 0035). The gate enumerated 22 while the prose said 18, so gating on 18 never dropped Ceremony, Ministry, " +
+    "Strategy or Risk out of a safety gate; and the prose now says 22, so the contradiction no longer has to be held in the reader's head. T20's list of SEVEN was " +
+    "itself an undercount - the figure was stale in EIGHTEEN places - so `recordedByT20` is retained beside the measured `wasStaleAt` rather than replaced by it. " +
+    "spec:73's 'previously 18 instances across 11 keys' and honesty note 18 at spec:1476 are NOT room counts and were deliberately left alone."
 })
 
 /* ==========================================================================
@@ -937,8 +993,9 @@ function printReport(report, { quiet = false } = {}) {
     }
   }
   console.log(
-    `${GATE_NAME} stale spec text: ${STALE_INSTANCE_COUNT_IN_SPEC.staleFigure} recorded at ` +
-      `${STALE_INSTANCE_COUNT_IN_SPEC.staleAt.length} places, current figure ${STALE_INSTANCE_COUNT_IN_SPEC.currentFigure} (${STALE_INSTANCE_COUNT_IN_SPEC.amendedAt})`
+    `${GATE_NAME} stale spec text: ${STALE_INSTANCE_COUNT_IN_SPEC.staleFigure} was stale at ` +
+      `${STALE_INSTANCE_COUNT_IN_SPEC.wasStaleAt.length} places, current figure ${STALE_INSTANCE_COUNT_IN_SPEC.currentFigure} (${STALE_INSTANCE_COUNT_IN_SPEC.amendedAt}); ` +
+      `corrected ${STALE_INSTANCE_COUNT_IN_SPEC.correctedAt}`
   )
 }
 

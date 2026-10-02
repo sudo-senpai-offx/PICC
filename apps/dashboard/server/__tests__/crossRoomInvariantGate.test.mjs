@@ -929,33 +929,65 @@ describe("pre-existing write affordances are SURFACED, never failed on", () => {
    8. THE 18-vs-22 SPEC CONTRADICTION - RECORDED, NOT PAPERED OVER
    ========================================================================== */
 
-describe("spec self-contradiction: AC-047 and D27 still say 18, the inventory says 22", () => {
+describe("spec self-contradiction: AC-047 and D27 said 18, the inventory says 22, and T21 CORRECTED the prose", () => {
   const specPath = fileURLToPath(
     new URL("../../../../docs/specs/PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1.md", import.meta.url)
   )
   const spec = readFileSync(specPath, "utf8")
+  const specLines = spec.split(/\r?\n/)
 
   it("the amended inventory at spec:73 says 22 instances across 15 keys", () => {
     expect(spec).toMatch(/\*\*22 instances across 15 distinct room keys\*\*/)
     expect(spec).toMatch(/Amended 2026-09-30, owner-ruled; previously 18 instances across 11 keys/)
   })
 
-  it("AC-047 :1142 and the T20 block :1373 still say 18 - recorded, NOT silently corrected", () => {
-    expect(spec, "AC-047's scenario still says 18; the contradiction must remain visible").toMatch(
-      /The cross-room gate runs over all 18 room instances/
-    )
-    expect(spec, "the T20 scope line still says 18").toMatch(/The hard gate across all 18 room instances/)
-    expect(spec).toMatch(/All 18 rooms stay in scope/)
+  it("every recorded stale location now reads 22, so the prose cannot mislead a reader", () => {
+    for (const location of STALE_INSTANCE_COUNT_IN_SPEC.wasStaleAt) {
+      expect(location, `every entry names a line`).toMatch(/^spec:\d+ /)
+      const line = Number(location.split(" ")[0].slice("spec:".length))
+      expect(specLines[line - 1], `${location} must no longer assert 18`).toBeTypeOf("string")
+      expect(specLines[line - 1], `${location} must no longer assert 18`).not.toMatch(/\b18\b/)
+    }
   })
 
-  it("the gate RECORDS the contradiction rather than resolving it in either direction", () => {
+  it("the three sites T20 named by their own AC text all read 22", () => {
+    expect(spec).toMatch(/The cross-room gate runs over all 22 room instances/)
+    expect(spec).toMatch(/The hard gate across all 22 room instances/)
+    expect(spec).toMatch(/All 22 rooms stay in scope/)
+  })
+
+  it("the RECORD that they were stale survives the correction - this is the point", () => {
     expect(STALE_INSTANCE_COUNT_IN_SPEC.staleFigure).toBe(18)
     expect(STALE_INSTANCE_COUNT_IN_SPEC.currentFigure).toBe(22)
-    expect(STALE_INSTANCE_COUNT_IN_SPEC.staleAt.length, "every stale location is named").toBeGreaterThanOrEqual(7)
-    for (const location of STALE_INSTANCE_COUNT_IN_SPEC.staleAt) {
-      expect(location).toMatch(/^spec:\d+/)
+    expect(STALE_INSTANCE_COUNT_IN_SPEC.wasStaleAt.length, "every stale location is named").toBe(18)
+    expect(STALE_INSTANCE_COUNT_IN_SPEC.staleAt.length).toBe(STALE_INSTANCE_COUNT_IN_SPEC.wasStaleAt.length)
+    for (const location of STALE_INSTANCE_COUNT_IN_SPEC.wasStaleAt) {
+      expect(location).toMatch(/^spec:\d+ /)
     }
-    expect(STALE_INSTANCE_COUNT_IN_SPEC.disposition).toMatch(/RECORDED, NOT SILENTLY CORRECTED/)
+    expect(STALE_INSTANCE_COUNT_IN_SPEC.disposition).toMatch(/RECORDED \(T20, entry 0034\), THEN CORRECTED/)
+  })
+
+  it("T20's own SEVEN-location list is retained beside the measured EIGHTEEN, including its undercount", () => {
+    expect(STALE_INSTANCE_COUNT_IN_SPEC.recordedByT20).toHaveLength(7)
+    expect(STALE_INSTANCE_COUNT_IN_SPEC.disposition).toMatch(/itself an undercount/)
+    // every site T20 recorded is among the eighteen - T20 was right about the
+    // ones it found, and its list was not wrong, only short
+    const shortList = STALE_INSTANCE_COUNT_IN_SPEC.staleAt.map((l) => l.split(" ")[0])
+    for (const location of STALE_INSTANCE_COUNT_IN_SPEC.recordedByT20) {
+      expect(shortList, `T20 recorded ${location}, which must be in the measured list`).toContain(location.split(" ")[0])
+    }
+  })
+
+  it("the two remaining 18s are NOT room counts and were deliberately left alone", () => {
+    const remaining = specLines
+      .map((l, i) => [i + 1, l])
+      .filter(([, l]) => /\b18\b/.test(l) && !/7\.18/.test(l))
+    expect(remaining).toHaveLength(2)
+    // spec:73's amendment history, and honesty note 18's own number
+    expect(remaining[0][0]).toBe(73)
+    expect(remaining[0][1]).toMatch(/previously 18 instances across 11 keys/)
+    expect(remaining[1][0]).toBe(1476)
+    expect(remaining[1][1]).toMatch(/^18\. \*\*No credentials/)
   })
 
   it("the gate runs on 22 - gating on 18 would drop four rooms out of a safety gate", () => {
@@ -965,7 +997,7 @@ describe("spec self-contradiction: AC-047 and D27 still say 18, the inventory sa
     }
   })
 
-  it("the gate prints the contradiction every run, so it is unmissable", () => {
+  it("the gate prints the correction every run, so it is unmissable", () => {
     const r = runGateOn(REAL_FACTS)
     const out = `${r.stdout}${r.stderr}`
     // --quiet suppresses the row table but the staleness line is part of the
@@ -978,8 +1010,9 @@ describe("spec self-contradiction: AC-047 and D27 still say 18, the inventory sa
       timeout: 120_000
     })
     const verboseOut = `${verbose.stdout}${verbose.stderr}`
-    expect(verboseOut).toMatch(/stale spec text: 18 recorded at 7 places, current figure 22/)
+    expect(verboseOut).toMatch(/stale spec text: 18 was stale at 18 places, current figure 22/)
     expect(verboseOut).toMatch(/owner-ruled 2026-09-30/)
+    expect(verboseOut).toMatch(/corrected WS-7 T21/)
   })
 })
 
