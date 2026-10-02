@@ -428,6 +428,15 @@ describe("the Telegram credential never leaves the server", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 describe("a persisted record from before T14 migrates without inventing a cause", () => {
   it("`skipped` migrates to unavailable and NAMES the ambiguity it cannot resolve", async () => {
+    const path = join(tmp, "notifications.json")
+    // LET THE DEBOUNCED PERSIST SETTLE FIRST. `notifier.persist()` is debounced
+    // 50ms and RE-ARMS on every call, so a write queued by an earlier test in
+    // this file can land AFTER the legacy fixture is written and overwrite it -
+    // which is how this test failed intermittently under a loaded parallel run
+    // while passing in isolation. `notifier.test.mjs` settles the same way in its
+    // afterAll for the same reason; here it has to happen BEFORE the write, not
+    // after the file, because the write is the thing being clobbered.
+    await new Promise((r) => setTimeout(r, 120))
     const legacy = JSON.stringify({
       prefs: { minConfidence: 65, leadMinutes: 3, windowMinutes: 15, channels: { inApp: true, webpush: true, webhook: true } },
       subscriptions: [],
@@ -443,8 +452,7 @@ describe("a persisted record from before T14 migrates without inventing a cause"
       }],
       snoozes: {}
     })
-    const path = join(tmp, "notifications.json")
-    writeFileSync(path, legacy)
+    writeFileSync(join(tmp, "notifications.json"), legacy)
     vi.resetModules()
     try {
       const fresh = await import("../services/notifier.mjs?t14-legacy=1")
@@ -465,7 +473,10 @@ describe("a persisted record from before T14 migrates without inventing a cause"
     } finally {
       vi.resetModules()
       // Put a clean state file back for whatever runs after this suite.
-      writeFileSync(path, JSON.stringify({ prefs: { channels: { inApp: true, webpush: true, webhook: true, telegram: true } }, subscriptions: [], recent: [], snoozes: {} }))
+      writeFileSync(
+        join(tmp, "notifications.json"),
+        JSON.stringify({ prefs: { channels: { inApp: true, webpush: true, webhook: true, telegram: true } }, subscriptions: [], recent: [], snoozes: {} })
+      )
     }
   })
 })
