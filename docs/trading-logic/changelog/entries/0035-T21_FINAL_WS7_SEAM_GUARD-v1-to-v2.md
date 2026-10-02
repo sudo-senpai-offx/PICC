@@ -238,7 +238,26 @@ whitelist, and entry `0025` leaves that amendment with the owner. Recorded as
    count the same table, the second author is wrong, not the first rule. The
    double error is recorded in `PICC.md` and in the test that now pins 41 on
    WS-3's rule.
-4. **Guardrail 1's perps bullet** still described the pre-T3 adapter as having no
+5. **The gate scanned itself once committed** — found by running the suite *after*
+   committing, and it is the most interesting defect T21 produced. Both new gate
+   files **declare the vocabularies they search for**: the probe holds
+   `VENUE_RESIDUE_TOKENS` and `D26_CATALOG_ROWS` as data. Before the commit those
+   files were untracked, so `git ls-files` did not return them and the scans never
+   saw them. The commit made them tracked, and the residue count jumped **28 → 45**
+   with 17 of the new hits being the detector matching its own token list. T2's
+   regulatory-claim guard failed at the same moment, tripping on the D26 shapes
+   this gate names.
+
+   A gate whose measurement depends on whether the gate is committed reports a
+   different number to every reviewer. Fixed by excluding the two detector files
+   from the scans — and because excluding a file from a scanner is how residue gets
+   hidden, the exclusion is itself guarded: a test re-reads both files and fails if
+   any residue token appears in an `import`/`export`, so a detector may *search*
+   for a venue but may never *depend* on one. T2's guard received ten reasoned,
+   **exactly-counted** allowlist entries for the same reason (its own sanctioned
+   mechanism), so a new claim added to either gate file still fails the scan.
+
+6. **Guardrail 1's perps bullet** still described the pre-T3 adapter as having no
    `cancel` member. Corrected, with the prior wording quoted.
 
 Both counts are now pinned by tests that measure them independently of the code under

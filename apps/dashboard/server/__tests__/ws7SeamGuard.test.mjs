@@ -50,12 +50,15 @@ import {
   SPEC_ORIGINAL_CHECK_COUNT,
   SPEC_ROUND_2026_09_26_CHECK_COUNT,
   VERDICT_VOCABULARY,
+  DETECTOR_FILES,
+  D26_CATALOG_ROWS,
   evaluateSeam,
   gateExitCode,
   probeSeam,
   productionFiles,
   stripComments,
   stripPythonComments,
+  VENUE_RESIDUE_TOKENS,
   syntheticOpenItemProbe,
   syntheticProbe
 } from "../../../../scripts/ws7-seam-guard.mjs"
@@ -741,6 +744,56 @@ describe("T21's other file-list obligation: PICC.md's WS-7 claims are true", () 
       .filter(Boolean).length
     expect(declared).toBe(actual)
     expect(declared).toBe(39)
+  })
+
+  it("the two detector files are EXCLUDED from the scan, and nothing else is", () => {
+    const tracked = execFileSync("git", ["ls-files"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 1 << 28 })
+      .split(/\r?\n/)
+      .filter(Boolean)
+    const prod = productionFiles(tracked)
+
+    // A detector that scans itself is a gate whose measurement depends on whether
+    // the gate is committed. Before T21 was committed these files were untracked,
+    // so the scans never saw them; the commit made them tracked and the residue
+    // count jumped 28 -> 45, with 17 of the new hits being the detector matching
+    // its own token list. The exclusion is what makes the number stable.
+    for (const f of DETECTOR_FILES) {
+      expect(tracked, `${f} must be tracked for this test to be meaningful`).toContain(f)
+      expect(prod, `${f} must not be scanned by the guard it implements`).not.toContain(f)
+    }
+    // ...and the exclusion must be exactly those two files, not a widened net.
+    const wouldBeProd = tracked.filter(
+      (f) => productionFiles([f]).length > 0
+    )
+    expect(DETECTOR_FILES.length).toBe(2)
+  })
+
+  it("detectorFilesAreCleanApartFromTheirVocabulary: the exclusion hides nothing", { timeout: GATE_TEST_TIMEOUT }, () => {
+    // Excluding a file from a scanner is how residue gets hidden. So re-scan the
+    // two excluded files and require that no residue token appears in an
+    // import/export statement.
+    //
+    // The rule is about BINDING, not spelling. A detector must be able to spell
+    // the tokens it searches for - they live in its vocabulary array and in the
+    // regex it builds from them, and flagging those would flag the scanner for
+    // scanning. What must never happen is a detector that also *depends on* the
+    // removed venue: an `import { captureExpertOptionSession }` would make the
+    // exclusion hide a live capability, which is the real hazard.
+    for (const f of DETECTOR_FILES) {
+      const lines = readFileSync(join(REPO_ROOT, f), "utf8").split(/\r?\n/)
+      lines.forEach((line, i) => {
+        if (!/^\s*(import|export)\b/.test(line)) return
+        for (const token of VENUE_RESIDUE_TOKENS) {
+          if (!new RegExp(token, "i").test(line)) continue
+          throw new Error(
+            `${f}:${i + 1} binds residue token ${token} in an import/export. A detector may SEARCH for a venue but must not DEPEND on one:\n  ${line.trim().slice(0, 140)}`
+          )
+        }
+      })
+      // ...and it must really contain the vocabulary, so the exclusion is not
+      // hiding an empty file that a later edit could fill with anything.
+      expect(readFileSync(join(REPO_ROOT, f), "utf8")).toMatch(/expertoption/i)
+    }
   })
 
   it("§10's registry-row count matches the table, on WS-3's already-documented rule", () => {

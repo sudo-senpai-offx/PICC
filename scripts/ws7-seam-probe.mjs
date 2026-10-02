@@ -242,6 +242,27 @@ function gitFiles(repoRoot) {
    ========================================================================== */
 
 /**
+ * The two files that ARE this gate.
+ *
+ * They must be excluded from every scan, because each one DECLARES the vocabulary
+ * it searches for: the probe holds `VENUE_RESIDUE_TOKENS` and `D26_CATALOG_ROWS`
+ * as data, and both files name the D26 claim shapes in their own failure detail.
+ *
+ * This was not hypothetical. Before T21 was committed these files were untracked,
+ * so `git ls-files` did not return them and the scans never saw them. The commit
+ * made them tracked, and the residue count jumped 28 -> 45 with 17 of the new hits
+ * being the detector matching its own token list. A gate whose measurement depends
+ * on whether the gate is committed is a gate that reports a different number to
+ * every reviewer.
+ *
+ * Excluding a file from a scanner is also how residue gets hidden, so the
+ * exclusion is not taken on trust: `detectorFilesAreCleanApartFromTheirVocabulary`
+ * in the test re-scans these two files and fails if any token appears outside the
+ * declaration that legitimately contains it.
+ */
+export const DETECTOR_FILES = Object.freeze(["scripts/ws7-seam-probe.mjs", "scripts/ws7-seam-guard.mjs"])
+
+/**
  * What counts as PRODUCTION code for the residue and claim scans.
  *
  * Discovered, not hand-listed: every tracked file under the dashboard's server
@@ -253,6 +274,7 @@ export function productionFiles(tracked) {
   return tracked.filter((f) => {
     if ([...SKIP_SEGMENTS].some((s) => f.includes(`/${s}/`) || f.endsWith(`/${s}`))) return false
     if (/\.(test|spec)\.[cm]?[jt]sx?$/.test(f)) return false
+    if (DETECTOR_FILES.includes(f)) return false
     return /^(apps\/dashboard\/server\/.+\.mjs|apps\/dashboard\/src\/.+\.[cm]?[jt]sx?|scripts\/.+\.mjs|agents\/.+\.py)$/.test(f)
   })
 }

@@ -426,6 +426,76 @@ const isDocExcluded = (f) => DOC_EXCLUSIONS.some((d) => f.startsWith(d.prefix))
 // mandatory and non-empty.
 const ALLOWLIST = [
   {
+    file: "scripts/ws7-seam-probe.mjs",
+    rule: "named-regulator",
+    occurrences: 2,
+    reason:
+      "This file is the T21 seam guard's DETECTOR, not product code. It names regulators and venue row ids in its D26 measurement vocabulary (D26_CATALOG_ROWS) and in the failure detail it prints, because D26's invariant is precisely 'no unverifiable third-party claim survives'. A detector must be able to name what it searches for. This text is never rendered to a user. Counted exactly, so a new claim here still fails the scan."
+  },
+  {
+    file: "scripts/ws7-seam-probe.mjs",
+    rule: "dax-designation",
+    occurrences: 1,
+    reason:
+      "Same detector rationale: the `mx-global` D26 catalog row is named in D26_CATALOG_ROWS so the guard can assert its ABSENCE from the catalog. Naming a row in order to prove it was removed is the opposite of asserting a third party's status. Never user-facing, and counted exactly so a new claim here still fails the scan."
+  },
+  {
+    file: "scripts/ws7-seam-probe.mjs",
+    rule: "standalone-dax-licensing",
+    occurrences: 1,
+    reason:
+      "Same detector rationale: the T21 guard declares D26's licensing-claim shape in its own vocabulary so it can assert that shape no longer appears in product code. A search term is not a claim, and this text is never shown to a user. Counted exactly, so a new claim added here would still fail the scan."
+  },
+  {
+    file: "scripts/ws7-seam-probe.mjs",
+    rule: "jurisdiction-status-claim",
+    occurrences: 1,
+    reason:
+      "Same detector rationale: the T21 guard declares D26's jurisdiction-status shape in its own vocabulary so it can assert that shape no longer appears in product code. A search term is not a claim, and this text is never shown to a user. Counted exactly, so a new claim added here would still fail the scan."
+  },
+  {
+    file: "scripts/ws7-seam-probe.mjs",
+    rule: "kyc-exemption-claim",
+    occurrences: 1,
+    reason:
+      "Same detector rationale: this is the KYC-exemption shape the T21 guard searches for. It surfaced only because T21's commit made this file tracked - the scan reads the tracked tree, so adding a detector changes what the scanner sees. That is recorded rather than hidden. Counted exactly, so a new claim here still fails."
+  },
+  {
+    file: "scripts/ws7-seam-guard.mjs",
+    rule: "named-regulator",
+    occurrences: 1,
+    reason:
+      "Same detector rationale as scripts/ws7-seam-probe.mjs: this is the T21 seam guard's decision layer, which reports D26's two halves and therefore names the regulators and venue rows whose ABSENCE it asserts. Not product code, never user-facing, and counted exactly so a new claim here still fails the scan."
+  },
+  {
+    file: "scripts/ws7-seam-guard.mjs",
+    rule: "dax-designation",
+    occurrences: 1,
+    reason:
+      "Same detector rationale as scripts/ws7-seam-probe.mjs: the T21 decision layer names the DAX-designated row so it can report that the row's absence is what D26 requires. A detector naming what it searches for is not a claim about that venue. Never user-facing, and counted exactly."
+  },
+  {
+    file: "scripts/ws7-seam-guard.mjs",
+    rule: "entity-licensing-claim",
+    occurrences: 1,
+    reason:
+      "Same detector rationale as scripts/ws7-seam-probe.mjs: the T21 decision layer declares the D26 entity-licensing shape so it can assert the shape is absent from product code. A search term is not a claim, and this text is never shown to a user. Counted exactly, so a new claim here still fails."
+  },
+  {
+    file: "scripts/ws7-seam-guard.mjs",
+    rule: "jurisdiction-status-claim",
+    occurrences: 1,
+    reason:
+      "Same detector rationale as scripts/ws7-seam-probe.mjs: the T21 decision layer declares the D26 jurisdiction-status shape so it can assert the shape is absent from product code. A search term is not a claim, and this text is never shown to a user. Counted exactly, so a new claim here still fails."
+  },
+  {
+    file: "scripts/ws7-seam-guard.mjs",
+    rule: "standalone-dax-licensing",
+    occurrences: 1,
+    reason:
+      "Same detector rationale as scripts/ws7-seam-probe.mjs: the T21 decision layer declares D26's licensing shape so it can report that the shape no longer appears. A search term is not a claim, and this text is never shown to a user. Counted exactly, so a new claim here still fails the scan."
+  },
+  {
     file: "apps/dashboard/server/services/btcpay.mjs",
     rule: "kyc-exemption-claim",
     occurrences: 1,

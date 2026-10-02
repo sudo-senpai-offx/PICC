@@ -61,9 +61,31 @@
 //     "no claims" would be satisfied by deleting the eight catalog rows, which is
 //     the precise thing D26 forbids.
 
-import { probeSeam, PROBE_SCHEMA, productionFiles, stripComments, stripPythonComments, codeOf, VENUE_RESIDUE_TOKENS, REGULATORY_CLAIM_SHAPES, D26_CATALOG_ROWS } from "./ws7-seam-probe.mjs"
+import {
+  probeSeam,
+  PROBE_SCHEMA,
+  productionFiles,
+  stripComments,
+  stripPythonComments,
+  codeOf,
+  VENUE_RESIDUE_TOKENS,
+  REGULATORY_CLAIM_SHAPES,
+  D26_CATALOG_ROWS,
+  DETECTOR_FILES
+} from "./ws7-seam-probe.mjs"
 
-export { PROBE_SCHEMA, probeSeam, productionFiles, stripComments, stripPythonComments, codeOf, VENUE_RESIDUE_TOKENS, REGULATORY_CLAIM_SHAPES, D26_CATALOG_ROWS }
+export {
+  DETECTOR_FILES,
+  PROBE_SCHEMA,
+  probeSeam,
+  productionFiles,
+  stripComments,
+  stripPythonComments,
+  codeOf,
+  VENUE_RESIDUE_TOKENS,
+  REGULATORY_CLAIM_SHAPES,
+  D26_CATALOG_ROWS
+}
 
 /* ==========================================================================
    KINDS - and the structural split between BLOCKING and everything else
