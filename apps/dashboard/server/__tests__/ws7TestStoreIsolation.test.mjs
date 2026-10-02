@@ -1130,6 +1130,14 @@ const LEGACY_HAND_ROLLED_REDIRECTS = {
   "apps/dashboard/server/__tests__/newsRoutes.test.mjs": ["PICC_AUTH_DATA_DIR", "PICC_DATA_DIR", "PICC_TRADING_DATA_DIR"],
   "apps/dashboard/server/__tests__/notificationCenter.test.mjs": ["PICC_NOTIFICATION_DATA_DIR"],
   "apps/dashboard/server/__tests__/notifier.test.mjs": ["PICC_NOTIFICATION_DATA_DIR"],
+  // T14's transport suite drives the real notifier, which PERSISTS, so the
+  // redirect is not optional: without it the suite would write the real
+  // `server/data/notifications.json`, which is the one thing this guard exists
+  // to make impossible. The value is `mkdtempSync(join(tmpdir(), ...))`, so the
+  // runtime scratch check independently confirms it is outside both the run root
+  // and any live store - which is why widening this inventory is the benign case
+  // its own comment describes, and not a hole.
+  "apps/dashboard/server/__tests__/notifications.transports.test.mjs": ["PICC_NOTIFICATION_DATA_DIR"],
   "apps/dashboard/server/__tests__/notifierEmailRemoved.test.mjs": ["PICC_NOTIFICATION_DATA_DIR"],
   "apps/dashboard/server/__tests__/notifierStateMigration.test.mjs": ["PICC_NOTIFICATION_DATA_DIR"],
   "apps/dashboard/server/__tests__/packObservers.test.mjs": ["PICC_DATA_DIR"],
