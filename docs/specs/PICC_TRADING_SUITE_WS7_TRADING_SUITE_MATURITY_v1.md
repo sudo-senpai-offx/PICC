@@ -1351,6 +1351,31 @@ Approval artifact: `docs/trading-logic/changelog/entries/0016-EXPERTOPTION_VENUE
 
 **Bisect:** One venue at a time; each is independently enable-able and revertible behind its ceremony gate.
 
+**Seam-guard decision record (AC-7a amendment, owner decision 2026-10-02).** The WS-5 venue freeze and this task's `Files` clause collide head-on, so the freeze is amended here for the first time by *widening* rather than by re-deriving its semantics.
+
+The freeze forbids exactly what T17 mandates. The `Files` clause above says `apps/dashboard/server/services/ccxtOrdering.mjs` is to be **extended, do not replace** — and that file is one of the six frozen venue paths, so AC-7a treats any change to it as a venue-surface capability change unless it is subtractive. An extension is additive by construction. T17 was therefore not implementable at all while the freeze stood as written.
+
+**Why the later decision governs.** The AC-7a venue freeze is a WS-5 scope discipline, dated before T17 and aimed at keeping a workstream from spreading venue capability. T17 is a later, explicit, task-level instruction from the owner, and an order lifecycle it names cannot be built by a rule that predates it. Where the two conflict the later explicit instruction governs — but only because it is written down. An unwritten widening would be indistinguishable from the accidental erosion this freeze exists to prevent, which is why the grant is dated, enumerated, and reasoned rather than absorbed into the guard's predicate.
+
+**Authorised: four named files, nothing else.** Two of the four come from prose in the `Files` clause, so the resolution is recorded rather than left implicit:
+
+| T17 spec text | Authorised path | Reason |
+|---|---|---|
+| `:1348` "ccxtOrdering.mjs (extend, do not replace)" | `apps/dashboard/server/services/ccxtOrdering.mjs` | Named literally, and the exact path the pre-amendment width pins forbade authorising. T17's `Scope` (`:1346`) requires the full lifecycle to be built on the seam T3 amended. |
+| `:1346` "the full lifecycle" + `:1348` "new per-venue adapter configuration" | `apps/dashboard/server/services/venues/ccxtVenues.mjs` | The per-venue adapter configuration the clause names; D9 (`:166-173`) fixes it at exactly four venues, so it is configuration rather than capability growth. |
+| `:1348` "the ceremony/consent/risk integration points" | `apps/dashboard/server/services/venues/ccxtLifecycleRails.mjs` | The three integration points `:1350` requires honoured on **every** leg. One evaluator for all four legs is what makes "every leg" provable. |
+| `:1346` "the full lifecycle, four venues" | `apps/dashboard/server/services/venues/ccxtVenueLifecycle.mjs` | The lifecycle itself; holds no rail logic and no CCXT instance, taking its venue step from an injected adapter. |
+
+The middle two mappings are this amendment's judgement, not the spec's words — the clause describes the work rather than naming the files. A reviewer who disagrees with either should read the table and say so; because nothing outside the four is authorised, a wrong mapping is correctable without widening the grant.
+
+**No wildcard. No directory. No prefix.** The grant is exact `Set` membership in `ws5SeamGuard.test.mjs`. There is no prefix match, no glob, and no directory entry, and every authorised entry is asserted to be a named `.mjs` file. A venue file that no decision named is authorised by nothing and is frozen the moment it appears. T3's single grant (`hyperliquidPerps.mjs`) is unchanged and remains a separate, separately-pinned set, so "which decision authorised this file" stays answerable.
+
+**The freeze remains in force for everything else.** `captureProfiles.mjs`, `commandCentre/policyGraphCatalog.mjs` and `venues/venueAdapterContract.mjs` keep every check AC-7a gave them — including the additive-export plant and the body-edit plant. No threshold is lowered, no check is removed, and no equality assertion is loosened into a truthy one. The `:734` and `:759-760` anti-smuggling checks are **strengthened**, not relaxed: because `isVenuePath` is satisfied by the `services/venues/` prefix, the pre-amendment "every authorised entry is a venue path" assertion could not actually have prevented directory smuggling, so the directory-shaped forms are now rejected explicitly.
+
+**Residual coverage — stated, not implied.** `ccxtOrdering.mjs` is no longer capability-subtracted by this guard; that is the one coverage loss this amendment causes, and it is the honest price of implementing T17 at all. What still covers it: `perpsSeamGuard.test.mjs:36,107-114` pins `ccxtConnector`'s `READ_ONLY_BLOCKED` tokens and `ws7SeamGuard.test.mjs:371,392` pins that `cancelOrder` is still in that blocklist; `executionAbsenceScope.test.mjs` fails the build on an unreviewed order-capable module; and the two frozen venue paths T17 did not name keep their plants. **Forthcoming, not yet existing:** the T17 rails matrix (`ccxtVenueLifecycle.rails.test.mjs`) is a follow-on task's deliverable and is what will pin the ceremony gate, the consent payload lock, and the risk rails on every leg. It is cited as forthcoming deliberately — counting it as coverage today would be a false claim about this repo's state.
+
+Approval artifact: `docs/trading-logic/changelog/entries/0037-AC7A_VENUE_FREEZE_T17_AMENDMENT-v1-to-v2.md`.
+
 ### T18 — Data sources (Owner: WS-7+ · P0)
 **Scope:** Licensed/trusted sources plus PICC's own browser; no prohibited scrapers; no manual news input.
 

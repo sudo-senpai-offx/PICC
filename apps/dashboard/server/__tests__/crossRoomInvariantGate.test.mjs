@@ -997,7 +997,13 @@ describe("spec self-contradiction: AC-047 and D27 said 18, the inventory says 22
     // spec:73's amendment history, and honesty note 18's own number
     expect(remaining[0][0]).toBe(73)
     expect(remaining[0][1]).toMatch(/previously 18 instances across 11 keys/)
-    expect(remaining[1][0]).toBe(1476)
+    // The locator moved 1476 -> 1501 when the WS-7 T17 AC-7a decision record was
+    // added at spec:1354, because that record sits ABOVE the honesty notes and
+    // pushed them down by 25 lines. Nothing is relaxed: `toHaveLength(2)` and the
+    // content match on the next line both still apply, and neither changed. This
+    // is a positional locator that any spec growth invalidates by construction -
+    // only the count and the content are the assertions.
+    expect(remaining[1][0]).toBe(1501)
     expect(remaining[1][1]).toMatch(/^18\. \*\*No credentials/)
   })
 

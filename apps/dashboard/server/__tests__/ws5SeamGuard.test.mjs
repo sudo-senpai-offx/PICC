@@ -230,19 +230,96 @@ const isVenuePath = (path) => path.startsWith("apps/dashboard/server/services/ve
 // re-created, the set lookup would still match and the re-created file would be
 // authorised rather than re-frozen, which is the exact opposite of "re-creating
 // it immediately re-freezes it". Existence, checked on disk at decision time,
-// is the only thing that can express that. So this set is an exact ONE-entry
-// list: the single additive exception WS-7 T3 granted, and nothing from T2.
+// is the only thing that can express that. So each set below is an exact list of
+// the files ONE named decision authorised, and nothing from any other decision.
 const WS7_T3_AUTHORIZED_VENUE_PATHS = new Set([
   "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
 ])
 
-// A venue path is authorised when it is explicitly listed, when it no longer
-// exists (Rule 1), or when its change is subtractive (Rule 2). Anything else —
-// including every change to the three frozen paths this workstream did NOT
-// touch — stays frozen.
+// ---------------------------------------------------------------------------
+// WS-7 T17 AMENDMENT - 2026-10-02 - the AC-7a exception set widens by FOUR.
+// ---------------------------------------------------------------------------
+//
+// THE CONTRADICTION. The WS-5 freeze this file enforces forbids precisely what
+// WS-7 T17 mandates. T17's Files clause (spec :1348) says
+// `apps/dashboard/server/services/ccxtOrdering.mjs` is to be EXTENDED, do not
+// replace - and `ccxtOrdering.mjs` is a member of VENUE_PATHS above, so the
+// freeze treats any change to it as a venue-surface capability change unless it
+// is subtractive. An extension is additive by construction, so T17 could not be
+// implemented at all while this freeze stood.
+//
+// WHY THE LATER DECISION GOVERNS. T17 is a dated, explicit, task-level
+// instruction from the owner; the AC-7a venue freeze predates it and is a
+// WS-5 scope discipline, not a safety invariant about what an order lifecycle
+// may contain. Where the two conflict, the later explicit instruction governs -
+// but it governs only because it is WRITTEN DOWN. That is the whole reason for
+// this block: an unwritten widening would be indistinguishable from the
+// accidental erosion this guard exists to prevent, so the widening is dated,
+// enumerated, and reasoned here instead of being smuggled into the predicate.
+//
+// SCOPE - FOUR NAMED FILES, NO WILDCARD, NO DIRECTORY. Nothing else in the venue
+// surface is authorised. There is deliberately no prefix match, no glob, and no
+// directory entry: authorisation is exact `Set.has` equality, so a venue file
+// that no decision named is not authorised by anything, and a new file dropped
+// into `services/venues/` is frozen the moment it appears. Two of T17's four
+// Files-clause items are prose rather than paths, so the resolution is recorded
+// rather than left implicit:
+//
+//   spec :1348 "ccxtOrdering.mjs (extend, do not replace)"
+//     -> apps/dashboard/server/services/ccxtOrdering.mjs
+//        Named literally. Also VENUE_PATHS' one non-venues/ member, so it is the
+//        exact file the pre-amendment width pins forbade authorising.
+//   spec :1346 Scope "the full lifecycle", :1348 "new per-venue adapter
+//     configuration" (the four-venue registry D9:166-173 fixes at exactly four)
+//     -> apps/dashboard/server/services/venues/ccxtVenues.mjs
+//   spec :1348 "the ceremony/consent/risk integration points" - the three rails
+//     :1350 requires honoured on EVERY leg
+//     -> apps/dashboard/server/services/venues/ccxtLifecycleRails.mjs
+//   spec :1346 Scope "the full lifecycle, four venues"
+//     -> apps/dashboard/server/services/venues/ccxtVenueLifecycle.mjs
+//
+// The two `ccxtVenues` / `ccxtVenueLifecycle` mappings are the amendment's
+// judgement, not the spec's words: the spec describes the work rather than
+// naming the files, so a reviewer who disagrees with either mapping should read
+// the reasoning above and say so. No path outside these four is authorised,
+// which is what makes a wrong mapping correctable without widening anything.
+//
+// RESIDUAL COVERAGE - WHAT STILL GUARDS ccxtOrdering.mjs. This guard no longer
+// capability-subtracts that file: it is no longer in `stillFrozen` below, and
+// nothing here rejects an addition to it. That loss is real and is stated
+// rather than papered over. What still covers it:
+//   - `perpsSeamGuard.test.mjs:36,107-114` pins ccxtConnector's
+//     READ_ONLY_BLOCKED tokens, and `ws7SeamGuard.test.mjs:371,392` pins that
+//     `cancelOrder` is STILL in that blocklist. The read-only surface the
+//     lifecycle must not cross is asserted in two places, not one.
+//   - `executionAbsenceScope.test.mjs` discovers order-capable modules and
+//     fails the build on an unreviewed one, so gaining an order capability is
+//     still caught at a different seam.
+//   - The two frozen venue paths T17 did NOT name keep every tooth below,
+//     including the additive-plant and body-edit plants.
+//   - FORTHCOMING, not yet existing: the T17 rails matrix
+//     (`ccxtVenueLifecycle.rails.test.mjs`, a follow-on task's deliverable) is
+//     what pins the ceremony gate, the consent payload lock, and the risk rails
+//     on every leg. It is cited as forthcoming deliberately: counting it as
+//     existing coverage today would be a false claim about this repo's state.
+const WS7_T17_AUTHORIZED_VENUE_PATHS = new Set([
+  "apps/dashboard/server/services/ccxtOrdering.mjs",
+  "apps/dashboard/server/services/venues/ccxtVenues.mjs",
+  "apps/dashboard/server/services/venues/ccxtVenueLifecycle.mjs",
+  "apps/dashboard/server/services/venues/ccxtLifecycleRails.mjs"
+])
+
+// The UNION is what the predicate consults, and it is a union of two named
+// decisions' sets rather than one hand-maintained list, so "which decision
+// authorised this file" stays answerable by reading the two sets above.
+const WS7_AUTHORIZED_VENUE_PATHS = new Set([...WS7_T3_AUTHORIZED_VENUE_PATHS, ...WS7_T17_AUTHORIZED_VENUE_PATHS])
+
+// A venue path is authorised when it is explicitly listed by the WS-7 T3
+// decision or the WS-7 T17 amendment, when it no longer exists (Rule 1), or
+// when its change is subtractive (Rule 2). Anything else stays frozen.
 const isUnauthorizedVenueChange = (path) => {
   if (!isVenuePath(path)) return false
-  if (WS7_T3_AUTHORIZED_VENUE_PATHS.has(path)) return false
+  if (WS7_AUTHORIZED_VENUE_PATHS.has(path)) return false
   // Rule 1: a deleted frozen path is exempt by existence. `git show` still
   // returns its baseline content, which is exactly what the subtraction needs.
   if (!existsSync(resolve(ROOT, path))) return false
@@ -692,20 +769,25 @@ describe("WS-5 seam guard", () => {
     })
 
     it("the amendment does not weaken the other frozen venue paths", () => {
-      // The three frozen paths T2 did not add a venue to must keep exactly the
-      // coverage they had under WS-5. Two of them are byte-identical to baseline;
+      // The frozen paths that NO amendment named must keep exactly the coverage
+      // they had under WS-5. Two of them are byte-identical to baseline;
       // `policyGraphCatalog.mjs` was edited SUBTRACTIVELY (its ExpertOption
       // policy row and roster were removed), so "unchanged on disk" would be a
       // false claim for it. What must not change is COVERAGE: for each, an
       // additive edit is still rejected, and none is authorized.
+      //
+      // `ccxtOrdering.mjs` was in this list under T2 and is GONE under T17,
+      // because the T17 amendment names it (spec :1348, extend-don't-replace).
+      // Its removal is the one coverage loss this amendment causes, and it is
+      // disclosed in the RESIDUAL COVERAGE block above rather than left as a
+      // silent shrinkage in the list below.
       const stillFrozen = [
-        "apps/dashboard/server/services/ccxtOrdering.mjs",
         "apps/dashboard/server/services/commandCentre/policyGraphCatalog.mjs",
         "apps/dashboard/server/services/venues/venueAdapterContract.mjs"
       ]
       for (const path of stillFrozen) {
         expect(existsSync(resolve(ROOT, path)), `${path} must still exist`).toBe(true)
-        expect(WS7_T3_AUTHORIZED_VENUE_PATHS.has(path), `${path} must not be authorized`).toBe(false)
+        expect(WS7_AUTHORIZED_VENUE_PATHS.has(path), `${path} must not be authorized by the WS-7 T3 decision or the WS-7 T17 amendment`).toBe(false)
         // Whatever its diff, the change is removal-only, so the predicate agrees.
         expect(isSubtractiveVenueChange(path), `${path} must be subtractive`).toBe(true)
         // The real teeth, and the thing that must NOT have weakened: an ADDITIVE
@@ -729,20 +811,77 @@ describe("WS-5 seam guard", () => {
         ).toEqual([])
         expect(isRemovalOnly(baselineRaw, bodyEdit), `${path} must reject a body edit`).toBe(false)
       }
-      // And the venue/ directory as a whole is untouched by T2.
+      // `ccxtOrdering.mjs` left the frozen list, so its authorising decision is
+      // pinned explicitly here rather than inferred from its absence above: T17
+      // names it and T3 does not. If a later amendment moves it back, one of
+      // these two lines flips and the change is a deliberate edit.
       expect(
-        [...WS7_T3_AUTHORIZED_VENUE_PATHS].every((p) => !p.startsWith("apps/dashboard/server/services/venues/") || p.endsWith("hyperliquidPerps.mjs"))
+        WS7_T17_AUTHORIZED_VENUE_PATHS.has("apps/dashboard/server/services/ccxtOrdering.mjs"),
+        "the WS-7 T17 amendment must name ccxtOrdering.mjs - spec :1348 extends it"
       ).toBe(true)
+      expect(
+        WS7_T3_AUTHORIZED_VENUE_PATHS.has("apps/dashboard/server/services/ccxtOrdering.mjs"),
+        "ccxtOrdering.mjs is authorized by T17, never by T3"
+      ).toBe(false)
+      // And the venue/ directory can never be authorised wholesale, by ANY
+      // decision. Under T3's one-entry set that invariant was expressible as a
+      // single identity check ("the only venues/ entry is hyperliquidPerps");
+      // the T17 amendment makes venues/ four named files, so the SAME invariant
+      // is now asserted in its general form instead of by that one identity:
+      // every authorised entry is a FILE PATH, never a directory, never a glob,
+      // and a venue file no decision named is authorised by nothing. That is a
+      // strictly stronger statement of "no directory smuggle" than the identity
+      // check it replaces, and it is still an equality, not a truthy.
+      const VENUES_PREFIX = "apps/dashboard/server/services/venues/"
+      expect(
+        [...WS7_AUTHORIZED_VENUE_PATHS].filter((p) => p.startsWith(VENUES_PREFIX)).sort()
+      ).toEqual([
+        "apps/dashboard/server/services/venues/ccxtLifecycleRails.mjs",
+        "apps/dashboard/server/services/venues/ccxtVenueLifecycle.mjs",
+        "apps/dashboard/server/services/venues/ccxtVenues.mjs",
+        "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
+      ])
+      for (const p of WS7_AUTHORIZED_VENUE_PATHS) {
+        expect(p.endsWith("/"), `${p} must not be a directory entry`).toBe(false)
+        expect(/[*?]/.test(p), `${p} must not be a glob or wildcard`).toBe(false)
+        expect(p.endsWith(".mjs"), `${p} must be a named file, not a bare prefix`).toBe(true)
+      }
+      expect(
+        WS7_AUTHORIZED_VENUE_PATHS.has(VENUES_PREFIX),
+        "the venues/ directory itself must never be authorized by any decision"
+      ).toBe(false)
+      expect(
+        WS7_AUTHORIZED_VENUE_PATHS.has("apps/dashboard/server/services/venues/someVenueNoDecisionNamed.mjs"),
+        "a venue file that no decision named must not be authorized"
+      ).toBe(false)
     })
 
-    it("grants no venue exception beyond the single WS-7 T3 decision", () => {
+    it("grants no venue exception beyond the WS-7 T3 and WS-7 T17 decisions", () => {
       // Pins the width of the allowance so it cannot be widened silently. A new
       // exception requires a new spec decision AND a deliberate edit here.
       // WS-7 T2 granted NO entry: its two deleted venue paths are exempt by
       // existence (Rule 1), not by membership here, so a deleted file can never
-      // be re-created into a permanent write allowance. The set is therefore an
-      // exact ONE-entry list, and a second cannot appear by accident.
+      // be re-created into a permanent write allowance.
+      //
+      // There are now TWO named decisions, so there are TWO exact lists, asserted
+      // separately, plus their union asserted as a third. Each is an equality
+      // against a literal a reviewer can read at a glance - none of them is
+      // loosened to a truthy check, because a truthy check here would permit any
+      // width at all, which is the failure this assertion exists to prevent.
       expect([...WS7_T3_AUTHORIZED_VENUE_PATHS].sort()).toEqual([
+        "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
+      ])
+      expect([...WS7_T17_AUTHORIZED_VENUE_PATHS].sort()).toEqual([
+        "apps/dashboard/server/services/ccxtOrdering.mjs",
+        "apps/dashboard/server/services/venues/ccxtLifecycleRails.mjs",
+        "apps/dashboard/server/services/venues/ccxtVenueLifecycle.mjs",
+        "apps/dashboard/server/services/venues/ccxtVenues.mjs"
+      ])
+      expect([...WS7_AUTHORIZED_VENUE_PATHS].sort()).toEqual([
+        "apps/dashboard/server/services/ccxtOrdering.mjs",
+        "apps/dashboard/server/services/venues/ccxtLifecycleRails.mjs",
+        "apps/dashboard/server/services/venues/ccxtVenueLifecycle.mjs",
+        "apps/dashboard/server/services/venues/ccxtVenues.mjs",
         "apps/dashboard/server/services/venues/hyperliquidPerps.mjs"
       ])
       // The T2-deleted paths must be absent from the set, so that re-creating
@@ -752,13 +891,26 @@ describe("WS-5 seam guard", () => {
         "apps/dashboard/server/services/liveEO.mjs"
       ]) {
         expect(
-          WS7_T3_AUTHORIZED_VENUE_PATHS.has(deleted),
-          `${deleted} must be exempt by existence, never by authorization`
+          WS7_AUTHORIZED_VENUE_PATHS.has(deleted),
+          `${deleted} must be exempt by existence, never by authorization by the WS-7 T3 decision or the WS-7 T17 amendment`
         ).toBe(false)
       }
       // The exception must never be used to smuggle the whole directory in.
-      for (const path of WS7_T3_AUTHORIZED_VENUE_PATHS) {
+      //
+      // The original assertion - every authorized entry IS a venue path - is
+      // kept, but it does NOT on its own support the comment above it:
+      // `isVenuePath` is satisfied by the `services/venues/` PREFIX, so it
+      // returns true for the directory itself and for any file inside it. Under
+      // T3's one-entry set that gap was harmless, because the only authorised
+      // entry happened to be one named file. Widening the set would have turned
+      // it into a hole, so the directory-shaped forms are rejected explicitly
+      // below. Nothing here is relaxed: the membership check is stricter than
+      // before, and it runs over the union rather than one decision's set.
+      for (const path of WS7_AUTHORIZED_VENUE_PATHS) {
         expect(isVenuePath(path), "an authorized exception must actually be a venue path").toBe(true)
+        expect(path.endsWith("/"), `${path} must not be a directory entry`).toBe(false)
+        expect(/[*?]/.test(path), `${path} must not be a glob or wildcard`).toBe(false)
+        expect(path.endsWith(".mjs"), `${path} must be a named file, not a bare prefix`).toBe(true)
       }
     })
 
