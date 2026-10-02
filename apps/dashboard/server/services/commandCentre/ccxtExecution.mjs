@@ -43,8 +43,57 @@ export const CCXT_SITE = "trading:ccxt"
 const CONSENT_FIELD_SETS = {
   spotOpen: ["exchange", "symbol", "side", "amount", "price", "clientOrderId"],
   perpsOpen: ["action", "exchange", "symbol", "side", "amount", "price", "leverage", "marginMode", "clientOrderId"],
-  perpsClose: ["action", "exchange", "symbol", "positionId", "price", "side", "amount", "leverage"]
+  perpsClose: ["action", "exchange", "symbol", "positionId", "price", "side", "amount", "leverage"],
+  // ── WS-7 T17: the four CCXT spot lifecycle legs ───────────────────────────
+  //
+  // The place leg deliberately REUSES `spotOpen` rather than declaring a
+  // parallel set. Its locked fields are identical field-for-field, and a second
+  // set with the same six names would be a second home for one rule — the drift
+  // T14's changelog entry §7 named as the one place worth flagging. So the leg
+  // map below points `place` at the set the existing spot rail already anchors,
+  // and the two cannot come to disagree because there is only one.
+  //
+  // The three new sets lock what each leg's consent actually covers:
+  //
+  //   amend  — CCXT's editOrder may change amount and price but NOT side, so the
+  //            ORIGINAL side is in the set. Its presence is what makes an amend
+  //            that quietly flips direction a mismatch rather than a legal edit.
+  //            `orderId` is locked because it is the identity being amended; an
+  //            amend whose target differs from the anchored one is a different
+  //            order wearing the same consent.
+  //   cancel — a cancel carries no price and no amount, so locking fields the
+  //            leg has no value for would hash `undefined` and prove nothing.
+  //            What it does carry is the venue, the symbol and the identity PAIR
+  //            (venue order id and the client order id), and that pair is the
+  //            whole of a cancel's blast radius.
+  //   close  — an exit order. It locks the position being exited
+  //            (`positionOrderId`), the direction the exit is sent in, and the
+  //            size and price, so a close cannot be widened or re-aimed under a
+  //            consent granted for a smaller or different exit.
+  venueAmend: ["leg", "exchange", "symbol", "orderId", "side", "amount", "price", "clientOrderId"],
+  venueCancel: ["leg", "exchange", "symbol", "orderId", "clientOrderId"],
+  venueClose: ["leg", "exchange", "symbol", "positionOrderId", "side", "amount", "price", "clientOrderId"]
 }
+
+/**
+ * Which consent field set each lifecycle leg locks.
+ *
+ * Declared here, beside the sets, so `ccxtVenueLifecycle.mjs` never spells a set
+ * name as a bare string. A leg added without an entry here is refused by
+ * `venueLegConsent` with a named reason instead of hashing an empty projection —
+ * an empty projection hashes to a stable value, so a missing entry would
+ * otherwise produce a consent hash that is constant across every request and
+ * therefore locks nothing.
+ */
+export const VENUE_LEG_CONSENT_SET = Object.freeze({
+  place: "spotOpen",
+  amend: "venueAmend",
+  cancel: "venueCancel",
+  close: "venueClose"
+})
+
+/** Stable code for a leg with no declared consent field set. */
+export const UNKNOWN_VENUE_LEG_CONSENT_CODE = "consent:deny:unknown-lifecycle-leg"
 
 function consentProjection(setName, source) {
   const set = CONSENT_FIELD_SETS[setName]
@@ -81,6 +130,38 @@ export function perpsOpenConsent(fields) {
 }
 export function perpsCloseConsent(fields) {
   return consentProjection("perpsClose", fields)
+}
+
+/**
+ * WS-7 T17 — the consent projection for one CCXT lifecycle leg.
+ *
+ * Same mechanism, same canonicalisation, same sha-256 as every other rail: this
+ * is `consentProjection` reached through the leg map, not a second hashing path.
+ * The returned value carries `ok: false` plus `code` for an unmapped leg, because
+ * an unmapped leg must be a refusal and a refusal needs a reason a surface can
+ * render.
+ */
+export function venueLegConsent(leg, fields) {
+  const setName = VENUE_LEG_CONSENT_SET[String(leg ?? "").trim()]
+  if (!setName) return { ok: false, code: UNKNOWN_VENUE_LEG_CONSENT_CODE, leg: String(leg ?? ""), reason: `no consent field set is declared for lifecycle leg "${String(leg ?? "")}"` }
+  return { ok: true, setName, fields: consentProjection(setName, fields) }
+}
+
+/** The consent lock value for one lifecycle leg, or null when the leg is unmapped. */
+export function venueLegConsentHash(leg, fields) {
+  const projection = venueLegConsent(leg, fields)
+  if (!projection.ok) return null
+  return consentPayloadHash(projection.fields)
+}
+
+/**
+ * The locked field NAMES for one lifecycle leg — the surface a consent dialog
+ * renders, and what a test asserts against. `null` for an unmapped leg.
+ */
+export function venueLegConsentFields(leg) {
+  const setName = VENUE_LEG_CONSENT_SET[String(leg ?? "").trim()]
+  if (!setName) return null
+  return Object.freeze([...CONSENT_FIELD_SETS[setName]])
 }
 export function clientOrderIdFor(now = Date.now()) {
   return `picc-${now.toString(36)}-${randomBytes(4).toString("hex")}`

@@ -10,8 +10,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-function makeExchange({ balance = {}, tickers = {}, orders = {}, createOrderImpl = null } = {}) {
-  const calls = { createOrder: [], fetchOrder: [], fetchTicker: [], fetchBalance: 0 }
+function makeExchange({ balance = {}, tickers = {}, orders = {}, createOrderImpl = null, editOrderImpl = null, cancelOrderImpl = null } = {}) {
+  const calls = { createOrder: [], fetchOrder: [], fetchTicker: [], fetchBalance: 0, editOrder: [], fetchOpenOrders: [], cancelOrder: [] }
   const exchange = {
     id: "binance",
     calls,
@@ -50,6 +50,29 @@ function makeExchange({ balance = {}, tickers = {}, orders = {}, createOrderImpl
       calls.fetchOrder.push([id, symbol])
       if (!(id in orders)) throw new Error(`fixture: order ${id} not found`)
       return orders[id]
+    },
+    // The T17 lifecycle legs. `editOrder` is here because the amend envelope reads
+    // the live order back with fetchOrder before it will size anything.
+    async editOrder(id, symbol, amount, price) {
+      calls.editOrder.push([id, symbol, amount, price])
+      if (editOrderImpl) return editOrderImpl(id, symbol, amount, price)
+      const live = orders[id]
+      if (!live) throw new Error(`fixture: order ${id} not found`)
+      return { ...live, id, symbol, amount: amount ?? live.amount, price: price ?? live.price, status: "open", filled: 0, average: null }
+    },
+    async fetchOpenOrders(symbol) {
+      calls.fetchOpenOrders.push(symbol ?? null)
+      return Object.entries(orders)
+        .filter(([, o]) => o?.status === "open")
+        .filter(([, o]) => (symbol ? o.symbol === symbol : true))
+        .map(([id, o]) => ({ ...o, id }))
+    },
+    async cancelOrder(id, symbol) {
+      calls.cancelOrder.push([id, symbol])
+      if (cancelOrderImpl) return cancelOrderImpl(id, symbol)
+      const live = orders[id]
+      if (!live) throw new Error(`fixture: order ${id} not found`)
+      return { ...live, id, status: "canceled" }
     }
   }
   return exchange
@@ -513,5 +536,197 @@ describe("refreshAllCcxtEquity — the scheduled sweep that keeps the overview f
     const after = await mod.observeCcxtEquity({ exchange: "binance", now: Date.parse("2026-09-05T08:10:00Z") })
     expect(after.dayStartEquityUsd).toBe(100) // the sweep's first observation seeded the day baseline
     expect(after.dayLossPct).toBe(10)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T17's seam members: amend, cancel, close.
+//
+// These three exist because a rail that can open a position it cannot amend,
+// cancel or exit is a rail that can lose money unattended. Each one therefore
+// carries its OWN envelope rather than trusting the lifecycle's rails to have
+// run, and each refusal below is a behaviour T17 deliberately changed. They are
+// tested at the seam rather than only through the lifecycle because the seam is
+// importable by anything.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("ccxtOrdering — T17 amend / cancel / close members", () => {
+  let dir
+  let mod
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "picc-ccxt-t17-"))
+    process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
+    vi.resetModules()
+    mod = await import("../services/ccxtOrdering.mjs")
+    mod._resetCcxtOrderingState()
+    Object.assign(process.env, BINANCE_KEYS)
+  })
+  afterEach(() => {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith("PICC_")) delete process.env[k]
+    }
+    delete process.env.PICC_COMMAND_CENTRE_DATA_DIR
+    vi.resetModules()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("amend sizes the envelope from the VENUE's amount/price, so a lying caller cannot shrink it", async () => {
+    // The bug this pins: `amount`/`price` arrive as the CALLER's belief about the
+    // live order. Sizing the cap from them makes the envelope defeatable by the
+    // argument it is meant to check — a caller wanting a $500 amend passes
+    // `price: 0.01` and the arithmetic lands under the $10 cap. So the seam reads
+    // the live order back and ignores the caller's numbers entirely.
+    const ex = makeExchange({
+      orders: {
+        "o-9": { id: "o-9", symbol: "BTC/USDT", amount: 1, price: 500, status: "open", filled: 0 }
+      }
+    })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+
+    // The caller claims a tiny price; the venue says 500. 0.01 * 500 = $5 stays
+    // under the cap, so this amend is ALLOWED and editOrder is reached.
+    await expect(
+      mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-9", side: "buy", amount: 0.01, price: 0.01, newAmount: 0.01 })
+    ).resolves.toMatchObject({ id: "o-9" })
+    expect(ex.calls.editOrder).toEqual([["o-9", "BTC/USDT", 0.01, null]])
+    // The venue's order was read to do the arithmetic, which is the point.
+    expect(ex.calls.fetchOrder).toContainEqual(["o-9", "BTC/USDT"])
+
+    // Now the same lie on a bigger size: 0.05 * 500 = $25 is OVER the $10 cap even
+    // though the caller claimed price 0.01 (which would read as $0.0005). The cap
+    // must refuse, and it must refuse BEFORE editOrder is reached.
+    ex.calls.editOrder.length = 0
+    await expect(
+      mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-9", side: "buy", amount: 0.05, price: 0.01, newAmount: 0.05 })
+    ).rejects.toThrow(/exceeds the \$10 hard cap/)
+    expect(ex.calls.editOrder, "an over-cap amend must never reach the venue").toEqual([])
+  })
+
+  it("an amend whose live order cannot be priced is REFUSED, not allowed through", async () => {
+    // "A rail that cannot be evaluated is a named absence, never a default-allow."
+    // Two ways the venue can fail to price the order, and BOTH must refuse:
+    //   (a) the order cannot be read back at all;
+    //   (b) the order reads back with no usable amount/price.
+    // (b) is the one that needed code, because the venue answering with garbage is
+    // not an exception the seam can distinguish from success without checking.
+    //
+    // ONE exchange carries both cases, because the seam caches its instance per
+    // exchange id: re-registering a second lib under `binance` leaves the first
+    // instance in place, and the fixture then reports an order as missing when it
+    // is not. That caching is real behaviour, so the test is written around it
+    // rather than by resetting state to hide it.
+    const ex = makeExchange({
+      orders: { "o-junk": { id: "o-junk", symbol: "BTC/USDT", amount: null, price: undefined, status: "open" } }
+    })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    // (a) not in the map — refused by the venue's own error.
+    await expect(
+      mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-missing", side: "buy", amount: 0.01, price: 500, newAmount: 0.01 })
+    ).rejects.toThrow(/refused/i)
+    expect(ex.calls.editOrder).toEqual([])
+
+    // (b) present but unusable — the seam's own refusal, and editOrder still untouched.
+    await expect(
+      mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-junk", side: "buy", amount: 0.01, price: 500, newAmount: 0.01 })
+    ).rejects.toThrow(/refused to amend/)
+    expect(ex.calls.editOrder, "an unpriceable amend must never reach the venue").toEqual([])
+  })
+
+  it("an amend that changes neither amount nor price is refused as a no-op", async () => {
+    const ex = makeExchange({ orders: { "o-1": { id: "o-1", symbol: "BTC/USDT", amount: 0.01, price: 500, status: "open" } } })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    await expect(mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1", side: "buy" })).rejects.toThrow(/changes neither/)
+    expect(ex.calls.editOrder).toEqual([])
+  })
+
+  it("close REFUSES when no fill was observed — the cap cannot be conditional", async () => {
+    // The defect this pins: the guard read
+    // `if (Number.isFinite(filled) && amountN > filled)`, so OMITTING filledAmount
+    // skipped the comparison entirely and any amount could be closed. The control
+    // was strongest exactly when the caller had the least evidence.
+    const ex = makeExchange()
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    await expect(
+      mod.closeCcxtPosition({ exchange: "binance", symbol: "BTCUSDT", positionSide: "long", positionOrderId: "p-1", amount: 1, price: 500 })
+    ).rejects.toThrow(/without an observed fill/)
+    expect(ex.calls.createOrder, "a close with no observation must not place anything").toEqual([])
+
+    // And an explicit zero is equally absent, not a licence for the full amount.
+    await expect(
+      mod.closeCcxtPosition({ exchange: "binance", symbol: "BTCUSDT", positionSide: "long", positionOrderId: "p-1", filledAmount: 0, amount: 1, price: 500 })
+    ).rejects.toThrow(/without an observed fill/)
+    expect(ex.calls.createOrder).toEqual([])
+  })
+
+  it("close still refuses an amount larger than the observed fill", async () => {
+    const ex = makeExchange()
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    await expect(
+      mod.closeCcxtPosition({ exchange: "binance", symbol: "BTCUSDT", positionSide: "long", positionOrderId: "p-1", filledAmount: 0.01, amount: 1, price: 500 })
+    ).rejects.toThrow(/exceeds the 0.01 observed/)
+    expect(ex.calls.createOrder).toEqual([])
+  })
+
+  it("a close within the observed fill goes out as the OPPOSITE side, through placeCcxtOrder", async () => {
+    const ex = makeExchange()
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    const closed = await mod.closeCcxtPosition({
+      exchange: "binance",
+      symbol: "BTCUSDT",
+      positionSide: "long",
+      positionOrderId: "p-1",
+      filledAmount: 0.01,
+      amount: 0.01,
+      price: 500
+    })
+    expect(closed.exitSide).toBe("sell")
+    expect(ex.calls.createOrder).toHaveLength(1)
+    expect(ex.calls.createOrder[0][2]).toBe("sell") // the venue receives the exit side
+  })
+
+  it("cancel by orderId reaches the venue; cancel with no identifier at all is refused", async () => {
+    const ex = makeExchange({ orders: { "o-1": { id: "o-1", symbol: "BTC/USDT", amount: 0.01, price: 500, status: "open" } } })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    const canceled = await mod.cancelCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1" })
+    // The seam's shape is `{ ok, cancelled }` — a transport that reports rather
+    // than throws, so a venue-side cancel failure is data and not an exception.
+    expect(canceled.ok).toBe(true)
+    expect(canceled.cancelled).toMatchObject({ id: "o-1", status: "canceled" })
+    expect(ex.calls.cancelOrder).toEqual([["o-1", "BTC/USDT"]])
+
+    await expect(mod.cancelCcxtOrder({ exchange: "binance", symbol: "BTCUSDT" })).rejects.toThrow(/orderId or clientOrderId/)
+    expect(ex.calls.cancelOrder).toHaveLength(1) // unchanged: the nameless cancel never left
+  })
+
+  it("a cancel naming only a clientOrderId resolves it through the read-only open-order view", async () => {
+    // This is the path the cancel-only lifecycle walk uses, so it must be proven
+    // rather than assumed: the resolution is a READ, never a guess. And when no
+    // order matches, the seam REPORTS unobservable rather than cancelling
+    // something it guessed at.
+    const ex = makeExchange({ orders: { "o-7": { id: "o-7", symbol: "BTC/USDT", amount: 0.01, price: 500, status: "open", clientOrderId: "picc-e2e-abc" } } })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    const canceled = await mod.cancelCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", clientOrderId: "picc-e2e-abc" })
+    expect(canceled.ok).toBe(true)
+    expect(canceled.cancelled.id).toBe("o-7")
+    expect(ex.calls.fetchOpenOrders).toEqual(["BTC/USDT"])
+    expect(ex.calls.cancelOrder).toEqual([["o-7", "BTC/USDT"]])
+
+    ex.calls.cancelOrder.length = 0
+    const miss = await mod.cancelCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", clientOrderId: "picc-e2e-nope" })
+    expect(miss.ok).toBe(false)
+    expect(miss.reason).toMatch(/unobservable/)
+    expect(ex.calls.cancelOrder, "an unresolved cancel must not reach the venue").toEqual([])
+  })
+
+  it("no T17 member ever mutates an exchange's sandbox flag or reads a balance", async () => {
+    // The read-only surface the lifecycle must not cross. Every one of the four
+    // legs is exercised, and the only venue writes each may perform are editOrder,
+    // cancelOrder and createOrder — named here so a fifth write fails this test.
+    const ex = makeExchange({ orders: { "o-1": { id: "o-1", symbol: "BTC/USDT", amount: 0.01, price: 500, status: "open" } } })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    await mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1", side: "buy", newPrice: 499 })
+    await mod.cancelCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1" })
+    await mod.closeCcxtPosition({ exchange: "binance", symbol: "BTCUSDT", positionSide: "long", positionOrderId: "p-1", filledAmount: 0.01, amount: 0.01, price: 500 })
+    expect(ex.calls.fetchBalance).toBe(0)
+    expect(ex.sandbox).toBe(false)
   })
 })

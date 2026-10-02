@@ -13,8 +13,36 @@
 //     envelope ceiling — enforced AGAIN here, independently of the gate, so a
 //     bypassed gate still cannot oversize an order; the seam REFUSES, it does
 //     not silently shrink)
-//   • there is no withdraw/transfer/leverage/cancel code path anywhere in this
-//     module — those methods stay guarded in ccxtConnector
+//   • there is no withdraw/transfer/leverage code path anywhere in this module —
+//     those methods stay guarded in ccxtConnector
+//
+//   • WS-7 T17 EXTENDED THIS SEAM, and the line above was FALSE until it did.
+//     T17's four-venue lifecycle needs an amend leg and a cancel leg, and those
+//     are `editOrder` and `cancelOrder` — both of which are in ccxtConnector's
+//     READ_ONLY_BLOCKED. So this module now calls them, and the carve-out is
+//     stated rather than implied:
+//
+//       amendCcxtOrder  -> instance.editOrder(...)   (added T17)
+//       cancelCcxtOrder -> instance.cancelOrder(...) (added T17)
+//
+//     This is the SAME class of documented exception as the perps adapter's
+//     `cancelOrder` (D23), and it is additive in exactly the way D23 was:
+//     `"editOrder"` and `"cancelOrder"` STAY in ccxtConnector's READ_ONLY_BLOCKED
+//     so every non-seam module remains read-only, `perpsSeamGuard.test.mjs` keeps
+//     pinning those tokens, and `ccxtConnector.test.mjs:299` keeps throwing for a
+//     guarded instance. What changed is that this module — already the single
+//     sanctioned createOrder site — is now also the single sanctioned editOrder
+//     and cancelOrder site, which is why `ccxtVenueLifecycle.mjs` reaches the
+//     venue only through here and holds no CCXT instance of its own.
+//
+//     The `close` leg calls NO new venue method. A spot venue has no
+//     close-position primitive that CCXT implements uniformly across these four,
+//     and `closePosition` is in the blocklist, so `closeCcxtPosition` refuses a
+//     close it cannot justify and otherwise derives the opposite-side exit order
+//     and hands it to `placeCcxtOrder` — the one createOrder site. Inventing a
+//     `closePosition` call to make the leg look uniform would have been a
+//     fabrication dressed as symmetry.
+//
 //   • credentials come from the process environment, in ONE of two modes per
 //     exchange (a complete pair is required; a half-set pair is refused):
 //       CEX-style  : PICC_CCXT_APIKEY_<EXCHANGE> + PICC_CCXT_SECRET_<EXCHANGE>
@@ -253,6 +281,239 @@ export async function placeCcxtOrder({ exchange, symbol, side, amount, price, cl
     const augmented = new Error(message)
     augmented.cause = err
     throw augmented
+  }
+}
+
+/**
+ * The ONLY editOrder caller in the process (WS-7 T17, the amend leg).
+ *
+ * Gated on the same independent envelope as `placeCcxtOrder`: a limit-only amend,
+ * and a refusal rather than a silent shrink when the amended notional would
+ * exceed the cap. The venue's `editOrder` takes the order id, the symbol, and the
+ * NEW amount and price — it cannot change an order's side, which is why the
+ * consent field set for this leg locks the original side (`ccxtExecution.mjs`).
+ * `newAmount`/`newPrice` may both be omitted only to leave a field untouched,
+ * and omitting BOTH is refused rather than sent as a no-op the venue might reject
+ * with an opaque error.
+ */
+export async function amendCcxtOrder({ exchange, symbol, orderId, side, amount, price, newAmount, newPrice }) {
+  const id = String(exchange ?? "").trim().toLowerCase()
+  const sym = toCcxtSymbol(symbol)
+  const oid = String(orderId ?? "").trim()
+
+  if (!id) throw new Error("ccxt ordering seam: exchange is required")
+  if (!sym) throw new Error(`ccxt ordering seam: cannot resolve symbol "${symbol}"`)
+  if (!oid) throw new Error("ccxt ordering seam: amend requires an orderId")
+
+  // `side` is accepted and validated but NOT forwarded: CCXT's editOrder has no
+  // side parameter, so a caller that believes it is changing direction is
+  // refused here rather than silently getting an amount-and-price edit.
+  const orderSide = String(side ?? "").toLowerCase()
+  if (orderSide && !["buy", "sell"].includes(orderSide)) {
+    throw new Error(`ccxt ordering seam: side must be buy or sell (got "${side}")`)
+  }
+
+  const amountTouched = newAmount !== undefined && newAmount !== null
+  const priceTouched = newPrice !== undefined && newPrice !== null
+  if (!amountTouched && !priceTouched) {
+    throw new Error("ccxt ordering seam: amend requires newAmount and/or newPrice — an amend that changes neither is refused")
+  }
+
+  const amountN = amountTouched ? Number(newAmount) : null
+  const priceN = priceTouched ? Number(newPrice) : null
+  if (amountTouched && (!Number.isFinite(amountN) || amountN <= 0)) {
+    throw new Error("ccxt ordering seam: newAmount must be a positive number")
+  }
+  if (priceTouched && (!Number.isFinite(priceN) || priceN <= 0)) {
+    throw new Error("ccxt ordering seam: newPrice must be a positive number")
+  }
+
+  const instance = await ccxtInstanceFor(id, { requireKeys: true })
+  try {
+    // THE CAP IS ENFORCED AGAINST THE VENUE'S OWN NUMBERS, not the caller's.
+    //
+    // `amount`/`price` arrive as the caller's belief about the live order. Using
+    // them to size the post-amend notional would make the envelope defeatable by
+    // the very argument it is supposed to check: a caller that wanted a $500
+    // amend would pass `price: 0.01` and the arithmetic would come out under the
+    // cap. So the current amount and price are read back from the venue with
+    // `fetchOrder` — the same READ-ONLY call `verifyCcxtOrder` already makes at
+    // :492, and the same one this file's header documents as non-mutating. An
+    // amend whose live order cannot be read is refused, because an envelope that
+    // cannot be evaluated must not default to allow.
+    const live = await instance.fetchOrder(oid, sym)
+    const liveAmount = Number(live?.amount)
+    const livePrice = Number(live?.price)
+    if (!Number.isFinite(liveAmount) || liveAmount <= 0 || !Number.isFinite(livePrice) || livePrice <= 0) {
+      throw new Error(
+        `ccxt ordering seam: refused to amend ${oid} on ${sym} because the venue's own order reports no usable amount/price (amount=${live?.amount} price=${live?.price}) — the notional cap cannot be evaluated, and an unevaluable envelope is not an allow`
+      )
+    }
+    // A field the caller left untouched keeps the VENUE's value, so an amend of
+    // only the price is still capped on the resulting price x live amount.
+    const effectiveAmount = amountTouched ? amountN : liveAmount
+    const effectivePrice = priceTouched ? priceN : livePrice
+    const notional = effectiveAmount * effectivePrice
+    if (notional > CCXT_HARD_NOTIONAL_CAP_USD) {
+      throw new Error(
+        `ccxt ordering seam: amended notional $${notional.toFixed(4)} exceeds the $${CCXT_HARD_NOTIONAL_CAP_USD} hard cap - refused (envelope defense-in-depth, measured on the venue's reported amount/price)`
+      )
+    }
+    const raw = await instance.editOrder(oid, sym, amountN, priceN)
+    return normalizeOrder(raw)
+  } catch (err) {
+    const message = `ccxt amend refused by ${id} (${oid} ${sym} -> ${amountN ?? "amount unchanged"} @ ${priceN ?? "price unchanged"}): ${String(err?.message ?? err)}`
+    log.warn(message)
+    const augmented = new Error(message)
+    augmented.cause = err
+    throw augmented
+  }
+}
+
+/**
+ * Read-only open-order view for one exchange (WS-7 T17). Used by
+ * `cancelCcxtOrder` to resolve a clientOrderId to a venue order id rather than
+ * guessing, and by a governance surface to show what is actually resting.
+ * `null` when credentials are absent or the venue cannot be read.
+ */
+export async function fetchCcxtOpenOrders({ exchange, symbol = null }) {
+  const id = String(exchange ?? "").trim().toLowerCase()
+  if (!id) return null
+  if (!ccxtKeysForExchange(id)) return null
+  const sym = symbol == null ? null : toCcxtSymbol(symbol)
+  if (symbol != null && !sym) return null
+  try {
+    const instance = await ccxtInstanceFor(id, { requireKeys: true })
+    const raw = await instance.fetchOpenOrders(sym ?? undefined)
+    return (Array.isArray(raw) ? raw : []).map((o) => ({
+      id: String(o?.id ?? "") || null,
+      clientOrderId: o?.clientOrderId == null ? null : String(o.clientOrderId),
+      symbol: o?.symbol ?? sym ?? null,
+      side: o?.side ?? null,
+      amount: Number.isFinite(Number(o?.amount)) ? Number(o.amount) : null,
+      price: Number.isFinite(Number(o?.price)) ? Number(o.price) : null
+    }))
+  } catch (err) {
+    log.warn(`ccxt open-orders read failed ${id} ${sym ?? "all"}`, { error: err.message })
+    return null
+  }
+}
+
+/**
+ * The ONLY cancelOrder caller in the process (WS-7 T17, the cancel leg).
+ *
+ * Mirrors the perps adapter's cancel in the two properties that matter: a cancel
+ * that cannot identify its target is refused LOCALLY, before an instance is
+ * built, and a lookup that cannot be resolved reports `unobservable` rather than
+ * a cancel that may not have happened. When only a clientOrderId is known the
+ * target is resolved through the READ-ONLY open-order view rather than guessed.
+ */
+export async function cancelCcxtOrder({ exchange, symbol = null, orderId = null, clientOrderId = null }) {
+  const id = String(exchange ?? "").trim().toLowerCase()
+  const sym = symbol == null ? null : toCcxtSymbol(symbol)
+  const oid = orderId == null || String(orderId).trim() === "" ? null : String(orderId).trim()
+  const cloid = clientOrderId == null || String(clientOrderId).trim() === "" ? null : String(clientOrderId).trim()
+
+  if (!id) throw new Error("ccxt ordering seam: exchange is required")
+  if (symbol != null && !sym) throw new Error(`ccxt ordering seam: cannot resolve symbol "${symbol}"`)
+  if (!oid && !cloid) {
+    throw new Error("ccxt ordering seam: cancel requires orderId or clientOrderId — a cancel that cannot identify its target is refused before the venue is touched")
+  }
+
+  let targetId = oid
+  if (!targetId) {
+    const open = await fetchCcxtOpenOrders({ exchange: id, symbol: sym })
+    if (open === null) return { ok: false, reason: "cancelCcxtOrder-unobservable: the open-order view could not be read" }
+    const match = open.find((o) => o.clientOrderId === cloid)
+    if (!match || !match.id) {
+      return { ok: false, reason: "cancelCcxtOrder-unobservable: no open order matches that clientOrderId" }
+    }
+    targetId = match.id
+  }
+
+  const instance = await ccxtInstanceFor(id, { requireKeys: true })
+  try {
+    const raw = await instance.cancelOrder(targetId, sym ?? undefined)
+    return {
+      ok: true,
+      cancelled: {
+        id: String(raw?.id ?? targetId),
+        clientOrderId: raw?.clientOrderId == null ? cloid : String(raw.clientOrderId),
+        symbol: raw?.symbol ?? sym ?? null,
+        status: raw?.status ?? null,
+        at: Number(raw?.timestamp) > 0 ? new Date(raw.timestamp).toISOString() : null
+      }
+    }
+  } catch (err) {
+    return { ok: false, reason: `cancelCcxtOrder-failed: ${String(err?.message ?? err)}` }
+  }
+}
+
+/**
+ * The CLOSE leg (WS-7 T17).
+ *
+ * This calls NO new venue method, and that is the honest shape rather than a
+ * shortcut. A spot venue exits a filled position with an OPPOSITE-side order; CCXT
+ * has no `closePosition` that these four implement uniformly, and `closePosition`
+ * is in `ccxtConnector`'s blocklist besides. So the exit is derived here and sent
+ * through `placeCcxtOrder`, which is already the single sanctioned createOrder
+ * site and already enforces the $10 envelope independently of any gate.
+ *
+ * `positionSide` is REQUIRED and is never inferred from an amount. Deriving the
+ * direction from a signed quantity would let a caller who mis-reports a long as a
+ * short buy more of it while calling the leg "close".
+ *
+ * Refuses locally, before any venue call:
+ *   - a close whose amount exceeds the observed filled amount
+ *   - a close with no `positionOrderId`, because a close that cannot name the
+ *     position it is exiting cannot be reconciled against it afterwards.
+ */
+export async function closeCcxtPosition({ exchange, symbol, positionSide, positionOrderId, filledAmount, amount, price, clientOrderId }) {
+  const id = String(exchange ?? "").trim().toLowerCase()
+  const sym = toCcxtSymbol(symbol)
+  const side = String(positionSide ?? "").trim().toLowerCase()
+
+  if (!id) throw new Error("ccxt ordering seam: exchange is required")
+  if (!sym) throw new Error(`ccxt ordering seam: cannot resolve symbol "${symbol}"`)
+  if (side !== "long" && side !== "short") {
+    throw new Error(`ccxt ordering seam: close requires positionSide "long" or "short" (got "${positionSide}") — the exit direction is never inferred`)
+  }
+  if (!positionOrderId || String(positionOrderId).trim() === "") {
+    throw new Error("ccxt ordering seam: close requires the positionOrderId it is exiting")
+  }
+
+  const amountN = Number(amount)
+  const priceN = Number(price)
+  if (!Number.isFinite(amountN) || amountN <= 0) throw new Error("ccxt ordering seam: close amount must be a positive number")
+  if (!Number.isFinite(priceN) || priceN <= 0) throw new Error("ccxt ordering seam: close price must be a positive number")
+
+  // THE CAP IS NOT CONDITIONAL. The first draft of this line read
+  // `if (Number.isFinite(filled) && amountN > filled)`, which compares the close
+  // against the observed fill only when a fill happens to be supplied — so OMITTING
+  // `filledAmount` skipped the check entirely and any amount could be closed. The
+  // guard was strongest exactly when the caller had the least evidence. A missing
+  // observation is now a refusal, not a bypass, which is the same rule the rails
+  // apply: a control that cannot be evaluated is named as absent, never assumed
+  // to have passed.
+  const filled = Number(filledAmount)
+  if (!Number.isFinite(filled) || filled <= 0) {
+    throw new Error(
+      `ccxt ordering seam: close refuses without an observed fill for position ${String(positionOrderId)} — the size that may be closed cannot be bounded without one`
+    )
+  }
+  if (amountN > filled) {
+    throw new Error(
+      `ccxt ordering seam: close amount ${amountN} exceeds the ${filled} observed on position ${String(positionOrderId)} — refused (a close cannot exceed the position it closes)`
+    )
+  }
+
+  const exitSide = side === "long" ? "sell" : "buy"
+  const order = await placeCcxtOrder({ exchange: id, symbol: sym, side: exitSide, amount: amountN, price: priceN, clientOrderId })
+  return {
+    ok: true,
+    exitSide,
+    closesPositionOrderId: String(positionOrderId),
+    order
   }
 }
 

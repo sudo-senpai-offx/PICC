@@ -78,6 +78,14 @@ export const INTENTIONAL_ORDER_CAPABLE = new Set([
   "services/ccxtOrdering.mjs",
   // Hyperliquid perps. Ceremony-gated and mainnet-env-gated.
   "services/venues/hyperliquidPerps.mjs",
+  // WS-7 T17 — the four-venue CCXT lifecycle. It holds no CCXT instance of its
+  // own and reaches the venue only through the seam above; it IS order-capable
+  // because its injected adapter's members are invoked, so it is declared here
+  // rather than renamed to dodge the scanner. A module that reaches a venue and
+  // hides that from this scan would be exactly the evasion the header describes.
+  // Every leg is ceremony-gated, consent-locked and risk-gated, and the whole
+  // rail is dark with no ceremony unlock.
+  "services/venues/ccxtVenueLifecycle.mjs",
   // Hand-rolled paper/demo path. Reached only through human approval: the
   // interventions.mjs trade gate, the demo-open API in handlers.mjs, and the
   // openPaperTrade ledger in trading.mjs.
