@@ -448,27 +448,36 @@ describe("observeSignalNotifications — T4.1/T4.2 mapping (P1-4)", () => {
   })
 
   it("in-app healthy + webpush/webhook unconfigured → running; channel rows show honest skip reasons", () => {
+    // T14: the dispatch record's `results` now holds OUTCOME objects, each
+    // carrying the CAUSE. The old fixture passed the bare string "skipped" and
+    // the observer had to re-derive the reason from `c.configured` — a guess.
+    // The observer now reads the reason off the outcome, so the reason asserted
+    // below is the one the transport actually reported, not an inference.
     const r = obs.observeSignalNotifications({
       engineEnabled: true,
       recent: [{
         ts: "2026-09-14T12:00:00.000Z",
-        results: { inApp: "sent", webpush: "skipped", webhook: "skipped" },
-        webpushError: undefined,
-        webhookError: undefined
+        results: {
+          inApp: { state: "delivered", reason: null, attempted: 1, acknowledged: 1 },
+          webpush: { state: "unavailable", reason: "VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY unset", attempted: 0, acknowledged: 0 },
+          webhook: { state: "unavailable", reason: "WEBHOOK_URL unset", attempted: 0, acknowledged: 0 }
+        }
       }],
       channels: defaultChannels
     })
     expect(r.status).toBe("running")
     expect(r.observed.channels).toHaveLength(3)
     const inApp = r.observed.channels.find((c) => c.name === "inApp")
-    expect(inApp.state).toBe("sent")
-    expect(inApp.reason).toBeUndefined()
+    expect(inApp.state).toBe("delivered")
+    expect(inApp.acknowledged).toBe(1)
+    // The reason now comes from the record, so it names the actual missing key
+    // rather than the observer's generic "no-vapid" wording.
     const webpush = r.observed.channels.find((c) => c.name === "webpush")
     expect(webpush.state).toBe("skipped")
-    expect(webpush.reason).toBe("no-vapid")
+    expect(webpush.reason).toBe("VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY unset")
     const webhook = r.observed.channels.find((c) => c.name === "webhook")
     expect(webhook.state).toBe("skipped")
-    expect(webhook.reason).toBe("no-webhook-url")
+    expect(webhook.reason).toBe("WEBHOOK_URL unset")
   })
 
   it("no dispatch records yet → running; configured+enabled channel shows no-dispatch-yet; unconfigured still shows skip reason", () => {
@@ -489,12 +498,18 @@ describe("observeSignalNotifications — T4.1/T4.2 mapping (P1-4)", () => {
   })
 
   it("failed channel surfaces error detail from the dispatch record", () => {
+    // T14: the reason now travels ON the outcome rather than in a sibling
+    // `${channel}Error` key, so the observer reads it from one place. Same
+    // assertion, same strength, one fewer key to keep in step.
     const r = obs.observeSignalNotifications({
       engineEnabled: true,
       recent: [{
         ts: "2026-09-14T12:00:00.000Z",
-        results: { inApp: "sent", webpush: "failed", webhook: "skipped" },
-        webpushError: "push service rejected"
+        results: {
+          inApp: { state: "delivered", reason: null, attempted: 1, acknowledged: 1 },
+          webpush: { state: "failed", reason: "push service rejected", attempted: 2, acknowledged: 0 },
+          webhook: { state: "unavailable", reason: "WEBHOOK_URL unset", attempted: 0, acknowledged: 0 }
+        }
       }],
       channels: defaultChannels
     })
@@ -506,7 +521,11 @@ describe("observeSignalNotifications — T4.1/T4.2 mapping (P1-4)", () => {
   it("volume: recentCount reflects actual record count (observer honest, notifier caps at 20)", () => {
     const records = Array.from({ length: 15 }, (_, i) => ({
       ts: `2026-09-14T12:${String(i).padStart(2, "0")}:00.000Z`,
-      results: { inApp: "sent", webpush: "skipped", webhook: "skipped" }
+      results: {
+        inApp: { state: "delivered", reason: null, attempted: 1, acknowledged: 1 },
+        webpush: { state: "unavailable", reason: "VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY unset", attempted: 0, acknowledged: 0 },
+        webhook: { state: "unavailable", reason: "WEBHOOK_URL unset", attempted: 0, acknowledged: 0 }
+      }
     }))
     const r = obs.observeSignalNotifications({ engineEnabled: true, recent: records, channels: defaultChannels })
     expect(r.observed.recentCount).toBe(15)

@@ -25,6 +25,12 @@ import { getTradingVenues, getTradingCatalog, assetOptionGroups, type CatalogCat
 import { computePositionSize, computeRiskReward, computeHalfKelly } from "@/lib/positionMath"
 import { request, post } from "@/lib/api"
 import { isPushSupported } from "@/lib/push"
+import {
+  describeDelivery,
+  deliveryRows,
+  type DeliveryOutcome,
+  type DeliverySummary
+} from "@/lib/notificationDelivery"
 import { useWebPush } from "@/hooks/useWebPush"
 import { TradeJournalPanel } from "@/components/TradeJournalPanel"
 import { SessionPanel } from "@/components/SessionPanel"
@@ -274,11 +280,34 @@ export function MarketsSuite() {
 
 export { AutopilotSuite } from "./AutopilotSuite";
 
-/** Advisory notification preferences — channels, thresholds, test send. */
+/**
+ * Advisory notification preferences — channels, thresholds, test send.
+ *
+ * WS-7 T14 / D11. Two changes matter here, and both are about not claiming
+ * things that were not measured:
+ *
+ *   1. "Send test" no longer says "Test dispatched". It renders the server's
+ *      per-transport outcome. Before this, the card reported success the
+ *      instant the POST resolved, which is true of the HTTP call and says
+ *      nothing about whether a message arrived - and since the in-app bell
+ *      always succeeds, that fabricated claim was almost always wrong about the
+ *      transport the operator was actually testing. D11 (spec :191) requires
+ *      delivery failures to be explicit, and that is impossible from a room
+ *      that never asks.
+ *   2. Each transport's state comes from the same vocabulary as the server's
+ *      (`@/lib/notificationDelivery`), so "unavailable" and "failed" cannot
+ *      collapse into one another on screen the way they did in the record.
+ */
 export function SignalNotificationsCard() {
-  const [status, setStatus] = useState<{ ok: boolean; prefs: { minConfidence: number; leadMinutes: number; windowMinutes: number; channels: Record<string, boolean> }; subscriptions: number; channels: Array<{ name: string; configured: boolean; userEnabled: boolean }> } | null>(null)
+  const [status, setStatus] = useState<{ ok: boolean; prefs: { minConfidence: number; leadMinutes: number; windowMinutes: number; channels: Record<string, boolean> }; subscriptions: number; subscriptionEndpoints?: string[]; channels: Array<{ name: string; configured: boolean; userEnabled: boolean; reason?: string }> } | null>(null)
+  const [readoutObtained, setReadoutObtained] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [draft, setDraft] = useState<{ minConfidence: number; leadMinutes: number } | null>(null)
+  const [lastDelivery, setLastDelivery] = useState<DeliverySummary | null>(null)
+  // T14: the per-transport OUTCOMES are kept beside the summary, because the
+  // summary answers "did anything arrive" and the table answers "what happened
+  // to each transport". Both come from one response, so they cannot disagree.
+  const [lastResults, setLastResults] = useState<Record<string, DeliveryOutcome> | null>(null)
   // T8 — single shared web-push hook (suite card + bell both consume it).
   const wp = useWebPush()
 
@@ -286,8 +315,16 @@ export function SignalNotificationsCard() {
     try {
       const r = await request<{ ok: boolean; prefs: any; subscriptions: number; channels: any[] }>("/notifications/status")
       setStatus(r)
+      setReadoutObtained(true)
       setDraft({ minConfidence: r.prefs.minConfidence, leadMinutes: r.prefs.leadMinutes })
-    } catch { setStatus(null) }
+    } catch {
+      // T14: a failed readout is its own state, kept SEPARATE from `status`.
+      // Collapsing the two is what let "the dispatcher could not be reached"
+      // render as the same "Loading…" spinner as a slow-but-working one, and
+      // then as an empty configuration that looks like a fresh install.
+      setStatus(null)
+      setReadoutObtained(false)
+    }
   }, [])
 
   useEffect(() => { void load() }, [load])
@@ -302,10 +339,18 @@ export function SignalNotificationsCard() {
   }
 
   const testSend = async () => {
+    setLastDelivery(null)
+    setLastResults(null)
     try {
-      await post("/notifications/test", {})
-      setMsg("Test dispatched — check bell/push.")
-    } catch (e) { setMsg((e as Error).message) }
+      const r = await post<{ ok: boolean; record?: { delivery?: DeliverySummary; results?: Record<string, DeliveryOutcome> } }>("/notifications/test", {})
+      // The response's own `record` is the only evidence. A response without one
+      // renders as "no readout", never as a success.
+      setLastDelivery(r?.record?.delivery ?? null)
+      setLastResults(r?.record?.results ?? null)
+      setMsg(describeDelivery(r?.record?.delivery ?? null))
+    } catch (e) {
+      setMsg((e as Error).message)
+    }
   }
 
   const toggleChannel = async (name: string, enabled: boolean) => {
@@ -322,7 +367,13 @@ export function SignalNotificationsCard() {
         The Signal Engine watches your scoped assets and notifies you ahead of ideal buy/sell windows.
         Execution is removed — you act on your platform; PICC watches and tells you.
       </p>
-      {!status ? (
+      {!readoutObtained ? (
+        <p className="muted small">
+          {status === null
+            ? "Notification configuration could not be read — PICC could not reach its notifier. Nothing below is known."
+            : "Loading…"}
+        </p>
+      ) : !status ? (
         <Spinner label="Loading notification settings…" />
       ) : (
         <>
@@ -338,14 +389,47 @@ export function SignalNotificationsCard() {
           </div>
           <div className="stack">
             {(status.channels ?? []).map((c) => (
-              <div key={c.name} className="row-between">
-                <span className="field-label">
-                  {c.name}{c.configured ? "" : " (not configured — set env keys)"}
-                </span>
-                <ToggleRow label="" checked={c.userEnabled} onChange={() => void toggleChannel(c.name, !c.userEnabled)} />
+              <div key={c.name}>
+                <div className="row-between">
+                  <span className="field-label">
+                    {c.name}
+                    {/* T14: the server now names WHICH setting is missing, so
+                        the room no longer has to guess a cause from a boolean.
+                        It is shown only when the answer is "not configured". */}
+                    {c.reason ? <span className="muted small"> — {c.reason}</span> : null}
+                  </span>
+                  <ToggleRow label="" checked={c.userEnabled} onChange={() => void toggleChannel(c.name, !c.userEnabled)} />
+                </div>
               </div>
             ))}
           </div>
+          {lastDelivery ? (
+            <div className="stack" data-notification-delivery="true">
+              <p className="small" data-delivery-outcome={lastDelivery.deliveredAny ? "delivered" : "not-delivered"}>
+                {describeDelivery(lastDelivery)}
+              </p>
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Transport</th>
+                      <th>Outcome</th>
+                      <th>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deliveryRows(lastResults).map((r) => (
+                      <tr key={r.transport} data-transport={r.transport}>
+                        <td><strong>{r.transport}</strong></td>
+                        <td><Badge tone={r.tone}>{r.label}</Badge></td>
+                        <td className="muted">{r.reason ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
           {(() => {
             const webpush = (status.channels ?? []).find((c) => c.name === "webpush")
             const swSupported = isPushSupported()
@@ -363,6 +447,18 @@ export function SignalNotificationsCard() {
                     <Badge tone="muted">push unavailable</Badge>
                   )}
                 </div>
+                {/* T14: a bare count cannot say WHICH browsers are subscribed,
+                    so an operator cannot tell their own subscription from a
+                    stale one left by a browser profile they no longer use. The
+                    endpoints are named when the server offers them, and the
+                    count remains the fallback for an older server. */}
+                {isEnabled ? (
+                  <p className="muted small" data-push-subscriptions="true">
+                    {Array.isArray(status.subscriptionEndpoints) && status.subscriptionEndpoints.length > 0
+                      ? `Subscribed browsers: ${status.subscriptionEndpoints.join(", ")}`
+                      : `${status.subscriptions} browser subscription(s) registered.`}
+                  </p>
+                ) : null}
                 {!webpush?.configured ? (
                   wp.message ? <p className="muted small">{wp.message}</p>
                     : <p className="muted small">Web push is not configured on this server (no VAPID keys) — nothing will be sent.</p>

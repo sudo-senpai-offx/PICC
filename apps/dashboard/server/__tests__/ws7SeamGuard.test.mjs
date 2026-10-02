@@ -522,9 +522,17 @@ describe("T21 does not require a clean sweep - the honest states are surfaced, n
     expect([...item.routes].sort()).toEqual(["/api/command-centre/perps/close", "/api/command-centre/perps/execute"])
   })
 
-  it("T14, T17 and T18 are measured as UNLANDED from git, whatever PICC.md's row claims", () => {
+  it("T17 and T18 remain UNLANDED from git, and T14 is no longer among them", () => {
+    // T14 has landed, so it drops out of the measured open set. The assertion is
+    // kept as an EXACT list rather than loosened to a count, because "T14 is not
+    // in here" is only evidence if the list is complete: a probe that stopped
+    // reporting a task at all would satisfy a weaker check. `count` moves 3 -> 2
+    // on the same derivation, and the probe's own `ws7-tasks-without-a-commit`
+    // item reports it without this test's help.
     const item = REPORT.openItems.find((i) => i.id === "ws7-tasks-without-a-commit")
-    expect([...item.tasks].sort()).toEqual(["T14", "T17", "T18"])
+    expect([...item.tasks].sort()).toEqual(["T17", "T18"])
+    expect(item.count).toBe(2)
+    expect(item.of).toBe(21)
   })
 
   it("the CI question T20 deferred is ANSWERED, and the answer is measured not asserted", { timeout: GATE_TEST_TIMEOUT }, () => {
@@ -835,10 +843,19 @@ describe("T21's other file-list obligation: PICC.md's WS-7 claims are true", () 
     expect(row).toContain("app-probe.json".slice(4)) // `apps/dashboard/perf/arm-probe.json`
   })
 
-  it("the row records the three T21 findings and the three unlanded tasks", () => {
+  it("the row records the three T21 findings and names the tasks still unlanded", () => {
     const row = piccLines.find((l) => l.includes("PICC_TRADING_SUITE_WS7_TRADING_SUITE_MATURITY_v1 |"))
-    for (const needle of ["T21's three blocking findings", "T14, T17 and T18 have not", "plasmo", "capture-eo-session.mjs"]) {
+    for (const needle of ["T21's three blocking findings", "T17 and T18 have not", "plasmo", "capture-eo-session.mjs"]) {
       expect(row, needle).toContain(needle)
+    }
+    // T14 landed, so the row must no longer claim it is missing. Asserted as a
+    // forbidden live claim, in the same shape as the ARM/2GB phrases above: the
+    // older sentence that said so survives only inside a quoted correction, which
+    // is where a record of the correction belongs.
+    const at = row.indexOf("T14, T17 and T18 have not")
+    if (at !== -1) {
+      const quoted = row.slice(Math.max(0, at - 4), at + 1).includes('"')
+      expect(quoted, '"T14, T17 and T18 have not" must be inside a quoted correction, not asserted').toBe(true)
     }
   })
 

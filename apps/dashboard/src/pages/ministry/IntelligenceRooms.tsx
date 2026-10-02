@@ -7,6 +7,8 @@ import { listData } from "@/lib/localdata"
 import type { AgentLog } from "@/lib/types"
 import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
 import { useReadOnlyView } from "./useReadOnlyView"
+// WS-7 T14 / D11 — see the note at the `data-room="notifications"` block below.
+import { SignalNotificationsCard } from "@/components/TradingSuite"
 
 /**
  * WS-7 T10 — the three intelligence instances that were `HonestScaffold`.
@@ -38,7 +40,21 @@ export function IntelligenceGovernorRoom() {
 
 export function IntelligenceSettingsRoom() {
   const { view } = useReadOnlyView("settings", "intelligence")
-  return <ReadOnlyRoom view={view} />
+  return (
+    <div className="stack">
+      <ReadOnlyRoom view={view} />
+      {/* WS-7 T14 / D11 — the notifications section, NOT ministry-gated. This room
+          was the read-only instance with ZERO write affordances, so its record had
+          nothing to name; D11 puts notification configuration in the general
+          Settings room, which this is, and the record now names the four routes
+          the control writes. The same pre-existing SignalNotificationsCard is
+          mounted here as in the other two settings rooms, so the configuration is
+          one surface with one set of answers rather than three. */}
+      <div className="card" data-room="notifications">
+        <SignalNotificationsCard />
+      </div>
+    </div>
+  )
 }
 
 const AGENT_ROLES = [

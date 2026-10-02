@@ -1,3 +1,26 @@
+// T14 NOTE ON THE STATE VOCABULARY. Builds before this task recorded each
+// channel's result as the bare STRING "sent" | "skipped" | "failed" | "off",
+// and several assertions below compared against those words. T14 replaces them
+// with OUTCOME OBJECTS - {state, reason, attempted, acknowledged} - and so the
+// old pair of assertions
+//
+//     expect(rec.results.webpush).toBe("skipped")   // unconfigured
+//     expect(rec.results.webhook).toBe("failed")    // refused
+//
+// becomes
+//
+//     expect(rec.results.webpush.state).toBe("unavailable")
+//     expect(rec.results.webpush.reason).toMatch(/VAPID_/)
+//     expect(rec.results.webhook.state).toBe("failed")
+//     expect(rec.results.webhook.reason).toMatch(/500/)
+//
+// Every one of those is the SAME claim plus the reason the string vocabulary
+// had nowhere to put, so this is a strengthening rather than a relaxation. The
+// substantive correction is that `skipped` used to mean BOTH "not configured"
+// and "every send threw", and this file could not tell those apart - D11
+// (spec :191) requires them to be different states, and the transport-independence
+// suite in notifications.transports.test.mjs now covers the second case directly.
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -42,9 +65,11 @@ describe("generic notifier dispatcher", () => {
       title: "test alert",
       body: "hello"
     })
-    expect(rec.results.inApp).toBe("sent")
-    // Unconfigured channels must be SKIPPED, never fabricated as sent/failed.
-    expect(rec.results.webpush).toBe("skipped")
+    expect(rec.results.inApp.state).toBe("delivered")
+    // Unconfigured channels must be UNAVAILABLE with a named reason, never
+    // fabricated as delivered or failed. T14 splits what used to be one word.
+    expect(rec.results.webpush.state).toBe("unavailable")
+    expect(rec.results.webpush.reason).toMatch(/VAPID_/)
   })
 
   it("status reports channel configuration honestly and prefs round-trip", async () => {
@@ -63,11 +88,12 @@ describe("generic notifier dispatcher", () => {
     expect(bad.leadMinutes).toBe(0)
   })
 
-  it("user-disabled channels record 'off', distinct from unconfigured 'skipped'", async () => {
+  it("user-disabled channels record 'off', distinct from unconfigured 'unavailable'", async () => {
     notifier.setPrefs({ channels: { inApp: false, webpush: true } })
     const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
-    expect(rec.results.inApp).toBe("off")
-    expect(rec.results.webpush).toBe("skipped") // enabled by user but not configured
+    expect(rec.results.inApp.state).toBe("off")
+    // enabled by user but not configured
+    expect(rec.results.webpush.state).toBe("unavailable")
     notifier.setPrefs({ channels: { inApp: true } }) // restore
   })
 
@@ -115,17 +141,19 @@ it("removePushSubscription deletes only the matching endpoint and persists the d
     })
     expect(rec.kind).toBe("convergence")
     expect(rec.assetId).toBe("EURUSD")
-    expect(rec.results.inApp).toBe("sent")
-    // Unconfigured channels must be SKIPPED, never fabricated as sent/failed.
-    expect(rec.results.webpush).toBe("skipped")
+    expect(rec.results.inApp.state).toBe("delivered")
+    // Unconfigured channels must be UNAVAILABLE, never fabricated as
+    // delivered or failed.
+    expect(rec.results.webpush.state).toBe("unavailable")
   })
 })
 
 describe("webhook channel (T9)", () => {
-  it("unconfigured webhook records 'skipped', never fabricated as sent/failed", async () => {
+  it("unconfigured webhook records 'unavailable', never fabricated as delivered/failed", async () => {
     // WEBHOOK_URL is unset in beforeAll on purpose.
     const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "WEBHOOK", title: "t", body: "b" })
-    expect(rec.results.webhook).toBe("skipped")
+    expect(rec.results.webhook.state).toBe("unavailable")
+    expect(rec.results.webhook.reason).toBe("WEBHOOK_URL unset")
   })
 
   it("configured webhook POSTs the payload and records 'sent'", async () => {
@@ -144,7 +172,7 @@ describe("webhook channel (T9)", () => {
         title: "convergence hook",
         body: "state LONG BIAS · score 4/5"
       })
-      expect(rec.results.webhook).toBe("sent")
+      expect(rec.results.webhook.state).toBe("delivered")
       expect(calls).toHaveLength(1)
       expect(calls[0].url).toBe("https://hooks.example/picc")
       expect(calls[0].init.kind).toBe("convergence")
@@ -163,18 +191,21 @@ describe("webhook channel (T9)", () => {
     globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => "boom" })
     try {
       const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
-      expect(rec.results.webhook).toBe("failed")
-      expect(rec.webhookError).toMatch(/500/)
+      expect(rec.results.webhook.state).toBe("failed")
+      // T14: the reason lives ON the outcome, not in a sibling `webhookError`
+      // key, so the failure is readable from the outcome alone.
+      expect(rec.results.webhook.reason).toMatch(/500/)
+      expect(rec.webhookError).toBeUndefined()
     } finally {
       globalThis.fetch = orig
       delete process.env.WEBHOOK_URL
     }
   })
 
-  it("user-disabled webhook records 'off', distinct from unconfigured 'skipped'", async () => {
+  it("user-disabled webhook records 'off', distinct from unconfigured 'unavailable'", async () => {
     notifier.setPrefs({ channels: { webhook: false } })
     const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
-    expect(rec.results.webhook).toBe("off")
+    expect(rec.results.webhook.state).toBe("off")
     notifier.setPrefs({ channels: { webhook: true } }) // restore
   })
 })
@@ -207,7 +238,7 @@ describe("web-push payload v2 (T3)", () => {
       ],
       requireInteraction: false
     })
-    expect(rec.results.webpush).toBe("sent")
+    expect(rec.results.webpush.state).toBe("delivered")
     // Exactly one send per active subscription — earlier tests may have left
     // other endpoints in state, so the count is subscription-driven, not fixed.
     expect(webPushCalls).toHaveLength(notifier.listPushSubscriptions())
@@ -290,8 +321,8 @@ describe("snooze ledger (T4, REQ-5)", () => {
     expect(top.ts).toBe(first.ts) // re-show carries the ORIGINAL ts, never the flush time
     const original = new Date(first.ts).toLocaleString()
     expect(top.body).toBe(`above 1.08\n⏸ Snoozed 1× — re-shown per your snooze (original ${original}).`)
-    expect(top.results.inApp).toBe("sent")
-    expect(top.results.webpush).toBe("sent")
+    expect(top.results.inApp.state).toBe("delivered")
+    expect(top.results.webpush.state).toBe("delivered")
     // Channels were re-driven — the web-push transport received the re-show body.
     const sent = webPushCalls.at(-1)
     expect(sent.asset).toBe("SNOOZE2")

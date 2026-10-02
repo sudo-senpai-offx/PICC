@@ -67,7 +67,13 @@ describe("notifier loadState migration (pre-T4 persisted shape)", () => {
       title: "migrated",
       body: "still works"
     })
-    expect(rec.results.inApp).toBe("sent")
+    // T14: results are OUTCOME OBJECTS. The old assertion was
+    // `toBe("sent")`; pinning `.state` keeps the same claim and the stronger
+    // shape. `telegram` is a new channel key, so a state file written before
+    // D11's second transport existed gains it through the same defaults-merge
+    // this suite already covers for `webhook`.
+    expect(rec.results.inApp.state).toBe("delivered")
+    expect(notifier.notifierStatus().channels.some((c) => c.name === "telegram")).toBe(true)
     const snoozed = notifier.snoozeAlert({ tag: "picc-BTCUSD" })
     expect(snoozed.ok).toBe(true)
     expect(notifier.notifierStatus().snoozes).toBe(1)

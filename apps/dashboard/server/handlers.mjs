@@ -4158,7 +4158,14 @@ async function _handleApiInner(req, res, url, reqId) {
     try {
       const n = await import("./services/notifier.mjs")
       if (path === "/api/notifications/status" && req.method === "GET") {
-        writeJson(res, 200, n.notifierStatus())
+        const st = n.notifierStatus()
+        // T14: the room is shown WHICH browsers are subscribed, not how many.
+        // A count cannot distinguish an operator's own subscription from a stale
+        // one left by a profile they no longer use, and `subscriptions` above is
+        // kept so an existing consumer of it is not broken. The endpoint is the
+        // only identifying part of a subscription that is safe to show, and it
+        // is the same value the unsubscribe route takes.
+        writeJson(res, 200, { ...st, subscriptionEndpoints: n.listPushSubscriptionEndpoints() })
         return true
       }
       // WS-7 T20R. setPrefs WRITES the notification preferences store, so it is
@@ -4283,6 +4290,12 @@ async function _handleApiInner(req, res, url, reqId) {
       const notifierChannels = {
         inApp: true,
         webpush: Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY),
+        // T14/D11: Telegram is a shipping transport, so a capability probe that
+        // named only two of them was reporting an incomplete machine. Derived
+        // from the notifier's OWN registry rather than restated here, so this
+        // probe cannot drift from what can actually send.
+        telegram: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+        webhook: Boolean(process.env.WEBHOOK_URL)
       }
 
       let browserFound = false

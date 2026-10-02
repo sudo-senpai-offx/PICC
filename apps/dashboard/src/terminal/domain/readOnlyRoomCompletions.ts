@@ -135,6 +135,82 @@ const LOCAL_ONLY_AFFORDANCE_NOTE =
   "This affordance writes to the browser's localStorage and never touches the API, which is recorded explicitly " +
   "because an audit that listed only /api routes would have hidden it."
 
+/**
+ * T14's affordance note, for the notification configuration D11 puts in the
+ * general Settings room.
+ *
+ * WHY THIS SITS IN `preExistingWriteAffordances` AND NOT IN THE CEILING, which
+ * is the question the cross-room gate actually asks. The two measure different
+ * things, and conflating them would misreport this task:
+ *
+ *   - `preExistingWriteAffordances` is what the SHIPPED PAGE already carried.
+ *     `SignalNotificationsCard` and its four routes are WS-3-era code; T14
+ *     mounted the existing card in this room, it did not author a control. T8
+ *     already declared the same component as a pre-existing affordance on
+ *     `trading/dashboard` (this file, :173-178) and on `trading/autopilot`, and
+ *     the type's own field doc fixes `removedByThisTask: false` for this task.
+ *
+ *   - The CEILING measures affordances WS-7 ADDED to a read-only room, and its
+ *     rationale is specific: these rooms "compute no tier, no threshold, no gate
+ *     and no permit, so there is nothing here whose result a control could
+ *     change" (readOnlyRooms.ts:216-219). A notification toggle changes neither
+ *     a tier, a threshold, a gate nor a permit - it changes whether an ADVISORY
+ *     alert is delivered - and every route behind it already carries its own
+ *     requireAuth gate and its own owner, which is the pattern the same
+ *     rationale explicitly sanctions ("every real action behind this surface
+ *     belongs to a producer that already has its own auth-gated route and its
+ *     own owner", readOnlyRooms.ts:220-222).
+ *
+ * So the ceiling for these instances stays `READ_ONLY_INTERACTIVE_AFFORDANCES` -
+ * exported frozen empty data, unmoved and unweakened - and the control T14
+ * placed here is NAMED in the affordance list with its routes, which is the
+ * audit the invariant `safety.affordance-declares-a-route-and-a-token` checks.
+ * Reporting it in the affordance list rather than the ceiling is what makes the
+ * record true in both directions: the ceiling is not inflated to accommodate a
+ * control, and the control is not hidden to keep the ceiling at zero.
+ */
+const NOTIFICATION_AFFORDANCE_NOTE =
+  "Notification configuration, placed in this room by D11 (spec :187, :191) and NOT ministry-gated. The control is " +
+  "the pre-existing SignalNotificationsCard, so it pre-dates WS-7; T14 mounted it here rather than authoring one, " +
+  "because a new form over the same routes would be a second route over one store - the defect T8 declined to " +
+  "create for the ceremony store. The card is still rendered on trading/dashboard and trading/autopilot, where T8 " +
+  "declared it and did not remove it, so deleting it there would be removing shipped product behaviour, which D27 " +
+  "prohibits a task doing silently. Each write below is a MUTATING route and every one of them is requireAuth-gated " +
+  "as its first statement; the VAPID public key is served separately and unauthenticated because the browser must " +
+  "read it before it can subscribe, so the key is public and the subscription is not."
+
+/** The four notification routes this room's configuration control writes. */
+function notificationAffordances() {
+  return Object.freeze([
+    affordance(
+      "Notification thresholds",
+      "/api/notifications/prefs",
+      "SignalNotificationsCard",
+      `The min-consensus and lead-time inputs, saved by the card's "Save preferences". ${NOTIFICATION_AFFORDANCE_NOTE}`
+    ),
+    affordance(
+      "Per-transport enable toggle",
+      "/api/notifications/prefs",
+      "SignalNotificationsCard",
+      `One toggle per transport (in-app, web push, webhook, Telegram), each writing that transport's own key to the ` +
+        `preferences store - which is what makes the transports independently disableable. ${NOTIFICATION_AFFORDANCE_NOTE}`
+    ),
+    affordance(
+      "Enable / disable push for this browser",
+      "/api/notifications/subscribe-push",
+      "SignalNotificationsCard",
+      `Registers or removes this browser's Web Push subscription through the shared useWebPush hook. ${NOTIFICATION_AFFORDANCE_NOTE}`
+    ),
+    affordance(
+      "Send a test alert",
+      "/api/notifications/test",
+      "SignalNotificationsCard",
+      `Spends the dispatch budget once to prove the pipeline end to end, and renders the server's per-transport ` +
+        `outcome rather than asserting that anything arrived. ${NOTIFICATION_AFFORDANCE_NOTE}`
+    )
+  ])
+}
+
 export const READ_ONLY_ROOM_COMPLETIONS: readonly ReadOnlyRoomCompletion[] = Object.freeze([
   /* ---------------------------------------------------------- trading 7..13 */
 
@@ -503,7 +579,8 @@ export const READ_ONLY_ROOM_COMPLETIONS: readonly ReadOnlyRoomCompletion[] = Obj
         "local-storage-only",
         "saveMinistrySettings",
         `A range input that writes the confidence threshold on every change. ${LOCAL_ONLY_AFFORDANCE_NOTE}`
-      )
+      ),
+      ...notificationAffordances()
     ]),
     reason:
       "No scope in this room logically belongs to WS-8. Both producers already existed: GET /api/settings/llm " +
@@ -666,7 +743,8 @@ export const READ_ONLY_ROOM_COMPLETIONS: readonly ReadOnlyRoomCompletion[] = Obj
         "createEwalletOrder",
         "ChannelsTab posts an eWallet order for the same three fields. Also externally consequential, also " +
           "pre-dating WS-7."
-      )
+      ),
+      ...notificationAffordances()
     ]),
     reason:
       "No scope in this room logically belongs to WS-8. The producer — GET /api/health — already existed and is reused " +
@@ -854,7 +932,13 @@ export const READ_ONLY_ROOM_COMPLETIONS: readonly ReadOnlyRoomCompletion[] = Obj
         "not applicable — the mechanism, recorded so it is not mistaken for a bug"
       )
     ]),
-    preExistingWriteAffordances: Object.freeze([]),
+    // T14/D11: this instance previously carried NO write affordances at all, and
+    // its record said so. D11 puts notification configuration in the general
+    // Settings room, which this is - so the record now names the four routes the
+    // configuration control writes. It is the strongest before/after in this
+    // table: zero affordances to four, on the one instance whose own absences
+    // are about refusing to render a settings object it did not receive.
+    preExistingWriteAffordances: notificationAffordances(),
     reason:
       "No scope in this room logically belongs to WS-8. The producer — GET /api/agents/settings (handlers.mjs:5060), " +
       "which supports GET and POST but whose POST T10 does not touch — already existed and is reused unmodified; T10 " +

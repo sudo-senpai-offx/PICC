@@ -8,6 +8,24 @@ import { fetchIntegrations } from "@/lib/integrations"
 import type { IntegrationEntry } from "@/lib/integrations"
 import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
 import { useReadOnlyView } from "./useReadOnlyView"
+// WS-7 T14 / D11 (spec :187, :191): notification configuration lives in the
+// GENERAL Settings room and is not ministry-gated. The component is the
+// pre-existing `SignalNotificationsCard`, mounted here unmodified in behaviour
+// - it already owns every notification route (`/notifications/status`,
+// `/prefs`, `/test`, and the shared web-push hook behind `subscribe-push`).
+//
+// WHY THE EXISTING COMPONENT AND NOT A NEW ONE. A new form over the same
+// routes would be a second route over one store, which gives that store two
+// answers taken at two moments - the defect T8 declined to create for the
+// ceremony store (recorded at readOnlyRoomCompletions.ts:132-133). The card is
+// also still rendered on trading/dashboard and trading/autopilot, which T8
+// declared as PRE-EXISTING affordances and explicitly did not remove
+// (readOnlyRoomCompletions.ts:186-189); deleting it from there would be
+// removing shipped product behaviour, which D27 prohibits a task doing
+// silently. So the configuration is now REACHABLE in the room D11 names, and
+// the pre-existing surfaces are left alone. That is the reading of D11 this
+// task records: "lives in" is a placement requirement, not an exclusivity one.
+import { SignalNotificationsCard } from "@/components/TradingSuite"
 
 const VALID_SUITES = new Set<string>(["trading", "earnings", "intelligence"])
 
@@ -172,6 +190,14 @@ export function SettingsRoom() {
         <p className="muted small" style={{ margin: "12px 0 0 0" }}>
           New sources are added over time (PICC-as-a-country).
         </p>
+      </div>
+
+      {/* WS-7 T14 / D11 - the notifications section, NOT ministry-gated. It is
+          the same component the trading dashboard and autopilot already render,
+          so the operator has one configuration surface with one set of answers
+          rather than a second form over the same routes. */}
+      <div className="card" data-room="notifications">
+        <SignalNotificationsCard />
       </div>
     </div>
   )

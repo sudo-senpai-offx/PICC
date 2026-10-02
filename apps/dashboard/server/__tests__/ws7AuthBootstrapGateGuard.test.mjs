@@ -1374,7 +1374,40 @@ function connectorsSiteIsGated(lines, index) {
     // figures did not diverge this round. That is a property of how these comments
     // were written, not a general one, and the previous entry above records the
     // round where they did diverge.
-    expect(lines, "lines in handlers.mjs").toBe(6312)
+    // 6,312 -> 6,325 in WS-7 T14, the same protocol: +13 lines, and every one is
+    // accounted for rather than absorbed. 14 lines added, 1 removed, and the two
+    // edits are the whole of it:
+    //
+    //   * TWO CODE LINES plus six comment lines on GET /api/notifications/status,
+    //     which now also returns `subscriptionEndpoints`. The room showed a bare
+    //     count of registered push subscriptions, and a count cannot say WHICH
+    //     browsers are subscribed - so an operator cannot tell their own
+    //     subscription from a stale one left by a browser profile they no longer
+    //     use. `subscriptions` is still returned, so no existing consumer of it
+    //     is broken; this ADDS the identifying part, which is the same string the
+    //     unsubscribe route already takes.
+    //
+    //   * TWO CODE LINES plus four comment lines on the /api/system/capabilities
+    //     probe, which enumerated only `inApp` and `webpush`. T14 adds Telegram
+    //     (D11's second transport) and the probe also omits the pre-existing
+    //     `webhook` channel, so the capability probe was describing a machine
+    //     with fewer notification transports than it has. Both new entries are
+    //     env-derived, exactly like the `webpush` line beside them, and neither
+    //     is derived from the notifier's own registry - which is a known
+    //     duplication and is recorded in T14's changelog rather than left
+    //     implicit, because a probe that restates a list is a second home for it.
+    //
+    // THE IMPORT PAIR IS UNCHANGED, and it is the load-bearing part of this
+    // entry rather than an incidental one: 72 static and 83 comment-stripped
+    // dynamic imports are the same figures before and after, so not one of the 13
+    // lines is a new module binding. Both edits reach a service the routes had
+    // ALREADY imported - the status branch already imported notifier.mjs at the
+    // top of the wrapper, and the capabilities probe already imported getPrefs
+    // from the same module. T14 deliberately added no route and no gate: the
+    // requireAuth(req, res) call-site count is 126 before and 126 after, which
+    // is how "this task added a transport, not a surface" is measured rather
+    // than asserted on trust.
+    expect(lines, "lines in handlers.mjs").toBe(6325)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

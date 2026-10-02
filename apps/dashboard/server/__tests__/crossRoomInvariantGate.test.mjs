@@ -841,11 +841,22 @@ describe("pre-existing write affordances are SURFACED, never failed on", () => {
     }
   })
 
-  it("the instances carrying them - TWELVE, not the seven the brief states", () => {
+  it("the instances carrying them - THIRTEEN, not the seven the brief states", () => {
     const instances = [...new Set(report.ownerDecisions.map((d) => d.room))].sort()
-    expect(instances.length, "tally the records, do not trust the prose").toBe(12)
+    // 12 -> 13 in WS-7 T14, and the movement is exactly one room, for a reason
+    // worth stating because the assertion's own message is "tally the records,
+    // do not trust the prose". T14 mounted the notifications configuration into
+    // the general Settings room, which is THREE instances of one key
+    // (trading/settings, earnings/settings, intelligence/settings). Two of them
+    // already carried affordances and so were already tallied; only
+    // `intelligence/settings` went from zero to four, and it is the single
+    // instance this adds. The affordance TOTAL moves by 12 (four controls on
+    // each of the three instances); the INSTANCE count moves by one.
+    expect(instances.length, "tally the records, do not trust the prose").toBe(13)
+    expect(instances).toContain("intelligence/settings")
     // Recorded rather than reconciled silently: entry 0032 says "seven", the
-    // data says twelve instances / twenty-five affordances.
+    // data said twelve instances / twenty-five affordances when T20 wrote this,
+    // and says thirteen / thirty-seven now. The prose was never the source.
     expect(STALE_INSTANCE_COUNT_IN_SPEC.staleFigure).toBe(18)
   })
 

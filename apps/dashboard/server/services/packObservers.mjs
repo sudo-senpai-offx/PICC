@@ -335,17 +335,17 @@ export function observeSignalNotifications({
   const channelRows = channels.map((c) => {
     const r = results[c.name] ?? null
 
-    // Dispatch record states — observed truth from the notifier
-    if (r === "sent") return { name: c.name, state: "sent" }
-    if (r === "failed") return { name: c.name, state: "failed", reason: lastRecord?.[`${c.name}Error`] ?? "send-failed" }
-    if (r === "off") return { name: c.name, state: "off", reason: "channel-disabled-by-user" }
-    if (r === "skipped") {
-      if (!c.configured) {
-        if (c.name === "webpush") return { name: c.name, state: "skipped", reason: SKIP_REASONS.noVapid }
-        if (c.name === "webhook") return { name: c.name, state: "skipped", reason: SKIP_REASONS.noWebhookUrl }
-        return { name: c.name, state: "skipped", reason: "unconfigured" }
-      }
-      return { name: c.name, state: "skipped", reason: "no-subscriptions" }
+    // Dispatch record states — observed truth from the notifier. T14: these are
+    // OUTCOME OBJECTS, so the reason is read off the outcome the transport
+    // produced rather than re-derived here. The previous version mapped the
+    // single word `skipped` to either "unconfigured" or "no-subscriptions"
+    // purely by looking at `c.configured` — a GUESS about a cause the record had
+    // already lost. The record now carries the cause, so this mapping reads it.
+    if (r && typeof r === "object" && typeof r.state === "string") {
+      if (r.state === "delivered") return { name: c.name, state: "delivered", acknowledged: r.acknowledged }
+      if (r.state === "failed") return { name: c.name, state: "failed", reason: r.reason ?? "send-failed" }
+      if (r.state === "off") return { name: c.name, state: "off", reason: "channel-disabled-by-user" }
+      return { name: c.name, state: "skipped", reason: r.reason ?? "unconfigured" }
     }
 
     // No dispatch record for this channel — derive from config (honest config
@@ -353,6 +353,9 @@ export function observeSignalNotifications({
     if (!c.configured) {
       if (c.name === "webpush") return { name: c.name, state: "skipped", reason: SKIP_REASONS.noVapid }
       if (c.name === "webhook") return { name: c.name, state: "skipped", reason: SKIP_REASONS.noWebhookUrl }
+      if (c.name === "telegram") {
+        return { name: c.name, state: "skipped", reason: c.reason ?? "telegram-not-configured" }
+      }
       return { name: c.name, state: "skipped", reason: "unconfigured" }
     }
     if (c.userEnabled === false) return { name: c.name, state: "off", reason: "channel-disabled-by-user" }

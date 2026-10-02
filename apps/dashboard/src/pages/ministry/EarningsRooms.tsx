@@ -9,6 +9,8 @@ import { familyEntry, familyToSuite } from "@/lib/registry"
 import { ConnectorsPanel } from "@/components/ConnectorsPanel"
 import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
 import { useReadOnlyView } from "./useReadOnlyView"
+// WS-7 T14 / D11 — see the note at the `data-room="notifications"` block below.
+import { SignalNotificationsCard } from "@/components/TradingSuite"
 
 import type { IncomeStream } from "@/lib/types"
 
@@ -281,6 +283,18 @@ export function EarningsSettingsRoom() {
         </p>
       </header>
       <ChannelsTab />
+
+      {/* WS-7 T14 / D11 — the notifications section, NOT ministry-gated. D11 puts
+          notification configuration in the general Settings room, and `settings` is
+          THREE separate components (this one, IntelligenceSettingsRoom, and
+          trading's SettingsRoom), not one body rendered three times — which the
+          cross-room attribution guard proves by requiring each instance's affordance
+          token to appear in that instance's OWN page file. The same pre-existing
+          SignalNotificationsCard is mounted in all three rather than a ministry
+          variant, so an operator has one configuration surface either way. */}
+      <div className="card" data-room="notifications">
+        <SignalNotificationsCard />
+      </div>
     </div>
   )
 }

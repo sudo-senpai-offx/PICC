@@ -43,16 +43,23 @@ describe("email channel removal persistence tolerance (T9 / REQ-11)", () => {
     // The stale key survives the load (not silently dropped) but is dead.
     expect(notifier.getPrefs().channels.email).toBe(true)
 
-    // Status lists exactly the three shipping channels — no email row.
+    // Status lists exactly the FOUR shipping channels — no email row.
+    // T14 added `telegram` (D11's second transport), so the enumeration moves
+    // from three to four. The assertion is the same exhaustive one it always
+    // was: an exact set, so a fifth row or a resurrected `email` row still fails.
     const st = notifier.notifierStatus()
-    expect(st.channels.map((c) => c.name).sort()).toEqual(["inApp", "webhook", "webpush"])
+    expect(st.channels.map((c) => c.name).sort()).toEqual(["inApp", "telegram", "webhook", "webpush"])
 
     // A dispatch records no email result key and no transport is invoked
     // (sendEmail no longer exists — the row is not in CHANNELS at all).
     const rec = await notifier.dispatchAlert({ kind: "TEST", assetId: "X", title: "t", body: "b" })
     expect(rec.results.email).toBeUndefined()
-    expect(rec.results.inApp).toBe("sent")
-    expect(rec.results.webpush).toBe("skipped")
+    // T14: per-channel results are OUTCOME OBJECTS, not the old bare strings.
+    // The assertions below therefore also pin the reason, which the string
+    // vocabulary could not carry - a strengthening, not a relaxation.
+    expect(rec.results.inApp.state).toBe("delivered")
+    expect(rec.results.webpush.state).toBe("unavailable")
+    expect(rec.results.webpush.reason).toMatch(/VAPID_/)
 
     // Restore the module cache for any later suite.
     vi.resetModules()
