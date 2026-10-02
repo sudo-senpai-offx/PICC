@@ -65,6 +65,13 @@ The matrix is asserted by iteration over the real registry and the real leg list
 hand-written venue blocks, so adding a fifth venue or a fifth leg fails the test rather than quietly
 leaving a hole.
 
+Two states are asserted separately, because they are different claims:
+
+- **Unlocked, with green fixtures** — all 48 cells evaluate and pass (`:246`).
+- **This tree, with the real ceremony store and no unlock** — all 48 cells carry a verdict, ceremony
+  `block` on all sixteen, consent and risk `absent` on all sixteen, each with a written reason, and
+  `railMatrixProblems` returns `[]`. Measured: `{"ceremony=block":16,"consent=absent":16,"risk=absent":16}`.
+
 ## What each venue renders today, with no ceremony unlock
 
 **Nothing, and that is the designed result.** T8 established that no production authority set exists
@@ -120,7 +127,7 @@ while justifying it by citing `streamCatalog.ts:122,125` as recording it so — 
 and reads "Spot exchange."; only line 125, Bybit's, reads "Derivatives exchange." A checkable claim
 was checked against nothing. Binance is now `spot`, and the test fails if the two ever diverge again.
 
-## Three defects found and fixed while building this
+## Four defects found and fixed while building this
 
 Each was found by reading the code against its own comments, and each is now covered by a test that
 fails without the fix.
@@ -140,6 +147,15 @@ fails without the fix.
    notional at all. Worse, the `amount`/`price` parameters it accepted were dead. Sizing from those
    caller-supplied values would have made the envelope defeatable by the very argument it checks, so
    the cap is now measured on the venue's reported figures.
+4. **Two of the three rails reported silence instead of a named absence on this tree.** The evaluator
+   short-circuits when the ceremony rail refuses, which is correct — there is nothing downstream to
+   authorise. But it returned `{ ceremony }` alone, so the consent and risk cells read `null`, and
+   `railMatrixProblems` — the function that exists to enforce `:1350`'s "on every leg" — reported all
+   thirty-two as "rail was not evaluated at all". On the real, dark, un-unlocked tree that is every
+   cell of the matrix. `null` is not a named absence, and an unnamed gap is indistinguishable from a
+   rail nobody wrote. The short circuit still refuses, and now also reports `absent` with a reason for
+   each rail it did not consult, so all 48 cells carry evidence on this tree as well as in the
+   green-fixture state.
 
 ## No live trading path, and no fabricated sandbox pass
 

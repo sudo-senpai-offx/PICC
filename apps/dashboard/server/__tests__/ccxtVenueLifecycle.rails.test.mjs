@@ -190,6 +190,58 @@ describe("T17 matrix — the posture with no ceremony unlock, which is the tree'
     expect(blocked).toHaveLength(16)
   })
 
+  it("on THIS tree the 48-cell matrix is COMPLETE: ceremony blocks, and consent and risk are NAMED absences", () => {
+    // The gap this closes. The evaluator short-circuits on a ceremony refusal,
+    // which is correct — there is nothing downstream to authorise. But it used to
+    // return `{ ceremony }` alone, so the consent and risk cells read `null`, and
+    // `railMatrixProblems` — the function that exists to enforce AC-036:1350's
+    // "on every leg" — reported all thirty-two of them as "rail was not evaluated
+    // at all". On the real, dark tree that is every cell.
+    //
+    // `null` is not a named absence, and an unnamed gap is indistinguishable from
+    // a rail somebody forgot to write. The short circuit now still refuses, and
+    // also reports `absent` with the reason for each rail it did not consult.
+    //
+    // This runs on the REAL deps — no ceremony unlock, no consent anchor — rather
+    // than on the green fixtures the passing matrix uses, because the property
+    // being claimed is about the state this repository is actually in.
+    resetCeremonyState()
+    expect(ceremonyUnlockForCcxt(CEREMONY_CLASS).unlocked).toBe(false)
+
+    const cells = lifecycleRailMatrix(
+      VENUE_IDS,
+      LIFECYCLE_LEGS,
+      (venueId, leg) => evaluateLifecycleRails({ leg, venueId, request: legRequest(leg, venueId) })
+    )
+    expect(cells).toHaveLength(CCXT_LIFECYCLE_VENUE_COUNT * LIFECYCLE_LEGS.length * LIFECYCLE_RAILS.length)
+    expect(cells).toHaveLength(48)
+    // Every cell carries a verdict from the closed vocabulary — none is null.
+    for (const cell of cells) {
+      expect(cell.verdict, `${cell.venueId}/${cell.leg}/${cell.rail} has no verdict`).not.toBeNull()
+      expect(RAIL_VERDICTS, `${cell.venueId}/${cell.leg}/${cell.rail} verdict '${cell.verdict}' is outside the vocabulary`).toContain(cell.verdict)
+    }
+    // And the matrix checker that enforces "on every leg" agrees.
+    expect(railMatrixProblems(cells, { venues: VENUE_IDS, legs: LIFECYCLE_LEGS })).toEqual([])
+
+    // The specific shape: ceremony blocks all sixteen, and the other two are named
+    // absences on all sixteen.
+    const byRail = (rail) => cells.filter((c) => c.rail === rail)
+    expect(byRail("ceremony").every((c) => c.verdict === "block")).toBe(true)
+    for (const rail of ["consent", "risk"]) {
+      const railCells = byRail(rail)
+      expect(railCells).toHaveLength(16)
+      for (const cell of railCells) {
+        expect(cell.verdict, `${cell.venueId}/${cell.leg}/${rail} must be a named absence, not a pass`).toBe("absent")
+        // A NAMED absence: it says what was not consulted and why, and it says in
+        // terms that cannot be mistaken for permission.
+        expect(cell.reason).toContain("not-evaluated")
+        expect(cell.reason).toContain("ceremony rail refused")
+        expect(cell.reason).toMatch(/never consulted/)
+        expect(cell.reason).toMatch(/not a pass/)
+      }
+    }
+  })
+
   it("the refusal names the ceremony class and never says 'permitted'", () => {
     const r = evaluateLifecycleRails({ leg: "place", venueId: "kraken", request: legRequest("place", "kraken"), deps: baseDeps() })
     expect(r.reason).toContain("ceremony:deny:venue-class-not-unlocked")

@@ -617,13 +617,33 @@ export function evaluateLifecycleRails({ leg, venueId, request = {}, deps: overr
 
   const ceremony = evaluateCeremonyRail({ venue, deps })
   if (ceremony.verdict !== "pass") {
+    // The two downstream rails are REPORTED, not omitted.
+    //
+    // Ceremony is the outermost gate, so when it refuses there is nothing to
+    // authorise and evaluating consent and risk would be theatre. But returning
+    // `{ ceremony }` alone leaves those two cells reading `null` — which is
+    // silence, and silence is not the same as a named absence. AC-036:1350 asks
+    // for the three rails on every leg, and `railMatrixProblems` (which exists to
+    // enforce exactly that) counts a `null` cell as "rail was not evaluated at
+    // all". On this tree, with no unlock, that is all sixteen venue x leg pairs.
+    //
+    // So the short circuit still refuses — nothing here can turn a ceremony block
+    // into an allow — but it also states, per rail, that the rail was NOT
+    // EVALUATED and why. `absent` is the honest verdict for a control that could
+    // not be consulted, and it is the verdict the three-state vocabulary already
+    // has for exactly this.
+    const notEvaluated = (rail) => ({
+      verdict: "absent",
+      applies: null,
+      reason: `not-evaluated: the ceremony rail refused this leg (${ceremony.reason}), so ${rail} was never consulted. This is an absence, not a pass — the leg is blocked and cannot proceed.`
+    })
     return {
       ok: false,
       leg: legName,
       venueId: venue.id,
       blockedBy: "ceremony",
       reason: ceremony.reason,
-      rails: { ceremony }
+      rails: { ceremony, consent: notEvaluated("consent"), risk: notEvaluated("risk") }
     }
   }
 
