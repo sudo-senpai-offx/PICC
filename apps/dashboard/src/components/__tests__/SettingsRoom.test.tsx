@@ -11,6 +11,85 @@ import { getMinistrySettings } from "@/lib/ministrySettings"
 
 const WAIT = { timeout: 5000 }
 
+/**
+ * WS-7 T18. The D17 news/sentiment rows, shaped EXACTLY as the server derives
+ * them from `newsSources.mjs`. One source is configured (`rss-atom`) and the
+ * rest are absent, so both renderings are exercised in one table.
+ */
+const NEWS_FIXTURE = {
+  entries: [
+    {
+      id: "rss-atom",
+      ministry: "trading",
+      name: "RSS / Atom feeds",
+      url: "https://datatracker.ietf.org/doc/html/rfc4287",
+      purpose: "headline-level news for the digest and the 5% Sentiment expert",
+      retrievalMode: "licensed-feed",
+      licensedBasis: "the publisher's own RSS/Atom feed, reached over HTTP GET with no credential.",
+      boundary: { freeTier: "key-less", rateLimit: "6 fetches per feed per 10 min", keyRequired: false },
+      state: "degraded",
+      unconfiguredReason: null,
+      configEvidence: "PICC_NEWS_FEEDS=set"
+    },
+    {
+      id: "gdelt",
+      ministry: "trading",
+      name: "GDELT DOC 2.0",
+      url: "https://gdeltproject.org/",
+      purpose: "global news monitoring and tone scoring",
+      retrievalMode: "licensed-api",
+      licensedBasis: "GDELT publishes DOC 2.0 as open data over a documented, key-less HTTP API.",
+      boundary: { freeTier: "key-less", rateLimit: "~1 request / 5 s", keyRequired: false },
+      state: "unconfigured",
+      unconfiguredReason: 'PICC_NEWS_GDELT is not "on". This is an absence, not a neutral reading.',
+      configEvidence: null
+    },
+    {
+      id: "newsapi",
+      ministry: "trading",
+      name: "NewsAPI",
+      url: "https://newsapi.org/",
+      purpose: "licensed headline search with source attribution",
+      retrievalMode: "licensed-api",
+      licensedBasis: "NewsAPI is a commercial licensed news API with published developer terms.",
+      boundary: { freeTier: "credentialed - see the named env var", rateLimit: "100 requests/day", keyRequired: true },
+      state: "unconfigured",
+      unconfiguredReason:
+        "NEWSAPI_API_KEY is unset, so the licensed NewsAPI leg cannot run. (observed: PICC_NEWS_NEWSAPI is not \"on\"; NEWSAPI_API_KEY unset.) This is an absence, not a neutral reading.",
+      configEvidence: null
+    },
+    {
+      id: "cryptopanic",
+      ministry: "trading",
+      name: "CryptoPanic",
+      url: "https://cryptopanic.com/",
+      purpose: "crypto asset-news stream for the crypto leg of the digest",
+      retrievalMode: "licensed-websocket",
+      licensedBasis: "CryptoPanic is a licensed crypto news/asset API with a realtime stream.",
+      boundary: { freeTier: "credentialed - see the named env var", rateLimit: "published plan limits", keyRequired: true },
+      state: "unconfigured",
+      unconfiguredReason:
+        "CRYPTOPANIC_AUTH_TOKEN is unset, so the licensed CryptoPanic stream cannot authenticate. (observed: PICC_NEWS_CRYPTOPANIC is not \"on\"; CRYPTOPANIC_AUTH_TOKEN unset.) This is an absence, not a neutral reading.",
+      configEvidence: null
+    },
+    {
+      id: "picc-own-browser",
+      ministry: "trading",
+      name: "PICC's own browser",
+      url: "https://datatracker.ietf.org/doc/html/rfc9110",
+      purpose: "the sanctioned path for a source that publishes no API or feed",
+      retrievalMode: "picc-own-browser",
+      licensedBasis:
+        "PICC's own headed/headless Chromium, operated by PICC. D17:245: it carries PICC's labeling obligations.",
+      boundary: { freeTier: "key-less", rateLimit: "one page read per source per pass", keyRequired: false },
+      state: "unconfigured",
+      unconfiguredReason:
+        "PICC_NEWS_BROWSER_SOURCES names no page, so PICC's own browser was not asked to read anything. (observed: PICC_NEWS_BROWSER_SOURCES unset.) This is an absence, not a neutral reading.",
+      configEvidence: null
+    }
+  ]
+}
+
 const TRADING_FIXTURE = {
   entries: [
     {
@@ -113,6 +192,71 @@ describe("SettingsRoom", () => {
     expect(m.host.textContent).toContain("Unconfigured")
     expect(m.host.textContent).toContain("Key?")
     expect(m.host.textContent).toContain("PICC-as-a-country")
+  })
+
+  // ── WS-7 T18 / D17 — the "licensed and labeled" columns ────────────────────
+  //
+  // D17's obligation is that every news/sentiment datum carries its source AND
+  // its retrieval mode. A room that shows a source name and a "No key" badge and
+  // nothing else cannot satisfy that, so T18 added two columns to the table that
+  // already existed rather than building a second configuration surface.
+  //
+  // These assertions drive the REAL shape the server derives, including a
+  // configured source, so the "degraded — configured but never probed" rendering
+  // is exercised rather than assumed.
+  it("shows the D17 retrieval mode and licensed basis for a news source", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => NEWS_FIXTURE })))
+    const m = mountAt("/suites/trading/settings")
+    mounted.push(m)
+    await vi.waitFor(() => expect(m.host.textContent).toContain("licensed-feed"), WAIT)
+    // Four modes, and PICC's own browser is one of them and says so.
+    expect(m.host.textContent).toContain("picc-own-browser")
+    expect(m.host.textContent).toContain("PICC's own headed/headless Chromium")
+    // And the trust basis is a sentence, not a badge.
+    expect(m.host.textContent).toContain("labeling obligations")
+  })
+
+  it("names the MISSING setting for an unconfigured news source", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => NEWS_FIXTURE })))
+    const m = mountAt("/suites/trading/settings")
+    mounted.push(m)
+    // Each absent source names the knob that is unset, so an operator learns
+    // WHICH setting to change rather than only that something is missing. This is
+    // T14's rule for notifications, applied to news sources.
+    await vi.waitFor(() => expect(m.host.textContent).toContain('PICC_NEWS_GDELT is not "on"'), WAIT)
+    await vi.waitFor(() => expect(m.host.textContent).toContain("NEWSAPI_API_KEY unset"), WAIT)
+    await vi.waitFor(() => expect(m.host.textContent).toContain("CRYPTOPANIC_AUTH_TOKEN unset"), WAIT)
+    await vi.waitFor(() => expect(m.host.textContent).toContain("PICC_NEWS_BROWSER_SOURCES unset"), WAIT)
+    // And each says it is an absence, not a neutral.
+    expect(m.host.textContent).toContain("not a neutral reading")
+  })
+
+  it("a configured news source says CONFIGURED BUT NEVER PROBED — never \"Connected\"", async () => {
+    // Nothing in this tree has ever fetched a news source, so `connected` would
+    // be a claim about a fetch nobody made. T5 established this for Serper's
+    // badge; T18 applies the same rule to the D17 rows.
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => NEWS_FIXTURE })))
+    const m = mountAt("/suites/trading/settings")
+    mounted.push(m)
+    await vi.waitFor(() => expect(m.host.textContent).toContain("configured by PICC_NEWS_FEEDS=set — never probed"), WAIT)
+    const rss = m.host.querySelector('[data-integration="rss-atom"]')
+    expect(rss?.textContent).toContain("Degraded")
+    expect(rss?.textContent).not.toContain("Connected")
+  })
+
+  it("no news row renders an empty licensed-basis cell", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => NEWS_FIXTURE })))
+    const m = mountAt("/suites/trading/settings")
+    mounted.push(m)
+    await vi.waitFor(() => expect(m.host.querySelector('[data-integration="gdelt"]')).not.toBeNull(), WAIT)
+    for (const id of ["rss-atom", "gdelt", "newsapi", "cryptopanic", "picc-own-browser"]) {
+      const cell = m.host.querySelector(`[data-integration="${id}"]`)
+      expect(cell, `${id} row missing`).not.toBeNull()
+      const cells = [...(cell!.querySelectorAll("td") ?? [])].map((c) => c.textContent?.trim() ?? "")
+      expect(cells.length, `${id} row has the wrong column count`).toBe(8)
+      expect(cells[6], `${id} has no retrieval mode`).toBeTruthy()
+      expect(cells[7], `${id} has no licensed basis`).toBeTruthy()
+    }
   })
 })
 

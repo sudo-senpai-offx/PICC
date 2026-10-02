@@ -522,29 +522,28 @@ describe("T21 does not require a clean sweep - the honest states are surfaced, n
     expect([...item.routes].sort()).toEqual(["/api/command-centre/perps/close", "/api/command-centre/perps/execute"])
   })
 
-  it("T17 has LANDED from git and T18 is the only task left open", () => {
-    // T17 has landed, so it drops out of the measured open set the same way T14
-    // did, and the assertion stays an EXACT list rather than a count or a
-    // membership check — "T17 is not in here" is only evidence if the list is
-    // complete, because a probe that stopped reporting a task at all would
-    // satisfy a weaker check. `count` moves 2 -> 1 on the same derivation, and the
-    // probe's own `ws7-tasks-without-a-commit` item reports it without this test's
-    // help.
+  it("T17 AND T18 have both LANDED from git - the unlanded list is empty", () => {
+    // T17 landed first and dropped out of the measured open set the same way T14
+    // did; T18 is the LAST task of WS-7 and drops out with it. The assertion
+    // stays an EXACT list rather than a count or a membership check - "T18 is not
+    // in here" is only evidence if the list is complete, because a probe that
+    // STOPPED REPORTING a task at all would satisfy a weaker check. `count` moves
+    // 1 -> 0 on the same derivation, and the probe's own
+    // `ws7-tasks-without-a-commit` item reports it without this test's help.
     //
-    // THIS IS THE COMMIT-SUBJECT TRAP, made load-bearing. The probe credits a task
-    // as landed when a `WS-7` subject carries a bare `Tn`
-    // (`ws7-seam-probe.mjs:1203-1207`), so this list turns red in TWO directions
-    // and both are reported rather than edited around:
-    //   * a subject naming `T17` before the implementation is committed would make
-    //     the probe report T17 landed while the code is still staged — which is
+    // THIS IS THE COMMIT-SUBJECT TRAP, made load-bearing, and it has now fired in
+    // BOTH directions across three tasks. The probe credits a task as landed when
+    // a `WS-7` subject carries a bare `Tn` (`ws7-seam-probe.mjs:1203-1207`):
+    //   * a subject naming `T18` before the implementation is committed would make
+    //     the probe report T18 landed while the code is still staged - which is
     //     what record 0037 did by naming itself `WS-7 T17 amendment:`;
     //   * a subject naming no task token would leave the probe reporting
-    //     `[T17, T18]` after T17 has in fact landed.
-    // Reading `[T18]` here is the evidence that the commit subject matched the
-    // work that is actually in the tree.
+    //     `[T18]` after T18 has in fact landed.
+    // Reading `[]` here is the evidence that the commit subject matched the work
+    // that is actually in the tree.
     const item = REPORT.openItems.find((i) => i.id === "ws7-tasks-without-a-commit")
-    expect([...item.tasks].sort()).toEqual(["T18"])
-    expect(item.count).toBe(1)
+    expect([...item.tasks].sort()).toEqual([])
+    expect(item.count).toBe(0)
     expect(item.of).toBe(21)
   })
 
@@ -861,16 +860,19 @@ describe("T21's other file-list obligation: PICC.md's WS-7 claims are true", () 
     for (const needle of ["T21's three blocking findings", "T17 and T18 have not", "plasmo", "capture-eo-session.mjs"]) {
       expect(row, needle).toContain(needle)
     }
-    // The LIVE claim is now T18 alone. "T17 and T18 have not" survives only as the
+    // The LIVE claim is now NONE. "T17 and T18 have not" survives only as the
     // quoted historical correction at T21's measurement, which is what
     // `ws7-seam-probe.mjs` measures against — a prose claim that outran git is the
     // failure this whole row exists to prevent, so the row must be corrected
     // downward the moment a task lands rather than left to rot.
-    expect(row).toContain("the live claim is now T18 (1 of 21)")
-    // T14 landed at entry 0036 and T17 at entry 0038; both corrections are named so
-    // a reader can see WHICH record moved the row, not just that it moved.
+    expect(row).toContain("the live claim is now NONE")
+    expect(row).toContain("`[]` (0 of 21)")
+    // T14 landed at entry 0036, T17 at 0038 and T18 at 0039; all three
+    // corrections are named so a reader can see WHICH record moved the row, not
+    // just that it moved.
     expect(row).toContain("0036-T14_NOTIFICATIONS_TELEGRAM_WEBPUSH")
     expect(row).toContain("0038-T17_CCXTVENUE_LIFECYCLE")
+    expect(row).toContain("0039-T18_DATA_SOURCES")
     // T14, T17 and T18 have not
     const at = row.indexOf("T14, T17 and T18 have not")
     if (at !== -1) {

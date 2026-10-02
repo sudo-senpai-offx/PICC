@@ -264,10 +264,24 @@ export function winProbEstimate({ closes, times = null, period = ANALYSIS_PERIOD
 
 /**
  * Fetch current sentiment for an asset symbol and return a confluence weight.
- * Positive = bullish alignment, negative = bearish, 0 = neutral/no data.
+ *
+ * WS-7 T18: the returned `score` is `number | null`, and `null` is an HONEST
+ * ABSENCE, never a 0. The pre-T18 version returned `score: 0` for "no symbol",
+ * `score: 0` on timeout, `score: 0` on throw, and `?? 0` when the composite
+ * was missing — four fabricated neutrals on the leg that reaches the Copilot's
+ * confidence. `getSentiment` now returns `composite: null` when a leg is
+ * absent, so without this change an honest engine would still be laundered into
+ * a neutral one layer up.
+ *
+ * `null` flows through `evaluateAsset` as `absScore = 0`, which is arithmetic
+ * "contributes nothing" rather than an asserted opinion: the `absScore > 0.1`
+ * gate below is simply not taken, so no boost and no penalty is applied and
+ * neither is claimed.
  */
 async function sentimentScore(symbol, { timeoutMs = 4000 } = {}) {
-  if (!symbol) return { score: 0, source: "none", detail: null }
+  if (!symbol) {
+    return { score: null, source: "unavailable", reason: "no asset symbol was supplied, so no sentiment source was asked", detail: null }
+  }
   let timer = null
   try {
     timer = setTimeout(() => {}, timeoutMs)
@@ -275,11 +289,26 @@ async function sentimentScore(symbol, { timeoutMs = 4000 } = {}) {
       getSentiment(String(symbol).toUpperCase()),
       new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs) })
     ])
-    if (!result) return { score: 0, source: "timeout", detail: null }
-    const compositeScore = result.composite?.score ?? 0
-    return { score: clamp(compositeScore, -1, 1), source: result.composite?.label || "fusion", detail: result }
-  } catch {
-    return { score: 0, source: "error", detail: null }
+    if (!result) {
+      return { score: null, source: "timeout", reason: `no sentiment readout within ${timeoutMs}ms; no source answered and none is claimed to have`, detail: null }
+    }
+    if (result.composite === null || result.composite === undefined) {
+      return {
+        score: null,
+        source: "unavailable",
+        reason: result.reason ?? "the sentiment engine reported no composite, and no neutral is substituted for it",
+        detail: result
+      }
+    }
+    const compositeScore = result.composite.score
+    return { score: clamp(compositeScore, -1, 1), source: result.composite.label || "fusion", reason: null, detail: result }
+  } catch (err) {
+    return {
+      score: null,
+      source: "error",
+      reason: `the sentiment readout threw: ${err instanceof Error ? err.message : String(err)}`,
+      detail: null
+    }
   } finally {
     clearTimeout(timer)
   }
@@ -474,15 +503,22 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
   // Multi-timeframe confirmation using full indicator dashboard (not just EMA)
   const mtf = quickMtfCheck(asset, direction)
 
-  // Sentiment score (pre-fetched or passed in)
-  const sent = sentimentOverride ?? { score: 0, source: "none" }
+  // Sentiment leg (pre-fetched or passed in). WS-7 T18: an absent leg arrives
+  // with `score: null` and a reason, and stays that way — `absScore` below is
+  // 0 because there is nothing to take a magnitude of, NOT because sentiment
+  // was measured as zero.
+  const sent = sentimentOverride ?? {
+    score: null,
+    source: "unavailable",
+    reason: "no sentiment readout was supplied for this asset, so no sentiment source was asked and no neutral is assumed"
+  }
   // Regime-adaptive sentiment weighting:
   //   Trending:  sentiment CONFIRMS the trend — amplify bullish/bearish alignment
   //   Ranging:   sentiment is CONTRARIAN at extremes — flip when very strong
   //   Volatile:  sentiment is noise — minimize impact
   //   Breakout:  sentiment confirms the breakout direction
-  const sentimentAligned = sent.score * direction > 0
-  const absScore = Math.abs(sent.score)
+  const sentimentAligned = sent.score !== null && sent.score !== undefined && sent.score * direction > 0
+  const absScore = sent.score === null || sent.score === undefined ? 0 : Math.abs(sent.score)
   let sentimentBoost = 0
   const regime = read.phase
   if (absScore > 0.1) {
@@ -580,7 +616,15 @@ export function evaluateAsset({ id, name, candles, volume, observedPayout = null
       gates,
       confidence,
       mtf: { agree: mtf.agree, total: mtf.total, details: mtf.tfDetails },
-      sentiment: { score: round(sent.score, 4), source: sent.source, aligned: sentimentAligned },
+      // `score` is `null` when the leg is absent. `round(null, 4)` would have
+      // produced 0, so the null is passed through deliberately and `reason`
+      // travels with it.
+      sentiment: {
+        score: sent.score === null || sent.score === undefined ? null : round(sent.score, 4),
+        source: sent.source,
+        aligned: sentimentAligned,
+        reason: sent.reason ?? null
+      },
       ...(u4faStrat ? { u4fa: { signalStrength: round(u4faSignal, 3) } } : {})
     }
   })

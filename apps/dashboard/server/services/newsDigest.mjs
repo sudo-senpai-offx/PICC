@@ -16,6 +16,20 @@
 import { localStore } from "./localstore.mjs"
 import { webFetch } from "./webfetch.mjs"
 import { routeTask, defaultBudgets } from "./resourceGovernor.mjs"
+// WS-7 T18 / D17 (spec :238-245): every item this digest emits now carries its
+// source, its retrieval mode and the basis on which it is trusted. Before T18 an
+// item was `{title, link, pubDate, source}` — `source` was the operator's feed
+// label and nothing said HOW it was reached, so a datum obtained by scraping was
+// indistinguishable from one obtained from a publisher's own feed. That is
+// AC-038's "a datum may not appear without provenance".
+import {
+  NEWS_SOURCES_ABSENT_REASON,
+  classifySourceUrl,
+  makeDatum,
+  newsSourceFamily,
+  provenanceGap,
+  resolveNewsSources
+} from "./newsSources.mjs"
 
 export const DIGEST_CADENCE_MS = 600_000 // envelope cadenceMs: 10min
 
@@ -51,21 +65,66 @@ export const VERIFIED_FREE_FEEDS = Object.freeze([
  * The digest's own config: PICC_NEWS_FEEDS (comma-separated URLs). Only valid
  * http(s) URLs count as configured; garbage entries are dropped (never
  * counted). Empty → [] → the registry shows skipped-unconfigured honestly.
+ *
+ * Every returned feed is an INSTANCE of the declared `rss-atom` family, so it
+ * carries that family's retrieval mode and licensed basis. The family is not
+ * derived from the host: an operator naming a feed cannot mint a licence claim.
+ *
+ * A D17-prohibited target (Bloomberg, X, ForexFactory) is REFUSED here rather
+ * than fetched, and the refusal is reported by `newsFeedRejections` instead of
+ * being a silent drop. AC-039's runtime half.
  */
 export function newsFeedsConfig(env = process.env) {
+  return newsFeedEntries(env).feeds
+}
+
+/**
+ * The feed config AND its refusals, in one pass, so the two cannot disagree.
+ *
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {{feeds: Array<{id:string,url:string,family:string,retrievalMode:string}>,
+ *            rejections: Array<{raw:string, reason:string}>, configured: boolean}}
+ */
+export function newsFeedEntries(env = process.env) {
   const feeds = []
+  const rejections = []
   for (const raw of String(env.PICC_NEWS_FEEDS ?? "").split(",")) {
     const u = raw.trim()
     if (!u) continue
+    let parsed
     try {
-      const parsed = new URL(u)
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue
-      feeds.push({ id: `${parsed.host}${parsed.pathname}`.replace(/\/+$/, ""), url: parsed.toString() })
+      parsed = new URL(u)
     } catch {
-      /* invalid URL — not configured */
+      rejections.push({ raw: u, reason: "not-an-absolute-url" })
+      continue
     }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      rejections.push({ raw: u, reason: `scheme-${parsed.protocol.replace(":", "")}-is-not-http(s)` })
+      continue
+    }
+    const classified = classifySourceUrl(parsed.toString())
+    if (!classified.permitted) {
+      // Named, not dropped. A prohibited ToS target the operator pasted is a
+      // fact the operator needs to read, and AC-039 asks the guard to NAME it.
+      rejections.push({
+        raw: u,
+        reason: `D17 prohibits scraping ${classified.prohibitedTarget}; this URL is refused and was not fetched`
+      })
+      continue
+    }
+    feeds.push({
+      id: `${parsed.host}${parsed.pathname}`.replace(/\/+$/, ""),
+      url: parsed.toString(),
+      family: "rss-atom",
+      retrievalMode: "licensed-feed"
+    })
   }
-  return feeds
+  return { feeds, rejections, configured: feeds.length > 0 }
+}
+
+/** The named refusals from `PICC_NEWS_FEEDS`, for a room or a runbook. */
+export function newsFeedRejections(env = process.env) {
+  return newsFeedEntries(env).rejections
 }
 
 /**
@@ -82,6 +141,84 @@ export function digestBudgetFromEnv(env = process.env) {
   const raw = Number(env.PICC_NEWS_DIGEST_MAX_ITEMS)
   const maxItems = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50
   return { maxPerSource: 6, windowMs: 600_000, maxItems }
+}
+
+// ── WS-7 T18 / D17 — the DIGEST VERDICT, and the absent-vs-zero distinction ──
+
+/**
+ * The three digest states, on T14's vocabulary (`notifications/states.mjs:39-48`)
+ * because the distinction is the same one:
+ *
+ *   absent       - no D17 source is configured. NOTHING WAS ASKED. There is no
+ *                  observation to report and none is invented.
+ *   unavailable  - sources are configured and a pass ran, and it produced no
+ *                  item. That is a MEASURED zero and it is a fact about the
+ *                  publishers, not about PICC.
+ *   delivered    - at least one fully-provenanced datum came back.
+ *
+ * `delivered` is not a claim that the news is GOOD or that it is bullish. It is
+ * a claim that PICC holds at least one datum whose provenance it can state.
+ */
+export const DIGEST_STATES = Object.freeze({
+  ABSENT: "absent",
+  UNAVAILABLE: "unavailable",
+  DELIVERED: "delivered"
+})
+
+/**
+ * Reduce a digest outcome to the state a room may render.
+ *
+ * `items: []` is deliberately NOT enough to reach `delivered`, and `items: []`
+ * alone cannot decide between `absent` and `unavailable` — which is the entire
+ * point. A pass that returned nothing from a configured, reachable feed is
+ * `unavailable`; a pass over no sources at all is `absent`; and neither may be
+ * reported as a sentiment of 0.
+ *
+ * @param {object|null} outcome A `runDigest` result, or null when none exists.
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {{state: string, reason: string|null, items: number|null,
+ *            sourcesConfigured: number, unprovenancedItems: number|null,
+ *            retrievalModes: string[]}}
+ */
+export function digestVerdict(outcome = null, env = process.env) {
+  const resolved = resolveNewsSources(env)
+  const sourcesConfigured = resolved.configuredCount
+
+  if (sourcesConfigured === 0) {
+    return Object.freeze({
+      state: DIGEST_STATES.ABSENT,
+      reason: NEWS_SOURCES_ABSENT_REASON,
+      // `null`, not 0. Nobody asked, so there is no count to report.
+      items: null,
+      sourcesConfigured: 0,
+      unprovenancedItems: null,
+      retrievalModes: []
+    })
+  }
+
+  if (outcome === null || outcome === undefined) {
+    return Object.freeze({
+      state: DIGEST_STATES.UNAVAILABLE,
+      reason: `${sourcesConfigured} D17 source${sourcesConfigured === 1 ? " is" : "s are"} configured but no digest pass has produced a readout yet`,
+      items: null,
+      sourcesConfigured,
+      unprovenancedItems: null,
+      retrievalModes: resolved.retrievalModes
+    })
+  }
+
+  const items = Array.isArray(outcome.items) ? outcome.items : []
+  return Object.freeze({
+    state: items.length > 0 ? DIGEST_STATES.DELIVERED : DIGEST_STATES.UNAVAILABLE,
+    reason:
+      items.length > 0
+        ? null
+        : `${sourcesConfigured} D17 source${sourcesConfigured === 1 ? "" : "s"} configured and a pass ran, and ${(outcome.sources ?? []).length} source row(s) returned no item. This is a MEASURED zero about the publishers - not a neutral sentiment reading, and not an absence of sources.`,
+    items: items.length,
+    sourcesConfigured,
+    unprovenancedItems: outcome.unprovenancedItems ?? null,
+    retrievalModes: resolved.retrievalModes
+  })
 }
 
 // ── Minimal dependency-free RSS 2.0 / Atom extractor ──────────────────────
@@ -170,12 +307,19 @@ function sourceFetchCount(feedId, now, windowMs) {
  * the global webfetch capability (honest outcomes) up to the per-source
  * budget; items are deduped by link across sources and bounded (maxItems).
  *
- * @param {{feeds?:Array<{id:string, url:string}>, fetcher?:Function,
+ * WS-7 T18 / D17: every emitted item is a `makeDatum` with
+ * `{source, sourceFamily, retrievalMode, licensedBasis, retrievedAt, verified,
+ * text, sourceUrl, publishedAt}`, and every source row carries the same
+ * retrieval mode. An item that cannot be provenanced is NOT emitted — and the
+ * count of refusals is reported, because silently dropping one would make the
+ * digest look cleaner than the source is.
+ *
+ * @param {{feeds?:Array<{id:string, url:string, family?:string, retrievalMode?:string}>,
+ *          fetcher?:Function,
  *          budget?:{maxPerSource?:number, windowMs?:number, maxItems?:number},
  *          now?:number}} [opts]
- * @returns {{at:string, sources:Array<{feed:string, url:string, status:string,
- *           ok:boolean, items:number, reason?:string|null}>,
- *           items:Array<{title:string, link:string, pubDate:string, source:string}>}}
+ * @returns {{at:string, sources:Array<object>, items:Array<object>,
+ *            unprovenancedItems:number, absentReason:string|null}}
  */
 export async function runDigest({
   feeds = [],
@@ -193,10 +337,25 @@ export async function runDigest({
   const sources = []
   const items = []
   const seen = new Set()
+  let unprovenancedItems = 0
 
   for (const feed of list) {
     const feedId = feed.id ?? feed.url ?? "?"
-    const base = { feed: feedId, url: feed.url ?? "" }
+    // An operator-supplied feed is an instance of a DECLARED family. An
+    // undeclared family has no retrieval mode, so it cannot be fetched: the
+    // source row says so rather than reaching the wire unlabelled.
+    const family = feed.family ?? "rss-atom"
+    const declared = newsSourceFamily(family)
+    const base = {
+      feed: feedId,
+      url: feed.url ?? "",
+      sourceFamily: family,
+      retrievalMode: declared?.retrievalMode ?? feed.retrievalMode ?? null
+    }
+    if (declared === null) {
+      sources.push({ ...base, status: "refused", ok: false, items: 0, reason: `"${family}" is not a declared D17 source family, so it has no retrieval mode and was not fetched` })
+      continue
+    }
     if (sourceFetchCount(feedId, now, caps.windowMs) >= caps.maxPerSource) {
       sources.push({ ...base, status: "rate-limited-local-budget", ok: false, items: 0, reason: "per-source-fetch-budget" })
       continue
@@ -235,13 +394,61 @@ export async function runDigest({
       const link = item.link.toLowerCase()
       if (link && seen.has(link)) continue
       if (link) seen.add(link)
-      items.push({ ...item, source: feedId })
+      // AC-039's runtime half, at the point of emission rather than only at
+      // config time: a feed whose body links into a prohibited host is refused
+      // per item, because one aggregator can carry a prohibited link among
+      // legitimate ones.
+      const classified = classifySourceUrl(item.link)
+      if (!classified.permitted) {
+        unprovenancedItems += 1
+        continue
+      }
+      let datum
+      try {
+        datum = makeDatum({
+          sourceId: feedId,
+          family,
+          text: item.title.length > 0 ? item.title : item.link,
+          retrievedAt: at,
+          // `verified` is null, not true: nothing in this tree has verified a
+          // publisher's licence, and T10's discipline says an unverified fact is
+          // `boolean | null`, never a number.
+          verified: null,
+          sourceUrl: item.link.length > 0 ? item.link : null,
+          publishedAt: item.pubDate.length > 0 ? item.pubDate : null
+        })
+      } catch (err) {
+        unprovenancedItems += 1
+        continue
+      }
+      if (provenanceGap(datum) !== null) {
+        unprovenancedItems += 1
+        continue
+      }
+      items.push({
+        ...datum,
+        // The pre-existing digest fields, kept so every current consumer keeps
+        // working and so the two views of an item cannot drift.
+        title: datum.text,
+        link: item.link,
+        pubDate: item.pubDate
+      })
       added += 1
     }
     sources.push({ ...base, status: "ok", ok: true, items: added, reason: null })
   }
 
-  return { at, sources, items }
+  return {
+    at,
+    sources,
+    items,
+    unprovenancedItems,
+    // `items: []` with sources configured is a MEASURED zero ("the feed is live
+    // and published nothing"); `items: []` with no source configured is an
+    // ABSENCE. The two were the same value before T18, which is the whole of
+    // AC-038's complaint.
+    absentReason: list.length === 0 ? NEWS_SOURCES_ABSENT_REASON : null
+  }
 }
 
 // ── T3.2 digest store + prune (registry evidence backing store) ───────────

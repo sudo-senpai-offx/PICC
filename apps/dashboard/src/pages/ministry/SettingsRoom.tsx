@@ -170,17 +170,38 @@ export function SettingsRoom() {
                   <th>Rate Limit</th>
                   <th>Key?</th>
                   <th>Status</th>
+                  {/* WS-7 T18 / D17 — the two columns the "licensed and labeled"
+                      obligation needs and this table lacked. `retrievalMode` is
+                      HOW the source is reached (one of four modes D17:241
+                      permits) and `licensedBasis` is why it is trusted. Rows
+                      that predate D17 carry neither, and render an explicit "—"
+                      rather than a blank that would read as an oversight. */}
+                  <th>Retrieval Mode</th>
+                  <th>Licensed Basis</th>
                 </tr>
               </thead>
               <tbody>
                 {integrations.map((i) => (
-                  <tr key={i.id}>
+                  <tr key={i.id} data-integration={i.id}>
                     <td><strong>{i.name}</strong></td>
                     <td>{i.purpose}</td>
                     <td>{i.boundary.freeTier}</td>
                     <td>{i.boundary.rateLimit}</td>
                     <td>{i.boundary.keyRequired ? "Yes" : "No"}</td>
-                    <td>{statusBadge(i.state)}</td>
+                    <td>
+                      {statusBadge(i.state)}
+                      {/* The named absence, so "Unconfigured" says WHICH setting
+                          is missing rather than only that something is. T14
+                          established the same rule for notifications. */}
+                      {i.state === "unconfigured" && i.unconfiguredReason ? (
+                        <span className="muted small" style={{ display: "block" }}>{i.unconfiguredReason}</span>
+                      ) : null}
+                      {i.state === "degraded" && i.configEvidence ? (
+                        <span className="muted small" style={{ display: "block" }}>configured by {i.configEvidence} — never probed</span>
+                      ) : null}
+                    </td>
+                    <td>{i.retrievalMode ?? "—"}</td>
+                    <td>{i.licensedBasis ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>

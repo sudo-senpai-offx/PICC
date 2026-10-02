@@ -64,7 +64,38 @@ describe("newsFeedsConfig — PICC_NEWS_FEEDS, empty default is the honest skip"
     vi.stubEnv("PICC_NEWS_FEEDS", "https://www.forexlive.com/feed/news, https://cointelegraph.com/rss")
     const feeds = digest.newsFeedsConfig()
     expect(feeds).toHaveLength(2)
-    expect(feeds[0]).toEqual({ id: "www.forexlive.com/feed/news", url: "https://www.forexlive.com/feed/news" })
+    // WS-7 T18 / D17: the id and url are unchanged; the feed now also carries
+    // the declared FAMILY it is an instance of and that family's retrieval
+    // mode. The old exact-shape assertion became a partial match precisely
+    // because the shape grew a provenance requirement - and the two new fields
+    // are asserted on the next line rather than waved through.
+    expect(feeds[0]).toMatchObject({ id: "www.forexlive.com/feed/news", url: "https://www.forexlive.com/feed/news" })
+    expect(feeds[0].family).toBe("rss-atom")
+    expect(feeds[0].retrievalMode).toBe("licensed-feed")
+  })
+
+  // WS-7 T18 / D17 + AC-039: a prohibited ToS target the operator pasted is a
+  // named refusal, not a silent drop. A silent drop would leave the operator
+  // believing a Bloomberg feed was configured.
+  it("a D17-prohibited target is REFUSED and named, not fetched and not silently dropped", () => {
+    vi.stubEnv(
+      "PICC_NEWS_FEEDS",
+      "https://www.bloomberg.com/feed/podcast, https://x.com/user/status/1, https://www.forexfactory.com/calendar, https://ok.test/feed"
+    )
+    const { feeds, rejections } = digest.newsFeedEntries()
+    expect(feeds).toHaveLength(1)
+    expect(feeds[0].url).toBe("https://ok.test/feed")
+    expect(rejections).toHaveLength(3)
+    expect(rejections.map((r) => r.reason).join(" | ")).toMatch(/Bloomberg/)
+    expect(rejections.map((r) => r.reason).join(" | ")).toMatch(/X \(Twitter\)/)
+    expect(rejections.map((r) => r.reason).join(" | ")).toMatch(/ForexFactory/)
+  })
+
+  it("a well-known legitimate RSS host is NOT caught by the prohibited matcher", () => {
+    vi.stubEnv("PICC_NEWS_FEEDS", "https://news.google.com/rss/search?q=crypto, https://www.forexlive.com/feed/news")
+    const { feeds, rejections } = digest.newsFeedEntries()
+    expect(rejections).toEqual([])
+    expect(feeds).toHaveLength(2)
   })
 
   it("garbage and non-http entries are dropped, never counted as configured", () => {

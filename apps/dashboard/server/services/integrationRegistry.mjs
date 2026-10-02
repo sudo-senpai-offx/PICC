@@ -2,6 +2,30 @@
 // from the verified research dossier (research-live-integrations.md). Every
 // source reports honest boundary metadata; state defaults to "unconfigured"
 // until a probe proves otherwise (no probes today, so nothing is "connected").
+//
+// ---------------------------------------------------------------------------
+// WS-7 T18 — THE NEWS/SENTIMENT ROWS ARE DERIVED, NOT RESTATED
+// ---------------------------------------------------------------------------
+//
+// D17 (spec :238-245) makes licensed/licensed-feed/licensed-websocket/PICC-own-
+// browser the only acceptable reach for a news datum, and `newsSources.mjs` is
+// the single registry that decides it. The rows below are APPENDED from that
+// registry rather than written here, for two reasons:
+//
+//   1. Two registries over one decision is how sentiment ingestion ended up
+//      spread across three files in the first place (D17's own `Context`:
+//      "sentiment/news ingestion spread across `newsDigest.mjs`,
+//      `sentimentEngine.mjs`, and handler research paths").
+//   2. The Settings room this feeds is the CONFIGURATION surface D17-style
+//      configuration belongs in, and a room that renders a hand-copied list is
+//      a room that can show an operator a source the engine no longer accepts.
+//
+// So the `gdelt` row that used to be hand-written here is gone: the derived
+// `gdelt` row replaces it, carrying the same URL and purpose plus the two
+// fields D17's "licensed and labeled" obligation needs and this catalog lacked
+// — `retrievalMode` and `licensedBasis`. The catalog entry is preserved; its
+// definition moved to where the decision lives.
+import { newsSourceRows } from "./newsSources.mjs"
 
 const INTEGRATIONS = [
   // Trading — market data APIs
@@ -27,19 +51,6 @@ const INTEGRATIONS = [
     boundary: {
       freeTier: "Weight-based limits, no key for public endpoints",
       rateLimit: "~1200 weight/min",
-      keyRequired: false
-    },
-    state: "unconfigured"
-  },
-  {
-    id: "gdelt",
-    ministry: "trading",
-    name: "GDELT DOC 2.0",
-    url: "https://gdeltproject.org/",
-    purpose: "Global news monitoring, tone/sentiment scoring, event detection",
-    boundary: {
-      freeTier: "100% free, open data",
-      rateLimit: "~1 request/5 seconds recommended",
       keyRequired: false
     },
     state: "unconfigured"
@@ -128,12 +139,24 @@ const INTEGRATIONS = [
   }
 ]
 
-/** Entries for a ministry; [] for an unknown ministry. */
-export function getMinistryIntegrations(ministry) {
-  return INTEGRATIONS.filter((e) => e.ministry === ministry)
+/**
+ * Entries for a ministry; [] for an unknown ministry.
+ *
+ * `env` is read at CALL time, not at import time, so the room answers for the
+ * configuration that is actually in force when the question is asked rather than
+ * for whatever the process happened to hold at boot.
+ */
+export function getMinistryIntegrations(ministry, env = process.env) {
+  return [...INTEGRATIONS, ...newsSourceRows(env)].filter((e) => e.ministry === ministry)
 }
 
-/** Flat array of every cataloged entry. */
-export function getAllIntegrations() {
-  return INTEGRATIONS.slice()
+/**
+ * Flat array of every cataloged entry, news/sentiment sources included.
+ *
+ * The D17 rows are appended here rather than merged into `INTEGRATIONS`, so the
+ * static seed stays readable as the static seed it is and the derived half is
+ * visibly derived.
+ */
+export function getAllIntegrations(env = process.env) {
+  return [...INTEGRATIONS, ...newsSourceRows(env)]
 }

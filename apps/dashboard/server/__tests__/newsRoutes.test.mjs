@@ -91,8 +91,33 @@ describe("trading news API routes", () => {
       ok: true,
       query: "test",
       source: "serper",
+      // WS-7 T18 / D17: the retrieval mode is `null` when nothing was reached.
+      // It is NOT "licensed-api", because naming a mode for a source that was
+      // never asked would be a claim about a retrieval that did not happen —
+      // and it is not `0`, for the same reason.
+      retrievalMode: null,
       items: [],
       degraded: { reason: "news_api_unconfigured" }
     })
+  })
+
+  it("the request body cannot carry a HEADLINE — only a query", async () => {
+    // AC-038 / R14.3: "manual entry may not be possible". The route reads
+    // `symbol`, `query` and `num` and nothing else, so an operator posting a
+    // headline is posting a field no code path reads. It becomes a `query`, which
+    // is then sent to a licensed source as a search — the operator cannot inject
+    // an item.
+    const { handleApi } = await loadHandlers()
+
+    const res = await call(handleApi, "POST", "/api/trading/news", {
+      query: "eurusd",
+      headline: "FABRICATED HEADLINE the operator typed",
+      newsItems: [{ title: "FABRICATED HEADLINE the operator typed" }]
+    })
+    expect(res.status).toBe(200)
+    // Unconfigured, so nothing came back at all — and specifically not the
+    // headline the caller supplied.
+    expect(res.body.items).toEqual([])
+    expect(JSON.stringify(res.body)).not.toContain("FABRICATED HEADLINE")
   })
 })

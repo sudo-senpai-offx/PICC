@@ -510,7 +510,23 @@ export async function watchlistQuotes() {
 }
 
 // ---------------------------------------------------------------------
-// Market news (Serper) + multi-asset scanner
+// Market news — Serper, over its licensed API
+//
+// WS-7 T18 / D17. Serper is NOT a D17 news/sentiment source and T18 removed it
+// from the sentiment path (`sentimentEngine.mjs` no longer imports it). It stays
+// here because this is the /api/trading/news SEARCH surface, not the Copilot's
+// 5% sentiment input, and T5 (AC-017) resolved Serper by making the documentation
+// tell the truth rather than by deleting a live import.
+//
+// What D17:245 requires of it is labelling, and it had none: the response named
+// `source: "serper"` and nothing said HOW the items were retrieved. So each item
+// now carries `retrievalMode` and a `provenance` record, and the response
+// carries the retrieval mode alongside the source name.
+//
+// SERPER'S LICENSED BASIS IS STATED, NOT ASSUMED: it is a commercial API reseller
+// for Google Search, which is a licensed API and not a scrape of a ToS-
+// prohibited publisher. That is a claim an operator can read and contest, which
+// is the difference between labelling and asserting.
 // ---------------------------------------------------------------------
 export async function marketNews({ symbol, query, num = 5 } = {}) {
   const q = String(query || (symbol ? `${symbol} finance` : "financial markets today")).trim()
@@ -518,12 +534,44 @@ export async function marketNews({ symbol, query, num = 5 } = {}) {
   // the honest degraded state instead. Configured-but-failing Serper still
   // throws below (real 502 with the real error).
   if (!env.serperApiKey) {
-    return { ok: true, query: q, source: "serper", items: [], degraded: { reason: "news_api_unconfigured" } }
+    return {
+      ok: true,
+      query: q,
+      source: "serper",
+      retrievalMode: null,
+      items: [],
+      degraded: { reason: "news_api_unconfigured" }
+    }
   }
   if (!q) throw new Error("query required")
-  const items = await serperNews(q, num)
-  return { ok: true, query: q, source: "serper", items }
+  const retrievedAt = new Date().toISOString()
+  const raw = await serperNews(q, num)
+  const items = (Array.isArray(raw) ? raw : []).map((item) => ({
+    ...item,
+    // AC-038: every datum carries source and retrieval mode. `verified` is
+    // `null`, never `false` — nothing in this tree has verified Serper's
+    // licence, and T10's `boolean | null` discipline says an unverified fact is
+    // null rather than a coerced zero.
+    provenance: {
+      source: "serper",
+      retrievalMode: SERPER_RETRIEVAL_MODE,
+      licensedBasis: SERPER_LICENSED_BASIS,
+      retrievedAt,
+      verified: null
+    }
+  }))
+  return { ok: true, query: q, source: "serper", retrievalMode: SERPER_RETRIEVAL_MODE, items }
 }
+
+/** The D17 retrieval mode Serper's licensed API is reached by. */
+const SERPER_RETRIEVAL_MODE = "licensed-api"
+
+/** Why Serper is on this surface at all — stated so a reader can contest it. */
+const SERPER_LICENSED_BASIS =
+  "Serper is a commercial API reseller for Google Search, reached over its documented HTTP API with a " +
+  "credential. It is a licensed API, not a scrape of a ToS-prohibited publisher. D17:241 prohibits " +
+  "Bloomberg, X and ForexFactory specifically; Serper is none of them. It is NOT one of the four sources " +
+  "D17:241 permits for the Copilot's 5% Sentiment input, and T18 removed it from that path."
 
 /**
  * Run the prediction engine across a set of symbols (defaults to the
