@@ -482,14 +482,34 @@ const SITE_INDEX = [
   ["opensea.io", "nft-royalties", "OpenSea", "nft", 0, "https://opensea.io", "Floor price / volume reads."],
   ["app.aave.com,aave.com", "defi-supply", "Aave", "defi", 0, "https://app.aave.com", "Supply stablecoins for APY."],
   ["yearn.fi", "defi-supply", "Yearn", "defi", 0, "https://yearn.fi", "Yield vaults."],
-  ["luno.com", "luno", "Luno", "crypto", 0, "https://www.luno.com/my", "Crypto exchange (MY)."],
-  ["mxglobal.com.my", "mx-global", "MX Global", "crypto", 0, "https://mxglobal.com.my", "Crypto exchange (MY)."],
-  ["hata.io", "hata", "HATA Digital", "crypto", 0, "https://www.hata.io", "Crypto exchange (MY)."],
-  ["sinegy.com", "sinegy", "SINEGY DAX", "crypto", 0, "https://sinegy.com", "Crypto exchange (MY)."],
-  ["kineticdax.com", "kinetic", "Kinetic DAX", "crypto", 0, "https://kineticdax.com", "Crypto exchange (MY)."],
-  ["fundingsocieties.com.my", "funding-circle", "Funding Societies", "p2p", 0, "https://www.fundingsocieties.com.my", "P2P SME lending (MY)."],
-  ["selangorkuasa.com", "selangor-kuasa", "Selangor Kuasa (SKS)", "p2p", 0, "https://www.selangorkuasa.com", "Islamic P2P financing (MY)."],
-  ["pitik.ai", "pitik", "Pitik.ai", "p2p", 0, "https://pitik.ai", "Agritech P2P financing (MY)."],
+  // D20/T7b (record 0019, 2026-09-30): the eight site rows for luno, mx-global,
+  // hata, sinegy, kinetic, funding-circle, selangor-kuasa and pitik are REMOVED
+  // here as well as from `streamCatalog.ts`. Record 0019:87-92 flagged this file as
+  // a SEPARATE venue catalog that names some of the same venues, declared it out of
+  // scope for that decision, and recorded the fact so a later reader would not
+  // mistake 0019 for a repo-wide purge. The owner ruling of 2026-10-03 is to remove
+  // them, so the browser-studio login surface names the same venues the income
+  // catalog does.
+  //
+  // WHAT THIS DOES AND DOES NOT COST, measured rather than assumed: these eight
+  // carried NO login capability to lose. `LOGIN_HINTS` has been empty since
+  // D2/AC-005 removed its only entry (the `expertoption` `cookieAuth: false`
+  // suppression), so `hint` was `undefined` for all eight and the site-scoped
+  // high-confidence cookie branch (the `hintHits` branch in `detectLoginState`)
+  // was already unreachable for every site in the tree. None had a
+  // `SITE_TO_CONNECTOR` mapping, a `PLATFORM_KINDS` entry, a cooldown constant or
+  // an `isLiveStreamTab` exemption - each was exactly one row here. What changes is
+  // RECOGNITION: `detectSite` now returns the generic unknown-host profile for these
+  // hosts, which is the intended effect.
+  //
+  // Recorded consequence, stated rather than left for someone to discover: the
+  // vault lookup key in `studioLogin` is derived from `detected?.name`, so
+  // credentials previously filed under a venue's display name ("Luno") are now
+  // looked up under the bare hostname ("luno.com"). That is the correct outcome for
+  // a venue PICC no longer profiles. It moves for SEVEN of the eight - `pitik`'s
+  // display name was `Pitik.ai`, which lower-cases to exactly its own hostname, so
+  // its key does not move. Both facts are asserted per venue in
+  // `browserStudio.login.test.mjs` rather than left to surprise a user.
   ["aigen.dev", "aigen", "AIGEN Protocol", "agent", 0, "https://aigen.dev", "On-chain bounty protocol for AI agents."],
   ["agora.xyz", "agora", "Agora", "agent", 0, "https://agora.xyz", "Living agent + human economy ($THREE)."],
   // D2/AC-005: the `expertoption` site row is REMOVED with the venue. It described

@@ -47,19 +47,27 @@
 //
 //   D23  `"cancelOrder"` is STILL in READ_ONLY_BLOCKED, AND the sanctioned
 //        perps seam exposes the gated member.
-//   D26  no unverifiable regulatory/KYC CLAIM string survives, AND the eight
-//        D26 catalog ENTRIES are still present.
+//   D26  no unverifiable regulatory/KYC CLAIM string survives, AND the catalog
+//        holds at or above the OWNER-APPROVED FLOOR, AND that pin still equals
+//        the live count, AND no surviving claim outlives its row.
 //
-// Each is measured as BOTH halves independently and the halves are reported
-// separately, because each has a half that passes trivially on its own:
+// Each is measured as ALL of its halves independently and the halves are
+// reported separately, because each has a half that passes trivially on its own:
 //
 //   - D23's first half is the naive check. A guard that asserted only it would
 //     pass on a repository where the cancel path had been deleted outright -
 //     which is exactly the pre-T3 defect D23 exists to fix.
-//   - D26's first half is the naive check. D26 :363 says the entries are "**not**
-//     removed - only the unverifiable claims are", so a guard that asserted only
-//     "no claims" would be satisfied by deleting the eight catalog rows, which is
-//     the precise thing D26 forbids.
+//   - D26's first half is the naive check. A guard that asserted only it would be
+//     satisfied by deleting every catalog row, which is the precise thing D26
+//     forbids. The remaining three halves are what survive that attack: a floor
+//     catches silent deletion, a pin-equality catches a stale pin, and the
+//     claim-needs-a-row half catches a claim outliving the row that justified it.
+//
+// D26's second half was an EQUALITY over eight named row ids until the owner's
+// 2026-10-03 ruling. T7b (ab2148a, 2026-09-30) removed those rows, because that
+// ruling WAS the answer to the question D26 had deferred, so the equality could
+// not be satisfied by any state of the repository. It is now a floor, with its
+// provenance recorded in `D26_OWNER_APPROVED_CATALOG_FLOOR`.
 
 import {
   probeSeam,
@@ -71,6 +79,8 @@ import {
   VENUE_RESIDUE_TOKENS,
   REGULATORY_CLAIM_SHAPES,
   D26_CATALOG_ROWS,
+  T7B_REMOVED_CATALOG_ROWS,
+  D26_OWNER_APPROVED_CATALOG_FLOOR,
   DETECTOR_FILES
 } from "./ws7-seam-probe.mjs"
 
@@ -84,7 +94,9 @@ export {
   codeOf,
   VENUE_RESIDUE_TOKENS,
   REGULATORY_CLAIM_SHAPES,
-  D26_CATALOG_ROWS
+  D26_CATALOG_ROWS,
+  T7B_REMOVED_CATALOG_ROWS,
+  D26_OWNER_APPROVED_CATALOG_FLOOR
 }
 
 /* ==========================================================================
@@ -344,12 +356,14 @@ export const CHECKS = Object.freeze([
     kind: "blocking",
     comparison: "at-most",
     conjunction: true,
-    specRef: ":1386 D26 / AC-049, D20",
+    specRef: ":1386 D26 / AC-049, D20 (entries half amended by the 2026-10-03 owner ruling)",
     ownedBy: "ws7RegulatoryClaimGuard.test.mjs (half A ONLY)",
-    label: "D26 - no unverifiable regulatory/KYC claim survives AND the eight D26 catalog entries are still present",
+    label:
+      "D26 - no unverifiable regulatory/KYC claim survives AND the catalog holds at or above the owner-approved floor AND no claim outlives its row",
     asserts:
-      "BOTH halves. Half A: no licensing-status, securities-commission, KYC-negation or DAX-registration string survives in comment-stripped product code. Half B: all eight D26 rows (luno, mx-global, hata, sinegy, kinetic, funding-circle, selangor-kuasa, pitik) are still declared in streamCatalog.ts. D26 :363 says the entries are NOT removed - only the claims - so half A alone would be satisfied by deleting the eight rows, which is exactly what D26 forbids.",
-    composition: "COMPOSES half A; NEW half B."
+      "BOTH halves, now four sub-halves. Half A: no licensing-status, securities-commission, KYC-negation or DAX-registration string survives in comment-stripped product code. Half B: the catalog row count is at or above D26_OWNER_APPROVED_CATALOG_FLOOR (44, the post-T7b count - 50 - 13 + 7, measured 2026-09-30). Half C: that pin still EQUALS the live count, so the pin cannot go stale unnoticed. Half D: a venue the owner removed is named in live product code only if its row exists again, so a surviving claim always has a factual row.",
+    composition:
+      "COMPOSES half A; halves B-D REPLACE an eight-row equality that T7b (ab2148a) made unsatisfiable. Half A is unchanged and remains owned by ws7RegulatoryClaimGuard.test.mjs."
   }),
   Object.freeze({
     id: "lockfile.single-and-no-pnpm",
@@ -513,9 +527,14 @@ function conjunctionHalvesFor(id, detail) {
     const d = detail.d26Conjunction ?? {}
     return Object.freeze({
       ...(d.halves ?? {}),
-      entriesAbsent: Object.freeze(d.entriesAbsent ?? []),
-      entriesPresentCount: (d.entriesPresent ?? []).length,
-      entriesExpectedCount: (d.entriesExpected ?? []).length
+      liveRowCount: d.liveRowCount,
+      floorCount: d.floor?.count,
+      floorAsOf: d.floor?.asOf,
+      floorRulingDate: d.floor?.rulingDate,
+      floorArithmetic: d.floor?.arithmetic,
+      removedSetStillWithoutARow: Object.freeze(d.removedSetStillWithoutARow ?? []),
+      orphanClaims: Object.freeze(d.orphanClaims ?? []),
+      widerSetResidual: Object.freeze(d.widerSetResidual ?? [])
     })
   }
   return null

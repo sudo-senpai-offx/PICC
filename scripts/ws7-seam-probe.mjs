@@ -331,7 +331,19 @@ export const REGULATORY_CLAIM_SHAPES = Object.freeze([
   Object.freeze({ shape: "dax-registration", token: /\bDAX\b[^\n]{0,60}\bregistered\b|\bregistered\b[^\n]{0,60}\bDAX\b/i })
 ])
 
-/** The eight D26 rows. Claims were deleted from these; the entries were to STAY. */
+/**
+ * The eight D26 rows. D26 (records 0001/0006) deleted the claims from these and
+ * deliberately left the rows, recording that whether these venues should be listed
+ * at all was a SEPARATE question. The owner's ruling of 2026-09-30 (T7b) answered
+ * that question and removed the rows.
+ *
+ * The list is kept, not deleted, and it is kept for the reason it was written: a
+ * detector naming the rows in order to assert something about them is not a claim
+ * about a third party - that is why this file carries ALLOWLIST entries in
+ * `ws7RegulatoryClaimGuard.test.mjs`, pinned to exact occurrence counts. It is no
+ * longer the subject of an equality; it is the reference set that names which of
+ * the removed rows D26 had once touched.
+ */
 export const D26_CATALOG_ROWS = Object.freeze([
   "luno",
   "mx-global",
@@ -342,6 +354,79 @@ export const D26_CATALOG_ROWS = Object.freeze([
   "selangor-kuasa",
   "pitik"
 ])
+
+/**
+ * Every catalog row T7b's owner ruling removed on 2026-09-30.
+ *
+ * Superset of {@link D26_CATALOG_ROWS} - the eight D26 rows plus five p2p rows the
+ * same ruling dropped. Named in full because the "a surviving claim must still have
+ * a factual row" half is stated over this set: a venue that has been removed may
+ * still be named in live product code ONLY if its row exists again.
+ */
+export const T7B_REMOVED_CATALOG_ROWS = Object.freeze([
+  ...D26_CATALOG_ROWS,
+  "stashaway",
+  "peerberry",
+  "brdge",
+  "8lends",
+  "prosper"
+])
+
+/**
+ * THE FLOOR, and why this number is this number.
+ *
+ * This is deliberately NOT a bare integer. A floor with no recorded provenance is
+ * indistinguishable from a number somebody typed until the catalog stops matching,
+ * at which point it is indistinguishable from a guess. So the reasoning, the date it
+ * was measured, and the ruling it comes from are all in this object, and the probe
+ * asserts the pin against the live count so the two cannot drift apart silently.
+ *
+ * PROVENANCE. `apps/dashboard/src/lib/streamCatalog.ts` held **50** rows immediately
+ * before T7b. T7b (commit ab2148a, owner decision recorded in D20 record 0019,
+ * dated 2026-09-30) removed **13** and added **7** sourced replacements. So the
+ * owner-approved post-T7b count is `50 - 13 + 7 = 44`. The arithmetic is recorded
+ * here, with both id lists, rather than asserted, so a later reader can recompute it
+ * from git instead of taking 44 on trust.
+ *
+ * WHICH DECISION THIS REPLACES, and why an equality had to go. D26's original
+ * second half was a CONJUNCTION over a fixed list of eight row ids: all eight had to
+ * still be declared. That became unsatisfiable the moment T7b landed, because T7b's
+ * ruling WAS the answer to the question D26 had deferred - its commit message says
+ * so in as many words ("This change is the owner's answer to that separate
+ * question"). So the failure was in the guard's TEXT, not in the catalog, and the
+ * text is amended here rather than the catalog being reverted.
+ *
+ * WHY A FLOOR AND NOT A NEW EQUALITY. An equality over 44 ids would break, and
+ * loudly, on the next legitimate owner ruling that adds or drops a row - which is
+ * the same unsatisfiable-by-construction defect D26 just had, one generation later.
+ * A floor catches the failure mode the original equality existed to catch, which is
+ * SILENT DELETION of rows below the approved set, while surviving a deliberate
+ * upward change. Deliberate downward change is still caught: the pin-equality half
+ * below fails until a human re-pins the constant and records why.
+ *
+ * `asOf` is when the count was measured. `rulingDate` is when the owner ruled that
+ * it is the floor. Both are asserted, so neither can be quietly restated.
+ */
+export const D26_OWNER_APPROVED_CATALOG_FLOOR = Object.freeze({
+  count: 44,
+  asOf: "2026-09-30",
+  rulingDate: "2026-10-03",
+  sourceCommit: "ab2148a",
+  sourceRecord: "docs/trading-logic/changelog/entries/0019-CATALOG_VENUE_REMOVAL-v1-to-v2.md",
+  arithmetic: "50 rows before T7b - 13 removed + 7 sourced replacements added = 44",
+  removedByRuling: T7B_REMOVED_CATALOG_ROWS,
+  addedByRuling: Object.freeze([
+    "interactive-brokers",
+    "webull",
+    "swissquote",
+    "oanda",
+    "alpaca",
+    "mintos",
+    "debitum"
+  ]),
+  supersedes:
+    "D26's eight-row equality, unsatisfiable since T7b (ab2148a) removed those rows to answer the question D26 deferred"
+})
 
 /* ==========================================================================
    THE PROBE
@@ -691,16 +776,31 @@ export function probeSeam({ repoRoot = REPO_ROOT_DEFAULT } = {}) {
   }
 
   /* --------------------------------------------------------------- 14 --- */
-  // D26 - A CONJUNCTION. Owner: ws7RegulatoryClaimGuard.test.mjs (half A).
+  // D26 - FOUR HALVES. Owner: ws7RegulatoryClaimGuard.test.mjs (half A).
   //
   //   half A: no unverifiable regulatory/KYC CLAIM string survives
-  //   half B: the eight D26 CATALOG ENTRIES are still present
+  //   half B: the catalog is not below the OWNER-APPROVED FLOOR
+  //            (D26_OWNER_APPROVED_CATALOG_FLOOR)
+  //   half C: the floor pin still EQUALS the live row count (anti-drift)
+  //   half D: no surviving claim outlives its row
   //
-  // Half A is the half that passes trivially. D26 `:363` says the entries are
-  // "**not** removed - only the unverifiable claims are", so a guard that
-  // asserted only half A would be satisfied by deleting the eight rows outright,
-  // which is the precise thing D26 forbids. Both halves are measured, both are
-  // reported separately, and each is proven to flip on its own.
+  // HALF A IS UNCHANGED, AND IS NOT THE ENFORCEMENT POINT. `ws7RegulatoryClaimGuard`
+  // (29 assertions, a compositional vocabulary, a pinned allowlist) remains the
+  // enforcement point for the claims half; this measures the same claim CLASS with
+  // the four shapes above so a claim cannot hide in a paraphrase the narrower regex
+  // misses. That is defence in depth, not a second copy of the guard.
+  //
+  // HALVES B-D REPLACE AN EQUALITY THAT COULD NOT BE SATISFIED. D26's original
+  // second half demanded all eight D26 rows still be declared. T7b's owner ruling
+  // (ab2148a, 2026-09-30) removed those rows, because that ruling WAS the answer to
+  // the question D26 had deferred. So the old half was unsatisfiable by construction
+  // and the gate was red for a text reason, not a product reason.
+  //
+  // A FLOOR ALONE WOULD BE A LOOPHOLE, which is what half D closes. A count floor
+  // says nothing about WHICH rows survive: delete a row and add another, stay at 44,
+  // and the floor is green while a claim about the deleted venue is still served to
+  // users. Half D therefore requires that a removed venue is named in live product
+  // code only if its row exists again - a surviving claim must have a factual row.
   {
     const prod = productionFiles(tracked)
     const claimHits = []
@@ -713,19 +813,67 @@ export function probeSeam({ repoRoot = REPO_ROOT_DEFAULT } = {}) {
       }
     }
     const catalogRel = "apps/dashboard/src/lib/streamCatalog.ts"
+    // Stripped with this probe's own `code()`, not read raw: a row that exists only
+    // inside a comment must not be able to hold the floor up.
     const catalog = missing(catalogRel) ? "" : code(p(catalogRel))
-    const presentRows = D26_CATALOG_ROWS.filter((id) => new RegExp(`id:\\s*"${id}"`).test(catalog))
+    const catalogIds = Object.freeze([...new Set([...catalog.matchAll(/\bid:\s*"([^"]+)"/g)].map((m) => m[1]))])
+    const liveRowCount = catalogIds.length
+    const floor = D26_OWNER_APPROVED_CATALOG_FLOOR
+
+    // Half D. `productionFiles()` already excludes the detector files, `__tests__`
+    // and `*.test.*`, so a removal RECORD naming a venue is not a claim and a test
+    // fixture using `hata` as an arbitrary venueId is not a claim either.
+    //
+    // SCOPE IS THE OWNER'S RULING, NOT THE WIDEST SET AVAILABLE. The scan covers the
+    // eight D26 venues, because that is exactly the set the 2026-10-03 ruling
+    // authorised removing from `browserStudio.mjs`'s SITE_INDEX. It is deliberately
+    // NOT widened to all thirteen T7B-removed rows: `opportunities.mjs:45` still
+    // names Prosper and PeerBerry in a bookkeeping suggestion, and record 0019:88-90
+    // placed that file OUT OF SCOPE for the T7b decision. A guard that widened itself
+    // past the ruling would turn the gate red on ground the owner never ruled on,
+    // which is the same move as editing the catalog to match a stale guard - just in
+    // the other direction. The residual is REPORTED below instead of hidden, and
+    // widening the scan is a one-constant change (`T7B_REMOVED_CATALOG_ROWS`) if and
+    // when the owner extends the ruling to `opportunities.mjs`.
+    const orphanClaims = []
+    for (const id of D26_CATALOG_ROWS) {
+      if (catalogIds.includes(id)) continue
+      const token = new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+      for (const rel of prod) {
+        if (rel === catalogRel) continue
+        if (token.test(code(p(rel)))) orphanClaims.push({ id, file: rel })
+      }
+    }
+    // Measured, surfaced, and NOT gated on. See the scope note above.
+    const widerSetResidual = []
+    for (const id of T7B_REMOVED_CATALOG_ROWS) {
+      if (D26_CATALOG_ROWS.includes(id) || catalogIds.includes(id)) continue
+      const token = new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+      for (const rel of prod) {
+        if (rel === catalogRel) continue
+        if (token.test(code(p(rel)))) widerSetResidual.push({ id, file: rel })
+      }
+    }
+
     const halves = {
       "no-regulatory-claim": claimHits.length === 0,
-      "d26-catalog-entries-still-present": presentRows.length === D26_CATALOG_ROWS.length
+      "catalog-not-below-owner-approved-floor": liveRowCount >= floor.count,
+      "floor-pin-matches-live-count": floor.count === liveRowCount,
+      "no-claim-outlives-its-row": orphanClaims.length === 0
     }
     measured["catalog.claims-gone-entries-stay"] = Object.values(halves).filter((ok) => !ok).length
     detail.d26Conjunction = {
       halves,
       claimHits,
-      entriesExpected: D26_CATALOG_ROWS,
-      entriesPresent: presentRows,
-      entriesAbsent: D26_CATALOG_ROWS.filter((id) => !presentRows.includes(id))
+      floor,
+      liveRowCount,
+      catalogRowIds: catalogIds,
+      d26RowsRemovedByT7b: D26_CATALOG_ROWS,
+      removedSetStillWithoutARow: T7B_REMOVED_CATALOG_ROWS.filter((id) => !catalogIds.includes(id)),
+      orphanClaims,
+      widerSetResidual,
+      widerSetResidualNote:
+        "Removed venues outside the 2026-10-03 ruling's scope, named in live product code. Reported, not gated: record 0019:88-90 placed opportunities.mjs out of scope for the T7b decision."
     }
   }
 

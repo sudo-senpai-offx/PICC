@@ -41,10 +41,37 @@ async function call(handleApi, method, path, body, headers) {
 describe("Browser Studio — site detection", () => {
   it("maps known dashboards to catalog entries", async () => {
     const { detectSite } = await import("../services/browserStudio.mjs")
-    expect(detectSite("https://www.luno.com/my").id).toBe("luno")
     expect(detectSite("https://aigen.dev/").id).toBe("aigen")
     // D2/AC-005: the removed venue's host resolves to no catalog entry.
     expect(detectSite("https://app.expertoption.finance/").id).toBeNull()
+  }, 15_000)
+
+  it("D20/T7b: all eight venues removed from streamCatalog.ts have NO site profile here either", async () => {
+    // Record 0019:87-92 named `browserStudio.mjs:485-492` as a SEPARATE venue catalog
+    // that also listed these eight, declared it out of scope for that decision, and
+    // recorded the fact. The owner's ruling of 2026-10-03 removed them, so the
+    // browser-studio login surface names the same venues the income catalog does.
+    // Each host is asserted individually: a table-driven loop that passed because it
+    // iterated nothing would assert nothing, so the count is pinned too.
+    const { detectSite } = await import("../services/browserStudio.mjs")
+    const removed = [
+      ["luno", "https://www.luno.com/my"],
+      ["mx-global", "https://mxglobal.com.my"],
+      ["hata", "https://www.hata.io"],
+      ["sinegy", "https://sinegy.com"],
+      ["kinetic", "https://kineticdax.com"],
+      ["funding-circle", "https://www.fundingsocieties.com.my"],
+      ["selangor-kuasa", "https://www.selangorkuasa.com"],
+      ["pitik", "https://pitik.ai"]
+    ]
+    expect(removed).toHaveLength(8)
+    for (const [id, url] of removed) {
+      expect(detectSite(url).id, `${id} must have no site profile`).toBeNull()
+      // The host falls through to the generic unknown-host profile, honestly labelled.
+      const site = detectSite(url)
+      expect(site.category, `${id} must fall back to the generic profile`).toBe("other")
+      expect(site.note).toMatch(/No PICC profile for this site yet/)
+    }
   }, 15_000)
 
   it("returns a generic profile for unknown sites", async () => {
@@ -306,12 +333,16 @@ describe("Browser Studio — API routes", () => {
   })
 
   it("stores per-source browser preferences over the API", async () => {
-    const saved = await call(handleApi, "POST", "/api/browser/prefs", { site: "luno", prefs: { profile: "luno-1", headless: false } })
+    // Re-pointed off `luno` when T7b's eight venue rows were removed: the prefs key is
+    // free-form (handlers.mjs:5834 stores whatever `site` it is given), so this test
+    // never depended on `luno` being a live site - but using a removed venue as the
+    // example would read as an assertion that it still is one.
+    const saved = await call(handleApi, "POST", "/api/browser/prefs", { site: "binance", prefs: { profile: "binance-1", headless: false } })
     expect(saved.status).toBe(200)
-    expect(saved.body.prefs.profile).toBe("luno-1")
+    expect(saved.body.prefs.profile).toBe("binance-1")
 
     const got = await call(handleApi, "GET", "/api/browser/prefs")
-    expect(got.body.prefs.luno.profile).toBe("luno-1")
+    expect(got.body.prefs.binance.profile).toBe("binance-1")
   })
 })
 

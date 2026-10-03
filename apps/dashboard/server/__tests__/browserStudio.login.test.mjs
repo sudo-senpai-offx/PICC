@@ -180,6 +180,117 @@ describe("detectLoginState — heuristics", () => {
     expect(auth.detail).toMatch(/auth cookies: token/)
   })
 
+  it("D20/T7b: all eight removed venues are CONFIDENCE-NEUTRAL, asserted per venue rather than assumed", async () => {
+    // The question this pins: removing the eight SITE_INDEX rows drops whatever
+    // login-hint suppression each of them carried. MEASURED, the answer is that none
+    // of them carried any, so nothing was lost - and that is a property of
+    // `LOGIN_HINTS` being `{}` (D2/AC-005 removed its only entry), not a coincidence.
+    //
+    // The mechanism, so the "no change" claim is checkable rather than asserted:
+    //   `hint = site?.id ? LOGIN_HINTS[site.id] : null`
+    //   - row PRESENT -> site.id is the slug -> hint is `undefined` (map is empty)
+    //   - row REMOVED -> site.id is null    -> hint is `null`
+    //   `hint?.cookieAuth !== false` is TRUE in both cases, so the cookie branch is
+    //   entered either way; and `hintHits` is `[]` in both cases, so the site-scoped
+    //   HIGH-confidence cookie branch (`out.confidence = "high"` under `hintHits`)
+    //   was ALREADY unreachable for every site in the tree. A bare `token` cookie
+    //   therefore reads as MEDIUM either way.
+    //
+    // So for all eight: site recognition is gone (that IS the change), and login
+    // confidence is identical to a still-recognised venue on the same signals.
+    const p = page()
+    const REMOVED = [
+      ["luno", "https://www.luno.com/my"],
+      ["mx-global", "https://mxglobal.com.my"],
+      ["hata", "https://www.hata.io"],
+      ["sinegy", "https://sinegy.com"],
+      ["kinetic", "https://kineticdax.com"],
+      ["funding-circle", "https://www.fundingsocieties.com.my"],
+      ["selangor-kuasa", "https://www.selangorkuasa.com"],
+      ["pitik", "https://pitik.ai"]
+    ]
+    // The control: a venue whose row SURVIVED, so "unchanged" has something to be
+    // unchanged FROM. If the removed set behaved differently from this, the loop below
+    // would be asserting a difference rather than an equality.
+    const CONTROL = ["binance", "https://www.binance.com"]
+    expect(REMOVED).toHaveLength(8)
+
+    const probe = async (url) => {
+      p.setUrl(url)
+      p.setEval({ logoutControl: false, hasPassword: false, hasLoginForm: false, loginButton: false, accountMenu: false, avatar: false })
+      h.setCookies([{ name: "token", value: "0123456789abcdef0123456789abcdef" }])
+      return m.detectLoginState(p, {})
+    }
+
+    const [controlId, controlUrl] = CONTROL
+    const control = await probe(controlUrl)
+    expect(control.site, "the control must actually be a recognised site").toBe(controlId)
+    expect(control.loggedIn).toBe(true)
+    expect(control.confidence).toBe("medium")
+    expect(control.method).toBe("cookie")
+
+    for (const [id, url] of REMOVED) {
+      const auth = await probe(url)
+      // THE CHANGE: the host is no longer recognised.
+      expect(auth.site, `${id}: site recognition must be gone`).toBeNull()
+      // NO CHANGE: identical verdict, confidence, method and detail shape.
+      expect(auth.loggedIn, `${id}: signed-in verdict must be unchanged`).toBe(control.loggedIn)
+      expect(auth.confidence, `${id}: confidence must be unchanged`).toBe(control.confidence)
+      expect(auth.method, `${id}: method must be unchanged`).toBe(control.method)
+      expect(auth.detail, `${id}: detail must be unchanged`).toBe(control.detail)
+      // Explicitly: the generic rule is MEDIUM and never HIGH, exactly as for a
+      // still-recognised venue with no hint. A "high" here would mean a
+      // site-auth-cookie path had become reachable.
+      expect(auth.confidence).not.toBe("high")
+      expect(auth.detail).toMatch(/auth cookies: token/)
+      // No connector was mapped for any of the eight, before or after.
+      expect(m.siteToConnectorSlug(auth.site)).toBeNull()
+    }
+  }, 60_000)
+
+  it("D20/T7b: the removed venues' vault lookup key moves from display name to hostname - for SEVEN of the eight", () => {
+    // The one real capability consequence, asserted per venue rather than left to
+    // surprise a user. `studioLogin` derives its vault key from `detected?.name`
+    // and then lower-cases it, so:
+    //
+    //   key BEFORE = displayName.toLowerCase()   key AFTER = hostname
+    //
+    // Seven of the eight keys MOVE. PITIK'S DOES NOT, and pretending otherwise would
+    // be a false claim: its display name was `Pitik.ai`, which lower-cases to exactly
+    // its own hostname `pitik.ai`, so a user whose credentials are filed under
+    // `pitik.ai` finds them still there. It is the one venue of the eight whose
+    // one-tap login is genuinely unaffected, and that is asserted as its own case.
+    const FORMER = [
+      ["luno", "https://www.luno.com/my", "Luno", true],
+      ["mx-global", "https://mxglobal.com.my", "MX Global", true],
+      ["hata", "https://www.hata.io", "HATA Digital", true],
+      ["sinegy", "https://sinegy.com", "SINEGY DAX", true],
+      ["kinetic", "https://kineticdax.com", "Kinetic DAX", true],
+      ["funding-circle", "https://www.fundingsocieties.com.my", "Funding Societies", true],
+      ["selangor-kuasa", "https://www.selangorkuasa.com", "Selangor Kuasa (SKS)", true],
+      // display name lower-cases to its own hostname -> key unchanged
+      ["pitik", "https://pitik.ai", "Pitik.ai", false]
+    ]
+    expect(FORMER).toHaveLength(8)
+    for (const [id, url, formerName, keyMoves] of FORMER) {
+      const hostname = new URL(url).hostname.replace(/^www\./, "")
+      const keyBefore = formerName.toLowerCase()
+      const keyAfter = m.detectSite(url).name.toLowerCase()
+      // `detectSite` no longer knows the display name at all.
+      expect(m.detectSite(url).name, `${id} must resolve to the hostname now`).toBe(hostname)
+      expect(keyAfter).toBe(hostname.toLowerCase())
+      if (keyMoves) {
+        expect(keyAfter, `${id}: vault key must move off the display name`).not.toBe(keyBefore)
+      } else {
+        // The honest exception, pinned so a future edit cannot quietly change it.
+        expect(keyAfter, `${id}: key is unchanged because its display name WAS its hostname`).toBe(keyBefore)
+      }
+    }
+    // Exactly one of the eight is the exception. If a future row breaks this
+    // coincidence the count moves, which is the signal to re-read the ruling.
+    expect(FORMER.filter(([, , , moves]) => !moves).map(([id]) => id)).toEqual(["pitik"])
+  })
+
   it("still refuses a lone Sign in button with no other signal (weak negative)", async () => {
     // D2/AC-005: this used to be the ExpertOption guest-session assertion, which
     // read `dom.guest` through the removed venue's account-model branch. The

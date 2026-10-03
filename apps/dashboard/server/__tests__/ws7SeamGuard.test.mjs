@@ -52,6 +52,8 @@ import {
   VERDICT_VOCABULARY,
   DETECTOR_FILES,
   D26_CATALOG_ROWS,
+  T7B_REMOVED_CATALOG_ROWS,
+  D26_OWNER_APPROVED_CATALOG_FLOOR,
   evaluateSeam,
   gateExitCode,
   probeSeam,
@@ -412,17 +414,61 @@ describe("D23 is a conjunction, and the naive half alone is not the check", () =
   })
 })
 
-describe("D26 is a conjunction: claims gone is the half that passes trivially", () => {
-  it("half A - no unverifiable regulatory/KYC claim survives", () => {
+describe("D26: the claims half is unchanged, and the entries half is now a FLOOR", () => {
+  it("half A - no unverifiable regulatory/KYC claim survives, and it is still owned by the guard that owns it", () => {
     expect(rowFor("catalog.claims-gone-entries-stay").halves["no-regulatory-claim"]).toBe(true)
+    // The claims half must NOT have been traded away to make the entries half
+    // satisfiable. It is still measured here, and it is still declared as owned by
+    // ws7RegulatoryClaimGuard.test.mjs, which remains the enforcement point.
+    const owned = CHECKS.find((c) => c.id === "catalog.claims-gone-entries-stay").ownedBy
+    expect(owned).toContain("ws7RegulatoryClaimGuard.test.mjs")
   })
 
-  it("half B - the eight D26 catalog entries are still present: MEASURED, and it is NOT satisfied", () => {
+  it("half B - the catalog is not below the owner-approved floor, and the pin's PROVENANCE is asserted", () => {
     const halves = rowFor("catalog.claims-gone-entries-stay").halves
-    expect(halves["d26-catalog-entries-still-present"]).toBe(false)
-    expect(halves.entriesExpectedCount).toBe(8)
-    expect(halves.entriesPresentCount).toBe(0)
-    expect([...halves.entriesAbsent]).toEqual([
+    expect(halves["catalog-not-below-owner-approved-floor"]).toBe(true)
+    // The number is never bare. Arithmetic, both id lists, the commit, the record and
+    // both dates ride with it, and the probe surfaces them so a reader of the gate
+    // output can see WHY 44 rather than being asked to trust it.
+    expect(halves.floorCount).toBe(44)
+    expect(halves.floorArithmetic).toBe("50 rows before T7b - 13 removed + 7 sourced replacements added = 44")
+    expect(halves.floorAsOf).toBe("2026-09-30")
+    expect(halves.floorRulingDate).toBe("2026-10-03")
+    const floor = PROBE.detail.d26Conjunction.floor
+    expect(floor.sourceCommit).toBe("ab2148a")
+    expect(floor.sourceRecord).toContain("0019-CATALOG_VENUE_REMOVAL")
+    expect(floor.removedByRuling).toHaveLength(13)
+    expect(floor.addedByRuling).toHaveLength(7)
+    // The arithmetic is recomputed from the two lists, not read off the pin.
+    expect(50 - floor.removedByRuling.length + floor.addedByRuling.length).toBe(floor.count)
+    // ...and the pin the probe actually used IS the exported constant, so the gate
+    // output and this file cannot be reading two different numbers.
+    expect(floor).toBe(D26_OWNER_APPROVED_CATALOG_FLOOR)
+    expect(floor.count).toBe(44)
+    expect([...floor.removedByRuling]).toEqual([...T7B_REMOVED_CATALOG_ROWS])
+    // The ruling that produced the floor is named, not implied.
+    expect(floor.supersedes).toContain("unsatisfiable")
+  })
+
+  it("half C - the pin EQUALS the live count, so the two cannot drift apart silently", () => {
+    const halves = rowFor("catalog.claims-gone-entries-stay").halves
+    expect(halves["floor-pin-matches-live-count"]).toBe(true)
+    expect(halves.liveRowCount).toBe(halves.floorCount)
+    // And the count is measured on comment-stripped source, so a row that exists only
+    // inside a comment cannot hold the floor up.
+    const ids = PROBE.detail.d26Conjunction.catalogRowIds
+    expect(ids.length).toBe(halves.liveRowCount)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it("half D - a surviving claim must still have a factual row", () => {
+    const halves = rowFor("catalog.claims-gone-entries-stay").halves
+    expect(halves["no-claim-outlives-its-row"]).toBe(true)
+    expect([...halves.orphanClaims]).toEqual([])
+    // The property is not vacuous: the eight D26 venues ARE row-less, so the scan has
+    // a real orphan set to miss and is reported as such.
+    expect(halves.removedSetStillWithoutARow.length).toBe(13)
+    for (const id of [
       "luno",
       "mx-global",
       "hata",
@@ -431,25 +477,109 @@ describe("D26 is a conjunction: claims gone is the half that passes trivially", 
       "funding-circle",
       "selangor-kuasa",
       "pitik"
-    ])
+    ]) {
+      expect(halves.removedSetStillWithoutARow, `${id} must be recorded as row-less`).toContain(id)
+    }
   })
 
-  it("a guard that asserted ONLY 'no claims' would pass today - which is why the conjunction exists", () => {
-    // Both halves true, count 0, check green: the naive guard's world.
+  it("REINTRODUCING a claim about a row-less venue fails half D ALONE", () => {
+    // The loophole the floor would otherwise open: delete a row, keep the claim, and
+    // a count-only check stays green. Half D is what closes it.
+    const probe = cloneProbe()
+    probe.detail = {
+      ...probe.detail,
+      d26Conjunction: {
+        ...probe.detail.d26Conjunction,
+        halves: { ...probe.detail.d26Conjunction.halves, "no-claim-outlives-its-row": false },
+        orphanClaims: [{ id: "luno", file: "apps/dashboard/server/services/opportunities.mjs" }]
+      }
+    }
+    probe.measured["catalog.claims-gone-entries-stay"] = 1
+    const row = evaluateSeam(probe).rows.find((r) => r.id === "catalog.claims-gone-entries-stay")
+    expect(row.ok).toBe(false)
+    expect(row.halves["no-claim-outlives-its-row"]).toBe(false)
+    expect(row.halves["catalog-not-below-owner-approved-floor"]).toBe(true)
+    expect(row.halves["floor-pin-matches-live-count"]).toBe(true)
+    expect(row.halves["no-regulatory-claim"]).toBe(true)
+  })
+
+  it("DELETING rows below the floor fails half B, and the pin-equality half with it", () => {
+    const probe = cloneProbe()
+    probe.detail = {
+      ...probe.detail,
+      d26Conjunction: {
+        ...probe.detail.d26Conjunction,
+        halves: {
+          ...probe.detail.d26Conjunction.halves,
+          "catalog-not-below-owner-approved-floor": false,
+          "floor-pin-matches-live-count": false
+        },
+        liveRowCount: 40
+      }
+    }
+    probe.measured["catalog.claims-gone-entries-stay"] = 2
+    const row = evaluateSeam(probe).rows.find((r) => r.id === "catalog.claims-gone-entries-stay")
+    expect(row.ok).toBe(false)
+    expect(row.halves["catalog-not-below-owner-approved-floor"]).toBe(false)
+    expect(row.halves["floor-pin-matches-live-count"]).toBe(false)
+    expect(row.halves["no-regulatory-claim"]).toBe(true)
+  })
+
+  it("GROWING the catalog past the pin fails the pin-equality half - a floor must not become a ratchet", () => {
+    const probe = cloneProbe()
+    probe.detail = {
+      ...probe.detail,
+      d26Conjunction: {
+        ...probe.detail.d26Conjunction,
+        halves: { ...probe.detail.d26Conjunction.halves, "floor-pin-matches-live-count": false },
+        liveRowCount: 45
+      }
+    }
+    probe.measured["catalog.claims-gone-entries-stay"] = 1
+    const row = evaluateSeam(probe).rows.find((r) => r.id === "catalog.claims-gone-entries-stay")
+    expect(row.ok).toBe(false)
+    // The floor itself still passes - that is the point of a floor rather than an
+    // equality - but the stale pin is caught, so the constant cannot go stale.
+    expect(row.halves["catalog-not-below-owner-approved-floor"]).toBe(true)
+    expect(row.halves["floor-pin-matches-live-count"]).toBe(false)
+  })
+
+  it("a guard that asserted ONLY 'no claims' would pass today - which is why the rest of the conjunction exists", () => {
+    // Half A alone, all others fabricated true: count 0, check green. This is the naive
+    // guard's world, and it is the world D26's second half was invented to prevent.
     const probe = cloneProbe()
     probe.measured["catalog.claims-gone-entries-stay"] = 0
     probe.detail = {
       ...probe.detail,
-      d26Conjunction: { halves: { "no-regulatory-claim": true, "d26-catalog-entries-still-present": true }, entriesAbsent: [], entriesPresent: ["all eight"], entriesExpected: ["all eight"] }
+      d26Conjunction: {
+        halves: {
+          "no-regulatory-claim": true,
+          "catalog-not-below-owner-approved-floor": true,
+          "floor-pin-matches-live-count": true,
+          "no-claim-outlives-its-row": true
+        },
+        floor: { count: 44 },
+        liveRowCount: 44,
+        orphanClaims: [],
+        removedSetStillWithoutARow: []
+      }
     }
     const row = evaluateSeam(probe).rows.find((r) => r.id === "catalog.claims-gone-entries-stay")
     expect(row.ok).toBe(true)
-    // ...and so a DELETION of the eight entries is what the real gate catches.
+    // ...and so a SILENT DELETION of catalog rows is what the real gate catches.
     const afterDeletion = cloneProbe()
-    afterDeletion.measured["catalog.claims-gone-entries-stay"] = 1
+    afterDeletion.measured["catalog.claims-gone-entries-stay"] = 2
     afterDeletion.detail = {
       ...afterDeletion.detail,
-      d26Conjunction: { halves: { "no-regulatory-claim": true, "d26-catalog-entries-still-present": false }, entriesAbsent: ["all eight"], entriesPresent: [], entriesExpected: ["all eight"] }
+      d26Conjunction: {
+        ...afterDeletion.detail.d26Conjunction,
+        halves: {
+          ...afterDeletion.detail.d26Conjunction.halves,
+          "catalog-not-below-owner-approved-floor": false,
+          "floor-pin-matches-live-count": false
+        },
+        liveRowCount: 40
+      }
     }
     expect(evaluateSeam(afterDeletion).rows.find((r) => r.id === "catalog.claims-gone-entries-stay").ok).toBe(false)
   })
@@ -459,12 +589,16 @@ describe("D26 is a conjunction: claims gone is the half that passes trivially", 
     probe.measured["catalog.claims-gone-entries-stay"] = 1
     probe.detail = {
       ...probe.detail,
-      d26Conjunction: { halves: { "no-regulatory-claim": false, "d26-catalog-entries-still-present": true }, entriesAbsent: [], entriesPresent: ["all eight"], entriesExpected: ["all eight"] }
+      d26Conjunction: {
+        ...probe.detail.d26Conjunction,
+        halves: { ...probe.detail.d26Conjunction.halves, "no-regulatory-claim": false }
+      }
     }
     const row = evaluateSeam(probe).rows.find((r) => r.id === "catalog.claims-gone-entries-stay")
     expect(row.ok).toBe(false)
     expect(row.halves["no-regulatory-claim"]).toBe(false)
-    expect(row.halves["d26-catalog-entries-still-present"]).toBe(true)
+    expect(row.halves["catalog-not-below-owner-approved-floor"]).toBe(true)
+    expect(row.halves["no-claim-outlives-its-row"]).toBe(true)
   })
 
   it("names the shape vocabulary, so a reworded claim is in the scan's reach", () => {
@@ -557,7 +691,7 @@ describe("T21 does not require a clean sweep - the honest states are surfaced, n
     // which is exactly why a dedicated job is feasible and why T20 could not add
     // one. The job is still not added - the whitelist amendment is the owner's.
     const bare = spawnSync(process.execPath, [GATE_PATH, "--quiet"], { encoding: "utf8", cwd: REPO_ROOT, timeout: 180_000 })
-    expect(bare.status).toBe(1) // the three real findings, from a bare process
+    expect(bare.status).toBe(0) // the last blocking finding was discharged; from a bare process too
     expect(`${bare.stdout}${bare.stderr}`).toContain("picc-ws7-seam-gate")
     expect(item.ownerRuling).toContain("does NOT transfer")
     expect(item.ownerRuling).toContain("requires a dated spec amendment")
@@ -586,13 +720,11 @@ describe("T21 does not require a clean sweep - the honest states are surfaced, n
    files it must scan, which is what stops "pass because it inspected nothing".
    ========================================================================== */
 
-describe("the real repository produces ONE blocking finding, and its number is pinned", () => {
-  it("names exactly that one, and nothing else fails", () => {
-    expect(REPORT.failures.map((f) => f.id).sort()).toEqual([
-      "catalog.claims-gone-entries-stay"
-    ])
-    expect(REPORT.verdictWord).toBe("fail")
-    expect(gateExitCode(REPORT)).toBe(1)
+describe("the real repository produces ZERO blocking findings, and that is pinned", () => {
+  it("names none, and the gate exits zero", () => {
+    expect(REPORT.failures.map((f) => f.id).sort()).toEqual([])
+    expect(REPORT.verdictWord).toBe("pass")
+    expect(gateExitCode(REPORT)).toBe(0)
   })
 
   it("FINDING 1 - ZERO venue identifiers survive in comment-stripped production code, across no files", () => {
@@ -669,11 +801,14 @@ describe("the real repository produces ONE blocking finding, and its number is p
     expect(fromArchive).toEqual(["react", "react-dom"])
   })
 
-  it("FINDING 3 - D26's second half is unsatisfiable as written: T7b removed the eight rows", () => {
-    expect(rowFor("catalog.claims-gone-entries-stay").measured).toBe(1)
+  it("FINDING 3 - D26's second half was unsatisfiable as written, and is now a floor over the post-T7b count", () => {
+    // T7b removed the eight rows D26's equality demanded, so this check was red for a
+    // TEXT reason. The owner's 2026-10-03 ruling replaced the equality with a floor.
+    expect(rowFor("catalog.claims-gone-entries-stay").measured).toBe(0)
+    expect(rowFor("catalog.claims-gone-entries-stay").verdict).toBe("pass")
     // ...and the removal is RECORDED, not silent: changelog entry 0019 names every
-    // one of the eight rows. That is why this is a spec contradiction to
-    // reconcile rather than an unexplained disappearance.
+    // one of the eight rows. That is why this was a spec contradiction to reconcile
+    // rather than an unexplained disappearance.
     const record = readFileSync(
       join(REPO_ROOT, "docs", "trading-logic", "changelog", "entries", "0019-CATALOG_VENUE_REMOVAL-v1-to-v2.md"),
       "utf8"
@@ -681,6 +816,13 @@ describe("the real repository produces ONE blocking finding, and its number is p
     for (const id of ["luno", "mx-global", "hata", "sinegy", "kinetic", "funding-circle", "selangor-kuasa", "pitik"]) {
       expect(record, `entry 0019 must name ${id}`).toContain(id)
     }
+    // The replacement floor is itself recorded, with its date and its ruling.
+    const amendment = readFileSync(
+      join(REPO_ROOT, "docs", "trading-logic", "changelog", "entries", "0041-D26_CATALOG_FLOOR_AND_VENUE_SURFACE-v1-to-v2.md"),
+      "utf8"
+    )
+    expect(amendment).toContain("44")
+    expect(amendment).toContain("2026-10-03")
   })
 })
 
