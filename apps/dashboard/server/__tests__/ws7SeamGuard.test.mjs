@@ -630,10 +630,15 @@ describe("T21 does not require a clean sweep - the honest states are surfaced, n
     }
   })
 
-  it("the 62 deferred route verdicts are MEASURED, and match the guard's own recorded 62", () => {
+  it("the deferred route verdicts are MEASURED, and the deferred set is now EMPTY", () => {
+    // 62 -> 0. The owner has ruled on every deferred verdict: 24 were gated and their
+    // allowlist rows DELETED, and 38 were ruled public and reclassified to `declared`.
+    // The count is asserted rather than left to the reader, because a deferral nobody
+    // returns to is not a deferral — it is an abandoned queue, and the only thing that
+    // stops it regrowing is a red build when a row reappears with no ruling behind it.
     const item = REPORT.openItems.find((i) => i.id === "route-auth-verdicts-deferred")
-    expect(item.count).toBe(62)
-    expect(item.of).toBe(74)
+    expect(item.count).toBe(0)
+    expect(item.of).toBe(50)
   })
 
   it("the two honest `incomplete` rooms are counted, and NEITHER is a blocking failure", () => {
@@ -884,8 +889,12 @@ describe("the comment stripper is string-aware, and that is load-bearing", () =>
       join(REPO_ROOT, "apps", "dashboard", "server", "__tests__", "ws7RouteAuthCoverageGuard.test.mjs"),
       "utf8"
     )
+    // 62 -> 0, with the allowlist at 50 rows (74 less the 24 the owner gated). The
+    // comment-stripped row count is the measurement; the prose in that file's header
+    // is not, because counting the token anywhere also counts the sentences that
+    // mention it — which is how a recorded backlog number rots while looking green.
     const rows = (stripComments(guardFile).match(/^\s*owner:\s*"decision"\s*,?\s*$/gm) || []).length
-    expect(rows).toBe(62) // the count the file's own header states
+    expect(rows).toBe(0)
   })
 })
 

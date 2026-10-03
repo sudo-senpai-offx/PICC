@@ -271,17 +271,33 @@ describe("WS-7 slice C — a gated destructive delete REFUSES an anonymous calle
     expect(readWatchlists().some((w) => w.id === WATCHLIST_ID)).toBe(true)
   }, ROUTE_BUDGET_MS)
 
-  it("the alert payload is ABSENT from an anonymous refusal, not merely the status", async () => {
+it("the alert payload is ABSENT from an anonymous refusal, not merely the status", async () => {
     // The assertion that a status-only test would miss. The alert registry
     // carries a userId field, so a refusal that echoed the row would be a
     // disclosure wearing a 401.
-    const res = await call("GET", "/api/trading/alerts", {})
-    // The GET is NOT gated — it is a declared-public decision item — so this
-    // documents what the payload looks like, which is what the delete's refusal
-    // must not echo. Kept as its own test so the shape is pinned rather than
-    // assumed.
-    expect(res.status, "the alert registry GET is a declared-public decision item, not a gated route").toBe(200)
-    expect(JSON.stringify(res.body ?? {})).toContain(ALERT_ID)
+    //
+    // THE REGISTRY READ IS NOW GATED, so the payload shape is established WITH A
+    // SESSION. That is the change this test had to absorb, and it is a change of
+    // harness rather than of claim: what is being pinned is still "the id really is
+    // in the payload", which is what makes the refusal's `not.toContain(ALERT_ID)`
+    // below a real assertion rather than a tautology. Reading it anonymously used to
+    // be how the shape was learned, and that route is closed now — which is the point
+    // of the ruling, not an obstacle to it.
+    writeJson(authDir, "sessions.json", {
+      sessions: { [TOKEN]: { userId: "u1", createdAt: Date.now(), expiresAt: Date.now() + 3_600_000 } }
+    })
+    // NOTE the harness shape: this file's `makeReq` takes `authorization` as its own
+    // option and builds the header itself. Passing `{ headers: { ... } }` is silently
+    // IGNORED here — which reads as an anonymous 401 and looks like a gate failure.
+    const authed = await call("GET", "/api/trading/alerts", { authorization: `Bearer ${TOKEN}` })
+    expect(authed.status, `the registry must answer a session, got ${JSON.stringify(authed.body)}`).toBe(200)
+    expect(JSON.stringify(authed.body ?? {})).toContain(ALERT_ID)
+
+    // And the anonymous read of the same registry is now refused outright.
+    const anonymous = await call("GET", "/api/trading/alerts", {})
+    expect(anonymous.status, "the alert registry GET is GATED by the owner's ruling").toBe(401)
+    expect(JSON.stringify(anonymous.body ?? {})).not.toContain(ALERT_ID)
+
     const refusal = await call("POST", "/api/trading/alerts/delete", { body: { id: ALERT_ID } })
     expect(JSON.stringify(refusal.body ?? {})).not.toContain(ALERT_ID)
   }, ROUTE_BUDGET_MS)
@@ -704,6 +720,21 @@ describe("WS-7 slice C — every declared-public route still answers an anonymou
     // comments discuss `owner: "decision"` in prose, and an unanchored pattern
     // would count a sentence as an entry. Anchoring also keeps the two patterns
     // independent in the way the check needs — they must fail differently.
+    // THE FLOOR MOVED, AND IT IS NOW AN EXACT PIN RATHER THAN A LOWERED BAR.
+    //
+    // It read `toBeGreaterThan(60)`, chosen when the allowlist held 74 entries. The
+    // owner's later ruling legitimately removed 24 of them (each gated, each entry
+    // DELETED), leaving 50 — so a floor of 60 would now fail a correct tree. Lowering it
+    // to "greater than 40" would have been the wrong move: it would have relaxed a
+    // number to accommodate a change, which is the "make the count match" move this
+    // file exists to prevent.
+    //
+    // So it is pinned EXACTLY at 50 instead, which is strictly stronger than the floor
+    // it replaces in the direction that matters: a parse that silently finds fewer
+    // entries fails, AND a parse that finds more fails. A vacuous parse — the failure
+    // the original floor existed to catch — finds 0 and fails here too. The two derived
+    // cross-checks above (marker count vs owner count, sweep size vs marker count) are
+    // untouched and still carry the weight.
     const slice = declaredPublicSlice()
     const markerCount = [...slice.matchAll(/^ {4}marker: '([^']+)',?\s*$/gm)].length
     const ownerCount = [...slice.matchAll(/^ {4}owner: "(?:declared|decision)",?\s*$/gm)].length
@@ -719,9 +750,10 @@ describe("WS-7 slice C — every declared-public route still answers an anonymou
     ).toBe(ownerCount)
     expect(
       markerCount,
-      "the allowlist sweep found no markers — a parse that found nothing would make every test below " +
-        "vacuous, which is the exact failure this file exists to prevent"
-    ).toBeGreaterThan(60)
+      "the allowlist is 74 entries less the 24 routes the owner gated = 50. This is an EXACT pin, not a " +
+        "floor: the sweep must find every entry, and finding one that is not there means a row was added " +
+        "or removed without this number moving."
+    ).toBe(50)
   })
 
   for (const marker of MARKERS) {

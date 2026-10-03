@@ -1262,31 +1262,37 @@ function buildOpenItems({ root, tracked, manifest }) {
   const p = (rel) => join(root, rel)
   const items = []
 
-  // 1. Route-auth verdicts still owned by "decision" (T20R's deliberate deferral).
+  // 1. Route-auth verdicts still owned by "decision".
   //
-  // Measured from the COMMENT-STRIPPED allowlist, not from raw text: the file's
-  // own header states "62 of them are still marked owner:\"decision\"" in prose,
-  // and a raw count returns 66 because four of the occurrences are in that very
-  // header. Counting prose as data is how a backlog number goes stale silently,
-  // which is the reason the file records its counts in the first place.
+  // MEASURED, and this figure is now ZERO: the owner has ruled on every verdict T20R
+  // deferred. 24 were gated and their allowlist entries deleted; 38 were ruled public
+  // and reclassified to `declared`. A count of 0 is reported rather than the item being
+  // dropped, so the projection cannot shrink by deletion alone.
+  //
+  // Measured from the COMMENT-STRIPPED allowlist, not from raw text, and by ROW
+  // TERMINATOR rather than by token. The guard file's own comments discuss the deferred
+  // set in prose, so a raw count finds more occurrences than there are rows, and
+  // counting prose as data is how a backlog number goes stale silently.
   {
     const rel = "apps/dashboard/server/__tests__/ws7RouteAuthCoverageGuard.test.mjs"
     const stripped = exists(p(rel)) ? stripComments(readText(p(rel))) : ""
-    // Count the ROW TERMINATOR, not every occurrence: a row ends with a line that
-    // is nothing but `owner: "decision"`. Counting the token anywhere returns 66
-    // against a real 62 because four occurrences live in the header prose that
-    // states the number - which is how a recorded count goes stale silently.
+    // A row ends with a line that is nothing but `owner: "decision"`. Counting the
+    // token anywhere would also count the header prose that states the number.
     const decisions = (stripped.match(/^\s*owner:\s*"decision"\s*,?\s*$/gm) || []).length
     const declared = (stripped.match(/^\s*owner:\s*"declared"\s*,?\s*$/gm) || []).length
     items.push({
       id: "route-auth-verdicts-deferred",
-      classification: "DELIBERATELY DEFERRED",
+      classification: decisions === 0 ? "RULED — NOTHING DEFERRED" : "DELIBERATELY DEFERRED",
       count: decisions,
       of: decisions + declared,
       ownerRuling:
-        "the owner's 2026-09-30 ruling deferred every read-shaped route; T20R gated 21 (their entries DELETED) and ruled 3 public (reclassified owner:\"declared\")",
+        "the owner's 2026-09-30 ruling gated 21 (their entries DELETED) and ruled 3 public; the owner's " +
+        "later ruling closed the remaining 62 — 24 gated with their entries deleted, 38 ruled public and " +
+        "reclassified to declared, so the deferred set is now empty",
       where: `${rel} - the allowlist's row terminators, comment-stripped`,
-      note: "the file's header prose says 62; the comment-stripped row count above is the measurement and is the authority"
+      note:
+        "the comment-stripped row count above is the measurement and is the authority; 0 means every " +
+        "route on this allowlist now carries a decision rather than a pending question"
     })
   }
 

@@ -830,14 +830,20 @@ describe("WS-7 T10 — every producer this task consumes already had a route; T1
 //
 // `GET /api/settings/llm` is in this list for a reason worth stating: its POST
 // sibling at handlers.mjs:2774 IS gated and its GET at :2769 is NOT. That pairing
-// is exactly why the gate check below is bounded to the route's own block — a
+// is exactly why the gate check below is bounded to the route's own block - a
 // fixed-size character window over :2769 also covers :2775 and would have reported
 // the GET as gated, hiding the finding.
+//
+// TWO ENTRIES WERE REMOVED BY THE OWNER'S LATER ROUTE-AUTH RULING, which is the whole
+// point of this list: `/api/trading/signals` (GET) and `/api/trading/status` (GET|POST)
+// were named in it precisely because they were ungated, and both are now GATED with
+// requireAuth. Leaving them would assert that a closed hole is still open, and the
+// check below would go red on a correct tree. They moved out of this list rather than
+// being deleted from the rooms: the rooms still READ those routes, they now read them
+// with a session, which is a different thing and is recorded as such.
 const KNOWN_UNGATED_ROUTES = [
   "/api/health",
-  "/api/settings/llm",
-  "/api/trading/signals",
-  "/api/trading/status"
+  "/api/settings/llm"
 ]
 
 it("the routes T10 reuses are the ones the audit recorded, and each is auth-gated", () => {

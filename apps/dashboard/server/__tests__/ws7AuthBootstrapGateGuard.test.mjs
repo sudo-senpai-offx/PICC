@@ -1338,10 +1338,28 @@ function connectorsSiteIsGated(lines, index) {
     // `/api/integrations/configuration` beside the existing module-level
     // `integrationRegistry.mjs` import — so the module graph did not move either.
     //
-    // THE requireAuth(req, res) CALL-SITE COUNT IS 126 -> 128, one gate per new
+    // THE requireAuth(req, res) CALL-SITE COUNT IS 128 -> 152, one gate per newly gated
     // route, which is how "this round added gates rather than loosening them" is
     // measured rather than asserted on trust.
-    expect(lines, "lines in handlers.mjs").toBe(6376)
+    //
+    // 6,376 -> 6,421, and EVERY ONE OF THE +45 LINES IS ACCOUNTED FOR rather than
+    // absorbed. 24 are the unconditional requireAuth() gate and its own single line,
+    // one per route the owner gated (the 4 proven trading-ledger writers, the 7
+    // LLM-budget routes, and the 13 per-user/operator reads). The other 21 are
+    // COMMENT lines explaining why each gate sits where it does, net of 6 comment
+    // lines the rewrites replaced. And 7 further lines appear as both an addition and
+    // a removal: the /api/notifications wrapper's VAPID branch (4 lines) and status
+    // branch (3 lines) were REORDERED so the always-answering VAPID branch comes
+    // first, which keeps the declared-public wrapper's own region answering before it
+    // reaches any gate. That reorder is net zero and behaviourally inert — the branches
+    // are mutually exclusive on path and method — and it is why this figure is 45 and
+    // not 52.
+    //
+    // THE IMPORT FIGURES ARE UNCHANGED, and that is the load-bearing part: 72 static
+    // and 83 comment-stripped dynamic imports are identical before and after, so not
+    // one of the 45 lines is a new module binding. The growth is gates and the
+    // reasoning attached to them, not structure.
+    expect(lines, "lines in handlers.mjs").toBe(6421)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

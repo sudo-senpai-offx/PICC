@@ -1333,6 +1333,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/twin/run" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     if (validateOr400(res, body, "twinRun")) return true
     try {
       writeJson(res, 200, await handleTwinRun(body))
@@ -1423,6 +1424,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // and a paper-trading ledger. No auto-execution of real orders.
   // -------------------------------------------------------------------
   if (path === "/api/trading/status" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await withTimeout(tradingStatus(), 8000))
     } catch (err) {
@@ -2755,6 +2757,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // implementation was `proAnalyzeExpertOption`, deleted with the venue.
 
   if (path === "/api/trading/pro/narrative" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     const report = body?.report
     if (!report || !report.ok) return writeJson(res, 400, { error: "pro-analysis report required" })
     try {
@@ -2837,6 +2840,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // stripped at write time). GET mirrors the sibling /api/settings/llm read;
   // no secrets cross this surface.
   if (path === "/api/settings/llm/resource" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
     try {
       const [stats, rows] = await Promise.all([governorStats(), recentRows({ limit: 50 })])
       writeJson(res, 200, {
@@ -2968,21 +2972,25 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/paper/positions" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 200, { ok: true, positions: await paperPositions() })
     return
   }
 
   if (path === "/api/trading/paper/overview" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 200, { ok: true, ...(await paperOverview()) })
     return
   }
 
   if (path === "/api/trading/paper/history" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 200, { ok: true, closed: await paperHistory(Math.min(Math.max(Number(body?.limit) || 50, 1), 500)) })
     return
   }
 
   if (path === "/api/trading/signals" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 200, { ok: true, signals: await recentSignals(20) })
     return
   }
@@ -3017,6 +3025,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/accuracy" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await signalAccuracy())
     } catch (err) {
@@ -3026,6 +3035,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/paper/analytics" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await withTimeout(paperAnalytics(), 20000))
     } catch (err) {
@@ -3036,6 +3046,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/assist" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await withTimeout(tradingAssist(body?.question, body?.context ?? {}), 30000))
     } catch (err) {
@@ -3271,6 +3282,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/demo/analytics" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await withTimeout(demoAnalytics(), 10000))
     } catch (err) {
@@ -3281,6 +3293,7 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   if (path === "/api/trading/demo/deals" && (req.method === "GET" || req.method === "POST")) {
+    if (!(await requireAuth(req, res))) return
     try {
       writeJson(res, 200, await demoDeals(Math.min(Math.max(Number(body?.limit) || Number(parsed.searchParams.get("limit")) || 50, 1), 500)))
     } catch (err) {
@@ -3292,6 +3305,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // Phase 15 — full export of the decision log + resolved trade history
   // (JSON or CSV) so the data can be analyzed outside the dashboard.
   if (path === "/api/trading/export" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
     try {
       const format = String(parsed.searchParams.get("format") || "json").toLowerCase()
       const [{ getAutopilotDecisions }, { ledgerHistory }, { perAssetStats }] = await Promise.all([
@@ -3604,11 +3618,13 @@ async function _handleApiInner(req, res, url, reqId) {
 
   // ── Alert Engine ──────────────────────────────────────────────────────
   if (path === "/api/trading/alerts" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
     const { listAlerts, alertStats } = await import("./services/alertEngine.mjs")
     writeJson(res, 200, { ok: true, alerts: listAlerts(), stats: alertStats() })
     return
   }
   if (path === "/api/trading/alerts/history" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
     const { getAlertHistory } = await import("./services/alertEngine.mjs")
     const limit = Math.min(Math.max(Number(parsed.searchParams.get("limit")) || 50, 1), 200)
     const symbol = parsed.searchParams.get("symbol") || null
@@ -4170,13 +4186,26 @@ async function _handleApiInner(req, res, url, reqId) {
       // The list moved to a GATED SIBLING below rather than being digested here,
       // because the wrapper cannot carry a gate: the vapid branch always returns,
       // so a gate before it would gate the key the browser needs before it can
-      // authenticate. `notifierStatus()` itself stays public — it is machine-level
-      // channel state, and `subscriptions` stays as the bare count so no existing
-      // consumer of it is broken. A count is the honest fallback when the endpoint
-      // list is unavailable, which is what the room renders.
-      if (path === "/api/notifications/status" && req.method === "GET") {
-        writeJson(res, 200, n.notifierStatus())
-        return true
+      // authenticate. `notifierStatus()` itself is now GATED — see its branch below,
+      // beside the other gated sub-routes.
+      //
+      // BRANCH ORDER IS LOAD-BEARING, and the vapid branch therefore comes FIRST. Every
+      // gated sub-route below answers only after its own gate, so whichever gated branch
+      // came first would make this declared-public wrapper's own region look like a route
+      // whose gate sits inside a conditional — which is exactly what the guard's nesting
+      // discriminator reports. Putting the always-answering vapid branch first keeps the
+      // wrapper's region answering before it reaches any gate, and it also makes the
+      // invariant the push-endpoints comment states — "no gate inside the wrapper precedes
+      // the key" — literally true of the source rather than merely of the prose. The
+      // branches are mutually exclusive on path and method, so the order carries no
+      // behavioural weight.
+      //
+      // Public by design: the browser needs the VAPID key *before* it can
+      // subscribe, so no auth header exists yet on first load.
+      if (path === "/api/notifications/vapid-public-key" && req.method === "GET") {
+        const publicKey = process.env.VAPID_PUBLIC_KEY
+        if (!publicKey) return writeJson(res, 503, { ok: false, error: "web-push not configured (VAPID_PUBLIC_KEY unset)" })
+        return writeJson(res, 200, { publicKey })
       }
       // WS-7 T20R. setPrefs WRITES the notification preferences store, so it is
       // gated — as the FIRST statement of its own branch rather than by a gate in
@@ -4187,12 +4216,21 @@ async function _handleApiInner(req, res, url, reqId) {
         writeJson(res, 200, { ok: true, prefs: n.setPrefs(body) })
         return true
       }
-      // Public by design: the browser needs the VAPID key *before* it can
-      // subscribe, so no auth header exists yet on first load.
-      if (path === "/api/notifications/vapid-public-key" && req.method === "GET") {
-        const publicKey = process.env.VAPID_PUBLIC_KEY
-        if (!publicKey) return writeJson(res, 503, { ok: false, error: "web-push not configured (VAPID_PUBLIC_KEY unset)" })
-        return writeJson(res, 200, { publicKey })
+      // WS-7 owner ruling. GET /api/notifications/status is GATED as the FIRST
+      // statement of its own branch, ahead of the notifierStatus() call, because it is
+      // not the machine-level read its allowlist entry claimed: it serves channel state
+      // AND `recent` — the last 20 alert records, each carrying a title and a body — which
+      // is operator content rather than machine state. The pre-push review had already
+      // moved the per-device push-endpoint list off this branch to the GATED
+      // push-endpoints below; the alert records were missed, and this gate closes them.
+      //
+      // IT SITS BELOW THE VAPID BRANCH, beside the other gated sub-routes, for the same
+      // reason push-endpoints does: the wrapper cannot carry a gate ahead of the key the
+      // browser needs before it can authenticate.
+      if (path === "/api/notifications/status" && req.method === "GET") {
+        if (!(await requireAuth(req, res))) return true
+        writeJson(res, 200, n.notifierStatus())
+        return true
       }
       // WS-7 T20R, extended by the finding above. listPushSubscriptionEndpoints
       // READS the push-subscription store and returns a per-device identifier, so
@@ -4347,6 +4385,7 @@ async function _handleApiInner(req, res, url, reqId) {
   // ── Cross-platform portfolio: aggregate exposure + risk check ─────────
   // Own path — POST /api/trading/portfolio is the analytics endpoint above.
   if (path === "/api/trading/portfolio/aggregate" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
     try {
       const { aggregateOpenPositions, combinedTodayPnl, portfolioRiskCheck } = await import("./services/positionManager.mjs")
       const agg = await aggregateOpenPositions()
@@ -4604,6 +4643,7 @@ const creds = await getVenueCredentials()
   }
 
   if (path === "/api/trading/risk-of-ruin" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return true
     const winRate = Number(body?.winRate)
     const avgPayout = Number(body?.avgPayout)
     const riskPct = Number(body?.riskPct)
@@ -5089,22 +5129,26 @@ const creds = await getVenueCredentials()
   }
 
   if (path === "/api/streams/snapshot" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 200, await getSnapshot())
     return
   }
 
   if (path === "/api/listing/analyze" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     if (validateOr400(res, body, "listingAnalyze")) return true
     writeJson(res, 200, await handleListingAnalyze(body))
     return
   }
 
   if (path === "/api/listing/keywords" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 200, await handleListingKeywords(body))
     return
   }
 
   if (path === "/api/listing/rewrite" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     writeJson(res, 200, await handleListingRewrite(body))
     return
   }
@@ -5124,6 +5168,7 @@ const creds = await getVenueCredentials()
   }
 
   if (path === "/api/content/generate" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
     if (validateOr400(res, body, "contentGenerate")) return true
     writeJson(res, 200, await handleContentGenerate(body))
     return

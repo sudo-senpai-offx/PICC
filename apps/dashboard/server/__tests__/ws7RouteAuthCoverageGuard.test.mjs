@@ -783,11 +783,22 @@ function isGated(site) {
 // `sourceComment` OPTIONAL, and where present REQUIRED to be inside this route's
 //            own handler block. Used only where the justification genuinely
 //            lives in the source already; never searched by proximity.
-// `owner`   "declared" = the source itself states the public intent, or the route
-//            is structurally public (you cannot require a session to log in).
-//            "decision" = NOT YET RULED ON BY THE OWNER. This is the population
-//            the owner is being asked to decide; see the task report's inventory
-//            table for the per-route recommendation.
+// `owner`   "declared" = public by a decision that HAS been made. Three ways a
+//            row earns it, and all three are decisions rather than defaults:
+//            (a) the source itself states the public intent (a `sourceComment`
+//            entry, or a route comment that says so);
+//            (b) the route is STRUCTURALLY public — you cannot require a
+//            session to log in, to learn whether a session exists, or to receive
+//            a server-to-server webhook;
+//            (c) THE OWNER RULED IT PUBLIC. That is where all 38 of T20R's
+//            deferred rows now sit, and their reasons say so in as many words.
+//            "decision" = NOT YET RULED ON BY THE OWNER, and the population the
+//            owner is being asked to decide. IT IS CURRENTLY EMPTY, and the
+//            assertion that it stays empty is in this file. It is not a
+//            permanent deletion of the vocabulary: it is the honest label for a
+//            row that has no ruling behind it, and a future row that genuinely
+//            has none must be able to use it — which is exactly why the count is
+//            asserted at 0 rather than the field being removed.
 // ---------------------------------------------------------------------------
 const PLACEHOLDER_REASONS = [
   "todo",
@@ -814,14 +825,15 @@ const DECLARED_PUBLIC = [
   // WS-7 T20R — THE OWNER'S 2026-09-30 RULING ON THESE ENTRIES, IN ONE PLACE
   // ==========================================================================
   //
-  // The ruling had three parts, and they are worth restating here because the
-  // `owner` field alone cannot express the difference between "public because I
-  // decided so" and "public because I have not looked yet":
+  // The T20R ruling had three parts, and they are worth restating here because
+  // the `owner` field alone cannot express the difference between "public because
+  // I decided so" and "public because I have not looked yet":
   //
-  //   1. GATE every genuinely-mutating single-method route among the 86 pending
-  //      decision entries, and DELETE those allowlist entries. Gated: 21. The
-  //      `no route is BOTH gated and allowlisted` assertion below is what makes
-  //      the deletion non-optional — a gate with a surviving entry would be red.
+  //   1. GATE every genuinely-mutating single-method route among the then-pending
+  //      decision entries, and DELETE those allowlist entries. Gated: 21.
+  //      The `no route is BOTH gated and allowlisted` assertion below is what
+  //      makes the deletion non-optional — a gate with a surviving entry would be
+  //      red.
   //
   //   2. KEEP a short must-be-public list as explicit `declared` entries, each
   //      with a real reason, with no `owner: "decision"` left among them. Ruled
@@ -831,9 +843,32 @@ const DECLARED_PUBLIC = [
   //      /api/auth/signup, /api/auth/login, /api/auth/signout,
   //      /api/settings/session-capture, /api/system/capabilities).
   //
-  //   3. DEFER the remaining reads. They stay owner:"decision", untouched and
-  //      honestly labelled: 62 of them. Nothing below was quietly gated or
-  //      quietly allowlisted to make a count look tidier.
+  //   3. DEFER the remaining reads. They stayed owner:"decision", untouched and
+  //      honestly labelled: 62 of them.
+  //
+  // ── AND THEN THE OWNER RULED ON THOSE 62 AS WELL. THIS BLOCK IS THE RECORD ──
+  //
+  // T20R's part 3 was a deferral, and a deferral that nobody ever returns to is
+  // not a deferral, it is an abandoned queue. So the owner has now ruled on every
+  // one of the 62, and the consequences are recorded here rather than inferred:
+  //
+  //   * 24 GATED and their allowlist entries DELETED — not reworded. A gated
+  //     route with a surviving entry is the exact rot this file exists to catch,
+  //     and the "no route is BOTH gated and allowlisted" assertion is what holds
+  //     the line. Each one also carries a negative 401 assertion at the HTTP
+  //     boundary in `routeAuthRuling24Gates.test.mjs`, because a static scan is
+  //     satisfied by a gate that never runs.
+  //   * 36 RULED PUBLIC, reclassified to `declared`, each with its reason
+  //     corrected to describe what the code actually does.
+  //   * 2 RULED PUBLIC and reclassified to `declared` as STANDING RECORDS:
+  //     /api/stripe/webhook and /api/profile/github/callback. Both are
+  //     authenticated by something other than a session, so neither can carry
+  //     requireAuth, and the owner has confirmed that is the intended design
+  //     rather than a pending question. Their entries say so in as many words.
+  //
+  // `owner: "decision"` IS NOW 0, and that is asserted in this file so the
+  // deferred set cannot silently regrow: a new allowlist row that arrives without
+  // an owner ruling fails the build instead of joining a queue nobody reads.
   //
   // A NOTE ON WHAT "GATE" MEANS HERE, because it is a rule and not a preference:
   // `requireAuth(req, res)` as the FIRST statement of the branch, ahead of any
@@ -841,15 +876,14 @@ const DECLARED_PUBLIC = [
   // configured` response is dead code, and `isGated` rejects exactly that
   // ("the route answers BEFORE its gate"). T9 established the runtime half of
   // the rule — a static scan can be satisfied by a gate that never runs — so
-  // every route gated here also carries a negative 401 assertion in
-  // `t20rRouteAuthGates.test.mjs`.
+  // every route gated here also carries a negative 401 assertion.
   //
-  // TWO MUTATING ROUTES THE RULE REACHED AND T20R DID NOT FOLLOW, both left
-  // `decision` and both recorded in full at their entries rather than here:
-  // /api/stripe/webhook (authenticated by HMAC signature; a session gate would
-  // reject every real delivery) and /api/profile/github/callback (a browser
-  // redirect that cannot carry an Authorization header). Following the rule
-  // mechanically on either one would have been a functional regression.
+  // TWO MUTATING ROUTES THE RULE REACHED AND T20R DID NOT FOLLOW, both now
+  // reclassified as standing records and neither left `decision`: /api/stripe/webhook
+  // (authenticated by HMAC signature; a session gate would reject every real
+  // delivery) and /api/profile/github/callback (a browser redirect that cannot
+  // carry an Authorization header). Following the rule mechanically on either one
+  // would have been a functional regression.
 
   // ── Health / liveness / status ───────────────────────────────────────────
   {
@@ -863,42 +897,58 @@ const DECLARED_PUBLIC = [
     owner: "declared"
   },
   {
-    marker: 'if (path === "/api/trading/status" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Advisory engine status: feed mode, leg health, freshness ages. Machine-level, no user data, and " +
-      "the dashboard polls it before a session exists. DECISION ITEM: it does reveal which market-data " +
-      "legs are live, which is a small reconnaissance surface. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
-  {
+    // RULED PUBLIC BY THE OWNER, and the reason is corrected rather than inherited.
+    //
+    // IT USED TO SAY the snapshot was "Machine-level. DECISION ITEM: the calibration
+    // and autopilot sections describe how this instance is configured... it carries no
+    // per-user rows." Both halves of that were wrong in the way this branch exists to
+    // catch. WHAT THE CODE ACTUALLY DOES, and it is checkable at the HTTP boundary:
+    // the handler fetches 200 candles from a live broker on EVERY request
+    // (`fetchCandles`, handlers.mjs) and times the result, so an anonymous caller
+    // can drive an unbounded sequence of live-broker round trips. That is an
+    // outbound-spend surface, not a local status read, and "machine-level" does not
+    // describe it.
+    //
+    // RULED PUBLIC ANYWAY, on the stated ground that the rate limit is the control
+    // for it — the same ground the 21 market-data proxies rest on. The gate would not
+    // have been wrong; it was ruled not to be the answer here.
     marker: 'if (path === "/api/trading/health" && (req.method === "GET" || req.method === "POST")) {',
     reason:
-      "Deep trading health snapshot: liveEO freshness, autopilot status, calibration summary. " +
-      "Machine-level. DECISION ITEM: the calibration and autopilot sections describe how this instance " +
-      "is configured. RECOMMENDATION: leave public; it carries no per-user rows.",
-    owner: "decision"
+      "Live trading-health probe, and it is NOT compute-only: the handler fetches 200 " +
+      "candles from a live broker per request and reports the timing alongside the " +
+      "freshness, autopilot and calibration sections, so an anonymous caller can drive " +
+      "repeated live-broker round trips. That outbound spend is the real exposure " +
+      "here, and it is machine-level in the sense that matters: no per-user row and no " +
+      "caller-keyed store is read. RULED PUBLIC BY THE OWNER on the ground that the " +
+      "rate limit is the control for an outbound-fetch surface, the same ground the " +
+      "market-data proxies rest on. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/scheduler/status" && (req.method === "GET" || req.method === "POST")) {',
     reason:
-      "Scheduler registry: which jobs are registered, last run, next run. Machine-level, no user data. " +
-      "DECISION ITEM: job names disclose the deployment's enabled features. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Scheduler registry: which jobs are registered, last run, next run. Machine-level: it reads no " +
+      "per-user store and returns no per-user row. It does disclose job names, which reveals which features " +
+      "this deployment has enabled. RULED PUBLIC BY THE OWNER as one of the static machine-state reads. " +
+      "STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/signals/status" && req.method === "GET") {',
     reason:
-      "Advisory signal-window countdown state, which the in-app chip polls. Shared engine state, not " +
-      "user state. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Advisory signal-window countdown state, which the in-app chip polls. Shared engine state: no " +
+      "per-user store is read and no per-user row is returned. RULED PUBLIC BY THE OWNER as one of the " +
+      "static machine-state reads. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/btcpay/status" && (req.method === "GET" || req.method === "POST")) {',
     reason:
       "BTCPay node health probe. Reports whether the node is configured and reachable; it carries no " +
-      "invoice, amount or user data. DECISION ITEM: node URL reachability is environment " +
-      "reconnaissance. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "invoice, amount or per-user row. What it does disclose is node reachability, which is environment " +
+      "reconnaissance about this deployment. RULED PUBLIC BY THE OWNER as one of the static machine-state " +
+      "reads. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     // T20R: RULED PUBLIC by the owner, and the reason is the scrape contract
@@ -923,58 +973,61 @@ const DECLARED_PUBLIC = [
   {
     marker: 'if (path === "/api/finance/quote" && req.method === "POST") {',
     reason:
-      "Public equity/ETF quotes for caller-supplied tickers. Pure third-party market data keyed by the " +
-      "caller's own input. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Public equity/ETF quotes for caller-supplied tickers, bounded to 20 by the handler. Pure " +
+      "third-party market data keyed by the caller's own request body; no store read and no per-user " +
+      "row crosses. RULED PUBLIC BY THE OWNER as one of the outbound market-data proxies, whose real " +
+      "control is the rate limit rather than a session. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/finance/forecast" && req.method === "POST") {',
     reason:
-      "Price-history forecast for a caller-supplied ticker. Derived from public market data. " +
-      "DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Price-history forecast for a caller-supplied ticker, derived entirely from public market data. " +
+      "No store read and no per-user row crosses. RULED PUBLIC BY THE OWNER as one of the outbound " +
+      "market-data proxies, whose real control is the rate limit rather than a session. STANDING " +
+      "RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/crypto/market" && (req.method === "GET" || req.method === "POST")) {',
     reason:
-      "Public crypto market snapshot from a third-party aggregator: prices, market caps and 24h " +
-      "moves for the caller's coin list. No store read and no user data; every value comes from an " +
-      "upstream public API keyed by the caller's own request. DECISION ITEM. RECOMMENDATION: leave " +
-      "public — gating it would add nothing an upstream API does not already give away, and its " +
-      "siblings /api/crypto/price and /api/yields are on the same footing.",
-    owner: "decision"
+      "Public crypto market snapshot from a third-party aggregator: prices, market caps and 24h moves for " +
+      "the caller's coin list. It reads no store and returns no per-user row; every value comes from an " +
+      "upstream public API keyed by the caller's own request. RULED PUBLIC BY THE OWNER as one of the " +
+      "outbound market-data proxies, whose real control is the rate limit rather than a session — gating it " +
+      "would add nothing an upstream public API does not already give away. Its siblings /api/crypto/price " +
+      "and /api/yields are on the same footing. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/crypto/price" && (req.method === "GET" || req.method === "POST")) {',
     reason:
-      "Public crypto price for a caller-supplied coin id: price, market cap and 24h move, straight " +
-      "from an upstream public aggregator. No store read, no user data, and the coin id comes from the " +
-      "caller's own request body. DECISION ITEM. RECOMMENDATION: leave public — its sibling " +
-      "/api/crypto/market is on exactly the same footing and is also ungated.",
-    owner: "decision"
+      "Public crypto price for a caller-supplied coin id: price, market cap and 24h move, straight from " +
+      "an upstream public aggregator. It reads no store and returns no per-user row, and the coin id comes " +
+      "from the caller's own request body. RULED PUBLIC BY THE OWNER as one of the outbound market-data " +
+      "proxies, whose real control is the rate limit rather than a session; its sibling /api/crypto/market " +
+      "is on exactly the same footing. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/yields" && (req.method === "GET" || req.method === "POST")) {',
     reason:
       "Public treasury and DEX yield snapshot for the caller's instruments. Every value is upstream " +
-      "public data keyed by the caller's own request; there is no store read. DECISION ITEM. " +
-      "RECOMMENDATION: leave public, on the same footing as /api/crypto/market and /api/crypto/price.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/twin/run" && req.method === "POST") {',
-    reason:
-      "Stateless 'twin' simulation over caller-supplied inputs. No store read, no user data. " +
-      "DECISION ITEM: it is a compute-cost surface, and the general rate limit is the only control. " +
-      "RECOMMENDATION: leave public.",
-    owner: "decision"
+      "public data keyed by the caller's own request; there is no store read and no per-user row. RULED " +
+      "PUBLIC BY THE OWNER as one of the outbound market-data proxies, whose real control is the rate " +
+      "limit rather than a session, on the same footing as /api/crypto/market and /api/crypto/price. " +
+      "STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/predict" && req.method === "POST") {',
     reason:
-      "Model prediction for a caller-supplied symbol and horizon. Reads market data, not user state. " +
-      "DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Model prediction for a caller-supplied symbol and horizon. Reads market data keyed by the " +
+      "caller's own request body and no store at all, so no per-user or operator row crosses. " +
+      "RULED PUBLIC BY THE OWNER as one of the outbound market-data proxies, whose real control is " +
+      "the rate limit rather than a session — the same ground as its /api/trading/pro/analyze " +
+      "sibling below. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     // D2/AC-005: the `/api/trading/analyze` allowlist entry is REMOVED with the
@@ -986,21 +1039,23 @@ const DECLARED_PUBLIC = [
     // `/api/trading/predict`, both still allowlisted below.
     marker: 'if (path === "/api/trading/pro/analyze" && req.method === "POST") {',
     reason:
-      "Pro-tier asset analysis over caller-supplied symbol. Reads market data, not user state. " +
-      "DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Pro-tier asset analysis over a caller-supplied symbol. Reads market data keyed by the caller's " +
+      "own request body and no store at all. RULED PUBLIC BY THE OWNER as one of the outbound " +
+      "market-data proxies, whose real control is the rate limit rather than a session. STANDING " +
+      "RECORD, not an open question.",
+    owner: "declared"
   },
   {
     // D2/AC-005: the `/api/trading/pro/expertoption` allowlist entry is REMOVED
     // with the route. Its only implementation was `proAnalyzeExpertOption`,
     // deleted with the venue.
-    marker: 'if (path === "/api/trading/pro/narrative" && req.method === "POST") {',
-    reason:
-      "Narrative summary of a pro-analysis report the CALLER supplied in the body. It reads the " +
-      "request, not a store. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
-  {
+    //
+    // AND THE `/api/trading/pro/narrative` ENTRY THAT USED TO SIT HERE IS DELETED.
+    // It summarised a caller-supplied pro-analysis report through a paid model, so an
+    // anonymous caller could drive LLM spend on it; it is now GATED. A gated route
+    // with a surviving allowlist row reads as coverage while excusing nothing, which is
+    // the rot this file exists to prevent, so the row is removed rather than reworded.
+    //
     // D2/AC-005: the `/api/trading/feed-mode` allowlist entry is REMOVED with
     // the route. It read and wrote the feed-mode preference and reported live-LEG
     // health; every leg it described belonged to the deleted ExpertOption
@@ -1012,134 +1067,197 @@ const DECLARED_PUBLIC = [
     // exists to prevent.
     marker: 'if (path === "/api/trading/news" && (req.method === "GET" || req.method === "POST")) {',
     reason:
-      "News digest for a caller-supplied symbol or topic. Third-party content, no store read, no user " +
-      "data. DECISION ITEM — it is an outbound-fetch surface whose only control is the general rate " +
-      "limit. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "News digest for a caller-supplied symbol or topic. Third-party content keyed by the caller's " +
+      "own request; no store read and no per-user row crosses. RULED PUBLIC BY THE OWNER as one of " +
+      "the outbound market-data proxies, whose real control is the rate limit rather than a session. " +
+      "STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
+    // CORRECTED, because its old reason claimed "no store read and no user data crosses" and
+    // the store claim is false: when the caller supplies NO symbols this route falls back
+    // to `getWatchlist()`, which reads the operator's saved watchlist. So it is not
+    // purely caller-keyed, which is what the old wording implied.
+    //
+    // NOT GATED, because the owner's ruling named 24 routes and this is not one of them.
+    // FLAGGED FOR A FOLLOW-UP RULING alongside /api/trading/watchlists and
+    // /api/trading/candles, which have the same shape of per-user exposure.
     marker: 'if (path === "/api/trading/scan" && req.method === "POST") {',
     reason:
-      "Opportunity scan over caller-supplied symbols. Reads market data only; no store read and no user " +
-      "data crosses. DECISION ITEM. RECOMMENDATION: leave public, and bound the symbol count as the " +
-      "screener sibling already is.",
-    owner: "decision"
+      "Opportunity scan over caller-supplied symbols, with live market data as its only priced input. " +
+      "IT IS NOT PURELY CALLER-KEYED: when the caller supplies no symbols this route falls back to " +
+      "getWatchlist(), which reads the operator's own saved watchlist - so the old \"no store read\" was " +
+      "wrong. STILL PUBLIC because the owner's ruling named 24 routes and this is not one of them; " +
+      "NEEDS A FOLLOW-UP RULING, and the symbol count should be bounded as the screener sibling already " +
+      "is. Left ungated deliberately, and recorded rather than corrected away.",
+    owner: "declared"
   },
   {
+    // CORRECTED, and it is one of the ten reasons this round found FACTUALLY WRONG.
+    //
+    // IT SAID: "OHLCV candles for a caller-supplied asset and timeframe... Reads the
+    // liveEO buffer and Yahoo, not a user store." The second clause is false: this POST
+    // also reads `chart-prefs.json`, which is keyed BY userId, so the stored chart
+    // preferences are part of the answer alongside the caller's own symbol and timeframe.
+    //
+    // WHAT IT IS NOW, and checkable: the candles themselves still come from the liveEO
+    // buffer and Yahoo, keyed by the caller's request, but the response's preference
+    // fields are read from a per-user store. So this is NOT purely caller-keyed.
+    //
+    // NOT GATED, and the reason is recorded rather than implied: the owner's ruling named
+    // 24 routes and this is not one of them. FLAGGED FOR A FOLLOW-UP RULING, because a
+    // per-user store read served anonymously is the same class as the reads this round
+    // gated. Left ungated deliberately.
     marker: 'if (path === "/api/trading/candles" && req.method === "POST") {',
     reason:
       "OHLCV candles for a caller-supplied asset and timeframe, with honest source/timeframe tagging. " +
-      "Reads the liveEO buffer and Yahoo, not a user store. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "THE CANDLES come from the liveEO buffer and Yahoo and are keyed by the caller's own request, but " +
+      "this route ALSO READS chart-prefs.json, which is keyed BY userId - so the old \"not a user store\" " +
+      "was wrong and the stored chart preferences are part of the answer. That makes it a per-user read " +
+      "served anonymously. STILL PUBLIC because the owner's ruling named 24 routes and this is not one " +
+      "of them; NEEDS A FOLLOW-UP RULING. Left ungated deliberately, and recorded rather than corrected " +
+      "away.",
+    owner: "declared"
   },
   {
+    // CORRECTED, and it is one of the ten reasons this round found FACTUALLY WRONG.
+    //
+    // IT SAID: "Third-party macro data, no store read, no user data." Both halves were
+    // literally true and the sentence was still wrong, because it was SILENT about the
+    // thing that actually matters here: this route performs an OUTBOUND fetch of
+    // CALENDAR_URL on every request. Its siblings /api/trading/news and
+    // /api/opportunities/bounties disclose exactly that, and this entry did not — so a
+    // reader comparing the three would conclude the calendar was a local read.
+    //
+    // The store half stays true and is now stated as narrowly as it actually is.
     marker: 'if (path === "/api/trading/calendar" && req.method === "GET") {',
     reason:
-      "Economic calendar with a per-event impact summary. Third-party macro data, no store read, no " +
-      "user data. DECISION ITEM. RECOMMENDATION: leave public; it is reference data the dashboard " +
-      "cannot render without.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/portfolio/aggregate" && req.method === "POST") {',
-    reason:
-      "Cross-platform aggregate exposure plus a risk check. DECISION ITEM — this one needs a closer " +
-      "look than the others, because 'aggregate' and the returned todayPnl/riskCheck fields suggest it " +
-      "may fold in the user's own positions. RECOMMENDATION: owner should confirm whether it reads " +
-      "any per-user position store; if it does, gate it.",
-    owner: "decision"
+      "Economic calendar with a per-event impact summary, served from an OUTBOUND fetch of CALENDAR_URL " +
+      "on every request - the same outbound-fetch surface its /api/trading/news and " +
+      "/api/opportunities/bounties siblings disclose, which this entry used to be silent about. It reads " +
+      "no store at all, so there is no per-user row either, but the real exposure is the ungoverned " +
+      "upstream call rather than anything it discloses. RULED PUBLIC BY THE OWNER on the ground that the " +
+      "rate limit is the control for an outbound market-data fetch, and it is reference data the dashboard " +
+      "cannot render without. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/stress-test" && req.method === "POST") {',
     reason:
-      "Hypothetical stress test over caller-supplied symbols and weights. It computes from market " +
-      "data, not from the user's own portfolio store. DECISION ITEM. RECOMMENDATION: leave public, " +
-      "and confirm with the owner that the sibling /api/trading/portfolio/aggregate is genuinely " +
-      "separate — that one is a separate decision below.",
-    owner: "decision"
+      "Hypothetical stress test over caller-supplied symbols and weights. It computes entirely from " +
+      "market data and reads no position store, so it does NOT touch the operator's own portfolio - " +
+      "which is the distinction that matters here, because its /api/trading/portfolio/aggregate sibling " +
+      "does read the operator's ledger and was GATED and deleted in this round. RULED PUBLIC BY THE " +
+      "OWNER as one of the outbound market-data proxies, whose real control is the rate limit rather than " +
+      "a session. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/screener" && req.method === "POST") {',
     reason:
-      "Screener run over caller-supplied filters, bounded to 50 rows by the handler itself. Reads " +
-      "market data only; no store read and no user data crosses. DECISION ITEM. RECOMMENDATION: leave " +
-      "public — the row bound is the control that matters here, not a session.",
-    owner: "decision"
+      "Screener run over caller-supplied filters, bounded to 50 rows by the handler itself. It reads market " +
+      "data only and crosses no per-user row. RULED PUBLIC BY THE OWNER as one of the outbound market-data " +
+      "proxies, whose real control is the rate limit rather than a session — and the 50-row bound the " +
+      "handler applies is the other half of that control. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/patterns" && req.method === "POST") {',
     reason:
-      "Chart-pattern detection for a caller-supplied symbol, over historical candles. Reads market " +
-      "data only; no store read and no user data crosses. DECISION ITEM. RECOMMENDATION: leave public, " +
-      "as with its /api/trading/indicators sibling.",
-    owner: "decision"
+      "Chart-pattern detection for a caller-supplied symbol, over historical candles. It reads market data " +
+      "only and crosses no per-user row. RULED PUBLIC BY THE OWNER as one of the outbound market-data " +
+      "proxies, whose real control is the rate limit rather than a session, on the same footing as its " +
+      "/api/trading/indicators sibling. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/backtest" && req.method === "POST") {',
     reason:
-      "Strategy backtester: walk-forward hit rates, equity curve, drawdown over historical candles. " +
-      "Reads market data, not user state. DECISION ITEM — it is an unbounded compute surface whose only " +
-      "control is the general rate limit. RECOMMENDATION: leave public, but bound the window.",
-    owner: "decision"
+      "Strategy backtester: walk-forward hit rates, equity curve and drawdown over historical candles. " +
+      "It reads market data rather than user state, and crosses no per-user row. What it IS is an unbounded " +
+      "compute surface, and the general rate limit is its only control. RULED PUBLIC BY THE OWNER as one " +
+      "of the outbound market-data proxies on that basis; bounding the window remains worth doing. " +
+      "STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/levels" && req.method === "POST") {',
-    reason: "Ideal buy/sell levels for a caller-supplied asset and timeframe. Reads market data. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+    reason:
+      "Ideal buy/sell levels for a caller-supplied asset and timeframe. It reads market data only, crosses " +
+      "no per-user row, and performs no store read. RULED PUBLIC BY THE OWNER as one of the outbound " +
+      "market-data proxies, whose real control is the rate limit rather than a session. STANDING RECORD, " +
+      "not an open question.",
+    owner: "declared"
   },
   {
+    // CORRECTED, and it is one of the ten reasons this round found FACTUALLY WRONG.
+    //
+    // IT SAID: "Reads live quotes and feed config, not user state." The quotes half is
+    // right; the "not user state" half is not, and it was not a subtle miss: the route
+    // OPENS venue-credentials.json, and its response enumerates the configured exchanges,
+    // so an anonymous caller learns which venues this deployment has credentials for.
+    // Credential material never crosses, but venue CONFIGURATION does, and that is
+    // operator state read from a store.
     marker: 'if (path === "/api/trading/spread" && req.method === "POST") {',
     reason:
-      "Cross-venue price spread with a fee-adjusted edge, for a caller-supplied asset. Reads live " +
-      "quotes and feed config, not user state. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Cross-venue price spread with a fee-adjusted edge, for a caller-supplied asset. The quotes come " +
+      "from live market data keyed by the caller's own request, but this route ALSO OPENS " +
+      "venue-credentials.json and the response ENUMERATES THE CONFIGURED EXCHANGES - so the old \"not " +
+      "user state\" was wrong: it discloses which venues this deployment holds credentials for. No " +
+      "credential material crosses, so this is configuration disclosure rather than a secret leak. RULED " +
+      "PUBLIC BY THE OWNER as one of the outbound market-data proxies, whose real control is the rate " +
+      "limit rather than a session. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/models" && req.method === "POST") {',
     reason:
-      "Model matrix over a caller-supplied asset and timeframe, multiplexing multi-model consensus " +
-      "over historical candles. Reads market data only. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Model matrix over a caller-supplied asset and timeframe, multiplexing multi-model consensus over " +
+      "historical candles. It reads market data only and crosses no per-user row. RULED PUBLIC BY THE " +
+      "OWNER as one of the outbound market-data proxies, whose real control is the rate limit rather than " +
+      "a session. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
-    marker: 'if (path === "/api/trading/risk-of-ruin" && req.method === "POST") {',
-    reason:
-      "Risk-of-ruin maths over caller-supplied win rate, payout, risk percent and balance, falling " +
-      "back to aggregate signal accuracy. It echoes the CALLER's balance back as an input echo, and " +
-      "reads the shared accuracy ledger for the defaults. DECISION ITEM. RECOMMENDATION: leave public; " +
-      "the accuracy default is aggregate, not per-user.",
-    owner: "decision"
-  },
-  {
+    // GATED, AND ITS ALLOWLIST ENTRY DELETED WITH IT. riskOfRuin falls back to the
+    // AGGREGATE accuracy ledger (`signalAccuracy()`) for its defaults, which is the
+    // operator's own recorded win rate — so this was never the caller-keyed arithmetic
+    // its old reason claimed. It is GATED, not reworded.
     marker: 'if (path === "/api/trading/sessions" && req.method === "GET") {',
     reason:
-      "Current and scheduled trading sessions. Pure calendar data: which market windows are open and " +
-      "when the next ones start. No store read and no user data. DECISION ITEM. RECOMMENDATION: leave " +
-      "public — the dashboard cannot render session state without it.",
-    owner: "decision"
+      "Current and scheduled trading sessions. Pure calendar data: which market windows are open and when " +
+      "the next ones start. It reads no store and crosses no per-user row. RULED PUBLIC BY THE OWNER as " +
+      "one of the static machine-state reads — the dashboard cannot render session state without it. " +
+      "STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/sessions/asset" && req.method === "POST") {',
     reason:
       "Session lookup for a caller-supplied symbol: which windows that instrument trades in. Pure " +
-      "calendar data keyed by the caller's own request, no store read. DECISION ITEM. " +
-      "RECOMMENDATION: leave public, as with its /api/trading/sessions sibling.",
-    owner: "decision"
+      "calendar data keyed by the caller's own request; no store read and no per-user row. RULED PUBLIC " +
+      "BY THE OWNER as one of the static machine-state reads, on the same footing as its " +
+      "/api/trading/sessions sibling. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/venues" && req.method === "GET") {',
     reason:
-      "Venue list and deep-link metadata for an asset. The source comment above the site says " +
-      "'public redirect metadata (no execution, R5)'. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Venue list and deep-link metadata for an asset. Static reference data describing each venue and " +
+      "where to reach it; it performs no execution and reads no store. The source comment above the site " +
+      "says 'public redirect metadata (no execution, R5)', and the code honours that: no order path is " +
+      "reachable from here. RULED PUBLIC BY THE OWNER as one of the static machine-state reads. STANDING " +
+      "RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/trading/catalog" && req.method === "GET") {',
     reason:
-      "Grouped asset catalog for the symbol selector: every symbol the instance will resolve, " +
-      "server-side filtered to the resolvable ones. Static reference data, no store read, no user " +
-      "data. DECISION ITEM. RECOMMENDATION: leave public — the Live Chart cannot populate without it.",
-    owner: "decision"
+      "Grouped asset catalog for the symbol selector: every symbol the instance will resolve, server-side " +
+      "filtered to the resolvable ones. Static reference data with no store read and no per-user row. RULED " +
+      "PUBLIC BY THE OWNER as one of the static machine-state reads — the Live Chart cannot populate " +
+      "without it. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     // CORRECTED, because the reason this entry gave was FACTUALLY FALSE and a
@@ -1162,98 +1280,98 @@ const DECLARED_PUBLIC = [
     // `unconfiguredReason` — are served only by `/api/integrations/configuration`,
     // which is gated. `integrationRoutesDisclosure.test.mjs` asserts the absence
     // at the HTTP boundary, so "checkable" is not a claim.
+    // THAT CORRECTION WAS ITSELF INCOMPLETE, and this round found it. The rewritten reason
+    // said the projection carries "unconfiguredReason present and null". That is true of
+    // only 5 of the 13 rows: the 8 STATIC rows are built by a different code path and
+    // carry SIX keys each, with no `unconfiguredReason` at all. So the sentence described
+    // the derived rows and silently misdescribed the static ones.
+    //
+    // THE SHAPE AS IT ACTUALLY IS, and it is checkable: 5 rows are derived and carry
+    // `unconfiguredReason` (null); 8 rows are static and carry six reference keys instead.
+    // `integrationRoutesDisclosure.test.mjs` asserts at the HTTP boundary that neither shape
+    // leaks an env-derived field, so the claim below is verified rather than asserted.
     marker: 'if (path === "/api/integrations" && req.method === "GET") {',
     reason:
-      "Per-ministry integration catalog, serving the PROJECTION from getUnauthenticatedIntegrations(): id, " +
-      "ministry, name, url, purpose, boundary, retrievalMode and licensedBasis, with unconfiguredReason " +
-      "present and null. It carries NO field derived from process.env and makes NO claim about this machine's " +
-      "configuration: `state`, `configEvidence` and `unconfiguredReason` are served only by the GATED " +
-      "/api/integrations/configuration. `unconfiguredReason` is dropped rather than reduced to its DECLARED " +
-      "half because that sentence opens \"NEWSAPI_API_KEY is unset, so the licensed NewsAPI leg cannot run\" - " +
-      "reference data about what the source REQUIRES, and also a claim that this key IS unset. So an " +
-      "anonymous caller cannot read which credentials this deployment holds, in either direction. Boundary " +
-      "metadata is still static reference data describing each SOURCE. DECISION ITEM: the catalog is a map of " +
-      "what this deployment COULD reach. RECOMMENDATION: leave the catalog public and keep the configuration " +
-      "surface gated.",
-    owner: "decision"
+      "Per-ministry integration catalog, serving the PROJECTION from getUnauthenticatedIntegrations(). " +
+      "The 13 rows are NOT uniform and this entry previously described only half of them: 5 are DERIVED " +
+      "and carry id, ministry, name, url, purpose, boundary, retrievalMode, licensedBasis and " +
+      "unconfiguredReason (null); the other 8 are STATIC and carry six reference keys each with no " +
+      "unconfiguredReason field at all. Neither shape carries any field derived from process.env and " +
+      "neither makes a claim about this machine's configuration: `state`, `configEvidence` and the " +
+      "observed clause of `unconfiguredReason` are served only by the GATED " +
+      "/api/integrations/configuration, and integrationRoutesDisclosure.test.mjs asserts that absence at " +
+      "the HTTP boundary. So an anonymous caller cannot read which credentials this deployment holds, in " +
+      "either direction. What the catalog does disclose is a map of what this deployment COULD reach. " +
+      "RULED PUBLIC BY THE OWNER as one of the static reference reads, on that basis. STANDING RECORD, " +
+      "not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path.startsWith("/api/integrations/") && req.method === "GET") {',
     reason:
-      "One ministry's integration entries, from the same PROJECTION as the sibling above: getUnauthenticated" +
-      "MinistryIntegrations() strips the env-derived `state`, `configEvidence` and `unconfiguredReason` the " +
-      "same way, so this branch discloses no more than the flat route does. The ministry name comes from the " +
-      "caller's own path, and an unknown ministry yields an honest empty list rather than a 404. NOTE: this " +
-      "startsWith branch sits BELOW the gated /api/integrations/configuration on purpose - a gated path placed " +
-      "after it would be answered by this projection before its gate ran. DECISION ITEM. RECOMMENDATION: " +
-      "leave public.",
-    owner: "decision"
+      "One ministry's integration entries, from the same PROJECTION as the sibling above, with the same " +
+      "two row shapes: 5 derived rows carrying unconfiguredReason (null) and 8 static rows carrying six " +
+      "reference keys. getUnauthenticatedMinistryIntegrations() strips the env-derived `state`, " +
+      "`configEvidence` and `unconfiguredReason` the same way, so this branch discloses no more than the " +
+      "flat route does. The ministry name comes from the caller's own path, and an unknown ministry yields " +
+      "an honest empty list rather than a 404. NOTE: this startsWith branch sits BELOW the gated " +
+      "/api/integrations/configuration on purpose - a gated path placed after it would be answered by this " +
+      "projection before its gate ran. RULED PUBLIC BY THE OWNER as one of the static reference reads. " +
+      "STANDING RECORD, not an open question.",
+    owner: "declared"
   },
 
   // ── Opportunities / listings / content / agents ──────────────────────────
   {
     marker: 'if (path === "/api/opportunities" && (req.method === "GET" || req.method === "POST")) {',
     reason:
-      "Opportunity catalog. Read-only, no store read, no user data. DECISION ITEM. RECOMMENDATION: " +
-      "leave public; it is reference data the Opportunities view cannot render without.",
-    owner: "decision"
+      "Opportunity catalog. Read-only: no store read and no per-user row. RULED PUBLIC BY THE OWNER as one " +
+      "of the static reference reads — it is data the Opportunities view cannot render without. STANDING " +
+      "RECORD, not an open question.",
+    owner: "declared"
   },
   {
+    // VERIFIED ACCURATE IN THIS ROUND, and left substantively alone. Ten of its
+    // siblings' reasons were found factually wrong while closing the deferred set, so
+    // this one was re-checked rather than assumed: a `data/workflows/operator-secret.json`
+    // was planted and this route read nothing from it. It serves the workflow
+    // DEFINITIONS only - the named steps - and does not resolve or return the stored
+    // per-workflow payloads, which is what the "no store read" claim rests on. The
+    // owner ruling is that it stays public.
     marker: 'if (path === "/api/opportunities/workflows" && (req.method === "GET" || req.method === "POST")) {',
     reason:
       "Opportunity workflow definitions: the named steps an opportunity moves through. Read-only, no " +
-      "store read, no user data. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "store read, no per-user row. RE-VERIFIED IN THIS ROUND rather than inherited: a planted " +
+      "data/workflows/operator-secret.json leaked nothing, because this route serves the definitions and " +
+      "never resolves the stored per-workflow payloads. RULED PUBLIC BY THE OWNER as one of the static " +
+      "reference reads. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/opportunities/bounties" && (req.method === "GET" || req.method === "POST")) {',
     reason:
-      "Bounty-board monitor: reads public bounty boards and reports what is open. Read-only, no store " +
-      "read, no user data. DECISION ITEM — it is an outbound-fetch surface an anonymous caller can " +
-      "drive on a schedule. RECOMMENDATION: leave public, and treat the rate limit as the control.",
-    owner: "decision"
+      "Bounty-board monitor: reads public bounty boards and reports what is open. Read-only, with no store " +
+      "read and no per-user row. It IS an outbound-fetch surface an anonymous caller can drive on a " +
+      "schedule. RULED PUBLIC BY THE OWNER as one of the outbound market-data proxies, whose real control " +
+      "is the rate limit rather than a session. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
-  {
-    marker: 'if (path === "/api/listing/analyze" && req.method === "POST") {',
-    reason:
-      "Listing analysis over caller-supplied marketplace data. No store read. DECISION ITEM: an " +
-      "unauthenticated compute surface. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/listing/keywords" && req.method === "POST") {',
-    reason:
-      "Keyword extraction over caller-supplied listing text. No store read and no user data; the input " +
-      "is the caller's own request body. DECISION ITEM — an unauthenticated compute surface. " +
-      "RECOMMENDATION: leave public, on the same footing as /api/listing/analyze.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/listing/rewrite" && req.method === "POST") {',
-    reason:
-      "Listing rewrite over caller-supplied text. No store read and no user data; the input is the " +
-      "caller's own request body. DECISION ITEM — it may spend LLM budget, which its /api/listing/* " +
-      "siblings do not. RECOMMENDATION: confirm whether this path reaches a paid model, and gate it if " +
-      "it does.",
-    owner: "decision"
-  },
+  // GATED: all three /api/listing/* entries below are DELETED rather than reworded, because an
+  // anonymous caller could drive paid inference on each of them.
   {
     marker: 'if (path === "/api/listing/competitors" && req.method === "POST") {',
     reason:
-      "Competitor lookup for caller-supplied keywords or an ASIN, returning public marketplace " +
-      "listings. No store read and no user data. DECISION ITEM — it is an outbound-fetch surface whose " +
-      "only control is the general rate limit. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Competitor lookup for caller-supplied keywords or an ASIN, returning public marketplace listings. " +
+      "It reads no store and crosses no per-user row. It IS an outbound-fetch surface whose only control " +
+      "is the general rate limit. RULED PUBLIC BY THE OWNER as one of the outbound market-data proxies — " +
+      "note this is the one /api/listing/* route NOT gated: its three siblings were gated for LLM spend, " +
+      "and this one spends none. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
-  {
-    marker: 'if (path === "/api/content/generate" && req.method === "POST") {',
-    reason:
-      "Content generation over caller-supplied inputs. No store read, but it spends LLM budget, so it " +
-      "is a cost surface an anonymous caller can drive. DECISION ITEM. RECOMMENDATION: gate it — its " +
-      "sibling /api/settings/llm/test, which also spends budget, is already gated.",
-    owner: "decision"
-  },
-
+// GATED, AND ITS ALLOWLIST ENTRY DELETED WITH IT: content generation spends LLM budget, and its live
+  // non-browser consumer (infra/n8n/workflows/picc-content-pipeline.json, which POSTed with no
+  // Authorization header) was updated in the SAME change to send a bearer token, so gating this
+  // route did not break that workflow.
   // ── NOTIFICATIONS ───────────────────────────────────────────────────────
   {
     // T20R. The `/api/notifications` wrapper stays DECLARED, and its
@@ -1271,42 +1389,46 @@ const DECLARED_PUBLIC = [
     // would gate the key the browser needs before it can authenticate. The split
     // per branch is what lets the read stay public and every write stay closed.
     //
-    // CORRECTED, in the same spirit as the /api/integrations entry below: the
-    // previous wording said "public for exactly ONE sub-route", which was already
-    // loose (`/api/notifications/status` is public too, and has its own entry
-    // below) and became looser still when `push-endpoints` joined the gated set.
-    // It is now two, named: `vapid-public-key` by protocol necessity and
-    // `/api/notifications/status` as the owner's deferred read.
+// CORRECTED TWICE, in the same spirit as the /api/integrations entry below.
+    //
+    // FIRST CORRECTION: the previous wording said "public for exactly ONE sub-route",
+    // which was already loose (`/api/notifications/status` was public too, and had its
+    // own entry below) and became looser still when `push-endpoints` joined the gated
+    // set. It was corrected to two, named.
+    //
+    // SECOND CORRECTION, and this one is caused by THIS ROUND: /api/notifications/status
+    // is now GATED - it served the last 20 alert records with their titles and bodies,
+    // which is operator content rather than machine state - so the wrapper is public
+    // for exactly ONE sub-route again. A wrapper reason that lists a sub-route which
+    // now 401s is precisely the "allowlist that justifies itself with a claim the code
+    // does not honour" failure this branch exists to prevent, so it is corrected here
+    // in the same change that gated the sub-route.
     marker: 'if (path.startsWith("/api/notifications")) {',
     reason:
-      "Wrapper for the notifications family, public for exactly TWO sub-routes and no write. (1) The web-push " +
+      "Wrapper for the notifications family, public for exactly ONE sub-route and no write: the web-push " +
       "VAPID public key, which the browser must fetch BEFORE it can subscribe and therefore before any auth " +
-      "header exists — its own entry below. (2) GET /api/notifications/status, the owner's deferred read — " +
-      "its own entry below, carrying channel state and the bare subscription COUNT. Every sub-route that " +
-      "writes is gated (prefs, subscribe-push, unsubscribe-push, snooze, test), and so is " +
-      "/api/notifications/push-endpoints, which returns each subscribed device's push endpoint URL: a " +
-      "pre-push review probe read that list from the ungated status branch before this round, so it moved " +
-      "to a gated sibling and the room reads it from there. The private key is never served and no user data " +
-      "is read on the public path. RECOMMENDATION: keep the wrapper declared-public and every write plus " +
-      "push-endpoints gated; do not add a gate here, which would gate the key.",
+      "header exists. Every other sub-route is gated at the head of its own branch - the five writes (prefs, " +
+      "subscribe-push, unsubscribe-push, snooze, test), plus push-endpoints, which returns each subscribed " +
+      "device's push endpoint URL, plus /api/notifications/status, which serves channel state AND the last 20 " +
+      "alert records with their titles and bodies. The private key is never served and no per-user row is read " +
+      "on the public path. RECOMMENDATION: keep the wrapper declared-public and every other sub-route gated; " +
+      "do not add a gate here, which would gate the key.",
     owner: "declared"
   },
-  {
-    // CORRECTED for the same reason as the /api/integrations entry: this one said
-    // "which channels are configured and reachable. Machine-level, no user data."
-    // and stopped being complete when T14 added `subscriptionEndpoints`, which is a
-    // per-device identifier rather than machine state. It is machine-level again
-    // now, and the reason says WHICH fields it carries so the claim can be checked
-    // rather than believed.
-    marker: 'if (path === "/api/notifications/status" && req.method === "GET") {',
-    reason:
-      "Notifier channel status: which channels are configured and reachable, plus `subscriptions` — the bare " +
-      "COUNT of registered push subscriptions. Machine-level, no user data, and no per-device identifier: " +
-      "the endpoint list this route used to carry was removed by the pre-push review (finding 1) because an " +
-      "anonymous caller could read every subscribed device's endpoint URL from here, and it is served by the " +
-      "GATED /api/notifications/push-endpoints instead. DECISION ITEM. RECOMMENDATION: leave public.",
-    owner: "decision"
-  },
+// GATED, AND ITS ALLOWLIST ENTRY DELETED WITH IT.
+    //
+    // IT USED TO SAY "Notifier channel status: which channels are configured and reachable...
+    // Machine-level, no user data." The second clause was FALSE: the route also serves
+    // `recent` - the last 20 alert records, each carrying a title and a body - which is
+    // operator content, not machine state. The pre-push review had already removed the
+    // per-device push-endpoint list from this branch and moved it to the GATED
+    // /api/notifications/push-endpoints; the alert records were missed.
+    //
+    // It is now GATED as the FIRST statement of its own branch, for the same structural
+    // reason as the five writes beside it: the wrapper cannot carry a gate ahead of the
+    // VAPID branch, so each sub-route is gated individually. The deletion is recorded
+    // here rather than left silent, because a stale row reads as coverage while excusing
+    // nothing.
   {
     marker: 'if (path === "/api/notifications/vapid-public-key" && req.method === "GET") {',
     reason:
@@ -1317,15 +1439,23 @@ const DECLARED_PUBLIC = [
     owner: "declared"
   },
   {
+    // THE OWNER'S RULING DIVERGED FROM THIS ENTRY'S OWN RECOMMENDATION, and that is recorded
+    // rather than quietly reversed. The old reason recommended GATING this read "for
+    // consistency with its own sibling", on the grounds that the omission looked like an
+    // oversight. The owner instead ruled it PUBLIC, and this round separately GATED its
+    // sibling /api/settings/llm/resource. So the pairing this entry asked for did not
+    // happen; the two now differ, deliberately, and this entry is the record of why.
     marker: 'if (path === "/api/settings/llm" && req.method === "GET") {',
     reason:
-      "Masked LLM provider view: which providers are configured, which model and base URL each uses, " +
-      "and booleans for key/service-account presence. No key material crosses (llmSettingsView masks by " +
-      "construction). The POST sibling, one block below, IS gated, with a comment saying these routes " +
-      "'configure and echo provider credentials — never public' — so the omission here reads as an " +
-      "oversight rather than a decision. DECISION ITEM. RECOMMENDATION: gate it, for consistency with " +
-      "its own sibling.",
-    owner: "decision"
+      "Masked LLM provider view: which providers are configured, which model and base URL each uses, and " +
+      "booleans for key and service-account presence. No key material crosses - llmSettingsView masks by " +
+      "construction. This entry previously recommended GATING the read for consistency with its POST " +
+      "sibling, which is gated. THE OWNER RULED IT PUBLIC ANYWAY, and in the same round GATED the " +
+      "/api/settings/llm/resource read that mirrors it, so the two now differ deliberately rather than by " +
+      "oversight: what is disclosed here is provider NAMES, models, base URLs and presence booleans, and " +
+      "that is configuration reconnaissance rather than a secret or a per-user row. RULED PUBLIC BY THE " +
+      "OWNER. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/settings/session-capture" && req.method === "GET") {',
@@ -1338,16 +1468,12 @@ const DECLARED_PUBLIC = [
     owner: "declared"
   },
   {
-    marker: 'if (path === "/api/settings/llm/resource" && req.method === "GET") {',
-    reason:
-      "Resource-governor view: whether the governor is on, its budgets, aggregate stats, and the 50 " +
-      "most recent ledger rows. The source comment claims prompt content is stripped at write time. " +
-      "DECISION ITEM — the claim is about prompt CONTENT, and the rows still disclose timing and token " +
-      "counts for work this instance did. RECOMMENDATION: gate it; the sibling /api/settings/llm read " +
-      "it mirrors is ungated too, and both should move together.",
-    owner: "decision"
-  },
-  {
+    // AND THE `/api/settings/llm/resource` ENTRY THAT USED TO SIT ABOVE THIS ONE IS
+    // DELETED, not reworded: the owner gated it, so its row goes rather than lingering
+    // as coverage. It served the resource-governor's budgets, aggregate stats and the 50
+    // most recent ledger rows - timing and token counts for work this instance did. It
+    // moved together with the /api/settings/llm read it mirrored, which is also now
+    // gated; that pairing was this entry's own recorded recommendation.
     // T20R: RULED PUBLIC by the owner, on the stated grounds that MarketsRoom
     // fetches it on mount (`MARKETS_PANELS` entry 1, e2e/terminal-perf.spec.ts:180).
     //
@@ -1378,10 +1504,12 @@ const DECLARED_PUBLIC = [
   {
     marker: 'if (path === "/api/webfetch/limits" && req.method === "GET") {',
     reason:
-      "Global webfetch fair-use surface: current per-host sliding windows plus observed stats. " +
-      "Read-only, rate limited, and the source comment says so. DECISION ITEM: the per-host limits " +
-      "disclose the operator's configured budget. RECOMMENDATION: leave public.",
-    owner: "decision"
+      "Global webfetch fair-use surface: current per-host sliding windows plus observed stats. Read-only " +
+      "and rate limited, and the source comment says so. What it does disclose is the operator's CONFIGURED " +
+      "per-host budget, which is environment reconnaissance rather than a per-user row. RULED PUBLIC BY " +
+      "THE OWNER as one of the static machine-state reads, on the stated ground that the limits themselves " +
+      "are the rate limiting. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
   {
     marker: 'if (path === "/api/system/capabilities" && req.method === "POST") {',
@@ -1393,69 +1521,27 @@ const DECLARED_PUBLIC = [
     sourceComment: "No auth required — intentionally public on localhost.",
     owner: "declared"
   },
-  {
-    marker: 'if (path === "/api/streams/snapshot" && req.method === "GET") {',
-    reason:
-      "Reads the same income snapshot the POST writes. It has no gate at all, not even the loopback one " +
-      "the POST carries, so an anonymous remote caller can read the dashboard's income snapshot. " +
-      "DECISION ITEM. RECOMMENDATION: gate it with the same loopback control the POST uses, at minimum.",
-    owner: "decision"
-  },
+  // GATED, AND THE ENTRY DELETED WITH IT — this GET is now gated on the same
+  // requireAuth as the POST sibling above it, which is a stronger control than the
+  // loopback check the POST carries.
   // ── PAPER / DEMO / AUTOPILOT (user-shaped state, ungated) ────────────────
-  {
-    marker: 'if (path === "/api/trading/paper/positions" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Real open paper positions: symbol, side, entry, amount, openedAt. DECISION ITEM — the executed " +
-      "probe named this one specifically. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/paper/overview" && req.method === "GET") {',
-    reason:
-      "Paper account overview: cash, equity, unrealised and realised P&L. DECISION ITEM — the executed " +
-      "probe confirmed 200 with cash and P&L to an anonymous caller. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/paper/history" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Closed paper trades: symbol, side, entry, exit, P&L and timestamps. DECISION ITEM — this is the " +
-      "user's own trading record, and the sibling /api/trading/journal, which carries the same class of " +
-      "data, IS gated. RECOMMENDATION: gate it with the rest of the paper family.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/paper/analytics" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Paper-trading analytics over the user's own paper positions. DECISION ITEM — derived from " +
-      "user-shaped state, and the sibling /api/trading/journal is gated. RECOMMENDATION: gate it with " +
-      "the rest of the paper family.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/signals" && req.method === "GET") {',
-    reason:
-      "Recent advisory signals for the assets the engine is watching. DECISION ITEM — it is engine " +
-      "state rather than a per-user record, but the sibling /api/trading/journal is gated and this " +
-      "feeds the same view. RECOMMENDATION: gate it with the rest of the paper family.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/accuracy" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Signal accuracy ledger, and POST re-baselines it. DECISION ITEM — it is computed from the " +
-      "signal store, which is itself ungated, so gating this alone would not stop the write path. " +
-      "RECOMMENDATION: gate it together with /api/trading/signals.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/assist" && req.method === "POST") {',
-    reason:
-      "Free-text trading assistant over caller-supplied question and context. No store read, but it " +
-      "spends LLM budget and its sibling /api/content/generate does too. DECISION ITEM. " +
-      "RECOMMENDATION: gate it, on the same cost-surface reasoning as /api/content/generate.",
-    owner: "decision"
-  },
+  // EVERY ENTRY IN THIS SECTION IS DELETED rather than reworded. The owner gated the
+  // whole user-shaped trading family — paper positions, overview, history, analytics,
+  // the signal and accuracy ledgers, the export, the demo analytics and deals, and both
+  // alert reads — so each allowlist row is removed with its gate. A gated route with a
+  // surviving row reads as coverage while excusing nothing.
+  //
+  // ONE OF THEM IS WORTH NAMING, because it is the finding that motivated the ruling:
+  // /api/trading/paper/analytics did not only read the operator's paper account, it
+  // CLOSED an open position and wrote the trade into trading-ledger.json, at a price
+  // derived from a live quote, on a plain anonymous GET. It survived the previous pass
+  // because it was classified as a read. The gate is on the ROUTE; the TP/SL auto-close
+  // at live marks is convergence the engine should still perform for an authenticated
+  // caller, and it has NOT been removed — `routeAuthRuling24Gates.test.mjs` pins both
+  // halves: an anonymous GET leaves the ledger byte-identical, and an authenticated GET
+  // still auto-closes.
+  // GATED, AND ITS ALLOWLIST ENTRY DELETED WITH IT: free-text trading assistance spends LLM budget on
+  // the same reasoning as /api/content/generate above.
   // D2/AC-005: the `/api/trading/demo` allowlist entry is DELETED entirely
   // (not re-pointed, not stubbed). It served `expertOptionDemoStatus()` — an
   // ExpertOption demo-account status read. Its recorded DECISION ITEM ("gate it
@@ -1470,21 +1556,7 @@ const DECLARED_PUBLIC = [
   // handlers.mjs: the route is a static 410 today, so gating it is prophylactic
   // rather than a hole closed, and it removes the last unauthenticated POST in
   // a family whose siblings were gated for exactly this reason.
-  {
-    marker: 'if (path === "/api/trading/demo/analytics" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Demo-account analytics over the operator's own demo trades. DECISION ITEM — the same class of " +
-      "user-shaped record as the paper family, and none of it is gated. RECOMMENDATION: gate it with " +
-      "the demo family.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/demo/deals" && (req.method === "GET" || req.method === "POST")) {',
-    reason:
-      "Demo-account deal history, bounded to 500 rows by the handler. DECISION ITEM — the operator's " +
-      "own trade record, ungated. RECOMMENDATION: gate it with the demo family.",
-    owner: "decision"
-  },
+  //
   // D2/AC-005: the `/api/trading/demo` allowlist entry is DELETED entirely
   // (not re-pointed, not stubbed). It served `expertOptionDemoStatus()` — an
   // ExpertOption demo-account status read. Its recorded DECISION ITEM ("gate the
@@ -1492,10 +1564,11 @@ const DECLARED_PUBLIC = [
   // are gone. A stale entry reads as coverage while excusing nothing, which is
   // the exact rot this self-policing block exists to catch.
   //
-  // Its SIBLINGS `/api/trading/demo/analytics` and `/api/trading/demo/deals` are
-  // UNCHANGED and still allowlisted: both read the local settled-deals ledger
-  // (`demoDeals` / `demoAnalytics`), not the removed venue, so they remain live
-  // routes with the same ungated DECISION ITEM they always carried.
+  // ITS SIBLINGS `/api/trading/demo/analytics` and `/api/trading/demo/deals`, which sat
+  // beside it, are NOW GATED and their entries DELETED. That sentence used to say they
+  // were "UNCHANGED and still allowlisted... with the same ungated DECISION ITEM they
+  // always carried", which stopped being true the moment the owner ruled; it is corrected
+  // here in the same change rather than left to rot.
   //
   // T20R: the `/api/trading/autopilot/start` and `/api/trading/autopilot/stop`
   // entries that sat here are DELETED, not reworded — both routes now carry
@@ -1504,48 +1577,58 @@ const DECLARED_PUBLIC = [
   // followed: both are static 410 stubs today, so the gate is prophylactic rather
   // than a hole closed, and the full reasoning is written at the gate in
   // handlers.mjs rather than only here.
-  {
-    marker: 'if (path === "/api/trading/export" && req.method === "GET") {',
-    reason:
-      "Full export of the decision log plus resolved trade history, with a per-asset breakdown. " +
-      "DECISION ITEM — the executed probe confirmed 200 with decisions and ledger to an anonymous " +
-      "caller. This is the whole trading record in one response. RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-
-  // ── WATCHLISTS / ALERTS (the two deletes are gated; the rest are not) ───
+  // GATED, AND ITS ALLOWLIST ENTRY DELETED WITH IT: it is the whole trading record —
+  // the autopilot decision log plus resolved ledger history plus a per-asset breakdown —
+  // in one response, and it was the single largest read an anonymous caller had.
+  //
+  // ── WATCHLISTS / ALERTS (the deletes are gated; the two reads are not) ───
+  //
+  // FLAGGED FOR A FOLLOW-UP RULING, and deliberately NOT gated in this round:
+  //   * /api/trading/watchlists (GET) returns a `userId` on every entry, so it is
+  //     substantively one of the per-user reads this ruling gated, and I believe it
+  //     should be gated with them. It was not, because the ruling named 24 routes and
+  //     this is not one of them. It is recorded here rather than silently corrected.
+  //   * /api/trading/candles (POST) reads the per-user chart-prefs.json (see its entry).
+  //   * /api/trading/scan (POST) falls back to getWatchlist() when the caller passes no
+  //     symbols, so it is not purely caller-keyed.
   {
     marker: 'if (path === "/api/trading/watchlist" && req.method === "GET") {',
     reason:
-      "The default watchlist with live quotes attached. DECISION ITEM — it is the operator's own saved " +
-      "symbol list, and the sibling named-watchlist read is the reconnaissance step for a destructive " +
-      "delete. RECOMMENDATION: gate it with the watchlist family.",
-    owner: "decision"
+      "The default watchlist with live quotes attached. Reads the operator's own saved symbol list from " +
+      "the watchlist store, and the sibling named-watchlist read is the reconnaissance step for the " +
+      "destructive delete this slice already gated. RULED PUBLIC BY THE OWNER as a static machine-state " +
+      "read, on the stated ground that the rate limit rather than a session is the control for a " +
+      "watchlist the operator configured themselves. STANDING RECORD, not an open question.",
+    owner: "declared"
   },
+  // CORRECTED, because its old reason was FACTUALLY WRONG in the way this branch exists to
+    // prevent: it said "each entry carries its id" and stopped there. Every entry ALSO
+    // carries `userId`, so this is not a neutral id list — it is a per-user read served
+    // to an anonymous caller, which is the same class as the /api/trading/alerts rows
+    // this round GATED and deleted.
+    //
+    // NOT GATED ANYWAY, and the reason is stated plainly rather than left for a reader
+    // to infer: the ruling named 24 routes and this is not one of them. I think it should
+    // be gated with the rest of the per-user reads, and it is FLAGGED FOR A FOLLOW-UP
+    // RULING at the head of this section rather than quietly fixed here. Gating a route
+    // the owner did not name would be the same unilateral move in the opposite
+    // direction; the honest move is to make the exposure legible and let the owner rule.
   {
     marker: 'if (path === "/api/trading/watchlists" && req.method === "GET") {',
     reason:
-      "Every named watchlist with attached prices, and each entry carries its id. DECISION ITEM — and " +
-      "the ids are exactly what the sibling delete takes, so this is the reconnaissance step for a " +
-      "destructive call. RECOMMENDATION: gate it.",
-    owner: "decision"
+      "Every named watchlist with attached prices. EACH ENTRY CARRIES BOTH ITS ID AND ITS userId - the " +
+      "old wording mentioned only the id, and that was wrong: userId is what makes this a per-user read " +
+      "rather than a neutral id list, and it is served to an anonymous caller. The ids are also exactly " +
+      "what the sibling delete takes, so this remains the reconnaissance step for a destructive call. " +
+      "STILL PUBLIC, because the owner's ruling named 24 routes and this is not among them; " +
+      "NEEDS A FOLLOW-UP RULING, because on the merits it belongs with the per-user reads this round " +
+      "gated. Left ungated deliberately, and recorded rather than papered over.",
+    owner: "declared"
   },
-  {
-    marker: 'if (path === "/api/trading/alerts" && req.method === "GET") {',
-    reason:
-      "The alert registry with per-alert statistics. The executed probe confirmed it returns 200 with " +
-      "the registry, and that the registry rows carry a userId field. DECISION ITEM. " +
-      "RECOMMENDATION: gate it.",
-    owner: "decision"
-  },
-  {
-    marker: 'if (path === "/api/trading/alerts/history" && req.method === "GET") {',
-    reason:
-      "Fired alert history, filtered by limit and symbol. The executed probe confirmed 200 to an " +
-      "anonymous caller. DECISION ITEM. RECOMMENDATION: gate it with the alert family — it is the read " +
-      "half of the store whose delete half this slice gates.",
-    owner: "decision"
-  },
+  // GATED, AND BOTH ENTRIES DELETED WITH THE GATES: the alert registry rows carry a userId,
+  // and the fired-alert history is the read half of the same store whose create and delete
+  // halves this branch already gated. See the WATCHLISTS/ALERTS section header above.
+  //
   // ── AUTH (structurally public) ──────────────────────────────────────────
   {
     marker: 'if (path === "/api/auth/status" && (req.method === "GET" || req.method === "POST")) {',
@@ -1638,18 +1721,25 @@ const DECLARED_PUBLIC = [
     // `await` that makes this true is itself a slice-C fix recorded at
     // handlers.mjs:5130. Only a correctly-signed event reaches handleStripeWebhook.
     // So the route has an identity check — it is simply not a session check.
+    // STANDING RECORD, NOT AN OPEN QUESTION. This entry used to end "STILL AN OPEN OWNER
+    // DECISION: the residual is that a correctly-signed event from anyone holding the
+    // webhook secret applies subscription state". The owner has now ruled on that
+    // residual and accepted it, so this is no longer a pending decision: it is the
+    // recorded, accepted shape of the route. The technical facts below are unchanged and
+    // still checkable.
     marker: 'if (path === "/api/stripe/webhook" && req.method === "POST") {',
     reason:
-      "Stripe webhook, authenticated by SIGNATURE rather than by session, and deliberately left ungated " +
-      "by T20R: Stripe cannot present a bearer token, so requireAuth here would reject every real delivery. " +
-      "T20R verified the signature check is unconditional and precedes any store write — " +
+      "Stripe webhook, authenticated by SIGNATURE rather than by session, and deliberately left ungated: " +
+      "Stripe delivers server-to-server and cannot present a bearer token, so requireAuth here would reject " +
+      "every real delivery. The signature check is unconditional and precedes any store write - " +
       "constructWebhookEvent (services/stripe.mjs:39) throws when STRIPE_WEBHOOK_SECRET is unset and " +
       "otherwise delegates to Stripe's constructEvent, which throws on a bad signature; the `await` that " +
-      "makes the surrounding try/catch real is recorded at handlers.mjs:5130. STILL AN OPEN OWNER DECISION: " +
-      "the residual is that a correctly-signed event from anyone holding the webhook secret applies " +
-      "subscription state, which is inherent to webhooks and not fixable with a session. " +
-      "RECOMMENDATION: keep ungated; do NOT bolt on requireAuth.",
-    owner: "decision"
+      "makes the surrounding try/catch real is recorded at handlers.mjs:5130. So the route HAS an identity " +
+      "check and it fails closed - it is simply not a SESSION check. The residual the owner has now " +
+      "ACCEPTED as inherent to webhooks: a correctly-signed event from anyone holding the webhook secret " +
+      "applies subscription state, and no session requirement can change that. RULED PUBLIC BY THE OWNER " +
+      "AS A STANDING RECORD, NOT AN OPEN QUESTION - do NOT bolt on requireAuth.",
+    owner: "declared"
   },
   {
     // T20R CONSIDERED THIS FOR GATING AND DID NOT GATE IT. Same shape as the
@@ -1666,17 +1756,23 @@ const DECLARED_PUBLIC = [
     // echoes back the opaque value minted by beginGithubOauth, and
     // completeGithubOauth is what checks it. That is the identity proof here, and
     // it is the same proof the OAuth spec intends for a callback.
+    // STANDING RECORD, NOT AN OPEN QUESTION. This entry used to end "STILL AN OPEN OWNER
+    // DECISION: whether completeGithubOauth validates `state` strictly, and whether the
+    // failure page can leak a code or a username, is the owner's call to confirm" — and it
+    // made public access CONTINGENT on that confirmation. The owner has now ruled, so the
+    // contingency is discharged: this is the recorded, accepted shape of the route rather
+    // than a question waiting on someone.
     marker: 'if (path === "/api/profile/github/callback" && req.method === "GET") {',
     reason:
-      "GitHub OAuth redirect target. T20R did NOT gate it: a top-level browser redirect cannot carry an " +
-      "Authorization header (this app's token lives in localStorage and is attached by fetch), so a " +
-      "requireAuth gate would 401 the callback and break account linking entirely. It is protected by the " +
-      "OAuth `state` parameter instead — GitHub echoes back the opaque value minted by beginGithubOauth " +
-      "and completeGithubOauth is what validates it, which is the CSRF binding the OAuth spec intends. " +
-      "STILL AN OPEN OWNER DECISION: whether completeGithubOauth validates `state` strictly, and whether " +
-      "the failure page can leak a code or a username, is the owner's call to confirm. " +
-      "RECOMMENDATION: keep public, contingent on that confirmation; do NOT bolt on requireAuth.",
-    owner: "decision"
+      "GitHub OAuth redirect target. Deliberately left ungated: this is a TOP-LEVEL BROWSER REDIRECT from " +
+      "github.com, and a redirect cannot carry an Authorization header - this app's token lives in " +
+      "localStorage and is attached by fetch - so a requireAuth gate would 401 the callback and break " +
+      "account linking outright. It is authenticated by the OAuth `state` parameter instead: GitHub echoes " +
+      "back the opaque value minted by beginGithubOauth and completeGithubOauth is what validates it, " +
+      "which is the CSRF binding the OAuth spec intends for a callback. The owner's confirmation this entry " +
+      "used to make contingent has been given, so the route is public BY DESIGN rather than pending. RULED " +
+      "PUBLIC BY THE OWNER AS A STANDING RECORD, NOT AN OPEN QUESTION — do NOT bolt on requireAuth.",
+    owner: "declared"
   }
 ]
 
@@ -1710,6 +1806,48 @@ function regionCarries(site, needle) {
 }
 
 describe("WS-7 slice C — every /api route is gated or declared public with a reason", () => {
+  it("the deferred set is EMPTY, and stays empty — `owner: \"decision\"` is 0", () => {
+    // WHY THIS IS ASSERTED AT ALL. `owner: "decision"` meant "the owner has not looked
+    // at this yet". The owner has now looked at all 62: 24 were gated and their rows
+    // DELETED, and 38 were ruled public and reclassified. A deferral that nobody ever
+    // returns to is not a deferral, it is an abandoned queue — so the queue being empty
+    // is a property worth holding, and this is what holds it.
+    //
+    // THE COUNT IS MEASURED, NOT RESTATED, and it is measured the way the seam probe
+    // measures it: over the comment-stripped allowlist, matching the 4-space ROW
+    // TERMINATOR rather than the token anywhere. Counting the token anywhere also counts
+    // the prose in this file's own comments, which is exactly how a recorded backlog
+    // number goes stale while looking green.
+    const deferred = DECLARED_PUBLIC.filter((e) => e.owner === "decision")
+    expect(
+      deferred.map((e) => e.marker),
+      "a new allowlist row with no owner ruling behind it does not belong in the list: either gate " +
+        "the route (and delete its row) or record a ruling that makes it public. A row added here with " +
+        "no decision is how the 62 regrow that this ruling just closed."
+    ).toEqual([])
+
+    // And the total is pinned, so a row cannot be ADDED either. The allowance is not a
+    // blanket: the 38 rows this ruling reclassified all carry an owner ruling in prose
+    // ("RULED PUBLIC BY THE OWNER" or "STANDING RECORD"), which is what separates a
+    // deliberate new public route from a copy-paste. The three borderline routes left
+    // public by this ruling record it in their own words ("STILL PUBLIC because the
+    // owner's ruling named 24 routes"), so both phrasings count.
+    expect(
+      DECLARED_PUBLIC.length,
+      "the allowlist is 74 entries less the 24 this ruling gated = 50. A different number means a row " +
+        "was added or removed without the count moving here, which is how an allowance grows quietly."
+    ).toBe(50)
+    const ruled = DECLARED_PUBLIC.filter(
+      (e) => /RULED PUBLIC BY THE OWNER|STANDING RECORD|the owner's ruling named/.test(e.reason)
+    )
+    expect(
+      ruled.length,
+      "the rows this ruling reclassified must SAY SO in prose. Flipping `owner` from \"decision\" to " +
+        "\"declared\" edits one word, so a row can claim a decision nobody made while its reason still " +
+        "reads as a pending recommendation. 38 rows carry an explicit owner ruling."
+    ).toBeGreaterThanOrEqual(38)
+  })
+
   it("discovers the real dispatch surface, and none of the four forms is blind", () => {
     // A guard that silently finds nothing is the exact failure this file exists
     // to prevent, so the scan is proved against known ground truth rather than
@@ -2312,16 +2450,20 @@ describe("WS-7 slice C — the guard's own teeth", () => {
     // And the real predicate, for contrast, must leave only the routes that are
     // genuinely conditional. Zero here, because the two live ones are now gated
     // or allowlisted.
+    //
+    // IT REPORTS THE OFFENDING MARKERS, not a bare count, because a count says only
+    // THAT something regressed while a marker says WHICH route — and this assertion has
+    // just caught a real regression, which a bare 1 could not have been traced from.
     const genuinelyConditional = SITES.filter((s) => {
       const verdict = isGated(s)
       return !verdict.ok && /conditional/i.test(verdict.why ?? "")
-    }).length
+    }).map((s) => `handlers.mjs:${s.line}  ${s.marker}`)
     expect(
       genuinelyConditional,
       "after fixing IMPORTANT 1 and 2, no route in handlers.mjs has a gate nested in a conditional — the two " +
         "that did (/api/trading/notifications, /api/agents/run's neighbours) are resolved. A non-zero count " +
         "means a new conditional gate landed and was not dealt with."
-    ).toBe(0)
+    ).toEqual([])
   })
 
   it("no string literal in handlers.mjs contains a gate call, so preserving strings is safe", () => {

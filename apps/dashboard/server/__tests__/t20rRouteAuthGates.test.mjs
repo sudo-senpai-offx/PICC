@@ -92,6 +92,16 @@ const GATED = [
  * the ruling: the deferred reads stay deferred, and the must-be-public reads stay
  * public. A test that only proved the gates would be satisfied by a file where
  * everything 401s.
+ *
+ * THREE ENTRIES WERE REMOVED FROM THIS LIST BY THE OWNER'S LATER RULING, and the
+ * removal is recorded here rather than left as a silent edit:
+ *   GET /api/trading/signals     — now GATED (the read half of a path whose POST half
+ *                                  T20R already gated)
+ *   GET /api/trading/alerts      — now GATED (the registry rows carry a userId)
+ *   GET /api/streams/snapshot    — now GATED (its POST half was already gated)
+ * Each of the three is asserted 401 in `routeAuthRuling24Gates.test.mjs`, which is
+ * where the coverage went. Leaving them here would assert the opposite of what the
+ * owner ruled, and this list's whole purpose is to catch exactly that drift.
  */
 const STILL_PUBLIC = [
   { method: "GET", path: "/api/health", why: "a load balancer and CI poll it; a health check behind a session cannot report on an unauthenticated instance" },
@@ -102,12 +112,19 @@ const STILL_PUBLIC = [
 
 const DEFERRED_READS = [
   { method: "GET", path: "/api/trading/portfolio/positions" },
-  { method: "GET", path: "/api/trading/signals", why: "the READ half of a path whose POST half T20R gated" },
-  { method: "GET", path: "/api/trading/alerts", why: "the READ half of a path whose POST half T20R gated" },
   { method: "GET", path: "/api/trading/watchlist", why: "the READ half of a path whose POST/DELETE halves T20R gated" },
-  { method: "GET", path: "/api/streams/snapshot", why: "the READ half of a path whose POST half T20R gated" },
   { method: "GET", path: "/api/trading/catalog", why: "named in the scope as a read whose public status must be decided in a later pass" },
-  { method: "GET", path: "/api/opportunities" }
+  { method: "GET", path: "/api/opportunities" },
+  // Left public by the owner's later ruling but FLAGGED for a follow-up ruling, in
+  // `routeAuthRuling24Gates.test.mjs`. They are here rather than only there so BOTH
+  // files agree they are ungated: one asserting a gate and the other asserting its
+  // absence would be a contradiction, and the one that loses is whichever runs second.
+  //
+  // GET, not POST, on the watchlists row: T20R already gated POST /api/trading/watchlists
+  // (it is in GATED above, as a write), so the read is the half that is still public.
+  { method: "GET", path: "/api/trading/watchlists", why: "FLAGGED for a follow-up ruling — it returns a userId per entry, so it reads as a per-user route, but the ruling did not name it" },
+  { method: "POST", path: "/api/trading/candles", why: "FLAGGED for a follow-up ruling — it reads the per-user chart-prefs.json" },
+  { method: "POST", path: "/api/trading/scan", why: "FLAGGED for a follow-up ruling — it falls back to getWatchlist() when the caller passes no symbols" }
 ]
 
 // ── harness ─────────────────────────────────────────────────────────────────

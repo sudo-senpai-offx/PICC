@@ -18,6 +18,15 @@
       "parameters": {
         "method": "POST",
         "url": "={{ $json.baseUrl || 'http://localhost:5173' }}/api/content/generate",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.PICC_CONTENT_PIPELINE_TOKEN || $env.PICC_CONTENT_PIPELINE_TOKEN }}"
+            }
+          ]
+        },
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -45,6 +54,7 @@
       },
       "id": "http-content",
       "name": "Generate with PICC",
+      "notes": "GATED ROUTE. /api/content/generate now requires requireAuth (handlers.mjs), so this node MUST send a bearer token or it will get 401. The token is resolved at RUN TIME from $vars.PICC_CONTENT_PIPELINE_TOKEN (preferred, set in n8n under Variables) or $env.PICC_CONTENT_PIPELINE_TOKEN, and is deliberately NOT written into this exported workflow - an exported JSON is a tracked file, so a literal secret here would be a committed credential. Grant that token the operator's session, or use a dedicated service account. If the variable is unset the header renders as 'Bearer ' and the route answers 401, which is the honest failure rather than a silent success.",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [-320, 0]

@@ -31,6 +31,19 @@
 // helper, never by assigning `process.env` — `ws7TestStoreIsolation.test.mjs`
 // enumerates the suite via `git ls-files` and refuses a hand-rolled assignment.
 // Nothing here resolves to the real `apps/dashboard/server/data/`.
+//
+// LATER RULING, WHICH CHANGED THIS FILE'S PREMISE — recorded here because the first
+// version of block 1 below asserted that `/api/notifications/status` stays PUBLIC
+// ("gating it would be a different decision"). The owner has since made that decision:
+// `GET /api/notifications/status` is one of the 24 routes now gated with requireAuth.
+// The finding's security property is therefore STRENGTHENED, not traded away — an
+// anonymous caller now receives no endpoint URL, no push key, and in fact no payload
+// at all. The block was re-pointed rather than deleted: the anonymous half asserts
+// 401-with-no-leak, and the payload-shape half now runs WITH a session, which is
+// where the field move has to still hold (the status branch must not read the
+// endpoint list even for a caller who is allowed to read it).
+// `routeAuthRuling24Gates.test.mjs` is where the 24 gates are enumerated; this file
+// stays the place that pins what the payload must never contain.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -159,10 +172,11 @@ function expectNoEndpointLeak(text, what) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 1. THE NEGATIVE — the ungated status read carries no per-device identifier
+// 1. THE NEGATIVE — the GATED status read discloses no push endpoint to anyone
+//    who has not proved a session, and carries no endpoint field even to one who has
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("WS-7 finding 1 — the ungated notification status discloses no push endpoint", () => {
+describe("WS-7 finding 1 — the now-gated notification status discloses no push endpoint", () => {
   let authDir
   let notifyDir
 
@@ -182,32 +196,47 @@ describe("WS-7 finding 1 — the ungated notification status discloses no push e
     dirs = []
   })
 
-  it("an anonymous GET /api/notifications/status returns no endpoint URL and no push key", async () => {
+  it("an anonymous GET /api/notifications/status returns 401 and no endpoint URL and no push key", async () => {
     const api = await loadHandlers()
     const res = await call(api, "GET", "/api/notifications/status")
 
-    // The route is still PUBLIC — this is a field move, not a gate, and gating it
-    // would be a different decision. So the assertion is about the payload, and
-    // asserting 401 here would pass against a route broken in a different way.
-    expect(res.status, `expected the public 200, got ${JSON.stringify(res.body)}`).toBe(200)
-    expectNoEndpointLeak(JSON.stringify(res.body ?? {}), "GET /api/notifications/status")
+    // The route is GATED by the owner's later ruling. So the assertion is BOTH halves:
+    // the status is a refusal, AND the refusal leaks nothing. The leak check stays,
+    // because a gate is a placement and the branch behind it still has to be free of
+    // the field — proving that only for the 401 body would let a leak through the
+    // gate with a red test nowhere, which is the shape of rot this file exists to catch.
+    expect(res.status, `expected the gated 401, got ${JSON.stringify(res.body)}`).toBe(401)
+    expect(res.body?.ok, "a refusal must never report success").not.toBe(true)
+    expectNoEndpointLeak(JSON.stringify(res.body ?? {}), "an anonymous GET /api/notifications/status")
   })
 
-  it("the status read does not even CARRY the field an absent leak would hide in", async () => {
+  it("the status branch does not even CARRY the field an absent leak would hide in — for a SESSION either", async () => {
     // The string assertion above is the one that matters; this one names the
     // structural fact, so a future field rename cannot make the first vacuous by
-    // accident.
+    // accident. Run WITH a session, because on a 401 body `subscriptionEndpoints`
+    // is trivially absent and would assert nothing about the branch.
+    seedSession(authDir)
     const api = await loadHandlers()
-    const res = await call(api, "GET", "/api/notifications/status")
+    const res = await call(api, "GET", "/api/notifications/status", null, {
+      authorization: `Bearer ${TOKEN}`
+    })
+    expect(res.status, `the session was refused: ${JSON.stringify(res.body)}`).toBe(200)
     expect(Object.keys(res.body ?? {})).not.toContain("subscriptionEndpoints")
+    expectNoEndpointLeak(JSON.stringify(res.body ?? {}), "a SESSION read of /api/notifications/status")
   })
 
   it("the status read still answers what it always did — the channel table and the count", async () => {
     // The other half of a field move: the count is the honest fallback the room
-    // renders, so dropping the list must not have cost the caller the count.
+    // renders, so dropping the list must not have cost the caller the count. And the
+    // other half of the gate: a gate that emptied the payload would be a regression
+    // the negative assertions above would happily pass, so the 200 is asserted here.
+    seedSession(authDir)
     const api = await loadHandlers()
-    const res = await call(api, "GET", "/api/notifications/status")
+    const res = await call(api, "GET", "/api/notifications/status", null, {
+      authorization: `Bearer ${TOKEN}`
+    })
 
+    expect(res.status, `expected 200 for a session, got ${JSON.stringify(res.body)}`).toBe(200)
     expect(res.body?.ok).toBe(true)
     expect(res.body?.subscriptions, "the bare count must survive the move").toBe(1)
     expect(Array.isArray(res.body?.prefs)).toBe(false)
@@ -216,7 +245,7 @@ describe("WS-7 finding 1 — the ungated notification status discloses no push e
     expect(res.body.channels.map((c) => c.name)).toContain("webpush")
   })
 
-  it("the ungated status branch does not call listPushSubscriptionEndpoints at all", async () => {
+  it("the status branch does not call listPushSubscriptionEndpoints at all", async () => {
     // A static backstop, because a string assertion is satisfied by any route
     // that happens not to be reached with that value today. The whole status
     // branch is read here, so a re-added call is caught even before a value exists
@@ -227,9 +256,20 @@ describe("WS-7 finding 1 — the ungated notification status discloses no push e
     expect(start, "the status branch must still exist").toBeGreaterThan(-1)
     const end = lines.findIndex((l, i) => i > start && /^\s{6}\}/.test(l))
     const branch = lines.slice(start, end === -1 ? start + 8 : end).join("\n")
-    expect(branch, "the ungated status branch must not read the endpoint list").not.toContain(
+    expect(branch, "the status branch must not read the endpoint list").not.toContain(
       "listPushSubscriptionEndpoints"
     )
+  })
+
+  it("the status branch carries requireAuth as the FIRST statement, now that it is gated", async () => {
+    // Same reason `push-endpoints` has this assertion: a gate after a precondition is
+    // dead code, and `ws7RouteAuthCoverageGuard` reads that statically. Asserted at
+    // runtime-adjacent scope too so the static scan and this file cannot disagree.
+    const src = readFileSync(new URL("../handlers.mjs", import.meta.url), "utf8")
+    const lines = src.split("\n")
+    const start = lines.findIndex((l) => l.includes('path === "/api/notifications/status"'))
+    const branch = lines.slice(start, start + 4).join("\n")
+    expect(branch).toMatch(/requireAuth\(req, res\)/)
   })
 })
 
@@ -314,7 +354,7 @@ describe("WS-7 finding 1 — the controls: the room still works, and the key is 
     expect(res.body?.subscriptionEndpoints).toEqual([SECRET_ENDPOINT])
   })
 
-  it("an authenticated caller still reads the channel status from the public route", async () => {
+  it("an authenticated caller still reads the channel status from the (now gated) route", async () => {
     const api = await loadHandlers()
     const res = await call(api, "GET", "/api/notifications/status", null, {
       authorization: `Bearer ${TOKEN}`
