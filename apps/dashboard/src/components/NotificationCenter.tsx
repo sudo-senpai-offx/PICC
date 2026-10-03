@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { getInterventions, respondIntervention, type InterventionProposal } from "@/lib/api"
+import { getAlerts } from "@/lib/trading"
 import { useWebPush } from "@/hooks/useWebPush"
 import { IOSInstallBanner } from "@/components/IOSInstallBanner"
 
@@ -85,8 +86,17 @@ export function NotificationCenter() {
 
   const checkAlerts = useCallback(async () => {
     try {
-      const res = await fetch(`/api/trading/alerts`, { credentials: "include" })
-      const data = await res.json()
+      // getAlerts(), NOT a bare fetch. This poll used to call
+      // `fetch("/api/trading/alerts", { credentials: "include" })` with no
+      // Authorization header, which was fine while the route was public and is
+      // a silent failure now that it is gated: `credentials: "include"` cannot
+      // authenticate anything here, because this server sets no cookie at all
+      // (the session lives in localStorage and travels as a bearer), and the
+      // guard refused the call with a body whose `ok` was undefined — so the
+      // bell just stopped updating, with no error, on every non-loopback
+      // deployment. getAlerts() is the same route through the shared client,
+      // which attaches `Authorization: Bearer <token>`.
+      const data = await getAlerts()
       if (!data.ok) return
       const alerts = data.alerts ?? []
       const triggered = alerts.filter((a: any) => a.status === "triggered" && a.triggeredAt && a.triggeredAt > lastCheckRef.current)

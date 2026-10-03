@@ -1,5 +1,6 @@
 import { buildReadOnlyRoomView, readOnlySectionsFor } from "../domain/readOnlyRooms"
 import type { ReadOnlyRoomKey, ReadOnlyRoomView, ReadOnlySuiteId } from "../domain/readOnlyRooms"
+import { getToken } from "@/lib/auth"
 
 /**
  * WS-7 T10 — the transport seam for ALL SIXTEEN read-only room instances.
@@ -33,16 +34,35 @@ import type { ReadOnlyRoomKey, ReadOnlyRoomView, ReadOnlySuiteId } from "../doma
  * taken at two moments.
  *
  * ===========================================================================
- * NO `credentials` OPTION — DELIBERATE, AND PINNED BY A GUARD
+ * NO `credentials` OPTION, AND NO SESSION COOKIE TO SEND — DELIBERATE, PINNED
  * ===========================================================================
  *
- * Copied verbatim in substance from T8's adapter, for T8's reasons. The URLs are
- * RELATIVE, so every request is same-origin and `fetch`'s default
- * `credentials: "same-origin"` already sends the session cookie. `"include"`
- * would change nothing here and do real harm in one direction — it is the option
- * that forwards cookies to a THIRD-PARTY origin — and it is what
- * `ws6SafetySeamGuard.test.mjs:136-138` pins against. The guard is right, and the
- * fix belongs here rather than in the guard.
+ * Copied verbatim in substance from T8's adapter, for T8's reasons: the URLs are
+ * RELATIVE, so every request is same-origin, and `"include"` would change
+ * nothing here while doing real harm in one direction — it is the option that
+ * forwards cookies to a THIRD-PARTY origin. That much still holds.
+ *
+ * What this header USED to assert next was false, and the falseness was load-
+ * bearing: it claimed that `fetch`'s default `credentials: "same-origin"` "already
+ * sends the session cookie", and on that premise the adapter sent NO
+ * Authorization header at all. There is no session cookie. PICC's server sets
+ * none — there is no `Set-Cookie` anywhere in the non-test server sources —
+ * because the session lives in `localStorage` and travels as
+ * `Authorization: Bearer`, which is the only credential
+ * `verifyUser(req.headers.authorization)` (services/auth.mjs) will read. So the
+ * request carried no credential, always, and four of the producer routes declared
+ * in `readOnlyRooms.ts` are gated: /api/trading/status, /api/streams/snapshot,
+ * /api/twin/run and /api/trading/signals. Every one of the sixteen read-only
+ * room instances therefore rendered its named absence on any non-loopback
+ * deployment while passing here, because `isLocalhostRequest()` admitted the
+ * anonymous caller. That absence text then read "requires an authenticated
+ * session" for a user who WAS authenticated — the client simply never said so.
+ *
+ * The fix is the same one the rest of the client already uses (lib/api.ts and
+ * lib/trading.ts): read the token with `getToken()` and send it as a bearer. The
+ * token is injectable for tests through the same optional-override shape
+ * `request()` uses, and DEFAULTS to the stored session so a caller cannot forget
+ * it — the failure mode being fixed here is precisely a call site that forgot.
  */
 
 /** One section's declared producer, as the adapter needs it. */
@@ -52,6 +72,12 @@ export type ReadOnlyFetchOptions = {
   signal?: AbortSignal
   base?: string
   fetchImpl?: typeof fetch
+  /**
+   * Bearer to present. DEFAULTS to the stored session (`getToken()`), which is
+   * what makes the gate pass; pass it explicitly only to override, exactly as
+   * `request()` in lib/api.ts treats its own optional `token`.
+   */
+  token?: string | null
 }
 
 /**
@@ -66,16 +92,19 @@ export type ReadOnlyFetchOptions = {
 async function getJson(
   route: string,
   label: string,
-  options: { signal?: AbortSignal; base?: string; fetchImpl?: typeof fetch }
+  options: { signal?: AbortSignal; base?: string; fetchImpl?: typeof fetch; token?: string | null }
 ): Promise<{ body: unknown; error: string | null }> {
-  const { signal, base = "", fetchImpl } = options
+  const { signal, base = "", fetchImpl, token = getToken() } = options
   const doFetch = fetchImpl ?? fetch
   const path = `${base}${route}`
+  const headers: Record<string, string> = {}
+  if (token) headers.Authorization = `Bearer ${token}`
 
   let response: Response
   try {
     response = await doFetch(path, {
       method: "GET",
+      headers,
       // NO `credentials` OPTION — see this module's header.
       signal
     })
