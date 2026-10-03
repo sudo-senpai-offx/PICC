@@ -73,7 +73,6 @@ import {
   probeSeam,
   PROBE_SCHEMA,
   productionFiles,
-  stripComments,
   stripPythonComments,
   codeOf,
   VENUE_RESIDUE_TOKENS,
@@ -81,8 +80,15 @@ import {
   D26_CATALOG_ROWS,
   T7B_REMOVED_CATALOG_ROWS,
   D26_OWNER_APPROVED_CATALOG_FLOOR,
+  D26_APPROVED_CATALOG_ROW_IDS,
   DETECTOR_FILES
 } from "./ws7-seam-probe.mjs"
+
+// `stripComments` comes from the SHARED MODULE, not through the probe. The probe
+// re-exports the same binding for the identity assertion, but this gate takes it
+// from the one implementation so there is no chain of re-exports between the
+// definition and a consumer that could hide a second copy.
+import { stripComments } from "../apps/dashboard/server/scripts/guard-primitives.mjs"
 
 export {
   DETECTOR_FILES,
@@ -96,7 +102,8 @@ export {
   REGULATORY_CLAIM_SHAPES,
   D26_CATALOG_ROWS,
   T7B_REMOVED_CATALOG_ROWS,
-  D26_OWNER_APPROVED_CATALOG_FLOOR
+  D26_OWNER_APPROVED_CATALOG_FLOOR,
+  D26_APPROVED_CATALOG_ROW_IDS
 }
 
 /* ==========================================================================
@@ -533,6 +540,9 @@ function conjunctionHalvesFor(id, detail) {
       floorRulingDate: d.floor?.rulingDate,
       floorArithmetic: d.floor?.arithmetic,
       removedSetStillWithoutARow: Object.freeze(d.removedSetStillWithoutARow ?? []),
+      approvedCatalogRowIds: Object.freeze(d.approvedCatalogRowIds ?? []),
+      missingApprovedIds: Object.freeze(d.missingApprovedIds ?? []),
+      idsAddedSincePin: Object.freeze(d.idsAddedSincePin ?? []),
       orphanClaims: Object.freeze(d.orphanClaims ?? []),
       widerSetResidual: Object.freeze(d.widerSetResidual ?? [])
     })

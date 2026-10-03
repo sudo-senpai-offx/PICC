@@ -35,6 +35,7 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import { stripComments } from "../scripts/guard-primitives.mjs"
 
 const REPO_ROOT = fileURLToPath(new URL("../../../..", import.meta.url))
 const HANDLERS_REL = "apps/dashboard/server/handlers.mjs"
@@ -82,133 +83,21 @@ const ALLOWLIST = [
  * comment text would report the documentation as an unfixed call site forever.
  * Line numbers are preserved so a code offset still points at the right row.
  *
- * STRING-AWARE, and that is load-bearing rather than decoration. A stripper that
- * only knows `//` and `/*` blanks from the `//` onward INCLUDING text inside a
- * string literal. handlers.mjs already has 13 lines containing a quoted `//`,
- * three of which put a URL default on the same line as route logic (the Stripe
- * success/cancel defaults and the 5173 origin default). That is not a contrived
- * spelling. A one-line gate naming a home URL
+ * STRING-AWARE, REGEX-AWARE, AND LENGTH-PRESERVING — but the lexer itself is not
+ * declared here. It was duplicated across four guards, and two of those copies
+ * independently shipped the vacuous-pass bug this file's own history records: each
+ * blanked a legitimate one-line gate from the `//` of a `https://` string default
+ * onward, leaving the scan with ZERO call sites and every predicate in the file
+ * passing VACUOUSLY. There is now ONE lexer, in
+ * `server/scripts/guard-primitives.mjs`, reachable from both the test tree and
+ * `scripts/`, and it documents why string contents are preserved, why regex bodies
+ * are blanked, and why division-after-a-closed-string must not be read as a regex.
  *
- *     const home = "http://localhost:5173"; if (!(await verifyUser(auth)) && (await hasUsers())) return 401
- *
- * was blanked from the `//` onward, so the scan found ZERO `hasUsers(` sites and
- * every predicate in this file passed VACUOUSLY. A guard a real code style can
- * switch off is not a guard.
- *
- * String CONTENTS are deliberately PRESERVED (only the lexing is string-aware),
- * because the connectors-route predicate below needs to see the `"/api/connectors"`
- * literal in the code view. That is only safe if no string literal in the file
- * contains something that looks like a call site — asserted by a test below, so
- * the decision cannot rot into a phantom finding.
- *
- * The regex branch is defensive hardening, NOT a fix for a demonstrated failure:
- * a regex literal cannot contain a bare `//`, because each slash is either the
- * delimiter or escaped. It exists so the new lexer does not mistake `/^\/api\//`
- * for the start of a comment and blank the rest of the file.
+ * IMPORTED, NOT RE-DECLARED, and re-exported so `sharedCommentLexer.test.mjs` can
+ * assert this site's binding is `Object.is`-identical to the other three consumers'.
+ * That is a re-export of the same binding, never a second implementation.
  */
-function stripComments(src) {
-  const out = src.split("")
-  let i = 0
-  /**
-   * The kind of the last SIGNIFICANT thing consumed: "value" if it could end a
-   * value, "op" otherwise, null before anything has been consumed.
-   *
-   * Tracked explicitly instead of by looking BACKWARDS through `out`. The
-   * backward scan was unsound in a way that silently disabled the entire file.
-   * A `/` immediately after a CLOSED STRING is division, but the previous
-   * character is a quote, and a quote is not in the old `[\w$)\]}.]`
-   * value-ender set — so the lexer read the division as the start of a regex
-   * literal and then blanked forward to the next `/` ON THE LINE. Given a real
-   * one-line gate
-   *
-   *     const v = "b" / (a); if (!(await verifyUser(auth)) && (await hasUsers())) return 401
-   *
-   * that blanked away `verifyUser()` and `hasUsers()`, leaving the scan with
-   * ZERO call sites — and a guard that finds zero sites passes vacuously. The
-   * predicate was not wrong; it was switched off, silently, by a legitimate
-   * coding style. Tracking the kind of the consumed token makes this the actual
-   * JS rule: after a complete value, `/` is division.
-   */
-  let prev = null
-  const regexAllowed = () => prev !== "value"
-  const blank = (from, to) => {
-    for (let k = from; k < to && k < src.length; k += 1) if (src[k] !== "\n") out[k] = " "
-  }
-  while (i < src.length) {
-    const ch = src[i]
-    const two = src.slice(i, i + 2)
-    if (ch === "/" && two === "/*") {
-      const end = src.indexOf("*/", i + 2)
-      const stop = end === -1 ? src.length : end + 2
-      blank(i, stop)
-      i = stop
-      continue
-    }
-    if (ch === "/" && two === "//") {
-      const nl = src.indexOf("\n", i)
-      const stop = nl === -1 ? src.length : nl
-      blank(i, stop)
-      i = stop
-      continue
-    }
-    if (ch === "/" && regexAllowed()) {
-      let j = i + 1
-      let inClass = false
-      let closed = false
-      while (j < src.length) {
-        const c = src[j]
-        if (c === "\\") {
-          j += 2
-          continue
-        }
-        if (c === "\n") break
-        if (c === "[") inClass = true
-        else if (c === "]") inClass = false
-        else if (c === "/" && !inClass) {
-          j += 1
-          closed = true
-          break
-        }
-        j += 1
-      }
-      // An unterminated `/` was division after all: leave the line intact
-      // rather than blanking the remainder of the file on a bad guess.
-      if (closed) {
-        blank(i, j)
-        i = j
-        prev = "value"
-        continue
-      }
-      i += 1
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      // Scanned past WITHOUT being blanked, so a `//` inside is not a comment.
-      let j = i + 1
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2
-          continue
-        }
-        if (src[j] === ch) break
-        if (ch !== "`" && src[j] === "\n") break
-        j += 1
-      }
-      i = j + 1
-      // A string literal is a complete value, so the next `/` is division. This
-      // is the case the old backward scan got wrong.
-      prev = "value"
-      continue
-    }
-    // A value-ender means the next `/` is division; anything else leaves an
-    // operator position, where a regex literal may legitimately open.
-    if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
-      prev = /[\w$)\]}]/.test(ch) ? "value" : "op"
-    }
-    i += 1
-  }
-  return out.join("")
-}
+export { stripComments }
 
 const SRC = readFileSync(HANDLERS, "utf8")
 const CODE = stripComments(SRC)

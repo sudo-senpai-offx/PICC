@@ -53,6 +53,7 @@ import { join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { findUndeclaredOrderCapability, INTENTIONAL_ORDER_CAPABLE } from "../apps/dashboard/server/scripts/absence-scope.mjs"
+import { stripComments, NON_PRODUCTION_SEGMENTS } from "../apps/dashboard/server/scripts/guard-primitives.mjs"
 import { NAMED_RECORD_SOURCES, INVENTORY_SIZE } from "./cross-room-invariant-gate.mjs"
 import { TIER_BOUNDARIES, APLUS_MIN_SCORE, B_MIN_SCORE, ALL_BOUNDARY_CASES } from "../apps/dashboard/server/services/copilot/tierBoundaryFixture.mjs"
 import { EXPERT_WEIGHTS, EXPERT_WEIGHT_SUM } from "../apps/dashboard/server/services/copilot/confluence.mjs"
@@ -78,77 +79,23 @@ const REPO_ROOT_DEFAULT = fileURLToPath(new URL("../", import.meta.url))
 /**
  * Strip comments so a removal record cannot satisfy, or trip, a source scan.
  *
- * Every seam guard in this repository reads real sources and pins TOKEN
- * occurrences, so the token vocabulary and the stripping rule are shared here
- * rather than restated per check. `stripComments` is deliberately conservative:
- * it removes block comments and whole-line `//` comments plus a trailing `//`
- * that is not preceded by a `:` (so `https://` survives). It is the guard's own
- * function and the test re-derives its results from it rather than trusting an
- * assertion.
+ * IMPORTED from `../apps/dashboard/server/scripts/guard-primitives.mjs`, not
+ * declared here. Four guards each owned a copy of this rule and the copies had
+ * already drifted: two of them shipped a lexer that blanked a legitimate one-line
+ * gate from the `//` of a `https://` string default onward and passed VACUOUSLY,
+ * and this file's own first cut was a regex pair that DELETED real code — it lost
+ * 24 of the 62 real `owner: "decision"` rows in `ws7RouteAuthCoverageGuard.test.mjs`
+ * because that file contains the literal source text `two === "/*"`, so the regex
+ * opened a "comment" there and closed it hundreds of lines later. A comment
+ * stripper that deletes code is worse than no stripper at all: it makes every
+ * source-level check in this file measure the wrong thing while looking green.
+ *
+ * The shared lexer is quote-aware, regex-aware and length-preserving, so none of
+ * those three failure modes is reachable from here. Re-exported so
+ * `sharedCommentLexer.test.mjs` can assert this site's binding is the same object
+ * the three test-tree consumers use.
  */
-/**
- * Strip comments so a removal record cannot satisfy, or trip, a source scan.
- *
- * Every seam guard in this repository reads real sources and pins TOKEN
- * occurrences, so the token vocabulary and the stripping rule are shared here
- * rather than restated per check.
- *
- * THIS IS A STRING-AWARE SINGLE PASS, and it has to be. The first cut was a
- * regex pair (a non-greedy block-comment match plus a `//` cut), and it lost 24
- * of the 62 real `owner: "decision"` rows in `ws7RouteAuthCoverageGuard.test.mjs`.
- * The reason is that file at :124 contains the literal source text
- * `two === "/*"`, so the regex opened a "comment" there and closed it at the
- * next block-comment terminator hundreds of lines later, deleting real code. A
- * comment stripper that deletes code is worse than no stripper at all: it makes
- * every source-level check in this file measure the wrong thing while looking
- * green.
- *
- * Quote state is therefore tracked (single quote, double quote and backtick,
- * with backslash escapes), and a block comment only opens outside a string.
- */
-export function stripComments(src) {
-  const s = String(src)
-  let out = ""
-  let i = 0
-  let quote = null
-  while (i < s.length) {
-    const ch = s[i]
-    const next = s[i + 1]
-    if (quote) {
-      out += ch
-      if (ch === "\\") {
-        out += s[i + 1] ?? ""
-        i += 2
-        continue
-      }
-      if (ch === quote) quote = null
-      i += 1
-      continue
-    }
-    if (ch === "/" && next === "/") {
-      while (i < s.length && s[i] !== "\n") i += 1
-      continue
-    }
-    if (ch === "/" && next === "*") {
-      const close = s.indexOf("*/", i + 2)
-      const end = close === -1 ? s.length : close + 2
-      // A block comment still owes the file its line breaks, or line numbers in
-      // any downstream report stop matching the file on disk.
-      for (let k = i; k < end; k += 1) if (s[k] === "\n") out += "\n"
-      i = end
-      continue
-    }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      quote = ch
-      out += ch
-      i += 1
-      continue
-    }
-    out += ch
-    i += 1
-  }
-  return out
-}
+export { stripComments }
 
 /**
  * The Python equivalent: quote- AND docstring-aware.
@@ -270,7 +217,17 @@ export const DETECTOR_FILES = Object.freeze(["scripts/ws7-seam-probe.mjs", "scri
  * that could not see a new file would be the AC-001 defect one level up.
  */
 export function productionFiles(tracked) {
-  const SKIP_SEGMENTS = new Set(["__tests__", "fixtures", "node_modules", "dist", "build", ".playwright-tmp"])
+  // The directory vocabulary is SHARED, from `guard-primitives.mjs`, and used to
+  // be declared here as well as in `importResolutionGuard.test.mjs`. The two
+  // declarations had drifted: this one carried `.playwright-tmp`, that one carried
+  // `coverage`, `.next`, `.plasmo` and `__mocks__`. A directory added to one was
+  // silently absent from the other, which is the same rule-in-two-homes defect as
+  // the comment lexer, one level down.
+  //
+  // The union is COUNT-NEUTRAL on this tree: `git ls-files` returns zero paths
+  // under any of these segments, so no scanned file moves. Asserted in
+  // `sharedCommentLexer.test.mjs`, not assumed.
+  const SKIP_SEGMENTS = new Set(NON_PRODUCTION_SEGMENTS)
   return tracked.filter((f) => {
     if ([...SKIP_SEGMENTS].some((s) => f.includes(`/${s}/`) || f.endsWith(`/${s}`))) return false
     if (/\.(test|spec)\.[cm]?[jt]sx?$/.test(f)) return false
@@ -426,6 +383,95 @@ export const D26_OWNER_APPROVED_CATALOG_FLOOR = Object.freeze({
   ]),
   supersedes:
     "D26's eight-row equality, unsatisfiable since T7b (ab2148a) removed those rows to answer the question D26 deferred"
+})
+
+/**
+ * THE APPROVED ROW-ID SET — the identity half the floor could not be.
+ *
+ * WHY A COUNT IS NOT ENOUGH, and the attack that proves it. The floor half says
+ * `liveRowCount >= 44` and the pin-equality half says `44 === liveRowCount`, so
+ * together they pin the NUMBER and say nothing about WHICH rows. Delete catalog
+ * row *A*, add an unrelated row *Z*, and the count is still 44: the floor is
+ * green, the pin-equality is green, and the "no claim outlives its row" half is
+ * green too, because removing *A* orphaned no claim — *A* simply ceased to exist.
+ * That is silent identity churn, and it is precisely the failure D26's ORIGINAL
+ * second half existed to catch, since that half asserted over named row ids.
+ *
+ * So the count is kept AND the ids are pinned. The two do different jobs and
+ * neither replaces the other:
+ *
+ *   - the ID SET catches identity churn at constant count, which is the hole the
+ *     floor leaves;
+ *   - the COUNT pin catches a row that is removed and whose id is then forgotten
+ *     to update here, which would otherwise let the set quietly shrink to match.
+ *
+ * WHY A SUBSET AND NOT AN EQUALITY. Equality over these 44 ids would break, loudly,
+ * on the next legitimate owner ruling that adds a row — which is the SAME
+ * unsatisfiable-by-construction defect D26 already suffered once, when T7b's
+ * removal made its eight-row equality impossible to satisfy by any state of the
+ * repository. A subset keeps the owner's stated intent, which was that a
+ * deliberate UPWARD change must not require this gate to be weakened: additions
+ * are permitted, and the count pin is what forces a human to re-pin deliberately.
+ * Deletions are not permitted at all. Do not "tighten" this to an equality.
+ *
+ * `asOf` is when the set was read off the live catalog through this probe's own
+ * comment-stripping, so the pin and the measurement cannot come from two different
+ * readings of the file.
+ */
+export const D26_APPROVED_CATALOG_ROW_IDS = Object.freeze([
+  "interactive-brokers",
+  "webull",
+  "swissquote",
+  "oanda",
+  "alpaca",
+  "staking-defi",
+  "defi-supply",
+  "lsd-liquid-staking",
+  "basis-yield",
+  "nft-royalties",
+  "nft-gen-royalties",
+  "ordinals",
+  "mintos",
+  "debitum",
+  "agi-trading",
+  "n8n-automation",
+  "automatad",
+  "aigen",
+  "cashclaw",
+  "ash",
+  "yappr",
+  "agora",
+  "cds",
+  "money-market",
+  "t-bills",
+  "dividend-etfs",
+  "bond-funds",
+  "index-funds",
+  "faceless-youtube",
+  "newsletter",
+  "digital-templates",
+  "stock-photography",
+  "rental-property",
+  "real-estate-crowdfunding",
+  "parking-space",
+  "iqoption",
+  "olymptrade",
+  "deriv",
+  "binance",
+  "kucoin",
+  "okx",
+  "bybit",
+  "etoro",
+  "plus500"
+])
+
+/** Provenance for {@link D26_APPROVED_CATALOG_ROW_IDS}, asserted rather than implied. */
+export const D26_APPROVED_CATALOG_ROW_IDS_PROVENANCE = Object.freeze({
+  asOf: "2026-10-03",
+  catalog: "apps/dashboard/src/lib/streamCatalog.ts",
+  readVia: "scripts/ws7-seam-probe.mjs probeSeam(), comment-stripped, in catalog order",
+  relationToFloor: "the id set behind D26_OWNER_APPROVED_CATALOG_FLOOR.count; the two are asserted to agree in length",
+  semantics: "subset — every id below must still be declared; additions are permitted and caught by the count pin"
 })
 
 /* ==========================================================================
@@ -782,6 +828,7 @@ export function probeSeam({ repoRoot = REPO_ROOT_DEFAULT } = {}) {
   //   half B: the catalog is not below the OWNER-APPROVED FLOOR
   //            (D26_OWNER_APPROVED_CATALOG_FLOOR)
   //   half C: the floor pin still EQUALS the live row count (anti-drift)
+  //   half B2: every APPROVED ROW ID is still declared (identity, not just count)
   //   half D: no surviving claim outlives its row
   //
   // HALF A IS UNCHANGED, AND IS NOT THE ENFORCEMENT POINT. `ws7RegulatoryClaimGuard`
@@ -796,11 +843,12 @@ export function probeSeam({ repoRoot = REPO_ROOT_DEFAULT } = {}) {
   // the question D26 had deferred. So the old half was unsatisfiable by construction
   // and the gate was red for a text reason, not a product reason.
   //
-  // A FLOOR ALONE WOULD BE A LOOPHOLE, which is what half D closes. A count floor
-  // says nothing about WHICH rows survive: delete a row and add another, stay at 44,
-  // and the floor is green while a claim about the deleted venue is still served to
-  // users. Half D therefore requires that a removed venue is named in live product
-  // code only if its row exists again - a surviving claim must have a factual row.
+  // A FLOOR ALONE IS A RATCHET AGAINST BULK LOSS, NOT AGAINST IDENTITY. A count
+  // floor says nothing about WHICH rows survive: delete a row and add another, stay
+  // at 44, and the floor is green, the pin-equality is green, and half D is green
+  // too because the deleted venue simply ceased to exist rather than outliving its
+  // row. Half B2 therefore pins the approved ID SET as well as the count. Half D
+  // closes the other loophole - a claim that outlives the row that justified it.
   {
     const prod = productionFiles(tracked)
     const claimHits = []
@@ -855,10 +903,19 @@ export function probeSeam({ repoRoot = REPO_ROOT_DEFAULT } = {}) {
       }
     }
 
+    // Half B2 - IDENTITY. The count halves above pin a NUMBER; this pins WHICH
+    // rows. Reported as the explicit missing/added lists rather than a bare
+    // boolean so a failure NAMES the row that vanished, which is the whole reason
+    // this half exists. Subset, not equality - see D26_APPROVED_CATALOG_ROW_IDS.
+    const approvedIds = D26_APPROVED_CATALOG_ROW_IDS
+    const missingApprovedIds = approvedIds.filter((id) => !catalogIds.includes(id))
+    const idsAddedSincePin = catalogIds.filter((id) => !approvedIds.includes(id))
+
     const halves = {
       "no-regulatory-claim": claimHits.length === 0,
       "catalog-not-below-owner-approved-floor": liveRowCount >= floor.count,
       "floor-pin-matches-live-count": floor.count === liveRowCount,
+      "every-approved-catalog-row-still-declared": missingApprovedIds.length === 0,
       "no-claim-outlives-its-row": orphanClaims.length === 0
     }
     measured["catalog.claims-gone-entries-stay"] = Object.values(halves).filter((ok) => !ok).length
@@ -868,6 +925,10 @@ export function probeSeam({ repoRoot = REPO_ROOT_DEFAULT } = {}) {
       floor,
       liveRowCount,
       catalogRowIds: catalogIds,
+      approvedCatalogRowIds: approvedIds,
+      approvedCatalogRowIdsProvenance: D26_APPROVED_CATALOG_ROW_IDS_PROVENANCE,
+      missingApprovedIds,
+      idsAddedSincePin,
       d26RowsRemovedByT7b: D26_CATALOG_ROWS,
       removedSetStillWithoutARow: T7B_REMOVED_CATALOG_ROWS.filter((id) => !catalogIds.includes(id)),
       orphanClaims,

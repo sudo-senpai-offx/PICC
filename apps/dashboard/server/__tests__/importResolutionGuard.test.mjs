@@ -79,6 +79,7 @@ import { describe, it, expect } from "vitest"
 import ts from "typescript"
 
 import { prohibitedHostFor, prohibitedTargetFor, PROHIBITED_SOURCE_TARGETS } from "../services/newsSources.mjs"
+import { stripComments, isNonProductionPath } from "../scripts/guard-primitives.mjs"
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 const require_ = createRequire(join(REPO_ROOT, "apps/dashboard/package.json"))
@@ -88,8 +89,25 @@ const RESOLVE_EXTS = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"]
 const INDEX_NAMES = ["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs"]
 const ASSET_EXT = /\.(css|scss|less|svg|png|jpe?g|gif|webp|wasm|html|txt|md)$/
 
-/** Directories whose comments and strings are DATA, not production code. */
-const NON_PRODUCTION = /(^|\/)(node_modules|build|dist|coverage|\.next|\.plasmo|__tests__|__mocks__|fixtures)\//
+/**
+ * "Is this path's comments-and-strings DATA rather than production code?"
+ *
+ * NOT RE-DECLARED HERE. This predicate used to be a second home for a rule
+ * `scripts/ws7-seam-probe.mjs`'s `productionFiles()` already owned, and the two
+ * had drifted apart: this list carried `coverage`, `.next`, `.plasmo` and
+ * `__mocks__`, the probe's carried `.playwright-tmp`. A directory added to one was
+ * silently absent from the other.
+ *
+ * Only the DIRECTORY VOCABULARY is shared. Each caller keeps its own additional
+ * conditions — `productionFiles()` additionally excludes `*.test.*`/`*.spec.*`,
+ * excludes the two detector files, and restricts itself to four trees, while this
+ * guard deliberately scans every tracked source file it can see — because only
+ * the vocabulary was duplicated.
+ *
+ * The union is COUNT-NEUTRAL here, and that is asserted rather than assumed:
+ * `git ls-files` returns zero paths under any of these segments. See
+ * `sharedCommentLexer.test.mjs`.
+ */
 
 function trackedSourceFiles() {
   return execFileSync("git", ["ls-files"], { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 1 << 28 })
@@ -198,71 +216,22 @@ function declaredDependencies() {
 }
 
 /**
- * Strip comments from a source file so a PROSE mention of a prohibited target in
- * a removal record is not a finding. This is the same discipline
- * `ws5SeamGuard.test.mjs`'s residue check uses, and for the same reason: several
- * hundred D2 removal RECORDS name the thing they removed.
+ * Strip comments so a PROSE mention of a prohibited target in a removal record is
+ * not a finding — the same discipline `ws5SeamGuard.test.mjs`'s residue check
+ * uses, and for the same reason: several hundred D2 removal RECORDS name the
+ * thing they removed.
+ *
+ * IMPORTED from `../scripts/guard-primitives.mjs`, not re-declared. This file's
+ * copy was the weakest of the four: it tracked quote state but had NO regex-literal
+ * branch, so `/^\/api\//` ended in a `\//` that it read as a line comment and
+ * blanked the remainder of that line. Nothing here hit that spelling today, which
+ * is exactly why it survived — a guard is one refactor away from being switched
+ * off silently. The shared lexer is regex-aware, so the question does not arise.
+ *
+ * Re-exported so `sharedCommentLexer.test.mjs` can assert this site's binding is
+ * `Object.is`-identical to the other three consumers'.
  */
-function stripComments(src) {
-  let out = ""
-  let i = 0
-  const n = src.length
-  let inLine = false
-  let inBlock = false
-  let quote = null
-  while (i < n) {
-    const c = src[i]
-    const next = src[i + 1]
-    if (inLine) {
-      if (c === "\n") {
-        inLine = false
-        out += c
-      }
-      i += 1
-      continue
-    }
-    if (inBlock) {
-      if (c === "*" && next === "/") {
-        inBlock = false
-        i += 2
-        continue
-      }
-      if (c === "\n") out += c
-      i += 1
-      continue
-    }
-    if (quote) {
-      out += c
-      if (c === "\\") {
-        out += next ?? ""
-        i += 2
-        continue
-      }
-      if (c === quote) quote = null
-      i += 1
-      continue
-    }
-    if (c === "/" && next === "/") {
-      inLine = true
-      i += 2
-      continue
-    }
-    if (c === "/" && next === "*") {
-      inBlock = true
-      i += 2
-      continue
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      quote = c
-      out += c
-      i += 1
-      continue
-    }
-    out += c
-    i += 1
-  }
-  return out
-}
+export { stripComments }
 
 /** http(s) URL literals in comment-stripped production source. */
 function urlLiterals(src) {
@@ -285,7 +254,7 @@ function prohibitedSourceScan() {
 
   const sourceFindings = []
   const specifierFindings = []
-  const production = files.filter((f) => !NON_PRODUCTION.test(f))
+  const production = files.filter((f) => !isNonProductionPath(f))
   for (const rel of production) {
     const src = stripComments(readFileSync(join(REPO_ROOT, rel), "utf8"))
     for (const { spec } of collectSpecifiers(src, rel)) {

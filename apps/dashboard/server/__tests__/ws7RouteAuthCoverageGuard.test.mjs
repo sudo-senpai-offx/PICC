@@ -52,6 +52,7 @@
 import { describe, expect, it } from "vitest"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { stripComments } from "../scripts/guard-primitives.mjs"
 
 const HANDLERS = fileURLToPath(new URL("../handlers.mjs", import.meta.url))
 const SRC = readFileSync(HANDLERS, "utf8")
@@ -78,117 +79,24 @@ const GATES = ["requireAuth(", "requireSessionOrFirstRun(", "requireAuthStrict("
 //
 // The sibling guard hit the same wall from the other side: handlers.mjs
 // documents the defect it just fixed, so a scan that read comment text reported
-// the documentation as an unfixed call site forever. Its `stripComments` is
-// ported here nearly verbatim, because the lexer it grew is the actual fix and a
-// simpler `//`-only stripper reintroduces the same class of failure from a new
-// direction: blanking a line that carries a URL in a string, leaving the gate on
-// that line invisible, and making every predicate in this file pass VACUOUSLY. A
-// guard that a legitimate coding style can switch off is not a guard.
+// the documentation as an unfixed call site forever.
 //
-// STRING-AWARE, and load-bearing: a stripper that only knows `//` and `/*` blanks
-// from the `//` onward INCLUDING text inside a string literal. handlers.mjs has
-// real lines that put a URL default beside route logic (the Stripe success/cancel
-// defaults, the 5173 origin default), so that is not a contrived spelling.
+// `stripComments` is IMPORTED from `../scripts/guard-primitives.mjs` and was
+// previously "ported here nearly verbatim" from that sibling — duplicated JSDoc
+// included. Two copies is one too many: each had already shipped the vacuous-pass
+// bug this file's header describes, where a simpler `//`-only stripper blanks a
+// line carrying a URL in a string, leaves the gate on that line invisible, and
+// makes every predicate in the file pass VACUOUSLY. There is now one lexer,
+// shared by four guards, and it is STRING-AWARE (string CONTENTS preserved,
+// because the dispatch predicates need the `"/api/health"` literal in the code
+// view), REGEX-AWARE (regex bodies blanked, which is what makes the three
+// `path.match(/^\/api\/…/)` routes enumerable at all), and LENGTH-PRESERVING.
+// See the module for why division-after-a-closed-string must not be read as a
+// regex, which is the same vacuous pass reached by a different road.
 //
-// STRING CONTENTS ARE DELIBERATELY PRESERVED (only the lexing is string-aware),
-// because the dispatch predicates need to see the `"/api/health"` literal in the
-// code view. That is only safe if no string literal contains something that looks
-// like a gate call — asserted below, so the decision cannot rot into either a
-// phantom gate or a phantom finding.
-//
-// The regex branch is defensive hardening, not a fix for a demonstrated failure:
-// a regex literal cannot contain a bare `//`, so this exists so the lexer does not
-// read `/^\/api\//` as a comment and blank the rest of the file.
-function stripComments(src) {
-  const out = src.split("")
-  let i = 0
-  /**
-   * The kind of the last SIGNIFICANT thing consumed: "value" if it could end a
-   * value, "op" otherwise, null before anything has been consumed.
-   *
-   * Tracked explicitly instead of looking BACKWARDS through `out`, which was
-   * unsound: a `/` after a CLOSED STRING is division, but the previous character
-   * is a quote, which is not in the `[\w$)\]}.]` value-ender set — so a backward
-   * scan read the division as a regex literal and blanked forward to the next `/`
-   * ON THE LINE, taking a real gate with it. That is the vacuous-pass failure
-   * again, reached by a different road.
-   */
-  let prev = null
-  const regexAllowed = () => prev !== "value"
-  const blank = (from, to) => {
-    for (let k = from; k < to && k < src.length; k += 1) if (src[k] !== "\n") out[k] = " "
-  }
-  while (i < src.length) {
-    const ch = src[i]
-    const two = src.slice(i, i + 2)
-    if (ch === "/" && two === "/*") {
-      const end = src.indexOf("*/", i + 2)
-      const stop = end === -1 ? src.length : end + 2
-      blank(i, stop)
-      i = stop
-      continue
-    }
-    if (ch === "/" && two === "//") {
-      const nl = src.indexOf("\n", i)
-      const stop = nl === -1 ? src.length : nl
-      blank(i, stop)
-      i = stop
-      continue
-    }
-    if (ch === "/" && regexAllowed()) {
-      let j = i + 1
-      let inClass = false
-      let closed = false
-      while (j < src.length) {
-        const c = src[j]
-        if (c === "\\") {
-          j += 2
-          continue
-        }
-        if (c === "\n") break
-        if (c === "[") inClass = true
-        else if (c === "]") inClass = false
-        else if (c === "/" && !inClass) {
-          j += 1
-          closed = true
-          break
-        }
-        j += 1
-      }
-      // An unterminated `/` was division after all: leave the line intact rather
-      // than blanking the remainder of the file on a bad guess.
-      if (closed) {
-        blank(i, j)
-        i = j
-        prev = "value"
-        continue
-      }
-      i += 1
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      // Scanned past WITHOUT being blanked, so a `//` inside is not a comment.
-      let j = i + 1
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2
-          continue
-        }
-        if (src[j] === ch) break
-        if (ch !== "`" && src[j] === "\n") break
-        j += 1
-      }
-      i = j + 1
-      prev = "value"
-      continue
-    }
-    if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
-      prev = /[\w$)\]}]/.test(ch) ? "value" : "op"
-    }
-    i += 1
-  }
-  return out.join("")
-}
+// Re-exported so `sharedCommentLexer.test.mjs` can assert this site's binding is
+// `Object.is`-identical to the other three consumers'.
+export { stripComments }
 
 // ---------------------------------------------------------------------------
 // DISCOVERY — four dispatch forms, all structural
