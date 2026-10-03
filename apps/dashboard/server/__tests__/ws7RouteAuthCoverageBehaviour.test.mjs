@@ -41,8 +41,9 @@ const GUARD_REL = "server/__tests__/ws7RouteAuthCoverageGuard.test.mjs"
 // loopback address would sail through the documented loopback bypass in
 // requireAuth() and every "anonymous" request in this file would be
 // authenticated. And the general rate limiter is keyed `general:<ip>` at 60
-// POSTs a minute, so a shared address would make the 98-route allowlist sweep
-// start answering 429 part-way through and prove nothing. 203.0.113.0/24 is
+// POSTs a minute, so a shared address would make the allowlist sweep (one probe
+// per DECLARED_PUBLIC marker) start answering 429 part-way through and prove
+// nothing. 203.0.113.0/24 is
 // TEST-NET-3, reserved and unroutable, so it is both non-loopback and distinct
 // per request.
 let ipCounter = 0
@@ -240,7 +241,7 @@ describe("WS-7 slice C — a gated destructive delete REFUSES an anonymous calle
       readAlerts().some((a) => a.id === ALERT_ID),
       "the alert must still be on disk after an unauthenticated delete attempt"
     ).toBe(true)
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("POST /api/trading/watchlists/delete does NOT delete when the user store is unreadable", async () => {
     writeJson(authDir, "users.json", "}}} still not json")
@@ -252,7 +253,7 @@ describe("WS-7 slice C — a gated destructive delete REFUSES an anonymous calle
       readWatchlists().some((w) => w.id === WATCHLIST_ID),
       "the watchlist must still be on disk after an unauthenticated delete attempt"
     ).toBe(true)
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("both deletes refuse with 401 when the store is HEALTHY and a user exists", async () => {
     // The ordinary case, which is the one an attacker actually meets. The
@@ -268,7 +269,7 @@ describe("WS-7 slice C — a gated destructive delete REFUSES an anonymous calle
     }
     expect(readAlerts().some((a) => a.id === ALERT_ID)).toBe(true)
     expect(readWatchlists().some((w) => w.id === WATCHLIST_ID)).toBe(true)
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("the alert payload is ABSENT from an anonymous refusal, not merely the status", async () => {
     // The assertion that a status-only test would miss. The alert registry
@@ -283,7 +284,7 @@ describe("WS-7 slice C — a gated destructive delete REFUSES an anonymous calle
     expect(JSON.stringify(res.body ?? {})).toContain(ALERT_ID)
     const refusal = await call("POST", "/api/trading/alerts/delete", { body: { id: ALERT_ID } })
     expect(JSON.stringify(refusal.body ?? {})).not.toContain(ALERT_ID)
-  })
+  }, ROUTE_BUDGET_MS)
 })
 
 describe("WS-7 slice C — the delete assertions can actually detect a deletion", () => {
@@ -320,7 +321,7 @@ describe("WS-7 slice C — the delete assertions can actually detect a deletion"
       readWatchlists().some((w) => w.id === WATCHLIST_ID),
       "an authenticated delete MUST remove the record — if this fails, the refusal tests above prove nothing"
     ).toBe(false)
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("the seeded records were really on disk before the delete", async () => {
     // The other half of the control: the seed reached the store the handler
@@ -365,7 +366,7 @@ describe("WS-7 slice C fix round 1 — /api/trading/notifications refuses an ano
     expect(JSON.stringify(res.body ?? {})).not.toContain("seeded by the ws7 slice C")
     expect(res.body?.ok).not.toBe(true)
     expect(readNotifications().notifications.map((n) => n.id)).toContain(NOTIFICATION_ID)
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("POST action=clear refuses, and the stored notification is STILL ON DISK", async () => {
     // The on-disk assertion is the one that matters. clearOld() DELETES rows, so
@@ -380,7 +381,7 @@ describe("WS-7 slice C fix round 1 — /api/trading/notifications refuses an ano
       "an anonymous clear must not delete the seeded notification"
     ).toContain(NOTIFICATION_ID)
     expect(readNotifications().notifications.length, "and must not delete anything at all").toBe(before)
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("POST read / read-all / inject all refuse, and inject writes nothing", async () => {
     const before = readNotifications().notifications
@@ -407,7 +408,7 @@ describe("WS-7 slice C fix round 1 — /api/trading/notifications refuses an ano
       "an anonymous inject must not add a notification — it writes arbitrary title/body/level/meta into the registry"
     ).toBe(before.length)
     expect(after.map((n) => n.title)).not.toContain("injected by an anonymous caller")
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("the two webhook actions that WERE gated stay gated", async () => {
     // The conditional gate covered these, so they were never part of the defect.
@@ -419,7 +420,7 @@ describe("WS-7 slice C fix round 1 — /api/trading/notifications refuses an ano
       })
       expect(res.status, `${action} must still refuse`).toBe(401)
     }
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("CONTROL — an AUTHENTICATED caller really can write and really can clear", async () => {
     // THE CONTROL, and without it every "refuses" test above is worth nothing: a
@@ -470,7 +471,7 @@ describe("WS-7 slice C fix round 1 — /api/trading/notifications refuses an ano
       readNotifications().notifications.map((n) => n.id),
       "an AUTHENTICATED clear MUST remove the row — if this fails, the refusal tests above prove nothing"
     ).not.toContain(NOTIFICATION_ID)
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("the seeded notification was really on disk, and really is clearable", async () => {
     // The other half of the control, and the reason the seed uses `createdAt: 1`.
@@ -518,7 +519,7 @@ describe("WS-7 slice C — a finding this sweep made: the Prometheus branch of /
     const res = await call("GET", "/api/metrics", { headers: undefined })
     expect(res.thrown, "if this no longer throws, the bug is FIXED — delete this test and the ACCEPT entry").toBeDefined()
     expect(String(res.thrown?.message ?? "")).toContain("durations")
-  })
+  }, ROUTE_BUDGET_MS)
 
   it("still answers anonymously on the JSON branch, so the ROUTE is reachable", async () => {
     // The auth-relevant half, and the part this slice is actually about: the
@@ -529,7 +530,7 @@ describe("WS-7 slice C — a finding this sweep made: the Prometheus branch of /
     req.headers.accept = "text/plain"
     await handleApi(req, res, "/api/metrics")
     expect(res.status, "the JSON branch must answer an anonymous caller").toBe(200)
-  })
+  }, ROUTE_BUDGET_MS)
 })
 
 // ---------------------------------------------------------------------------
@@ -633,23 +634,53 @@ const ACCEPT = {
 const DEFAULT_REFUSAL = [401, 403]
 
 /**
- * A per-test timeout for the sweep, and why the global default is untouched.
+ * A per-test budget for every test here that drives the real handler, and why
+ * the global default is untouched.
  *
- * The suite's global testTimeout stays at 5s, deliberately: raising it would let
- * a genuine hang in any of the suite's 3,800-odd tests hide behind a longer
- * budget. These probes are a different case. Several of the routes under test
- * declare their OWN network budget in the handler — `withTimeout(..., 8000)` on
- * /api/trading/status, 10s on the two /api/trading/demo reads, 20s on
- * /api/crypto/market, /api/yields, /api/trading/paper/analytics and the
- * /api/trading/watchlist read, and 30s on /api/trading/assist — so a 5s ceiling
- * is SHORTER THAN THE CONTRACT THE ROUTE ITSELF DECLARES, and the sweep would
- * fail on routes that are behaving exactly as written.
+ * THE GLOBAL `testTimeout` STAYS AT 5s, deliberately. Raising it would let a
+ * genuine hang in any of the suite's ~5,400 other tests hide behind a longer
+ * ceiling, and nothing below changes that: every use of this constant is the
+ * PER-TEST argument to `it`, so the other files keep vitest's 5000 ms default.
+ * What follows is the narrower question — which tests in THIS file cannot be
+ * honestly held to 5 s — and there are two distinct answers, which is why this
+ * constant is no longer named for the sweep.
  *
- * This is the per-test argument to `it`, not the global config, and it is set on
- * these 98 probes alone. A route that hangs still fails here; it just has room
- * for a 20-second upstream rather than 5.
+ * 1. THE ALLOWLIST PROBES, because 5 s IS SHORTER THAN THE CONTRACT THE ROUTE
+ *    ITSELF DECLARES. Several routes under test set their OWN network budget in
+ *    the handler: `withTimeout(..., 8000)` on /api/trading/status (handlers.mjs
+ *    :1427), 10s on the /api/trading/demo/analytics read (:3275 — its sibling
+ *    /api/trading/demo/deals at :3283 declares NO budget, so it is not a second
+ *    example), 20s on /api/crypto/market (:1386), /api/yields (:1408),
+ *    /api/trading/paper/analytics (:3030) and the /api/trading/watchlist read
+ *    (:3330), and 30s on /api/trading/assist (:3040). A 5 s ceiling would fail
+ *    the sweep on routes behaving exactly as written.
+ *
+ * 2. THE NON-SWEEP TESTS THAT CALL THE HANDLER, for a different reason: the cost
+ *    is not an upstream, it is the MODULE GRAPH. `beforeEach` ends in
+ *    `vi.resetModules()` and every `call()` re-imports handlers.mjs, so the first
+ *    request in any such test pays a cold import of a ~6,375-line module with its
+ *    whole static and dynamic import graph. Measured cold on this host that import
+ *    is ~428ms (authBootstrapGateFailsClosed.test.mjs:293-295), but under the
+ *    suite's parallel worker pool it has been observed running past 5 s in this
+ *    very repository — the same file, :276-281, records that mode as "a flaky
+ *    test that proves nothing about the defect", and entry 0021:248-249 records a
+ *    SINGLE-request test in THIS file dying on exactly "Test timed out in
+ *    5000ms" under full-suite load while passing alone. So the 5 s ceiling sat
+ *    below this file's own floor cost, and the tests that flaked were whichever
+ *    handler-driving ones the scheduler happened to run under contention. Two of
+ *    them pay the import TWICE, because they call `vi.resetModules()` mid-test to
+ *    re-read a rewritten store: :297 and :425.
+ *
+ * THE LINE IS "DOES IT LOAD handlers.mjs", NOT "HOW MANY REQUESTS". Five tests in
+ * this file never touch the module graph — :326 and :476 assert on the seeded
+ * files directly, :333 and :490 assert on the redirected directories, and :688
+ * re-reads the guard file's own source text — and those keep the 5 s default,
+ * because nothing about them can be slow for this reason.
+ *
+ * A route that hangs still fails here; it just has room for a 20-second upstream
+ * or a loaded module graph rather than 5.
  */
-const SWEEP_TIMEOUT_MS = 20_000
+const ROUTE_BUDGET_MS = 20_000
 
 const MARKERS = readDeclaredPublicMarkers()
 
@@ -736,8 +767,9 @@ describe("WS-7 slice C — every declared-public route still answers an anonymou
       //
       // Checking it HERE, on every allowlisted route, rather than in a one-off
       // test for the one route found, is the point: the finding was made by hand
-      // on two routes, and there are 99 allowlisted routes and no reviewer. This
-      // is the rule that would have caught it the first time.
+      // on two routes, and there is no reviewer left to make it by hand on the
+      // rest of the allowlist. This is the rule that would have caught it the
+      // first time.
       const body = JSON.stringify(res.body ?? {})
       const leaks = [...new Set(body.match(/[A-Za-z]:\\\\[^"'\s]*|\\\\Users\\\\[^"'\s]*/g) ?? [])]
       expect(
@@ -747,6 +779,6 @@ describe("WS-7 slice C — every declared-public route still answers an anonymou
           " repo-relative label or a basename instead — the field can stay, its value must not be the" +
           " resolved path. See opportunities.mjs WORKFLOWS_DIR_LABEL and the /api/auth/status note."
       ).toEqual([])
-    }, SWEEP_TIMEOUT_MS)
+    }, ROUTE_BUDGET_MS)
   }
 })

@@ -544,7 +544,52 @@ test.afterEach(() => {
 test.describe("WS-6 T10 terminal performance under CPU throttling", () => {
   // Three throttle rates x (2 navigations + 25 domain samples + 10 route
   // transitions) on an emulated low-end CPU needs more than the default 30s.
-  test.setTimeout(300_000)
+  //
+  // THE BUDGET IS SIZED FROM THE MEASURED DISTRIBUTION, NOT ROUNDED UP BY FEEL.
+  // T19 root-caused the ~4-in-5 run-level flake to this budget alone, and recorded
+  // two points on the distribution:
+  //
+  //   - a COMPLETE run: 48/48 iterations in 281.7s  ->  5.87s per iteration;
+  //   - the WORST observed elapsed: 295.9s, at 32/48 iterations.
+  //
+  // 281.7s against the old 300s budget is 6% headroom, which is not headroom, it is
+  // a coin toss. Arithmetic for the figure below:
+  //
+  //   worst observed elapsed .................... 295.9 s
+  //   uniform-cost projection of THAT run to 48
+  //   iterations (295.9 x 48/32) ................ 443.9 s
+  //   repo convention for a per-test budget:
+  //   ~3x the slowest observed, explicitly NOT 10x
+  //   (authBootstrapGateFailsClosed.test.mjs:288-291
+  //   rejected 30s as "roughly 10x the slowest
+  //   observed" and settled on ~3x) .............. 3 x 295.9 = 887.7 s
+  //   rounded UP to a whole minute ............... 900 s
+  //
+  // So 900s is 3.04x the worst observed elapsed, 2.03x that run's projection to a
+  // full 48 iterations, and 3.20x the observed complete run. The projection is the
+  // figure that matters and it is a LOWER bound: rate 6 is the slowest of the
+  // three, and the 32 iterations that had completed when that run died were rates
+  // 1 and 4, so a run as slow as that one finishes the remaining 16 at a higher
+  // per-iteration cost than the average it is projected with.
+  //
+  // THIS IS A WALL-CLOCK ENVELOPE, NOT A HANG DETECTOR, so widening it does not
+  // weaken what can still fail. Every wait inside the loop already carries its own
+  // bound — 15 s per selector at :677 and :685, 30 s for the throttled room marker
+  // at :620 — so a transition that genuinely stalls still fails on THAT timeout in
+  // seconds, and a dead page cannot consume the outer budget silently. The old
+  // figure was simply below the harness's own legitimate work on a loaded host.
+  //
+  // **THIS IS NOT B1.** B1 is the x86 250 ms ROOM-TRANSITION BUDGET
+  // (`BUDGETS.roomTransition`, :62) — a per-transition performance budget that is
+  // currently BREACH, and which the owner has separately ruled must actually be
+  // fixed. Raising a test's wall-clock timeout does nothing for it: B1 is compared
+  // against a measured p50/p95 inside `verdict()` (:779-788) and asserted only as
+  // `expect(budgetVerdicts.some(v => v.verdict === "BREACH")).toBe(true)` (:872-876)
+  // — which means this spec currently DEPENDS on B1 breaching and would fail if B1
+  // were fixed without that assertion being revisited. Nothing here touches B1, B3,
+  // any budget value, any tolerance, or the 48-iteration count. T19 re-measures the
+  // room set regardless.
+  test.setTimeout(900_000)
 
   // D3 locks the minimum supported viewport at 1280x800. Measuring at
   // Playwright's 1280x720 default would understate layout cost, so the floor is
