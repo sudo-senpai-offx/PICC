@@ -40,6 +40,7 @@ import {
   prohibitedHostFor,
   prohibitedTargetFor,
   provenanceGap,
+  publicNewsSourceRows,
   resolveNewsSource,
   resolveNewsSources
 } from "../services/newsSources.mjs"
@@ -387,5 +388,80 @@ describe("the Settings-room rows are DERIVED from this registry, not restated", 
     expect(feeds.configEvidence).toBe("PICC_NEWS_FEEDS=set")
     expect(configured.find((r) => r.id === "newsapi").state).toBe("unconfigured")
     for (const r of configured) expect(r.state).not.toBe("connected")
+  })
+})
+
+// ── The projection an UNAUTHENTICATED read is served ─────────────────────────
+
+describe("publicNewsSourceRows carries no environment-derived field", () => {
+  /** Every env var name the registry declares. Naming one is the leak. */
+  const ALL_KNOBS = [
+    "NEWSAPI_API_KEY",
+    "PICC_NEWS_NEWSAPI",
+    "PICC_NEWS_GDELT",
+    "CRYPTOPANIC_AUTH_TOKEN",
+    "PICC_NEWS_CRYPTOPANIC",
+    "PICC_NEWS_FEEDS",
+    "PICC_NEWS_BROWSER_SOURCES"
+  ]
+  const CONFIGURED = {
+    NEWSAPI_API_KEY: "super-secret-value",
+    PICC_NEWS_NEWSAPI: "on",
+    PICC_NEWS_GDELT: "on"
+  }
+
+  it("drops state and configEvidence when the environment CONFIGURED a source", () => {
+    const rows = publicNewsSourceRows(CONFIGURED)
+    expect(rows).toHaveLength(NEWS_SOURCES.length)
+    for (const r of rows) {
+      expect(Object.keys(r), `${r.id} must not carry state`).not.toContain("state")
+      expect(Object.keys(r), `${r.id} must not carry configEvidence`).not.toContain("configEvidence")
+    }
+    expect(JSON.stringify(rows)).not.toContain("=set")
+    expect(JSON.stringify(rows)).not.toContain("super-secret-value")
+  })
+
+  it("drops the absence verdict too — the DECLARED sentence is also a machine claim", () => {
+    // `NEWS_SOURCES[i].unconfiguredReason` opens with "NEWSAPI_API_KEY is unset",
+    // so emitting it — conditionally or not — tells the reader whether this machine
+    // holds the credential. The public catalog therefore offers no verdict at all.
+    for (const r of publicNewsSourceRows({})) {
+      expect(r.unconfiguredReason, `${r.id} must carry no absence verdict`).toBeNull()
+    }
+    const text = JSON.stringify(publicNewsSourceRows({}))
+    for (const knob of ALL_KNOBS) expect(text).not.toContain(knob)
+    expect(text).not.toContain("(observed:")
+  })
+
+  it("keeps every REFERENCE field the room's D17 columns are built from", () => {
+    const [full, projected] = [newsSourceRows(CONFIGURED), publicNewsSourceRows(CONFIGURED)]
+    expect(projected.map((r) => r.id)).toEqual(full.map((r) => r.id))
+    for (const r of projected) {
+      const original = full.find((f) => f.id === r.id)
+      expect(r.url).toBe(original.url)
+      expect(r.purpose).toBe(original.purpose)
+      expect(r.retrievalMode).toBe(original.retrievalMode)
+      expect(r.licensedBasis).toBe(original.licensedBasis)
+      expect(r.boundary).toEqual(original.boundary)
+      expect(r.ministry).toBe(original.ministry)
+      expect(r.name).toBe(original.name)
+    }
+  })
+
+  it("the two exports differ ONLY in the env-derived fields", () => {
+    // A key-set difference, so a future field added to the row is noticed here
+    // rather than by a caller reading a credential-configuration answer off a
+    // public route. `unconfiguredReason` is PRESENT AND NULL on the projection
+    // rather than absent — an explicit null is the honest "no verdict is offered
+    // here" — so the key sets differ by exactly the two dropped fields.
+    const full = newsSourceRows(CONFIGURED).map((r) => Object.keys(r).sort())
+    const projected = publicNewsSourceRows(CONFIGURED).map((r) => Object.keys(r).sort())
+    const dropped = new Set(["state", "configEvidence"])
+    for (let i = 0; i < full.length; i += 1) {
+      expect(projected[i].filter((k) => !dropped.has(k)), `row ${i} key set`).toEqual(
+        full[i].filter((k) => !dropped.has(k))
+      )
+      expect(full[i].filter((k) => dropped.has(k))).toEqual(["configEvidence", "state"])
+    }
   })
 })

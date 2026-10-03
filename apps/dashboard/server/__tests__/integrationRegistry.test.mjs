@@ -7,7 +7,12 @@
 // trading ministry gained five derived rows and lost the duplicate: 7 total
 // (2 static + 5 derived), 13 across the three ministries.
 import { describe, expect, it } from "vitest"
-import { getAllIntegrations, getMinistryIntegrations } from "../services/integrationRegistry.mjs"
+import {
+  getAllIntegrations,
+  getMinistryIntegrations,
+  getUnauthenticatedIntegrations,
+  getUnauthenticatedMinistryIntegrations
+} from "../services/integrationRegistry.mjs"
 import { NEWS_SOURCES, RETRIEVAL_MODE_VALUES } from "../services/newsSources.mjs"
 
 const MINISTRIES = ["trading", "earnings", "intelligence"]
@@ -159,5 +164,88 @@ describe("integration registry — WS-7 T18's derived D17 rows", () => {
     const after = getMinistryIntegrations("trading", { ...BARE, PICC_NEWS_GDELT: "on" }).find((r) => r.id === "gdelt")
     expect(before.state).toBe("unconfigured")
     expect(after.state).toBe("degraded")
+  })
+})
+
+// ── The projection an UNAUTHENTICATED read is served ─────────────────────────
+
+describe("integration registry — the projection served to an anonymous reader", () => {
+  const CONFIGURED = {
+    NEWSAPI_API_KEY: "super-secret-value",
+    PICC_NEWS_NEWSAPI: "on",
+    PICC_NEWS_GDELT: "on"
+  }
+  const ALL_KNOBS = [
+    "NEWSAPI_API_KEY",
+    "PICC_NEWS_NEWSAPI",
+    "PICC_NEWS_GDELT",
+    "CRYPTOPANIC_AUTH_TOKEN",
+    "PICC_NEWS_CRYPTOPANIC",
+    "PICC_NEWS_FEEDS",
+    "PICC_NEWS_BROWSER_SOURCES"
+  ]
+
+  it("carries NO env-derived field on any row, configured or not", () => {
+    // Before T18 every row was a constant `state: "unconfigured"` and there was no
+    // configuration field at all. The projection restores that property rather than
+    // leaving the derived half to answer a question the public route must not answer.
+    for (const env of [BARE, CONFIGURED]) {
+      for (const row of getUnauthenticatedIntegrations(env)) {
+        expect(Object.keys(row), `${row.id} must not carry state`).not.toContain("state")
+        expect(Object.keys(row), `${row.id} must not carry configEvidence`).not.toContain("configEvidence")
+        expect(row.unconfiguredReason ?? null, `${row.id} must carry no verdict`).toBeNull()
+      }
+    }
+  })
+
+  it("names no env var at all, in either direction", () => {
+    // The direction a `state`+`configEvidence` strip alone misses: with nothing
+    // configured, the DECLARED absence reason opens "NEWSAPI_API_KEY is unset", so
+    // the caller learns the credential is ABSENT. Set and unset are both answers.
+    for (const env of [BARE, CONFIGURED]) {
+      const text = JSON.stringify(getUnauthenticatedIntegrations(env))
+      for (const knob of ALL_KNOBS) expect(text, knob).not.toContain(knob)
+      expect(text).not.toContain("super-secret-value")
+      expect(text).not.toContain("(observed:")
+    }
+  })
+
+  it("is the SAME catalog — a field projection, never a row filter", () => {
+    expect(getUnauthenticatedIntegrations(BARE).map((r) => r.id)).toEqual(
+      getAllIntegrations(BARE).map((r) => r.id)
+    )
+    for (const ministry of MINISTRIES) {
+      expect(getUnauthenticatedMinistryIntegrations(ministry, BARE).map((r) => r.id)).toEqual(
+        getMinistryIntegrations(ministry, BARE).map((r) => r.id)
+      )
+    }
+    expect(getUnauthenticatedIntegrations(BARE)).toHaveLength(13)
+    expect(getUnauthenticatedMinistryIntegrations("earnings", BARE)).toHaveLength(3)
+    expect(getUnauthenticatedMinistryIntegrations("nope", BARE)).toEqual([])
+  })
+
+  it("keeps every REFERENCE field the authenticated shape has, minus the env-derived three", () => {
+    const full = getAllIntegrations(CONFIGURED)
+    const projected = getUnauthenticatedIntegrations(CONFIGURED)
+    const dropped = new Set(["state", "configEvidence", "unconfiguredReason"])
+    for (const row of projected) {
+      const original = full.find((f) => f.id === row.id)
+      for (const key of Object.keys(row).filter((k) => !dropped.has(k))) {
+        expect(row[key], `${row.id}.${key}`).toEqual(original[key])
+      }
+      expect(Object.keys(row).filter((k) => !dropped.has(k)).sort()).toEqual(
+        Object.keys(original).filter((k) => !dropped.has(k)).sort()
+      )
+    }
+  })
+
+  it("the two getters cannot be confused: the unauthenticated pair is named for the boundary", () => {
+    // A naming assertion, because the whole safety property here is that a call
+    // site has to CHOOSE. Both are exported, both are correct, and only one is
+    // safe to serve without a gate.
+    expect(typeof getUnauthenticatedIntegrations).toBe("function")
+    expect(typeof getUnauthenticatedMinistryIntegrations).toBe("function")
+    expect(getUnauthenticatedIntegrations.name).toBe("getUnauthenticatedIntegrations")
+    expect(getUnauthenticatedMinistryIntegrations.name).toBe("getUnauthenticatedMinistryIntegrations")
   })
 })

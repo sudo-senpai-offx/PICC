@@ -669,3 +669,60 @@ export function newsSourceRows(env = process.env) {
     }
   })
 }
+
+// ---------------------------------------------------------------------------
+// THE PUBLIC PROJECTION — WHAT AN ANONYMOUS READER MAY SEE
+// ---------------------------------------------------------------------------
+//
+// WHY THIS EXISTS. `newsSourceRows(env)` is derived from `process.env` at CALL
+// time, so three of its fields are ENVIRONMENT RECONNAISSANCE rather than
+// reference data:
+//
+//   * `state`                       - "degraded" means a knob IS set;
+//   * `configEvidence`              - names the knobs, e.g.
+//                                     "NEWSAPI_API_KEY=set + PICC_NEWS_NEWSAPI=on";
+//   * `unconfiguredReason`          - WHATEVER IT IS, see below.
+//
+// No VALUE is ever emitted - `configEvidence` is built from the key NAMES, never
+// from what they hold - so this was never a secret leak. It was the complement of
+// one: an anonymous caller polling a public route learned which credentials this
+// deployment holds, and could poll it to detect a credential being added or
+// removed. The keys are named in the registry anyway, so what this hides is SET /
+// UNSET, not IDENTITY.
+//
+// WHY `unconfiguredReason` IS DROPPED RATHER THAN REDUCED TO ITS DECLARED HALF,
+// which is the non-obvious part. `NEWS_SOURCES[i].unconfiguredReason` reads, for
+// NewsAPI, "NEWSAPI_API_KEY is unset, so the licensed NewsAPI leg cannot run." That
+// sentence is REFERENCE data about what the source REQUIRES — and it is ALSO a
+// claim that this machine's key IS unset. Emitting it only when the source is
+// unconfigured (the obvious projection) publishes exactly that claim, which is the
+// reconnaissance being removed; emitting it unconditionally makes the projection
+// constant but puts a sentence asserting a machine fact on rows where it is false.
+// So the honest third option is the one taken: the public catalog makes NO claim
+// about this machine's configuration. `boundary.keyRequired` still says a
+// credential is needed, without naming it.
+//
+// WHY IT IS A SEPARATE EXPORT AND NOT A FLAG. A `newsSourceRows(env, { public:
+// true })` option is one argument away from being the wrong value at a call site
+// that nobody re-reads, and the failure it produces is silent: the route still
+// answers 200, the room still renders, and the disclosure is simply back. Two
+// exports with two names make the choice visible at the import, which is the only
+// place anybody looks when deciding which one a route should serve.
+
+/**
+ * The same catalog rows, projected for a read an ANONYMOUS caller may make.
+ *
+ * Carries no field whose value depends on the environment, and makes no claim
+ * that one is configured or absent. See the block comment above.
+ *
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {Array<object>}
+ */
+export function publicNewsSourceRows(env = process.env) {
+  return newsSourceRows(env).map(({ state, configEvidence, unconfiguredReason, ...rest }) => ({
+    ...rest,
+    // Present and null, rather than absent: the room's type has the key optional,
+    // and an explicit null is the honest "no verdict is offered here".
+    unconfiguredReason: null
+  }))
+}

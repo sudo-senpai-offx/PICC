@@ -25,7 +25,7 @@
 // fields D17's "licensed and labeled" obligation needs and this catalog lacked
 // — `retrievalMode` and `licensedBasis`. The catalog entry is preserved; its
 // definition moved to where the decision lives.
-import { newsSourceRows } from "./newsSources.mjs"
+import { newsSourceRows, publicNewsSourceRows } from "./newsSources.mjs"
 
 const INTEGRATIONS = [
   // Trading — market data APIs
@@ -145,6 +145,10 @@ const INTEGRATIONS = [
  * `env` is read at CALL time, not at import time, so the room answers for the
  * configuration that is actually in force when the question is asked rather than
  * for whatever the process happened to hold at boot.
+ *
+ * THIS IS THE AUTHENTICATED SHAPE, for the same reason `getAllIntegrations` is:
+ * the derived rows carry `state` and `configEvidence`. An ungated route wants
+ * `getUnauthenticatedMinistryIntegrations`.
  */
 export function getMinistryIntegrations(ministry, env = process.env) {
   return [...INTEGRATIONS, ...newsSourceRows(env)].filter((e) => e.ministry === ministry)
@@ -153,10 +157,71 @@ export function getMinistryIntegrations(ministry, env = process.env) {
 /**
  * Flat array of every cataloged entry, news/sentiment sources included.
  *
- * The D17 rows are appended here rather than merged into `INTEGRATIONS`, so the
+ * THE D17 ROWS ARE APPENDED HERE rather than merged into `INTEGRATIONS`, so the
  * static seed stays readable as the static seed it is and the derived half is
  * visibly derived.
+ *
+ * THIS IS THE AUTHENTICATED SHAPE. It carries `state`, `configEvidence` and the
+ * observed absence clause, so it belongs ONLY behind a gate — see
+ * `getUnauthenticatedIntegrations` for the projection an ungated read must serve,
+ * and read that function's own comment before choosing between them.
  */
 export function getAllIntegrations(env = process.env) {
   return [...INTEGRATIONS, ...newsSourceRows(env)]
+}
+
+// ---------------------------------------------------------------------------
+// THE UNAUTHENTICATED PROJECTION
+// ---------------------------------------------------------------------------
+//
+// WHAT IT REMOVES, and why each removal is a removal rather than a redaction:
+//
+//   * `state` on EVERY row, including the static seed's constant
+//     `"unconfigured"`. The seed rows' value is not env-derived, so dropping it
+//     closes nothing on its own — but leaving it would mean the ungated read
+//     answered a question ("is anything configured?") that it must not answer,
+//     and a projection that strips the derived half while keeping the constant
+//     half is a projection nobody can describe in one sentence.
+//   * `configEvidence` and the observed absence clause, on the derived rows.
+//
+// WHAT IT KEEPS: id, ministry, name, url, purpose, boundary, retrievalMode,
+// licensedBasis, and the DECLARED absence reason. Every one of those is REFERENCE
+// data - it describes the source, not this machine's configuration of it.
+//
+// The seed rows carry no `configEvidence` and their `boundary` is hand-written
+// reference metadata, so for them the projection is the `state` drop and nothing
+// else; they go through the same function so there is exactly one place where the
+// rule lives.
+
+/** The fields an unauthenticated reader never receives, named rather than inlined. */
+function publicRow(row) {
+  const { state, configEvidence, ...rest } = row
+  return rest
+}
+
+/**
+ * Every cataloged entry, projected for a read an ANONYMOUS caller may make.
+ *
+ * Pairs with `getAllIntegrations`, which is the same catalog WITH the
+ * configuration state. A route must pick one deliberately; the two names are
+ * chosen so that picking cannot happen by accident.
+ *
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {Array<object>}
+ */
+export function getUnauthenticatedIntegrations(env = process.env) {
+  return [...INTEGRATIONS.map(publicRow), ...publicNewsSourceRows(env)]
+}
+
+/**
+ * One ministry's entries, projected for a read an ANONYMOUS caller may make.
+ *
+ * @param {string} ministry
+ * @param {Record<string,string|undefined>} [env]
+ * @returns {Array<object>}
+ */
+export function getUnauthenticatedMinistryIntegrations(ministry, env = process.env) {
+  return [...INTEGRATIONS, ...publicNewsSourceRows(env)]
+    .filter((e) => e.ministry === ministry)
+    .map(publicRow)
 }

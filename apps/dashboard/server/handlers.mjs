@@ -278,7 +278,7 @@ import {
 } from "./services/browserStudio.mjs"
 import { suiteForSite } from "./services/suites.mjs"
 import { collectSourceStatuses } from "./services/dataSources.mjs"
-import { getAllIntegrations, getMinistryIntegrations } from "./services/integrationRegistry.mjs"
+import { getAllIntegrations, getMinistryIntegrations, getUnauthenticatedIntegrations, getUnauthenticatedMinistryIntegrations } from "./services/integrationRegistry.mjs"
 import * as interventions from "./services/interventions.mjs"
 
 // ---------------------------------------------------------------------
@@ -4157,15 +4157,25 @@ async function _handleApiInner(req, res, url, reqId) {
   if (path.startsWith("/api/notifications")) {
     try {
       const n = await import("./services/notifier.mjs")
+      // SECURITY (pre-push review finding 1). `subscriptionEndpoints` was returned
+      // HERE, on an ungated branch inside a declared-public wrapper, and a probe
+      // confirmed an anonymous non-loopback caller received every subscribed
+      // device's push endpoint URL. That is a provider reveal plus a stable
+      // per-browser registration identifier: the caller learns the push provider
+      // and can poll the route to detect a device being added or removed. (The
+      // `p256dh`/`auth` keys are NOT here — only `.endpoint` is mapped — so this
+      // was an identifier disclosure, not a takeover. A host plus a path is
+      // identifying, so a "redacted" endpoint would still have leaked.)
+      //
+      // The list moved to a GATED SIBLING below rather than being digested here,
+      // because the wrapper cannot carry a gate: the vapid branch always returns,
+      // so a gate before it would gate the key the browser needs before it can
+      // authenticate. `notifierStatus()` itself stays public — it is machine-level
+      // channel state, and `subscriptions` stays as the bare count so no existing
+      // consumer of it is broken. A count is the honest fallback when the endpoint
+      // list is unavailable, which is what the room renders.
       if (path === "/api/notifications/status" && req.method === "GET") {
-        const st = n.notifierStatus()
-        // T14: the room is shown WHICH browsers are subscribed, not how many.
-        // A count cannot distinguish an operator's own subscription from a stale
-        // one left by a profile they no longer use, and `subscriptions` above is
-        // kept so an existing consumer of it is not broken. The endpoint is the
-        // only identifying part of a subscription that is safe to show, and it
-        // is the same value the unsubscribe route takes.
-        writeJson(res, 200, { ...st, subscriptionEndpoints: n.listPushSubscriptionEndpoints() })
+        writeJson(res, 200, n.notifierStatus())
         return true
       }
       // WS-7 T20R. setPrefs WRITES the notification preferences store, so it is
@@ -4183,6 +4193,20 @@ async function _handleApiInner(req, res, url, reqId) {
         const publicKey = process.env.VAPID_PUBLIC_KEY
         if (!publicKey) return writeJson(res, 503, { ok: false, error: "web-push not configured (VAPID_PUBLIC_KEY unset)" })
         return writeJson(res, 200, { publicKey })
+      }
+      // WS-7 T20R, extended by the finding above. listPushSubscriptionEndpoints
+      // READS the push-subscription store and returns a per-device identifier, so
+      // it is gated as the FIRST statement of its own branch — ahead of any
+      // precondition, because a gate placed after a 400 or a 503 is dead code.
+      //
+      // IT SITS BELOW THE VAPID BRANCH, beside the other gated sub-routes, so the
+      // invariant the wrapper's allowlist entry states — no gate inside the wrapper
+      // precedes the key — stays literally true of the source rather than merely
+      // of the prose.
+      if (path === "/api/notifications/push-endpoints" && req.method === "GET") {
+        if (!(await requireAuth(req, res))) return true
+        writeJson(res, 200, { ok: true, subscriptionEndpoints: n.listPushSubscriptionEndpoints() })
+        return true
       }
       // WS-7 T20R. addPushSubscription WRITES the push-subscription store.
       if (path === "/api/notifications/subscribe-push" && req.method === "POST") {
@@ -5572,17 +5596,44 @@ const creds = await getVenueCredentials()
     return
   }
 
-  // Per-ministry integration catalog (R9.2). Read-only: the registry is a
-  // static seed with honest boundary metadata; state is "unconfigured" until
-  // a probe proves otherwise. Unknown ministry -> honest empty list, not 404.
+  // Per-ministry integration catalog (R9.2). Read-only reference data: the
+  // registry is a static seed plus the rows `newsSources.mjs` derives, every
+  // source carries honest boundary metadata, and the declared absence reason says
+  // what a source REQUIRES. Unknown ministry -> honest empty list, not 404.
+  //
+  // SECURITY (pre-push review finding 2). The derived rows used to be served here
+  // WITH `state` and `configEvidence`, and a probe confirmed an anonymous caller
+  // read `newsapi: state=degraded configuredEvidence="NEWSAPI_API_KEY=set +
+  // PICC_NEWS_NEWSAPI=on"`. No secret value crosses — `configEvidence` is built
+  // from the env var NAMES — so this was environment reconnaissance rather than a
+  // leak: which credentials this deployment holds, pollable. Both ungated routes
+  // therefore serve the PROJECTION, which carries no env-derived field, and the
+  // configuration state moved to the gated sibling below.
   if (path === "/api/integrations" && req.method === "GET") {
-    writeJson(res, 200, getAllIntegrations())
+    writeJson(res, 200, getUnauthenticatedIntegrations())
     return
+  }
+
+  // The CONFIGURATION surface: the same catalog WITH `state` and
+  // `configEvidence`, so it is gated as the FIRST statement of its own branch.
+  //
+  // IT IS ABOVE THE `startsWith` SIBLING BELOW AND MUST STAY THERE. That branch
+  // matches every path under `/api/integrations/`, so a gated `/configuration`
+  // placed after it would be swallowed by the ungated projection before its gate
+  // ever ran — the same ordering hazard the `/api/notifications` wrapper has, in a
+  // different direction: there the vapid key needs to be reached WITHOUT a gate,
+  // here the gated path has to be REACHED BEFORE one that has none.
+  if (path === "/api/integrations/configuration" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const ministry = String(parsed.searchParams.get("ministry") ?? "").trim()
+    const entries = ministry ? getMinistryIntegrations(ministry) : getAllIntegrations()
+    writeJson(res, 200, { ok: true, entries })
+    return true
   }
 
   if (path.startsWith("/api/integrations/") && req.method === "GET") {
     const ministry = path.slice("/api/integrations/".length)
-    writeJson(res, 200, { ok: true, entries: getMinistryIntegrations(ministry) })
+    writeJson(res, 200, { ok: true, entries: getUnauthenticatedMinistryIntegrations(ministry) })
     return
   }
 

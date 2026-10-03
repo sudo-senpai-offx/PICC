@@ -1234,18 +1234,51 @@ const DECLARED_PUBLIC = [
     owner: "decision"
   },
   {
+    // CORRECTED, because the reason this entry gave was FACTUALLY FALSE and a
+    // security allowlist that justifies itself with a claim the code no longer
+    // honours is what D26 and the documentation-truth work exist to prevent.
+    //
+    // IT SAID: "a static seed with honest boundary metadata, every entry
+    // 'unconfigured' until a probe says otherwise. The source comment says so."
+    // That stopped being true when WS-7 T18 appended `newsSourceRows(env)` —
+    // derived from `process.env` at call time — to this route. A pre-push review
+    // probe then read, anonymously: newsapi `state=degraded`,
+    // `configuredEvidence="NEWSAPI_API_KEY=set + PICC_NEWS_NEWSAPI=on"`. No secret
+    // VALUE ever crosses (`configEvidence` is built from the env var NAMES), so it
+    // was environment reconnaissance, not a leak — but it is still this route's
+    // answer, and the entry must describe the route that exists.
+    //
+    // WHAT IT IS NOW, and it is checkable: this route serves the PROJECTION from
+    // `getUnauthenticatedIntegrations()`, which carries no field derived from the
+    // environment. `state` and `configEvidence` — and the observed clause of
+    // `unconfiguredReason` — are served only by `/api/integrations/configuration`,
+    // which is gated. `integrationRoutesDisclosure.test.mjs` asserts the absence
+    // at the HTTP boundary, so "checkable" is not a claim.
     marker: 'if (path === "/api/integrations" && req.method === "GET") {',
     reason:
-      "Per-ministry integration catalog: a static seed with honest boundary metadata, every entry " +
-      "'unconfigured' until a probe says otherwise. The source comment says so. DECISION ITEM: the " +
-      "boundary metadata is a map of what this deployment could reach. RECOMMENDATION: leave public.",
+      "Per-ministry integration catalog, serving the PROJECTION from getUnauthenticatedIntegrations(): id, " +
+      "ministry, name, url, purpose, boundary, retrievalMode and licensedBasis, with unconfiguredReason " +
+      "present and null. It carries NO field derived from process.env and makes NO claim about this machine's " +
+      "configuration: `state`, `configEvidence` and `unconfiguredReason` are served only by the GATED " +
+      "/api/integrations/configuration. `unconfiguredReason` is dropped rather than reduced to its DECLARED " +
+      "half because that sentence opens \"NEWSAPI_API_KEY is unset, so the licensed NewsAPI leg cannot run\" - " +
+      "reference data about what the source REQUIRES, and also a claim that this key IS unset. So an " +
+      "anonymous caller cannot read which credentials this deployment holds, in either direction. Boundary " +
+      "metadata is still static reference data describing each SOURCE. DECISION ITEM: the catalog is a map of " +
+      "what this deployment COULD reach. RECOMMENDATION: leave the catalog public and keep the configuration " +
+      "surface gated.",
     owner: "decision"
   },
   {
     marker: 'if (path.startsWith("/api/integrations/") && req.method === "GET") {',
     reason:
-      "One ministry's integration entries. Same static seed as the sibling above; the ministry name " +
-      "comes from the caller's own path. DECISION ITEM. RECOMMENDATION: leave public.",
+      "One ministry's integration entries, from the same PROJECTION as the sibling above: getUnauthenticated" +
+      "MinistryIntegrations() strips the env-derived `state`, `configEvidence` and `unconfiguredReason` the " +
+      "same way, so this branch discloses no more than the flat route does. The ministry name comes from the " +
+      "caller's own path, and an unknown ministry yields an honest empty list rather than a 404. NOTE: this " +
+      "startsWith branch sits BELOW the gated /api/integrations/configuration on purpose - a gated path placed " +
+      "after it would be answered by this projection before its gate ran. DECISION ITEM. RECOMMENDATION: " +
+      "leave public.",
     owner: "decision"
   },
 
@@ -1317,11 +1350,11 @@ const DECLARED_PUBLIC = [
   {
     // T20R. The `/api/notifications` wrapper stays DECLARED, and its
     // justification is now narrow and specific rather than "the sweep left it
-    // open": it is public for exactly ONE sub-route, `vapid-public-key` below,
-    // and for nothing else. The five mutating sub-routes inside it — prefs,
-    // subscribe-push, unsubscribe-push, snooze and test — are each gated at the
-    // head of their own branch by T20R, and each of their allowlist entries was
-    // DELETED rather than reworded.
+    // open": it is public for exactly TWO sub-routes, and neither is a write.
+    // The five mutating sub-routes inside it — prefs, subscribe-push,
+    // unsubscribe-push, snooze and test — are each gated at the head of their own
+    // branch by T20R, and each of their allowlist entries was DELETED rather than
+    // reworded.
     //
     // The wrapper cannot carry a single gate of its own, and that is a property of
     // the code rather than a choice: the vapid branch sits ABOVE where a gate
@@ -1329,22 +1362,41 @@ const DECLARED_PUBLIC = [
     // placed after it would be dead code for the key and a gate placed before it
     // would gate the key the browser needs before it can authenticate. The split
     // per branch is what lets the read stay public and every write stay closed.
-    // `/api/notifications/status` below remains an open owner decision.
+    //
+    // CORRECTED, in the same spirit as the /api/integrations entry below: the
+    // previous wording said "public for exactly ONE sub-route", which was already
+    // loose (`/api/notifications/status` is public too, and has its own entry
+    // below) and became looser still when `push-endpoints` joined the gated set.
+    // It is now two, named: `vapid-public-key` by protocol necessity and
+    // `/api/notifications/status` as the owner's deferred read.
     marker: 'if (path.startsWith("/api/notifications")) {',
     reason:
-      "Wrapper for the notifications family. Public for exactly one sub-route: the web-push VAPID public " +
-      "key, which the browser must fetch BEFORE it can subscribe and therefore before any auth header " +
-      "exists. Every mutating sub-route inside it is gated: prefs, subscribe-push, unsubscribe-push, " +
-      "snooze and test each carry requireAuth as the first statement of their own branch. The private " +
-      "key is never served and no user data is read on the public path. RECOMMENDATION: keep the " +
-      "wrapper declared-public and the writes gated; do not add a gate here, which would gate the key.",
+      "Wrapper for the notifications family, public for exactly TWO sub-routes and no write. (1) The web-push " +
+      "VAPID public key, which the browser must fetch BEFORE it can subscribe and therefore before any auth " +
+      "header exists — its own entry below. (2) GET /api/notifications/status, the owner's deferred read — " +
+      "its own entry below, carrying channel state and the bare subscription COUNT. Every sub-route that " +
+      "writes is gated (prefs, subscribe-push, unsubscribe-push, snooze, test), and so is " +
+      "/api/notifications/push-endpoints, which returns each subscribed device's push endpoint URL: a " +
+      "pre-push review probe read that list from the ungated status branch before this round, so it moved " +
+      "to a gated sibling and the room reads it from there. The private key is never served and no user data " +
+      "is read on the public path. RECOMMENDATION: keep the wrapper declared-public and every write plus " +
+      "push-endpoints gated; do not add a gate here, which would gate the key.",
     owner: "declared"
   },
   {
+    // CORRECTED for the same reason as the /api/integrations entry: this one said
+    // "which channels are configured and reachable. Machine-level, no user data."
+    // and stopped being complete when T14 added `subscriptionEndpoints`, which is a
+    // per-device identifier rather than machine state. It is machine-level again
+    // now, and the reason says WHICH fields it carries so the claim can be checked
+    // rather than believed.
     marker: 'if (path === "/api/notifications/status" && req.method === "GET") {',
     reason:
-      "Notifier channel status: which channels are configured and reachable. Machine-level, no user " +
-      "data. DECISION ITEM. RECOMMENDATION: leave public.",
+      "Notifier channel status: which channels are configured and reachable, plus `subscriptions` — the bare " +
+      "COUNT of registered push subscriptions. Machine-level, no user data, and no per-device identifier: " +
+      "the endpoint list this route used to carry was removed by the pre-push review (finding 1) because an " +
+      "anonymous caller could read every subscribed device's endpoint URL from here, and it is served by the " +
+      "GATED /api/notifications/push-endpoints instead. DECISION ITEM. RECOMMENDATION: leave public.",
     owner: "decision"
   },
   {

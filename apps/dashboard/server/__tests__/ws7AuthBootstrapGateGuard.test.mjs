@@ -1407,7 +1407,52 @@ function connectorsSiteIsGated(lines, index) {
     // requireAuth(req, res) call-site count is 126 before and 126 after, which
     // is how "this task added a transport, not a surface" is measured rather
     // than asserted on trust.
-    expect(lines, "lines in handlers.mjs").toBe(6325)
+    // 6,325 -> 6,376 in the pre-push security review round, the same protocol: +51
+    // lines, and every one is accounted for rather than absorbed. The round closed
+    // two LOW route-auth findings, both introduced by this branch, and both by
+    // MOVING A FIELD to a gated sibling rather than by gating a public route:
+    //
+    //   * GET /api/notifications/status no longer returns `subscriptionEndpoints`
+    //     (each subscribed device's push endpoint URL, readable anonymously). The
+    //     list moved to a new gated GET /api/notifications/push-endpoints, because
+    //     the /api/notifications WRAPPER cannot carry a gate — the vapid branch
+    //     always returns, so a gate before it would gate the key the browser needs
+    //     before it can authenticate.
+    //   * GET /api/integrations (and its /:ministry sibling) now serve the
+    //     PROJECTION, which carries no field derived from process.env. The
+    //     configuration state moved to a new gated
+    //     GET /api/integrations/configuration.
+    //
+    // THE ACCOUNTING IS 16 + 48 ADDED, 5 + 9 REMOVED, PLUS ONE BLANK LINE, AND IT
+    // ADDS TO EXACTLY 51:
+    //
+    //   * 16 CODE LINES added, 5 removed. Two of the sixteen are the new routes'
+    //     dispatch lines and two more are their `requireAuth(req, res)` gates;
+    //     the import line at the top gained two names in place (one line, one
+    //     add and one remove); the status branch lost its `const st = …` line
+    //     because it now returns `notifierStatus()` directly. Counted by
+    //     classifying each side of `git diff -U0` rather than by eye, which is the
+    //     only way this figure stays honest.
+    //   * 48 COMMENT LINES added, 9 removed: why each field moved, why the wrapper
+    //     cannot carry a gate, why `/api/integrations/configuration` must be
+    //     dispatched ABOVE the ungated `startsWith` branch that would otherwise
+    //     swallow it, and why the public projection drops the DECLARED absence
+    //     reason rather than merely its observed clause.
+    //   * 1 BLANK LINE, separating the new gated sibling from the branch above it.
+    //
+    // THE IMPORT PAIR IS UNCHANGED, and that is the load-bearing part of this
+    // entry rather than an incidental one: 72 static and 83 comment-stripped
+    // dynamic imports are the same figures before and after, so not one of the 51
+    // lines is a new module binding. Both new routes reach a service the file
+    // ALREADY imported — `/api/notifications/push-endpoints` beside the wrapper's
+    // existing `await import("./services/notifier.mjs")`, and
+    // `/api/integrations/configuration` beside the existing module-level
+    // `integrationRegistry.mjs` import — so the module graph did not move either.
+    //
+    // THE requireAuth(req, res) CALL-SITE COUNT IS 126 -> 128, one gate per new
+    // route, which is how "this round added gates rather than loosening them" is
+    // measured rather than asserted on trust.
+    expect(lines, "lines in handlers.mjs").toBe(6376)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

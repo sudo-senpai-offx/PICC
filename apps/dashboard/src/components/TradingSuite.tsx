@@ -314,7 +314,27 @@ export function SignalNotificationsCard() {
   const load = useCallback(async () => {
     try {
       const r = await request<{ ok: boolean; prefs: any; subscriptions: number; channels: any[] }>("/notifications/status")
-      setStatus(r)
+      // T14: WHICH browsers are subscribed, read from the GATED
+      // `/notifications/push-endpoints` rather than from `/notifications/status`.
+      // It used to come back on the public status route, and a pre-push review
+      // probe confirmed an anonymous caller could read every subscribed device's
+      // endpoint URL that way — a provider reveal plus a stable per-browser
+      // identifier. The status route is public because the browser needs the VAPID
+      // key before it can authenticate, so the identifying half had to move to a
+      // route that can afford a gate.
+      //
+      // The two halves are read SEPARATELY and deliberately: a refusal on the
+      // second leaves `subscriptionEndpoints` undefined, and the render below
+      // falls back to the bare count rather than reporting an empty list. A failed
+      // read is an absence, not "there are none".
+      let subscriptionEndpoints: string[] | undefined
+      try {
+        const gated = await request<{ ok: boolean; subscriptionEndpoints?: string[] }>("/notifications/push-endpoints")
+        if (Array.isArray(gated?.subscriptionEndpoints)) subscriptionEndpoints = gated.subscriptionEndpoints
+      } catch {
+        // Refused or unreachable: the count is the fallback, not a claim of none.
+      }
+      setStatus(subscriptionEndpoints === undefined ? r : { ...r, subscriptionEndpoints })
       setReadoutObtained(true)
       setDraft({ minConfidence: r.prefs.minConfidence, leadMinutes: r.prefs.leadMinutes })
     } catch {
