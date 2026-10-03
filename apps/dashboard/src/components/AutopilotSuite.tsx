@@ -74,9 +74,11 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
 
   const [demo, setDemo] = useState<BrokerDemoStatus | null>(null)
   const [analytics, setAnalytics] = useState<DemoAnalyticsResult | null>(null)
-  const [creds, setCreds] = useState<{ token: string; demo: boolean; riskPct: number; ccxtJson: string }>({
-    token: "",
-    demo: true,
+  // D2/AC-005: the `token` and `demo` halves of this state are REMOVED with the
+  // venue. They mirrored `expertoptionToken` and `expertoptionDemo`; the server
+  // stopped reading and returning both when it removed the venue's only writer,
+  // so the fields they fed could never be saved or read back.
+  const [creds, setCreds] = useState<{ riskPct: number; ccxtJson: string }>({
     riskPct: 2,
     ccxtJson: ""
   })
@@ -103,14 +105,10 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
       if (a.status === "fulfilled" && a.value) setAnalytics(a.value)
       if (br.status === "fulfilled" && br.value?.ok) setBrokers(br.value)
       if (cr.status === "fulfilled") {
-        // Token comes back masked ("••••••") — only show whether one exists.
         const raw = cr.value as unknown as Record<string, unknown>
-        const masked = typeof raw.expertoptionToken === "string" ? raw.expertoptionToken : ""
         setCreds((prev) => ({
           ...prev,
-          demo: raw.expertoptionDemo !== false,
           riskPct: Number(raw.riskPerTradePct) || 2,
-          token: masked && !masked.includes("•") ? masked : "",
           ccxtJson:
             Array.isArray(raw.ccxtExchanges) && raw.ccxtExchanges.length
               ? JSON.stringify(raw.ccxtExchanges, null, 2)
@@ -208,14 +206,10 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
         return
       }
       const patch: Partial<TradingCredentials> = {
-        expertoptionDemo: creds.demo,
         riskPerTradePct: Math.min(20, Math.max(1, Number(creds.riskPct) || 2)),
         ccxtExchanges: parsed.pairs
       }
-      // Only send the token when the user typed a NEW one (masked reads stay untouched).
-      if (creds.token.trim()) patch.expertoptionToken = creds.token.trim()
       await saveTradingCredentials(patch)
-      setCreds((p) => ({ ...p, token: "" }))
       setCredsMsg("Credentials saved.")
       await load()
     } catch (e) {
@@ -521,22 +515,17 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
         </Card>
       </div>
 
-      {/* ─── Broker credentials (required to run) ─── */}
+      {/* ─── Broker credentials ─── */}
       <Card className="pad stack">
         <h3>Broker Connection</h3>
         <p className="muted small">
-          The engine refuses to run without a DEMO broker token here. Token is stored server-side and never
-          echoed back in full.
+          {/* D2/AC-005: the DEMO-broker-token sentence and its input are REMOVED with the
+              venue — `captureExpertOptionSession` was the only writer of that credential and
+              the engine has no execution venue to authenticate against. */}
+          Risk cap and the CCXT market-data pairs below are the parts of this form the server
+          still reads.
         </p>
         <div className="grid grid-3">
-          <Field label="Session token (paste to replace)">
-            <Input
-              type="password"
-              placeholder={demo?.configured ? "token saved ✓" : "paste session token"}
-              value={creds.token}
-              onChange={(e) => setCreds((p) => ({ ...p, token: e.target.value }))}
-            />
-          </Field>
           <Field label="Risk cap per trade %">
             <Input
               type="number"
@@ -547,7 +536,6 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
             />
           </Field>
           <div className="stack" style={{ justifyContent: "flex-end" }}>
-            <ToggleRow label="Demo account (required)" checked={creds.demo} onChange={() => setCreds((p) => ({ ...p, demo: !p.demo }))} />
             <Button variant="secondary" disabled={busy} onClick={saveCredentials}>Save credentials</Button>
           </div>
         </div>
@@ -566,9 +554,6 @@ export function AutopilotSuite({ SignalNotificationsCard }: AutopilotSuiteProps)
             onChange={(e) => setCreds((p) => ({ ...p, ccxtJson: e.target.value }))}
           />
         </div>
-        {!demo?.configured ? (
-          <p className="muted small">No token configured yet — autopilot ticks will report “no token configured” until saved.</p>
-        ) : null}
         {credsMsg ? <p className="muted small">{credsMsg}</p> : null}
       </Card>
 

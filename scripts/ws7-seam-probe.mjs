@@ -876,7 +876,11 @@ export function probeSeam({ repoRoot = REPO_ROOT_DEFAULT } = {}) {
       }
     }
     measured["deps.no-unused-dependency"] = unused.length
-    detail.dependencies = { declaredRuntime: declared.length, unused }
+    // `declared` is surfaced so a test can prove WHICH manifests were read. The
+    // count alone cannot distinguish "every manifest was read" from "the corpus
+    // shrank", and a shrinking corpus would report zero unused for the wrong
+    // reason — which is the failure mode this key exists to make visible.
+    detail.dependencies = { declaredRuntime: declared.length, declared, unused }
   }
 
   /* --------------------------------------------------------------- 19 --- */

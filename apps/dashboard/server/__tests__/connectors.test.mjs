@@ -88,25 +88,29 @@ describe("normalizeEarnings", () => {
 
 describe("connector registry", () => {
   it("registers built-in connectors with sensible metadata", () => {
-    expect(hasConnector("expertoption")).toBe(true)
+    // D2/AC-005: the removed venue is asserted ABSENT, not merely unlisted.
+    expect(hasConnector("expertoption")).toBe(false)
     expect(hasConnector("opensea")).toBe(true)
+    expect(hasConnector("aave")).toBe(true)
     expect(hasConnector("nope")).toBe(false)
     // bandwidth suite removed from the registry
     expect(hasConnector("honeygain")).toBe(false)
     expect(hasConnector("grass")).toBe(false)
-    const eo = getConnector("expertoption")
-    expect(eo.label).toBe("ExpertOption")
-    expect(eo.category).toBe("trading")
-    expect(eo.transports).toContain("ws")
-    expect(eo.transport).toBe("ws")
+    // `aave` is the subject this row's metadata assertions now read: the EO row
+    // they used to read was the only `ws` transport, and none survives.
+    const aave = getConnector("aave")
+    expect(aave.label).toBe("Aave")
+    expect(aave.category).toBe("defi")
+    expect(aave.transports).toContain("browser")
+    expect(aave.transport).toBe("browser")
   })
 
   it("enumerates all registered connectors", () => {
-const slugs = listConnectors().map((c) => c.slug)
-    for (const s of ["expertoption", "opensea", "aave", "yearn", "mysterium", "storj", "lido", "defillama"]) {
+    const slugs = listConnectors().map((c) => c.slug)
+    for (const s of ["opensea", "aave", "yearn", "mysterium", "storj", "lido", "defillama"]) {
       expect(slugs).toContain(s)
     }
-    for (const s of ["honeygain", "earnapp", "pawns", "repocket", "grass", "gradient", "silencio"]) {
+    for (const s of ["expertoption", "honeygain", "earnapp", "pawns", "repocket", "grass", "gradient", "silencio"]) {
       expect(slugs).not.toContain(s)
     }
   })
@@ -118,7 +122,7 @@ const slugs = listConnectors().map((c) => c.slug)
 
 describe("browserCollect", () => {
   it("returns a normalized snapshot from mocked DOM reads", async () => {
-    const result = await browserCollect({ slug: "expertoption", url: "https://app.expertoption.finance/" })
+    const result = await browserCollect({ slug: "aave", url: "https://app.aave.com/" })
     expect(result.status).toBe("ok")
     expect(result.balance).toBe(1234.56)
     expect(result.today).toBe(12.4)
@@ -130,7 +134,7 @@ describe("browserCollect", () => {
 
   it("returns an error snapshot when no browser is available", async () => {
     browserAvailable.mockResolvedValueOnce(false)
-    const result = await browserCollect({ slug: "expertoption", url: "https://x" })
+    const result = await browserCollect({ slug: "aave", url: "https://x" })
     expect(result.status).toBe("error")
     expect(result.error).toMatch(/no browser available/)
     expect(openBridge).not.toHaveBeenCalled()
@@ -147,7 +151,7 @@ describe("browserCollect", () => {
         return () => {}
       })
     }))
-    const result = await browserCollect({ slug: "expertoption", url: "https://dashboard.example.com/" })
+    const result = await browserCollect({ slug: "aave", url: "https://dashboard.example.com/" })
     expect(result.status).toBe("error")
     expect(result.error).toMatch(/no readable values/)
     expect(result.balance).toBeNull()
@@ -241,29 +245,29 @@ describe("live sessions", () => {
       })
     }))
 
-    const session = await openLiveSession("expertoption")
-    expect(session.slug).toBe("expertoption")
-    expect(liveSessionSlugs()).toContain("expertoption")
+    const session = await openLiveSession("aave")
+    expect(session.slug).toBe("aave")
+    expect(liveSessionSlugs()).toContain("aave")
 
     const seen = []
-    const off = subscribeLive("expertoption", (msg) => seen.push(msg))
-    expect(liveSubscriberCount("expertoption")).toBe(1)
+    const off = subscribeLive("aave", (msg) => seen.push(msg))
+    expect(liveSubscriberCount("aave")).toBe(1)
     expect(session.latest?.balance).toBe(5)
 
     // a page WS frame is forwarded immediately
     frameCb({ dir: "recv", payload: '{"action":"ping"}' })
     expect(seen.some((m) => m.type === "frame" && m.frame?.dir === "recv")).toBe(true)
 
-    await closeLiveSession("expertoption")
+    await closeLiveSession("aave")
     off()
-    expect(liveSessionSlugs()).not.toContain("expertoption")
-    expect(liveSubscriberCount("expertoption")).toBe(0)
+    expect(liveSessionSlugs()).not.toContain("aave")
+    expect(liveSubscriberCount("aave")).toBe(0)
     expect(seen.some((m) => m.type === "closed")).toBe(true)
   })
 
   it("reuses an existing session for the same slug", async () => {
-    const first = await openLiveSession("expertoption")
-    const second = await openLiveSession("expertoption")
+    const first = await openLiveSession("aave")
+    const second = await openLiveSession("aave")
     expect(second).toBe(first)
     await closeAllLiveSessions()
     expect(liveSessionSlugs()).toEqual([])
@@ -271,7 +275,7 @@ describe("live sessions", () => {
 
   it("fails cleanly when no browser is available", async () => {
     browserAvailable.mockResolvedValueOnce(false)
-    await expect(openLiveSession("expertoption")).rejects.toThrow(/no browser available/)
+    await expect(openLiveSession("aave")).rejects.toThrow(/no browser available/)
     expect(openBridge).not.toHaveBeenCalled()
   })
 

@@ -182,15 +182,18 @@ export function TradingChart({ assetId, label, height = 380, onCrosshair, timefr
   const changePct = display && display.open ? (change / display.open) * 100 : 0
   const isUp = change >= 0
   // The SERVED source (when known) gets the final say: restrict the enabled
-  // button set to its curve. Legacy "live"/"buffer" labels mean EO buffers.
-  const servedSource = source === "live" || source === "buffer" ? "expertoption" : source
-  const sourceCurve = servedSource ? sourceTimeframes.get(servedSource) : undefined
+  // button set to its curve.
+  // D2/AC-005: the legacy "live"/"buffer" tags are no longer canonicalised to
+  // the `expertoption` slug. They were ExpertOption buffer aliases; the venue is
+  // removed, so they keep their own names and resolve to no broker curve.
+  const sourceCurve = source ? sourceTimeframes.get(source) : undefined
   const servable = new Set<number>(sourceCurve?.length ? sourceCurve : [...servableTimeframes])
-  const sourceLabel = feed === "studio" ? "ExpertOption headless"
+  // D2/AC-005: the studio leg's label no longer names the venue — the studio
+  // capture it described was the ExpertOption headless capture.
+  const sourceLabel = feed === "studio" ? "headless stream"
       : source === "yahoo" || source === "yahoo-daily" ? "Yahoo"
-        : servedSource === "expertoption" ? "ExpertOption"
-          : servedSource === "ccxt" ? "CCXT"
-            : servedSource && servedSource !== "none" ? servedSource : "no visible source"
+        : source === "ccxt" ? "CCXT"
+          : source && source !== "none" ? source : "no visible source"
   // Honest resolution label: the SERVER decides the bar size (broker
   // resolveTimeframe), never the client's echo of the request. Any mismatch
   // between what the user picked and what the server served triggers the

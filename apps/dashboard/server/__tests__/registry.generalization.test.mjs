@@ -10,18 +10,26 @@ import {
 // The declarative registry surface (Q5): a connector can be described by
 // config (origins/cadence/extractors/scan) rather than per-site code, and
 // legacy url/selectors keep working.
+//
+// D2/AC-005: the row these assertions used as their subject was `expertoption`,
+// removed with the venue. They now read `aave`, a surviving row declared with a
+// legacy `url` and no explicit `origins`/`scan`/`cadence`, so each assertion
+// still exercises the defaulting surface it was written for.
 
 describe("registerConnector generalized config surface", () => {
   it("maps a legacy url to a single-origin list (host without leading www.)", () => {
-    const eo = getConnector("expertoption")
-    expect(eo.url).toContain("expertoption.finance")
-    expect(eo.origins).toContain("app.expertoption.finance")
+    const aave = getConnector("aave")
+    expect(aave.url).toContain("aave.com")
+    expect(aave.origins).toContain("app.aave.com")
   })
 
   it("keeps legacy transports/transport intact for back-compat", () => {
-    const eo = getConnector("expertoption")
-    expect(eo.transports).toContain("ws")
-    expect(eo.transport).toBe("ws")
+    // `expertoption` was the only row declaring `transports: ["ws", ...]`, so no
+    // surviving row exercises the non-first transport. The back-compat contract
+    // itself is still asserted: `transport` is derived as `transports[0]`.
+    const aave = getConnector("aave")
+    expect(aave.transports).toContain("browser")
+    expect(aave.transport).toBe("browser")
   })
 
   it("normalizes an explicit origins array verbatim", () => {
@@ -36,8 +44,8 @@ describe("registerConnector generalized config surface", () => {
   })
 
   it("defaults scan to an honest unconfigured shape when not provided", () => {
-    const eo = getConnector("expertoption")
-    expect(eo.scan).toMatchObject({ mode: null })
+    const aave = getConnector("aave")
+    expect(aave.scan).toMatchObject({ mode: null })
   })
 })
 
@@ -53,8 +61,8 @@ describe("config-driven connectors generalize across venues (Q5)", () => {
   it("per-site cadence overrides the DEFAULT_CADENCE tier values", () => {
     expect(getConnector("tz-cadence").cadence.realtimeMs).toBe(20000)
     expect(getConnector("tz-cadence").cadence.longMs).toBe(600000)
-    const eo = getConnector("expertoption")
-    expect(eo.cadence.realtimeMs).toBe(DEFAULT_CADENCE.realtimeMs)
+    const aave = getConnector("aave")
+    expect(aave.cadence.realtimeMs).toBe(DEFAULT_CADENCE.realtimeMs)
   })
 
   it("removed bandwidth suite: no bandwidth site survives in the registry", () => {
@@ -67,8 +75,20 @@ describe("config-driven connectors generalize across venues (Q5)", () => {
   })
 
   it("surviving trading + studio venues keep origin routing", () => {
-    const eo = getConnector("expertoption")
-    expect(getConnectorByOrigin("https://app.expertoption.finance/dashboard")).toBe(eo)
-    expect(getConnectorByOrigin("https://www.binance.com/en/trade")).toBe(getConnector("binance"))
+    // Pre-existing vacuity, corrected here: `binance` is a browserStudio SITE,
+    // not a connector, so this used to compare `undefined` with `undefined` and
+    // could never fail. It now names a row that exists, so the routing claim is
+    // actually asserted.
+    expect(getConnector("binance")).toBeUndefined()
+    expect(getConnectorByOrigin("https://www.binance.com/en/trade")).toBeUndefined()
+    expect(getConnectorByOrigin("https://app.aave.com/")).toBe(getConnector("aave"))
+    expect(getConnectorByOrigin("https://opensea.io/collections")).toBe(getConnector("opensea"))
+  })
+
+  it("removed venue: no expertoption row survives in the registry", () => {
+    // D2/AC-005: asserted, not assumed — the row's absence is the invariant.
+    expect(getConnector("expertoption")).toBeUndefined()
+    expect(hasConnector("expertoption")).toBe(false)
+    expect(getConnectorByOrigin("https://app.expertoption.finance/dashboard")).toBeUndefined()
   })
 })

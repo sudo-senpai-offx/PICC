@@ -42,13 +42,18 @@ import { join } from "node:path"
 // harness uses, so neither can fall back to server/data independently.
 import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
+// D2/AC-005: the probe routes below used the removed venue's connector slug.
+// They now use `aave`, a surviving row, because `getConnector` is the REAL one
+// here (this mock spreads `...actual`) and an unknown slug 404s before the auth
+// check runs — which would make a fail-open look like a pass.
+
 vi.mock("../services/connectors.mjs", async (importOriginal) => {
   const actual = await importOriginal()
   return {
     ...actual,
     collectSource: async () => ({
-      provider: "expertoption",
-      platform: "expertoption",
+      provider: "aave",
+      platform: "aave",
       source: "browser",
       status: "ok",
       balance: SENTINEL.collect,
@@ -56,7 +61,7 @@ vi.mock("../services/connectors.mjs", async (importOriginal) => {
     }),
     getHistory: async () => [{ at: SENTINEL.history }],
     openLiveSession: async () => ({
-      latest: { provider: "expertoption", status: "ok", balance: SENTINEL.live },
+      latest: { provider: "aave", status: "ok", balance: SENTINEL.live },
       bridge: { close: async () => {} }
     }),
     subscribeLive: () => () => {},
@@ -527,21 +532,21 @@ describe("WS-7 AUTH-FAILOPEN — a user-store fault never satisfies the bootstra
   // ── Connectors ──────────────────────────────────────────────────────────
   it("4857 /api/connectors/:slug/history refuses instead of disclosing earnings history", async () => {
     faultStore()
-    const res = await call("GET", "/api/connectors/expertoption/history")
+    const res = await call("GET", "/api/connectors/aave/history")
     assertRefused(res, { sentinels: [SENTINEL.history] })
     expect(res.text).not.toContain("history")
   })
 
   it("4870 /api/connectors/:slug/stream refuses instead of streaming live DOM frames", async () => {
     faultStore()
-    const res = await call("GET", "/api/connectors/expertoption/stream")
+    const res = await call("GET", "/api/connectors/aave/stream")
     assertRefused(res, { sentinels: [SENTINEL.live] })
     expect(res.text).not.toContain("text/event-stream")
   })
 
   it("4927 /api/connectors/:slug/collect refuses instead of driving a browser at an attacker URL", async () => {
     faultStore()
-    const res = await call("POST", "/api/connectors/expertoption/collect", {
+    const res = await call("POST", "/api/connectors/aave/collect", {
       body: { url: "http://169.254.169.254/latest/meta-data/" }
     })
     assertRefused(res, { sentinels: [SENTINEL.collect] })
@@ -564,7 +569,7 @@ describe("WS-7 AUTH-FAILOPEN — the fix cannot be satisfied by breaking first-r
   // protected payload is PRESENT. /api/connectors/:slug/history is used because
   // it answers 200 deterministically; /api/trading/decisions can answer 502 when
   // getDecisions() fails, so it cannot carry a 200 assertion.
-  const FIRST_RUN_ROUTE = "/api/connectors/expertoption/history"
+  const FIRST_RUN_ROUTE = "/api/connectors/aave/history"
 
   it("still admits a remote caller on a GENUINELY empty store, with its payload", async () => {
     writeSessions({ sessions: {} })
@@ -600,7 +605,7 @@ describe("WS-7 AUTH-FAILOPEN — the fix cannot be satisfied by breaking first-r
     writeSessions({ sessions: { [token]: { userId: "u1", createdAt: 1, expiresAt: Date.now() + 3_600_000 } } })
     writeUsers({ users: [USER_ROW] })
 
-    const res = await call("GET", "/api/connectors/expertoption/history", {
+    const res = await call("GET", "/api/connectors/aave/history", {
       headers: { authorization: `Bearer ${token}` }
     })
     expect(res.status).toBe(200)
@@ -611,7 +616,7 @@ describe("WS-7 AUTH-FAILOPEN — the fix cannot be satisfied by breaking first-r
     writeSessions({ sessions: {} })
     writeUsers({ users: [USER_ROW] })
 
-    const res = await call("GET", "/api/connectors/expertoption/history")
+    const res = await call("GET", "/api/connectors/aave/history")
     expect(res.status).toBe(401)
     expect(res.text).not.toContain(SENTINEL.history)
   })
@@ -678,7 +683,7 @@ describe("WS-7 AUTH-FAILOPEN — every store-fault shape, not just a parse error
     // The Windows locked/renamed-file shape that motivated the whole fix. Only
     // the PARSE branch was covered before.
     unreadableStore()
-    const res = await call("GET", "/api/connectors/expertoption/history")
+    const res = await call("GET", "/api/connectors/aave/history")
     assertRefused(res, { sentinels: [SENTINEL.history] })
   })
 
@@ -688,7 +693,7 @@ describe("WS-7 AUTH-FAILOPEN — every store-fault shape, not just a parse error
     // contradicting the documented contract.
     writeSessions({ sessions: {} })
     writeUsers("null")
-    const res = await call("GET", "/api/connectors/expertoption/history")
+    const res = await call("GET", "/api/connectors/aave/history")
     expect(res.status).toBe(503)
     expect(res.body?.error).toBe("auth store unavailable")
   })
@@ -706,7 +711,7 @@ describe("WS-7 AUTH-FAILOPEN — every store-fault shape, not just a parse error
 
   it("refuses a header-credential caller when the SESSION store is faulty", async () => {
     faultSessionStore()
-    const res = await call("GET", "/api/connectors/expertoption/history", {
+    const res = await call("GET", "/api/connectors/aave/history", {
       headers: { authorization: `Bearer ${"a".repeat(64)}` }
     })
     expect(res.status).toBe(503)
@@ -1055,7 +1060,7 @@ describe("WS-7 AUTH-FAILOPEN — valid-JSON-but-wrong-shape is corruption, not a
     writeSessions({ sessions: {} })
     writeUsers({ users: [] })
 
-    const res = await call("GET", "/api/connectors/expertoption/history")
+    const res = await call("GET", "/api/connectors/aave/history")
     expect(res.status, "the empty shape is the genuine first-run case, and is ADMITTED").toBe(200)
     expect(res.text).toContain(SENTINEL.history)
   })

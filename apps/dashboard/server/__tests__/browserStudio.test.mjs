@@ -41,9 +41,10 @@ async function call(handleApi, method, path, body, headers) {
 describe("Browser Studio — site detection", () => {
   it("maps known dashboards to catalog entries", async () => {
     const { detectSite } = await import("../services/browserStudio.mjs")
-    expect(detectSite("https://app.expertoption.finance/").id).toBe("expertoption")
     expect(detectSite("https://www.luno.com/my").id).toBe("luno")
     expect(detectSite("https://aigen.dev/").id).toBe("aigen")
+    // D2/AC-005: the removed venue's host resolves to no catalog entry.
+    expect(detectSite("https://app.expertoption.finance/").id).toBeNull()
   }, 15_000)
 
   it("returns a generic profile for unknown sites", async () => {
@@ -55,7 +56,8 @@ describe("Browser Studio — site detection", () => {
 
   it("detectSite tags trading venues with a platform kind", async () => {
     const { detectSite } = await import("../services/browserStudio.mjs")
-    expect(detectSite("https://app.expertoption.finance/").platformKind).toBe("binary")
+    // `iqoption` is the surviving binary platform; it held the EO row's role.
+    expect(detectSite("https://iqoption.com/").platformKind).toBe("binary")
     expect(detectSite("https://www.binance.com").platformKind).toBe("spot")
     expect(detectSite("https://www.bybit.com").platformKind).toBe("derivatives")
     expect(detectSite("https://aigen.dev/").platformKind).toBeNull()
@@ -80,9 +82,9 @@ describe("Browser Studio — trading venue redirects (Slice 5 / R5)", () => {
     expect(binance.mode).toBe("venue")
     expect(binance.url).toBe("https://www.binance.com")
     // Venues without instruments (binary platforms) → venue root, pick asset in-app.
-    const eo = instrumentUrl("expertoption", "EURUSD")
+    const eo = instrumentUrl("iqoption", "EURUSD")
     expect(eo.mode).toBe("venue")
-    expect(eo.url).toBe("https://app.expertoption.finance/")
+    expect(eo.url).toBe("https://iqoption.com")
     // Non-trading / unknown sites → no redirection at all.
     expect(instrumentUrl("silencio", "BTCUSD").mode).toBe("none")
     expect(instrumentUrl("whatever", "BTCUSD").mode).toBe("none")
@@ -257,11 +259,19 @@ describe("Browser Studio — API routes", () => {
   })
 
   it("detects the site for a given URL via /assist", async () => {
-    const res = await call(handleApi, "POST", "/api/browser/assist", { url: "https://app.expertoption.finance/" })
+    const res = await call(handleApi, "POST", "/api/browser/assist", { url: "https://iqoption.com/" })
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
-    expect(res.body.site.id).toBe("expertoption")
+    expect(res.body.site.id).toBe("iqoption")
     expect(res.body.hasSavedCredentials).toBeTypeOf("boolean")
+  })
+
+  it("/assist reports no site profile for the removed venue's host", async () => {
+    // D2/AC-005: the SITE_INDEX row is gone, so /assist answers with the honest
+    // unknown-site shape rather than a venue profile.
+    const res = await call(handleApi, "POST", "/api/browser/assist", { url: "https://app.expertoption.finance/" })
+    expect(res.status).toBe(200)
+    expect(res.body.site.id).toBeNull()
   })
 
   it("returns 409 when driving a closed browser", async () => {

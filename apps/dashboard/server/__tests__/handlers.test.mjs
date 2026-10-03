@@ -319,10 +319,11 @@ describe("PICC API handlers", () => {
     const { handleApi: hApi } = await import("../handlers.mjs?autodetect-test2")
 
     const res = makeRes()
-    await hApi(makeReq("POST", "/api/connectors/autodetect", { url: "https://app.expertoption.finance/x" }, { authorization: `Bearer ${token}` }), res, "/api/connectors/autodetect")
+    await hApi(makeReq("POST", "/api/connectors/autodetect", { url: "https://app.aave.com/x" }, { authorization: `Bearer ${token}` }), res, "/api/connectors/autodetect")
     expect(res.status).toBe(200)
     expect(res.body.result.matched).toBe(true)
-    expect(res.body.result.slug).toBe("expertoption")
+    // D2/AC-005: the removed venue's row no longer matches anything.
+    expect(res.body.result.slug).toBe("aave")
     expect(res.body.result.tuned).toBe(false)
     rmSync(dir, { recursive: true, force: true })
   })
@@ -339,10 +340,14 @@ describe("PICC API handlers", () => {
     expect(binance.platformKind).toBe("spot")
     expect(binance.tradeUrl).toBe("https://www.binance.com/en/trade/BTCUSDT")
     expect(binance.linkMode).toBe("asset")
-    const eo = res.body.venues.find((v) => v.id === "expertoption")
-    expect(eo.platformKind).toBe("binary")
-    expect(eo.linkMode).toBe("venue") // binary venues have no deep-link — honest fallback
-    expect(eo.tradeUrl).toBe("https://app.expertoption.finance/")
+    // `iqoption` is the surviving binary platform and holds the EO row's role:
+    // no verified deep-link, so the honest venue-root fallback is used.
+    const iq = res.body.venues.find((v) => v.id === "iqoption")
+    expect(iq.platformKind).toBe("binary")
+    expect(iq.linkMode).toBe("venue") // binary venues have no deep-link — honest fallback
+    expect(iq.tradeUrl).toBe("https://iqoption.com")
+    // D2/AC-005: the removed venue is not offered at all.
+    expect(res.body.venues.find((v) => v.id === "expertoption")).toBeUndefined()
   })
 
   it("trading/venues without an asset still returns venue roots", async () => {

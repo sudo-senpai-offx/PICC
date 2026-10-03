@@ -12,7 +12,7 @@ import { getBrokers, type BrokerRow, type LatencyRow } from "@/lib/trading"
 
 // Human truth about each broker's live-vs-EOD coverage per asset class.
 const COVERAGE: Record<string, { live: string[]; eod: string[] }> = {
-  expertoption: { live: ["Forex", "Metals", "Indices", "Crypto"], eod: [] },
+  // D2/AC-005: the `expertoption` coverage row is REMOVED with the venue.
   ccxt: { live: ["Crypto"], eod: [] },
   yahoo: { live: [], eod: ["Forex", "Metals", "Energies", "Indices", "Crypto", "Equities"] },
   paper: { live: [], eod: [] }
@@ -115,11 +115,9 @@ export function DataSourcesPanel() {
                     // token-exempt: charge-state hue (configured idle amber) — categorical per-state
                     : { text: "configured · idle", color: "#fbbf24" }
                 const whyEmpty =
-                  b.slug === "expertoption"
-                    ? (b.configured && !b.connected
-                      ? "Session rejected / not connected — live intraday needs a connected EO session."
-                      : "EO only pushes live while its account session is connected.")
-                    : b.slug === "ccxt"
+                  // D2/AC-005: the `expertoption` branch is REMOVED with the venue;
+                  // an EO row can no longer appear in the broker list.
+                  b.slug === "ccxt"
                       ? (b.configured && !b.connected
                         ? "Exchanges idle — public market data needs no API key; add a Broker pair in Settings → Trading."
                         : (b.connected ? "Serving live crypto candles now." : "Not configured — add a Broker pair in Settings → Trading for live crypto (no key needed)."))

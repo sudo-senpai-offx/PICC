@@ -208,8 +208,8 @@ const DEFAULT_SETTINGS = {
   // `suiteDeactivateMs` without any tab in that suite being active; note this
   // is deliberately longer than the tab timeout and is suite-scoped, because
   // multiple sites can share one suite at the same time (e.g. two trading
-  // platforms, both on the trading suite). Both are configurable. The
-  // live-stream tab (app.expertoption.com) is never frozen.
+  // platforms, both on the trading suite). Both are configurable. D2/AC-005: the
+  // live-stream tab that was never frozen is gone with the ExpertOption venue.
   tabFreezeMs: 90_000,
   suiteDeactivateMs: 600_000,
   // Screencast performance profile: "auto" picks by host cores/RAM (Core Duo
@@ -492,7 +492,8 @@ const SITE_INDEX = [
   ["pitik.ai", "pitik", "Pitik.ai", "p2p", 0, "https://pitik.ai", "Agritech P2P financing (MY)."],
   ["aigen.dev", "aigen", "AIGEN Protocol", "agent", 0, "https://aigen.dev", "On-chain bounty protocol for AI agents."],
   ["agora.xyz", "agora", "Agora", "agent", 0, "https://agora.xyz", "Living agent + human economy ($THREE)."],
-  ["app.expertoption.com,app.expertoption.finance,expertoption.com,expertoption.finance", "expertoption", "ExpertOption", "trading", 0, "https://app.expertoption.finance/", "Read-only trading bridge."],
+  // D2/AC-005: the `expertoption` site row is REMOVED with the venue. It described
+  // a read-only trading bridge whose capture transport (`liveEO.mjs`) T2 deleted.
   ["binance.com,www.binance.com", "binance", "Binance", "trading", 0, "https://www.binance.com", "Crypto spot/futures exchange."],
   ["bybit.com,www.bybit.com", "bybit", "Bybit", "trading", 0, "https://www.bybit.com", "Crypto derivatives exchange."],
   ["kucoin.com,www.kucoin.com", "kucoin", "KuCoin", "trading", 0, "https://www.kucoin.com", "Crypto spot exchange."],
@@ -531,7 +532,7 @@ export function detectSite(url = "") {
 // formats we can verify; everything else lands on the venue root honestly.
 // ---------------------------------------------------------------------
 const PLATFORM_KINDS = {
-  expertoption: "binary",
+  // D2/AC-005: the `expertoption` entry is REMOVED with the venue.
   iqoption: "binary",
   olymptrade: "binary",
   deriv: "binary",
@@ -1117,15 +1118,11 @@ const livePage = (p) => Boolean(p && !p.isClosed())
 // "Only refresh when active" — per-tab activity, suite activity, and
 // configurable pause/freeze of background tabs.
 // ---------------------------------------------------------------------
-/** True for the tab that feeds the ExpertOption live stream — never frozen. */
-function isLiveStreamTab(tab) {
-  if (!tab?.url) return false
-  try {
-    return /(?:^|\.)expertoption\.com$/i.test(new URL(tab.url).hostname)
-  } catch {
-    return /expertoption\.com/i.test(tab.url)
-  }
-}
+// D2/AC-005: `isLiveStreamTab` is REMOVED with the venue. Its only job was to
+// exempt the tab feeding the ExpertOption live stream from the background-tab
+// freeze, and the transport that stream arrived on (`liveEO.mjs`) was deleted in
+// the same decision. No site row can now resolve to a live EO tab, so the
+// exemption had no subject.
 
 /** The suite id a tab belongs to (its detected site's suite, else category). */
 function suiteIdForTab(tab) {
@@ -1165,7 +1162,6 @@ function tabPICCActive(tabId) {
 
 async function freezeTab(tab) {
   if (!tab || tab.id === studio.activeId || studio.frozen.has(tab.id)) return
-  if (isLiveStreamTab(tab)) return // the live EO stream must keep running
   studio.frozen.add(tab.id)
   const cdp = await studio.bridge?.context?.newCDPSession(tab.page).catch(() => null)
   if (!cdp) return
@@ -1742,8 +1738,9 @@ const automation = {
 /** Map a detected site id to the tuned connector slug that reads its DOM. */
 const SITE_TO_CONNECTOR = {
   "nft-royalties": "opensea",
-  "defi-supply": "aave",
-  expertoption: "expertoption"
+  "defi-supply": "aave"
+  // D2/AC-005: the `expertoption` -> `expertoption` mapping is REMOVED with the
+  // venue, and with the connector row it pointed at.
 }
 
 export function siteToConnectorSlug(siteId) {
@@ -2997,15 +2994,18 @@ const GENERIC_AUTH_COOKIE_RE = /(?:^|[-_.])(?:access_?token|auth(?:_token|_cooki
  * session cookie, so it can't be used as a login signal. Guests see a
  * "Log in"/"Sign up" header; signed-in accounts render a user menu/avatar.
  * Only those DOM controls (or the WS context handshake) distinguish the two.
+ *
+ * D2/AC-005: the `expertoption` hint is REMOVED with the venue, so the map is
+ * empty and every site takes the `hint === undefined` path the non-EO sites
+ * already took. The map and its lookup stay: a future site with a
+ * cookie-cannot-prove-login profile has somewhere to declare it.
  */
-const LOGIN_HINTS = {
-  expertoption: { authCookies: [], cookieAuth: false }
-}
+const LOGIN_HINTS = {}
 
 /** Minimum milliseconds between DOM/cookie login checks for one tab. */
 const LOGIN_CHECK_MIN_INTERVAL_MS = 4000
-/** ExpertOption token auto-recapture cooldown after a detected login. */
-const EO_CAPTURE_COOLDOWN_MS = 10 * 60 * 1000
+// D2/AC-005: `EO_CAPTURE_COOLDOWN_MS` is REMOVED. Its only consumer was the
+// auto-capture-on-login branch T2 deleted, so the constant had no reader.
 
 /**
  * Injected DOM + storage scanner. Compact login signal set plus an ExpertOption
@@ -3202,27 +3202,10 @@ export async function detectLoginState(page, tab) {
     return out
   }
 
-  // ExpertOption renders the same `token` session cookie for guest visitors, so
-  // cookie presence is never proof of an active account there. The account model
-  // is read from the content window's own login state (user controls / profile
-  // storage = active; Log in + Sign up header = guest). Runs before the generic
-  // avatar/menu branch so the full account model is attached, not just a marker.
-  if (site?.id === "expertoption" && (dom?.active || dom?.guest)) {
-    const active = Boolean(dom.active)
-    out.loggedIn = active
-    out.confidence = "high"
-    out.method = "dom"
-    out.detail = active ? "active ExpertOption account" : "guest session — not signed in"
-    out.account = {
-      type: active ? "active" : "guest",
-      guest: !active,
-      email: dom.email ?? null,
-      name: dom.name ?? null,
-      wallet: dom.wallet ?? null,
-      balance: dom.balance ?? null
-    }
-    return out
-  }
+  // D2/AC-005: the ExpertOption account-model branch is REMOVED with the venue.
+  // It keyed on `site.id === "expertoption"`, which the site row no longer
+  // declares, so it could never be reached. The generic avatar/menu branch
+  // below is now the only DOM path, exactly as it is for every other site.
 
   // Account menu / avatar are decent medium-confidence positives.
   if (dom?.accountMenu || dom?.avatar) {
@@ -3269,9 +3252,9 @@ export async function detectLoginState(page, tab) {
 
 /**
  * Refresh the cached login state for one tab and (when it flips) broadcast the
- * change so every subscriber stays in sync. Also auto-captures a fresh
- * ExpertOption session token the moment a login lands, reviving a stale/dead
- * trading bridge without any manual step.
+ * change so every subscriber stays in sync. D2/AC-005: the ExpertOption
+ * auto-capture that used to hang off this refresh is removed with the venue —
+ * `captureExpertOptionSession`, its only caller, is gone.
  */
 async function refreshTabLogin(tabId) {
   const tab = studio.tabs.find((t) => t.id === tabId)

@@ -162,38 +162,55 @@ describe("detectLoginState — heuristics", () => {
     expect(auth.confidence).toBe("low")
   })
 
-  it("does NOT treat the ExpertOption token cookie alone as sign-in (guests have it too)", async () => {
+  it("D2/AC-005: the removed venue has no site profile, so a bare `token` cookie takes the GENERIC rule", async () => {
+    // The EO row carried `cookieAuth: false` because guests hold that cookie too,
+    // which suppressed cookie-based detection for the venue. With the row gone the
+    // host is unrecognised, so the generic rule applies: `token` matches
+    // GENERIC_AUTH_COOKIE_RE and reads as MEDIUM confidence — never "high", and
+    // never a site-scoped claim. This asserts the suppression is gone rather than
+    // pretending it still applies.
     const p = page()
     p.setUrl("https://app.expertoption.com/")
     p.setEval({ logoutControl: false, hasPassword: false, hasLoginForm: false, loginButton: false, accountMenu: false, avatar: false })
     h.setCookies([{ name: "token", value: "0123456789abcdef0123456789abcdef" }])
     const auth = await m.detectLoginState(p, {})
-    expect(auth.loggedIn).toBe(null)
-    expect(auth.detail).toBe("no auth signal found")
+    expect(auth.loggedIn).toBe(true)
+    expect(auth.confidence).toBe("medium")
+    expect(auth.method).toBe("cookie")
+    expect(auth.detail).toMatch(/auth cookies: token/)
   })
 
-  it("flags an ExpertOption guest session when a Log in header is present", async () => {
+  it("still refuses a lone Sign in button with no other signal (weak negative)", async () => {
+    // D2/AC-005: this used to be the ExpertOption guest-session assertion, which
+    // read `dom.guest` through the removed venue's account-model branch. The
+    // generic weak-negative branch is what every other site gets, and it is what
+    // remains. No cookies are set, so the cookie rule cannot pre-empt it.
     const p = page()
-    p.setUrl("https://app.expertoption.com/")
-    p.setEval({ logoutControl: false, hasPassword: false, hasLoginForm: false, loginButton: true, accountMenu: false, avatar: false, guest: true, active: false })
-    h.setCookies([{ name: "token", value: "0123456789abcdef0123456789abcdef" }])
+    p.setUrl("https://iqoption.com/")
+    p.setEval({ logoutControl: false, hasPassword: false, hasLoginForm: false, loginButton: true, accountMenu: false, avatar: false })
+    h.setCookies([])
     const auth = await m.detectLoginState(p, {})
     expect(auth.loggedIn).toBe(false)
-    expect(auth.confidence).toBe("high")
+    expect(auth.confidence).toBe("low")
     expect(auth.method).toBe("dom")
-    expect(auth.detail).toMatch(/guest session/i)
-    expect(auth.account).toMatchObject({ type: "guest", guest: true })
+    expect(auth.detail).toMatch(/sign-in button present/i)
   })
 
-  it("marks an ExpertOption active account with its wallet from the content window", async () => {
+  it("an avatar is a MEDIUM positive and attaches NO venue account payload", async () => {
+    // D2/AC-005: the removed venue's branch attached an `account` object
+    // (type/email/name/wallet/balance) read from the content window. No surviving
+    // branch does, so a signed-in tab is reported by signal strength alone and
+    // never carries identity fields PICC has no site knowledge to interpret.
     const p = page()
-    p.setUrl("https://app.expertoption.com/")
+    p.setUrl("https://iqoption.com/")
     p.setEval({ logoutControl: false, hasPassword: false, hasLoginForm: false, loginButton: false, accountMenu: false, avatar: true, guest: false, active: true, wallet: "demo", email: "trader@example.com", name: "Trader", balance: "$1,234.50" })
-    h.setCookies([{ name: "token", value: "0123456789abcdef0123456789abcdef" }])
+    h.setCookies([])
     const auth = await m.detectLoginState(p, {})
     expect(auth.loggedIn).toBe(true)
+    expect(auth.confidence).toBe("medium")
     expect(auth.method).toBe("dom")
-    expect(auth.account).toMatchObject({ type: "active", guest: false, wallet: "demo", email: "trader@example.com", balance: "$1,234.50" })
+    expect(auth.detail).toMatch(/avatar present/i)
+    expect(auth.account).toBeNull()
   })
 
   it("proves sign-in via a generic auth cookie (medium)", async () => {

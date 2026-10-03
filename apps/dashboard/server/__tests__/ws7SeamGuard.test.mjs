@@ -576,24 +576,34 @@ describe("T21 does not require a clean sweep - the honest states are surfaced, n
 })
 
 /* ==========================================================================
-   7. THE THREE BLOCKING FINDINGS - pinned, so they cannot be mistaken for green
+   7. THE BLOCKING FINDINGS - pinned, so they cannot be mistaken for green
+   --------------------------------------------------------------------------
+   RE-PINNED after the two venue/dependency findings were DISCHARGED. The pins
+   below were, deliberately, red: T21 recorded 28 EO identifiers and one unused
+   dependency so neither could be quietly greened. Discharging a finding means
+   re-pinning it to the NEW measured truth, not deleting the assertion — so each
+   one below now asserts the cleared state AND that the scanner still reaches the
+   files it must scan, which is what stops "pass because it inspected nothing".
    ========================================================================== */
 
-describe("the real repository produces THREE blocking findings, and their numbers are pinned", () => {
-  it("names exactly those three, and nothing else fails", () => {
+describe("the real repository produces ONE blocking finding, and its number is pinned", () => {
+  it("names exactly that one, and nothing else fails", () => {
     expect(REPORT.failures.map((f) => f.id).sort()).toEqual([
-      "catalog.claims-gone-entries-stay",
-      "deps.no-unused-dependency",
-      "venue.expertoption-residue"
+      "catalog.claims-gone-entries-stay"
     ])
     expect(REPORT.verdictWord).toBe("fail")
     expect(gateExitCode(REPORT)).toBe(1)
   })
 
-  it("FINDING 1 - 28 venue identifiers survive in comment-stripped production code, across eleven files", () => {
-    expect(rowFor("venue.expertoption-residue").measured).toBe(28)
-    const files = [...new Set(PROBE.detail.venueResidue.hits.map((h) => h.file))].sort()
-    expect(files).toEqual([
+  it("FINDING 1 - ZERO venue identifiers survive in comment-stripped production code, across no files", () => {
+    expect(rowFor("venue.expertoption-residue").measured).toBe(0)
+    expect(rowFor("venue.expertoption-residue").verdict).toBe("pass")
+    // The eleven files it used to name are all still SCANNED. A scan that had
+    // narrowed its corpus would also report 0, so the corpus size is pinned too.
+    expect(PROBE.detail.venueResidue.filesScanned).toBeGreaterThan(300)
+    const files = [...new Set(PROBE.detail.venueResidue.hits.map((h) => h.file))]
+    expect(files).toEqual([])
+    for (const stillScanned of [
       "apps/dashboard/server/services/browserStudio.mjs",
       "apps/dashboard/server/services/connectors.mjs",
       "apps/dashboard/server/services/packObservers.mjs",
@@ -603,26 +613,29 @@ describe("the real repository produces THREE blocking findings, and their number
       "apps/dashboard/src/components/DataSourcesPanel.tsx",
       "apps/dashboard/src/components/SourceBadge.tsx",
       "apps/dashboard/src/components/TradingChart.tsx",
-      "apps/dashboard/src/lib/trading.ts",
-      // A tracked script that still imports the DELETED `captureExpertOptionSession`,
-      // so it cannot run. That is the sharpest instance of the residue.
-      "scripts/capture-eo-session.mjs"
-    ])
+      "apps/dashboard/src/lib/trading.ts"
+    ]) {
+      expect(
+        productionFiles([stillScanned]),
+        `${stillScanned} must remain inside the residue scan's corpus`
+      ).toEqual([stillScanned])
+    }
   })
 
-  it("and one of those eleven is a BROKEN module, not merely dead text", () => {
-    const script = readFileSync(join(REPO_ROOT, "scripts", "capture-eo-session.mjs"), "utf8")
+  it("and the corpus still contains no tracked `capture-eo-session.mjs` — the broken module is GONE, not renamed", () => {
+    // D2/AC-005: it imported the `captureExpertOptionSession` T2 deleted, so it
+    // could not run. It is deleted rather than left as dead text.
+    expect(existsSync(join(REPO_ROOT, "scripts", "capture-eo-session.mjs"))).toBe(false)
     const studio = readFileSync(
       join(REPO_ROOT, "apps", "dashboard", "server", "services", "browserStudio.mjs"),
       "utf8"
     )
-    expect(script).toContain("captureExpertOptionSession")
-    // browserStudio.mjs removed it with the venue, so the import cannot resolve
+    // browserStudio still does not export it, and the removal RECORD survives.
     expect(studio).not.toMatch(/export\s+(?:async\s+)?function\s+captureExpertOptionSession\b/)
     expect(studio).toContain("D2/AC-005: `captureExpertOptionSession` is REMOVED")
   })
 
-  it("the removal RECORDS do not count as residue - that is why the count is 28 and not 744", () => {
+  it("the removal RECORDS do not count as residue - that is why the count is 0 and not 744", () => {
     const rawMentions = 744 // measured this session across tracked code and docs
     expect(PROBE.detail.venueResidue.hits.reduce((n, h) => n + h.count, 0)).toBeLessThan(rawMentions / 10)
     // and the stripper demonstrably keeps CODE while removing comments
@@ -632,11 +645,28 @@ describe("the real repository produces THREE blocking findings, and their number
     expect(stripped).toContain("export")
   })
 
-  it("FINDING 2 - one declared runtime dependency has no production importer", () => {
-    expect(rowFor("deps.no-unused-dependency").measured).toBe(1)
-    expect(PROBE.detail.dependencies.unused).toEqual([
-      { manifest: "apps/extension-archived/package.json", name: "plasmo", range: "^0.90.0" }
-    ])
+  it("FINDING 2 - every declared runtime dependency has a production importer", () => {
+    expect(rowFor("deps.no-unused-dependency").measured).toBe(0)
+    expect(rowFor("deps.no-unused-dependency").verdict).toBe("pass")
+    expect(PROBE.detail.dependencies.unused).toEqual([])
+    // The corpus is not what shrank: the manifests are still read, and the
+    // archived extension's is one of them. Its `plasmo` DECLARATION is what was
+    // removed — the file itself is retained, because it is tracked history. The
+    // root manifest declares no runtime dependencies at all (workspaces +
+    // overrides only), so it contributes nothing to `declared` and is not
+    // asserted here; asserting it would pin an accident of its shape.
+    expect(PROBE.detail.dependencies.declaredRuntime).toBeGreaterThan(5)
+    const archived = JSON.parse(
+      readFileSync(join(REPO_ROOT, "apps", "extension-archived", "package.json"), "utf8")
+    )
+    expect(archived.dependencies).not.toHaveProperty("plasmo")
+    // ...and it is still a tracked manifest the check reads, not one it skips:
+    // its two surviving runtime deps are in `declared` under its own path.
+    const fromArchive = PROBE.detail.dependencies.declared
+      .filter((d) => d.manifest === "apps/extension-archived/package.json")
+      .map((d) => d.name)
+      .sort()
+    expect(fromArchive).toEqual(["react", "react-dom"])
   })
 
   it("FINDING 3 - D26's second half is unsatisfiable as written: T7b removed the eight rows", () => {

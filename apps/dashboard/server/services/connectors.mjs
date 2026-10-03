@@ -1,7 +1,9 @@
 // Connector registry — every income source exposes one interface and emits the
 // same normalized Earnings shape, regardless of which transport produced it:
 //   1. api      — the provider's official API (yfinance, Stripe, Aave, ...)
-//   2. ws       — a reverse-engineered protocol client (expertoption.mjs)
+//   2. ws       — a reverse-engineered protocol client. No connector declares
+//                 this transport today: D2/AC-005 removed the `ws` row with the
+//                 ExpertOption venue, whose `expertoption.mjs` client T2 deleted.
 //   3. browser  — the browser bridge (real Chrome/Edge via CDP): login once,
 //                 then read the live dashboard DOM + the page's own WebSocket
 //                 frames. This is the universal path for sources with no API.
@@ -490,22 +492,10 @@ export async function closeAllLiveSessions() {
 // Built-in connectors
 // ---------------------------------------------------------------------------
 
-// ExpertOption — the primary read path is the WS client (expertoption.mjs);
-// the browser transport is the fallback when a token isn't available, reading
-// the same numbers straight off the dashboard DOM.
-registerConnector({
-  slug: "expertoption",
-  label: "ExpertOption",
-  category: "trading",
-  transports: ["ws", "browser"],
-  url: "https://app.expertoption.finance/",
-  defaults: { label: "ExpertOption" },
-  selectors: {
-    balance: "input[placeholder*='balance'], [class*='balance']",
-    today: "[class*='today-profit'], [class*='profit-today'], [class*='daily']",
-    lifetime: "[class*='total-profit'], [class*='total-earned']"
-  }
-})
+// D2/AC-005: the `expertoption` connector row is REMOVED with the venue. Its
+// `ws` transport was the reverse-engineered `expertoption.mjs` client T2 deleted,
+// and its `browser` transport drove a site that no longer has a profile here, so
+// the row described two read paths that no longer exist.
 
 // NFT marketplaces — floor price / volume from the collection page. Tuned
 // against the live OpenSea homepage (2026): OpenSea's class names are hashed

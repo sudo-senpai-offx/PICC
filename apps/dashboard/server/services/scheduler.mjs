@@ -318,14 +318,18 @@ every(
 
 // ── Phase 6 (spec PICC_PACK1_LOCAL_TRADING_CORE_v1.md, S1/T1.1–T1.2) ─────────
 // Pack-1 observations ride the scheduler tick (no new process). P1-1 surveys the
-// REAL seams read-only: headlessSessionStatus (per-venue rows, honest sourceLeg),
-// liveEOStats (connected/stale/degraded sticky kinds), trading getCredentials
-// (token PRESENCE only — the value never leaves trading.mjs). The mapping lives
-// in packObservers.mjs (pure, table-tested); the pack runner applies the envelope
-// gate. Observation NEVER resumes stopped-at-human — that is the human ack's job.
+// REAL seams read-only: liveEOStats (connected/stale/degraded sticky kinds),
+// trading getCredentials (token PRESENCE only — the value never leaves
+// trading.mjs). D2/AC-005: `headlessSessionStatus` and `liveEOStats` are both
+// gone from this seam — the per-venue rows it returned and the transport
+// `liveStats` described belonged to the removed venue — so the survey runs
+// against no live capture source, which it reports as stopped-at-human rather
+// than as a fabricated running state. The mapping lives in packObservers.mjs
+// (pure, table-tested); the pack runner applies the envelope gate. Observation
+// NEVER resumes stopped-at-human — that is the human ack's job.
 // S6: the PICC-side settings toggle (sessionCaptureEnabled store) is read HERE —
-    // an observed OFF skips p1-1. There is no browser-side kill-switch anymore
-    // (clean break, D1): the studio leg is the only capture path.
+//     an observed OFF skips p1-1. There is no browser-side kill-switch anymore
+//     (clean break, D1): the studio leg is the only capture path.
 every(
   "pack-observation",
   60 * 1000,
@@ -338,9 +342,8 @@ every(
     // "EO session capture" should leave the Pack-1 step list is a product
     // decision the owner did not authorise, and the step still surfaces an
     // honest unconfigured state rather than a fabricated running one.
-    const [{ getCredentials }, { headlessSessionStatus }, { observeEoCapture, t0ExtractionSubStep, observeCcxtPoll, observeNewsDigest, observeSignalNotifications, coerceObservationForStoppedStep }, { runStep }, { resourceCaps, packOneDefinition, getStep }, { ccxtStats, ccxtStatus }, { digestState, newsFeedsConfig }, { notifierStatus }, { sessionCaptureEnabled }] = await Promise.all([
+    const [{ getCredentials }, { observeEoCapture, t0ExtractionSubStep, observeCcxtPoll, observeNewsDigest, observeSignalNotifications, coerceObservationForStoppedStep }, { runStep }, { resourceCaps, packOneDefinition, getStep }, { ccxtStats, ccxtStatus }, { digestState, newsFeedsConfig }, { notifierStatus }, { sessionCaptureEnabled }] = await Promise.all([
       import("./trading.mjs"),
-      import("./captureProfiles.mjs"),
       import("./packObservers.mjs"),
       import("./packRunner.mjs"),
       import("./packRegistry.mjs"),
@@ -349,13 +352,17 @@ every(
       import("./notifier.mjs"),
       import("./sessionCaptureSettings.mjs")
     ])
+    // D2/AC-005: `liveStats` is a literal empty object and the
+    // `headlessSessionStatus()` read is gone. Both belonged to the removed
+    // venue's realtime transport; neither is fabricated into a plausible-looking
+    // value, so `observeEoCapture` sees no live capture source at all. The
+    // dropped `captureProfiles.mjs` dynamic import is not reinstated: the module
+    // is already loaded statically for `headlessSessionRefresh` (`:57`).
     const liveStats = {}
-    const [headlessRows, creds] = await Promise.all([headlessSessionStatus(), getCredentials()])
+    const creds = await getCredentials()
 
     const survey = observeEoCapture({
-      headless: headlessRows.expertoption ?? {},
       liveStats,
-      creds,
       // PICC-side toggle: default-ON when never set; only a real false disables.
       sessionCaptureEnabled: sessionCaptureEnabled()
     })
@@ -380,7 +387,11 @@ every(
       packId: p1OneId,
       stepId: "p1-1-eo-session-capture",
       observation: surveyToRun,
-      gates: { hasCredentials: Boolean(creds.expertoptionToken?.trim()) },
+      // D2/AC-005: the `hasCredentials` gate is REMOVED with the venue. It read
+      // `creds.expertoptionToken`, and the credential it gated can no longer be
+      // configured. Omitting the gate is behaviourally identical to passing
+      // `false`: `envelopeGate` tests `gates.hasCredentials !== true`, so this
+      // l-class step still stops at the login gate exactly as it did before.
       caps: resourceCaps()
     })
     if (result.applied) {

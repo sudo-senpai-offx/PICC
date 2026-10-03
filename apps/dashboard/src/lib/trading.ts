@@ -26,10 +26,12 @@ function post<T>(path: string, body: unknown, token?: string): Promise<T> {
   return request<T>(path, { method: "POST", body: JSON.stringify(body) }, token)
 }
 
+// D2/AC-005: the three `expertoption*` fields are REMOVED with the venue. The
+// server stopped reading, defaulting and writing them in the same change
+// (`trading.mjs` `DEFAULT_CREDS`), so a response has never carried them since;
+// declaring them here only let the client compile against a shape that does not
+// exist.
 export interface TradingCredentials {
-  expertoptionToken: string
-  expertoptionDemo: boolean
-  expertoptionWsUrl: string
   paperStartingBalance: number
   riskPerTradePct: number
   ccxtExchanges: CcxtExchangePair[]

@@ -3,10 +3,18 @@ import { fingerprint } from "../services/autodetect.mjs"
 
 describe("autodetect.fingerprint (pure proposal builder)", () => {
   it("matches an existing connector's origin quickly", () => {
-    const r = fingerprint({ url: "https://app.expertoption.finance/dashboard" })
+    // D2/AC-005: the subject connector was `expertoption`, whose row is removed
+    // with the venue. `aave` is the surviving untuned row, so `tuned` stays false.
+    const r = fingerprint({ url: "https://app.aave.com/dashboard" })
     expect(r.matched).toBe(true)
-    expect(r.slug).toBe("expertoption")
+    expect(r.slug).toBe("aave")
     expect(r.tuned).toBe(false)
+  })
+
+  it("no longer matches the removed venue's origin", () => {
+    const r = fingerprint({ url: "https://app.expertoption.finance/dashboard" })
+    expect(r.matched).toBeFalsy()
+    expect(r.slug).not.toBe("expertoption")
   })
 
   it("proposes origins from a hostname (stripping www., registrable domain)", () => {

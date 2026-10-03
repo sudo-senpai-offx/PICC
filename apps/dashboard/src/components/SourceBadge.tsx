@@ -9,9 +9,9 @@
 import { Badge } from "@/components/ui"
 
 export interface SourceBadgeProps {
-  /** The slug the SERVER served ("expertoption" | "live" | "buffer" | "ccxt" | ...). */
+  /** The slug the SERVER served ("live" | "buffer" | "ccxt" | ...). */
   servedSource: string | null
-  /** Leg provenance for EO winners: "studio" | "headless" | null. */
+  /** Leg provenance for the EO winners: "studio" | "headless" | null. */
   feed: string | null
   /** Server-reported staleness (stale series ≠ live data). */
   stale?: boolean
@@ -21,7 +21,9 @@ export interface SourceBadgeProps {
 
 export function SourceBadge({ servedSource, feed, stale = false, streamError = false }: SourceBadgeProps) {
   if (!servedSource || servedSource === "none") return null
-  const isEo = ["expertoption", "live", "buffer"].includes(servedSource)
+  // D2/AC-005: the `expertoption` slug is REMOVED with the venue. The remaining
+  // entries are the legacy buffer aliases the server still tags.
+  const isEo = ["live", "buffer"].includes(servedSource)
 
   if (feed === "studio") {
     const status = streamError ? "stream offline" : stale ? "stale" : "active"

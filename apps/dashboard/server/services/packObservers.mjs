@@ -115,6 +115,16 @@ export function coerceObservationForStoppedStep(observation, currentStatus, prio
 }
 
 /**
+ * D2/AC-005: whether a venue session credential is configured — now a constant
+ * `false`, not a read. It replaces `Boolean(creds.expertoptionToken?.trim())`
+ * after the venue's removal. It is kept as a named constant rather than an
+ * inline `false` so the observation payload keeps its `tokenConfigured` field
+ * (the packs strip renders it) and so the reason it can never be true is stated
+ * in one place instead of at each use.
+ */
+const SESSION_CREDENTIAL_CONFIGURED = false
+
+/**
  * Survey the EO session-capture step from the real seams' outputs.
  *
  * S6/T6.2 PICC-side session-capture kill-switch (owner decision 2026-09-15):
@@ -123,19 +133,24 @@ export function coerceObservationForStoppedStep(observation, currentStatus, prio
  * browser-side kill-switch anymore (clean break, D1): the studio leg is the
  * only capture path.
  *
- * @param {{headless?: {sourceLeg?: string|null},
- *          liveStats?: {status?: string,
+ * D2/AC-005: the `creds` and `headless` inputs are REMOVED with the venue. The
+ * credential they carried (`expertoptionToken`) had exactly one writer — the
+ * `captureExpertOptionSession` T2 deleted — and the transport they described
+ * (`liveEO.mjs`) is gone, so neither can report a live session again. The
+ * step stays, because it is a declared pack step and the canonical fixture for
+ * the registry's ack-only contract; what changes is that it now reports
+ * stopped-at-human for the removal rather than asking for a login that no
+ * longer exists.
+ *
+ * @param {{liveStats?: {status?: string,
  *                       degraded?: {kind?: string, reason?: string}|null,
  *                       feedMode?: string},
- *          creds?: {expertoptionToken?: string},
  *          sessionCaptureEnabled?: boolean|null}} opts  null = server never observed it
  * @returns {{status:string, detail:string, observed:object}}
  *          a registry observation ready for runStep
  */
 export function observeEoCapture({
-  headless = {},
   liveStats = {},
-  creds = {},
   sessionCaptureEnabled = null
 } = {}) {
   // PICC-side kill-switch first — the dashboard setting is authoritative when
@@ -162,34 +177,26 @@ export function observeEoCapture({
       observed: {
         degradedKind: degKind,
         reason: liveStats.degraded.reason,
-        tokenConfigured: Boolean(creds.expertoptionToken?.trim()),
+        tokenConfigured: SESSION_CREDENTIAL_CONFIGURED,
         sessionCaptureEnabled,
         pathway: loginPathway({ need: "re-login", reason: liveStats.degraded.reason })
       }
     }
   }
 
-  if (!creds.expertoptionToken?.trim()) {
-    return {
-      status: "stopped-at-human",
-      detail: "needs: login",
-      observed: {
-        tokenConfigured: false,
-        sessionCaptureEnabled,
-        pathway: loginPathway({ need: "login" })
-      }
-    }
-  }
-
+  // D2/AC-005: the token gate is REMOVED with the venue. It read
+  // `creds.expertoptionToken`, and no credential can be configured now that the
+  // venue and its only writer are gone, so this is the terminal observation for
+  // every caller that is not kill-switched or degraded. The `running` branch
+  // that followed it is deleted with it: it required BOTH a configured token and
+  // a live transport, and neither exists.
   return {
-    status: "running",
-    detail: `capture armed (token present; liveEO ${liveStats.status ?? "unknown"})`,
+    status: "stopped-at-human",
+    detail: "needs: login",
     observed: {
-      tokenConfigured: true,
-      status: liveStats.status ?? null,
-      sourceLeg: headless.sourceLeg ?? null,
-      feedMode: liveStats.feedMode ?? null,
-      sessionCaptureEnabled
+      tokenConfigured: SESSION_CREDENTIAL_CONFIGURED,
+      sessionCaptureEnabled,
+      pathway: loginPathway({ need: "login" })
     }
   }
 }

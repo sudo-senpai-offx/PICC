@@ -8,6 +8,11 @@
 //     ("active" / "stale" / "stream offline")
 //   • EO buffer + Yahoo daily → their real, degraded labels
 //   • unknown/generic slug → muted slug — a ccxt/broker feed is not EO
+//
+// D2/AC-005: the `servedSource` fixtures below used to read "expertoption",
+// which is no longer a source the server can serve. They now read "live", the
+// surviving alias that takes the SAME `isEo` branch, so every assertion still
+// exercises the branch it was written for rather than a dead slug.
 import { describe, expect, it } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
@@ -28,7 +33,7 @@ function mount(el: React.ReactNode) {
   }
 }
 
-function badge(overrides: Partial<SourceBadgeProps> = {}, defaults: SourceBadgeProps = { servedSource: "expertoption", feed: null }) {
+function badge(overrides: Partial<SourceBadgeProps> = {}, defaults: SourceBadgeProps = { servedSource: "live", feed: null }) {
   return mount(<SourceBadge {...defaults} {...overrides} />)
 }
 
@@ -42,7 +47,7 @@ describe("SourceBadge (T11 — never claims 'EO live')", () => {
   })
 
   it("studio provenance with a fresh series → 'EO studio · active'", () => {
-    const b = badge({ servedSource: "expertoption", feed: "studio", stale: false })
+    const b = badge({ servedSource: "live", feed: "studio", stale: false })
     const t = b.text()
     expect(t).toContain("EO studio")
     expect(t).toContain("active")
@@ -52,14 +57,14 @@ describe("SourceBadge (T11 — never claims 'EO live')", () => {
   })
 
   it("studio provenance with a stale series → 'EO studio · stale'", () => {
-    const b = badge({ servedSource: "expertoption", feed: "studio", stale: true })
+    const b = badge({ servedSource: "live", feed: "studio", stale: true })
     expect(b.text()).toContain("EO studio")
     expect(b.text()).toContain("stale")
     b.unmount()
   })
 
   it("studio provenance with a dead stream → 'EO studio · stream offline'", () => {
-    const b = badge({ servedSource: "expertoption", feed: "studio", stale: false, streamError: true })
+    const b = badge({ servedSource: "live", feed: "studio", stale: false, streamError: true })
     const t = b.text()
     expect(t).toContain("EO studio")
     expect(t).toContain("stream offline")
@@ -69,7 +74,7 @@ describe("SourceBadge (T11 — never claims 'EO live')", () => {
 
   it("headless provenance is labeled 'headless' and NEVER 'EO headless live'", () => {
     for (const stale of [false, true]) {
-      const b = badge({ servedSource: "expertoption", feed: "headless", stale })
+      const b = badge({ servedSource: "live", feed: "headless", stale })
       const t = b.text()
       expect(t).toContain("EO headless")
       expect(t).not.toContain("EO headless live")
@@ -103,14 +108,14 @@ describe("SourceBadge (T11 — never claims 'EO live')", () => {
   })
 
   it("EO without provenance is 'EO · active' / 'EO · stale' / 'EO · stream offline'", () => {
-    const fresh = badge({ servedSource: "expertoption", feed: null, stale: false })
+    const fresh = badge({ servedSource: "live", feed: null, stale: false })
     expect(fresh.text()).toContain("EO · active")
     expect(fresh.text()).not.toContain("stale")
     fresh.unmount()
-    const stale = badge({ servedSource: "expertoption", feed: null, stale: true })
+    const stale = badge({ servedSource: "live", feed: null, stale: true })
     expect(stale.text()).toContain("EO · stale")
     stale.unmount()
-    const down = badge({ servedSource: "expertoption", feed: null, streamError: true })
+    const down = badge({ servedSource: "live", feed: null, streamError: true })
     expect(down.text()).toContain("EO · stream offline")
     down.unmount()
   })
@@ -133,10 +138,10 @@ describe("SourceBadge (T11 — never claims 'EO live')", () => {
       { servedSource: "live", feed: "studio", stale: false },
       { servedSource: "live", feed: "headless", stale: false },
       { servedSource: "buffer", feed: null, stale: true },
-      { servedSource: "expertoption", feed: "studio", stale: false },
-      { servedSource: "expertoption", feed: "headless", stale: false },
-      { servedSource: "expertoption", feed: null, stale: false },
-      { servedSource: "expertoption", feed: "studio", stale: false, streamError: true }
+      { servedSource: "live", feed: "studio", stale: false },
+      { servedSource: "live", feed: "headless", stale: false },
+      { servedSource: "live", feed: null, stale: false },
+      { servedSource: "live", feed: "studio", stale: false, streamError: true }
     ]
     for (const c of cases) {
       const b = badge(c)

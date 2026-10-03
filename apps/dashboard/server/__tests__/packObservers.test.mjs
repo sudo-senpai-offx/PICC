@@ -45,7 +45,7 @@ describe("observeEoCapture — T1.1 status mapping table", () => {
   })
 
   it("kill-switch NOT observed (null) is never assumed off — the mapping proceeds", () => {
-    const r = obs.observeEoCapture({ creds: { expertoptionToken: "" } })
+    const r = obs.observeEoCapture({})
     expect(r.status).toBe("stopped-at-human")
     expect(r.detail).toBe("needs: login")
     expect(r.observed.tokenConfigured).toBe(false)
@@ -53,98 +53,76 @@ describe("observeEoCapture — T1.1 status mapping table", () => {
 
   it("degraded unconfigured → stopped-at-human, needs re-login (sticky seam state)", () => {
     const r = obs.observeEoCapture({
-      liveStats: { status: "unconfigured", degraded: { kind: "unconfigured", reason: "no expertoption session" } },
-      creds: { expertoptionToken: "abc123" }
+      liveStats: { status: "unconfigured", degraded: { kind: "unconfigured", reason: "no live session" } }
     })
     expect(r.status).toBe("stopped-at-human")
     expect(r.detail).toBe("needs: re-login")
     expect(r.observed.degradedKind).toBe("unconfigured")
-    expect(r.observed.tokenConfigured).toBe(true) // token on file, session rejected — truth
+    // D2/AC-005: the credential read is gone, so this is false rather than
+    // "token on file, session rejected". The degraded KIND is still surfaced,
+    // which is what this row is actually about.
+    expect(r.observed.tokenConfigured).toBe(false)
   })
 
   it("stopped-at-human carries the workflow PATHWAY prompt (owner Q2) — no autodetection claims", () => {
     const r = obs.observeEoCapture({
-      liveStats: { status: "expired", degraded: { kind: "expired", reason: "session token rejected" } },
-      creds: { expertoptionToken: "abc123" }
+      liveStats: { status: "expired", degraded: { kind: "expired", reason: "session token rejected" } }
     })
     expect(r.observed.pathway).toBeDefined()
     expect(r.observed.pathway.need).toBe("re-login")
     expect(r.observed.pathway.prompt).toContain("never auto-fills, auto-detects, or automates")
     const joined = r.observed.pathway.steps.join(" ")
-    expect(joined).toContain("https://app.expertoption.com/")
     expect(joined).toContain("Log in AGAIN to the DEMO account manually") // re-login wording
     expect(joined).toContain("acknowledge this handoff")
     // the pathway never references an automated fill/login attempt
     expect(joined).not.toMatch(/auto-fill|automated login/)
   })
 
-  it("no token → stopped-at-human needs login, with the login pathway (first-login wording)", () => {
-    const r = obs.observeEoCapture({ creds: { expertoptionToken: "" } })
+  it("no session can be live → stopped-at-human needs login, with the login pathway (first-login wording)", () => {
+    const r = obs.observeEoCapture({})
     expect(r.status).toBe("stopped-at-human")
     expect(r.detail).toBe("needs: login")
     expect(r.observed.tokenConfigured).toBe(false)
     expect(r.observed.pathway.need).toBe("login")
-    expect(r.observed.pathway.steps.join(" ")).toContain("Open the ExpertOption app tab")
     expect(r.observed.pathway.steps.join(" ")).not.toMatch(/AGAIN/)
   })
 
-  it("connected session + token → running with honest sourceLeg provenance", () => {
-    const r = obs.observeEoCapture({
-      headless: { sourceLeg: "studio" },
-      liveStats: { status: "connected", feedMode: "studio" },
-      creds: { expertoptionToken: "abc123" }
-    })
-    expect(r.status).toBe("running")
-    expect(r.observed.tokenConfigured).toBe(true)
-    expect(r.observed.sourceLeg).toBe("studio")
-    expect(r.observed.feedMode).toBe("studio")
-    expect(r.observed.status).toBe("connected")
+  it("D2/AC-005: a healthy liveStats seam still stops at the human gate — 'running' is unreachable", () => {
+    // The `running` branch is deleted with the venue: it required BOTH a
+    // configured session credential and a live capture transport, and neither
+    // exists. This is the assertion that the terminal state is not a silent
+    // "everything is fine" — the step still stops, every time.
+    for (const liveStats of [
+      { status: "connected", feedMode: "studio" },
+      { status: "running", feedMode: "auto", degraded: null },
+      { status: "idle", feedMode: "auto" }
+    ]) {
+      const r = obs.observeEoCapture({ liveStats })
+      expect(r.status).toBe("stopped-at-human")
+      expect(r.detail).toBe("needs: login")
+      expect(r.observed.tokenConfigured).toBe(false)
+    }
   })
 
-  it("REGRESSION: degraded cleared by softReconnect + fresh token → running (not stuck stopped-at-human)", () => {
+  it("REGRESSION: a CLEARED degraded is not surfaced; a STALE one still is", () => {
     // Bug chain (2026-09-14): softReconnectLiveEO did NOT clear the degraded
-    // flag from a previous auth failure. When a fresh token arrived, the stale
-    // degraded survived, causing currentStatus() to return "expired" perpetually
-    // — the observer always reported stopped-at-human despite a valid session.
-    // Fix: softReconnectLiveEO now clears degraded + lastError before starting
-    // fresh. This test verifies the seam produces the right state AFTER the fix:
-    // degraded=null (cleared) + token present → running.
-    const r = obs.observeEoCapture({
-      headless: { sourceLeg: "studio" },
-      liveStats: { status: "connected", degraded: null, feedMode: "studio" },
-      creds: { expertoptionToken: "fresh-token-after-reconnect" }
+    // flag from a previous auth failure, so currentStatus() returned "expired"
+    // perpetually. The part of that fix this observer still owns is the
+    // degraded-kind surfacing, and it is asserted here without the removed
+    // credential: degraded=null is not surfaced, degraded=set still is.
+    const cleared = obs.observeEoCapture({
+      liveStats: { status: "connected", degraded: null, feedMode: "studio" }
     })
-    expect(r.status).toBe("running")
-    expect(r.observed.tokenConfigured).toBe(true)
-    expect(r.observed.degradedKind).toBeUndefined() // null degraded → not surfaced
-    // If degraded were STILL set (the old bug), this would be stopped-at-human:
-    const stuckBug = obs.observeEoCapture({
-      headless: { sourceLeg: "studio" },
-      liveStats: { status: "expired", degraded: { kind: "expired", reason: "old error" }, feedMode: "studio" },
-      creds: { expertoptionToken: "fresh-token-after-reconnect" }
+    expect(cleared.observed.degradedKind).toBeUndefined() // null degraded → not surfaced
+    expect(cleared.status).toBe("stopped-at-human")
+    // If degraded were STILL set (the old bug), this is also stopped-at-human,
+    // but it must SAY why rather than reporting a clean seam:
+    const stuck = obs.observeEoCapture({
+      liveStats: { status: "expired", degraded: { kind: "expired", reason: "old error" }, feedMode: "studio" }
     })
-    expect(stuckBug.status).toBe("stopped-at-human") // confirms the old bug behavior
-    expect(stuckBug.observed.degradedKind).toBe("expired")
-  })
-
-  it("studio leg is reported as studio, never guessed", () => {
-    const r = obs.observeEoCapture({
-      headless: { sourceLeg: "studio" },
-      liveStats: { status: "running" === "x" ? "connected" : "idle", feedMode: "auto" },
-      creds: { expertoptionToken: "abc123" }
-    })
-    expect(r.status).toBe("running")
-    expect(r.observed.sourceLeg).toBe("studio")
-  })
-
-  it("unknown/never-captured leg stays null (rendered 'not-observed'), never zero-filled", () => {
-    const r = obs.observeEoCapture({
-      headless: { sourceLeg: null },
-      liveStats: { status: "idle", feedMode: "auto" },
-      creds: { expertoptionToken: "abc123" }
-    })
-    expect(r.status).toBe("running") // armed, waiting — the capture RUN leg is active
-    expect(r.observed.sourceLeg).toBeNull()
+    expect(stuck.status).toBe("stopped-at-human")
+    expect(stuck.detail).toBe("needs: re-login")
+    expect(stuck.observed.degradedKind).toBe("expired")
   })
 })
 

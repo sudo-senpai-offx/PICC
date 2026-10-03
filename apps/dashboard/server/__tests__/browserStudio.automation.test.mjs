@@ -41,7 +41,8 @@ describe("Browser automation — pure helpers", () => {
     const { siteToConnectorSlug } = await import("../services/browserStudio.mjs")
     expect(siteToConnectorSlug("nft-royalties")).toBe("opensea")
     expect(siteToConnectorSlug("defi-supply")).toBe("aave")
-    expect(siteToConnectorSlug("expertoption")).toBe("expertoption")
+    // D2/AC-005: the removed venue resolves to no connector, as it must.
+    expect(siteToConnectorSlug("expertoption")).toBeNull()
     expect(siteToConnectorSlug("honeygain")).toBeNull() // bandwidth suite removed
     expect(siteToConnectorSlug("mysterium")).toBeNull() // no tuned connector for depin
     expect(siteToConnectorSlug("packetstream")).toBeNull()
@@ -64,15 +65,25 @@ describe("Browser automation — pure helpers", () => {
 
   it("falls back when nothing is readable and still appends the site note", async () => {
     const { automationSuggestions } = await import("../services/browserStudio.mjs")
-    const site = { id: "expertoption", note: "Demo mode only." }
+    const site = { id: "binance", note: "Demo mode only." }
     const out = automationSuggestions(site, { balance: null, today: null, lifetime: null, payoutThreshold: null, estimatedDaily: null })
     expect(out[0]).toContain("No readable figures yet")
     expect(out).toContain("Demo mode only.")
   })
 
-  it("detects the expertoption venue host", async () => {
+  it("no longer detects the removed venue host as a site profile", async () => {
+    // D2/AC-005: the SITE_INDEX row is removed, so the host falls through to the
+    // honest "no PICC profile for this site" shape (id null, name = host).
     const { detectSite } = await import("../services/browserStudio.mjs")
-    expect(detectSite("https://app.expertoption.finance/").id).toBe("expertoption")
+    const site = detectSite("https://app.expertoption.finance/")
+    expect(site.id).toBeNull()
+    expect(site.name).toBe("app.expertoption.finance")
+    expect(site.platformKind).toBeNull()
+  })
+
+  it("still detects a surviving trading venue host", async () => {
+    const { detectSite } = await import("../services/browserStudio.mjs")
+    expect(detectSite("https://iqoption.com/").id).toBe("iqoption")
   })
 })
 
