@@ -42,6 +42,51 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+/**
+ * How long the one test below may wait for a LAZY room chunk to resolve, and why
+ * the fix is the wait budget and NOT a per-test `timeout`.
+ *
+ * WHAT THE TEST IS ACTUALLY WAITING ON. `:107` mounts `/suites/earnings/
+ * simulator`. `EARNINGS_ROOMS.simulator` is a `lazy(...)` component
+ * (MinistryRoom.tsx:56), so `MinistryRoom` renders `<Room />` and the
+ * `header[data-room="simulator"]` this test looks for DOES NOT EXIST until React
+ * has resolved the dynamic `import("./EarningsRooms")`. The wait is on a module
+ * load, not on a render, and not on a timer.
+ *
+ * WHY 1000ms WAS TOO SHORT. Measured with a scratch probe over 16 cold loads on
+ * this host: 1207, 1297, 1367, 1510, 1615, 1705, 1742, 2185, 2251, 2338, 2413,
+ * 2430, 2533, 2534, 2628, 2710ms — worst 2710ms. The SAME load again once warm
+ * resolves in 4-5ms, which is why the cost is transform/registry cold-start and
+ * not the component. `vi.waitFor`'s DEFAULT timeout is 1000ms, so the outcome
+ * depended on whether Vite's transform cache happened to be warm: this test
+ * failed at 1020ms and 1032ms run after run when this file was run alone, and
+ * passed inside a full suite. That is the flake, and it is a cache-warmth
+ * dependency rather than a concurrency one — the opposite of the two
+ * server-side files fixed alongside it.
+ *
+ * WHY A PER-TEST `timeout` IS NOT THE FIX, stated because it is the obvious
+ * wrong move. `vi.waitFor` enforces its OWN deadline and rejects on it; it never
+ * consults `testTimeout`. The observed failures landed at 1020ms and 1032ms
+ * under a 5000ms test ceiling, which is the proof. Raising only the test budget
+ * would change nothing and the test would still be red.
+ *
+ * WHY 8000ms. ~3x the worst observed cold load (3 x 2710 = 8130), which is the
+ * sizing convention `0dc9989` states for this repo, and it is inside the range
+ * this repo already uses for exactly this kind of wait: `ministryRooms.test.tsx`
+ * waits on this IDENTICAL element at `:93` with `timeoutMs = 3000` (`:18`), and
+ * `SettingsRoom`/`HoldingsEditor`/`FinanceTracker` all use `WAIT = { timeout:
+ * 5000 }`. This file was the one place that waited with no budget at all.
+ *
+ * WHY THE TEST CARRIES A LARGER CEILING STILL. A wait ceiling is only reachable
+ * if it sits strictly INSIDE the test ceiling; otherwise vitest kills the test
+ * first and a genuine failure is reported as an opaque "Test timed out in
+ * 5000ms" instead of the assertion that actually failed. 10000ms leaves 2000ms
+ * of headroom, so a chunk that genuinely never resolves still fails HERE, with
+ * `expected null not to be null`, which is the diagnostic worth having.
+ */
+const LAZY_ROOM_WAIT_MS = 8_000
+const LAZY_ROOM_TEST_MS = 10_000
+
 describe("room-key parity — INNER_NAV vs MINISTRY_ROOMS", () => {
   it("serves exactly the rooms the nav advertises, for every suite", () => {
     for (const [suite, entries] of Object.entries(INNER_NAV)) {
@@ -104,13 +149,13 @@ describe("MinistryRoom — unmapped room is honest, not blank", () => {
     expect(host.textContent).toContain("trading")
   })
 
-  it("still renders a known room through the normal path, with no reserved state", async () => {
+  it("still renders a known room through the normal path, with no reserved state", { timeout: LAZY_ROOM_TEST_MS }, async () => {
     const host = mountRoom("/suites/earnings/simulator")
     // Legacy rooms keep their own `data-room` header marker; the reserved state
     // is reserved for rooms that are genuinely NOT mapped.
     await vi.waitFor(() => {
       expect(host.querySelector("header[data-room='simulator']")).not.toBeNull()
-    })
+    }, { timeout: LAZY_ROOM_WAIT_MS })
     expect(host.querySelector("[data-availability]")).toBeNull()
   })
 })

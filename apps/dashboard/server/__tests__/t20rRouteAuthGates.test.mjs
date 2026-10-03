@@ -213,6 +213,47 @@ async function loadHandlers(tag) {
   return handleApi
 }
 
+/**
+ * A per-test budget for every test here that calls `loadHandlers()`, and why the
+ * global default is untouched.
+ *
+ * THE GLOBAL `testTimeout` STAYS AT 5s, deliberately: raising it would let a
+ * genuine hang in any of the suite's other ~5,400 tests hide behind a longer
+ * ceiling. Every use below is the PER-TEST argument to `it`, so nothing outside
+ * this file moves.
+ *
+ * THE LINE IS "DOES IT CALL `loadHandlers()`", NOT "HOW MANY REQUESTS". That is
+ * the discriminator `0dc9989` established for the sibling file
+ * (`ws7RouteAuthCoverageBehaviour.test.mjs`), and it is the right one here for
+ * the same reason: `loadHandlers()` ends in `vi.resetModules()` and then
+ * `import("../handlers.mjs?t20r-route-auth-gates")`, so the FIRST request in any
+ * such test pays a cold import of a ~6,375-line module and its whole import
+ * graph. A single-request negative test is exactly as exposed as a 21-request
+ * loop, and the baseline proved it: the flake in this file was reported at
+ * `:238`, which is ONE `call()`.
+ *
+ * MEASURED, not guessed. Alone, the slowest such test is 2053ms. Under
+ * full-suite concurrency (`npm run test`, 386 files on 12 cores) the range across
+ * the 37 affected tests is 745-3461ms, and `:238` has been observed past the 5s
+ * ceiling. The two tests in this file that do NOT load the module graph measured
+ * 180ms (`:253`) and 94ms (`:491`) under the same load — a clean bimodal split,
+ * 4x to 37x apart from the budgeted set, which is why the line is drawn where
+ * it is rather than by feel.
+ *
+ * 20s is `ROUTE_BUDGET_MS` from the sibling file, reused rather than re-invented:
+ * 5.8x this file's worst observed loaded test, and the same magnitude the repo
+ * already ratified for this exact defect class. The two tests that already
+ * carried `{ timeout: 30_000 }` (`:298`, `:317`) are LEFT ALONE — they loop over
+ * many routes per module load, and a budget that exists so a genuine hang cannot
+ * hide has no business being widened or narrowed without cause.
+ *
+ * The two tests that keep the 5s default, and why neither can be slow this way:
+ * `:253` reads `handlers.mjs` as SOURCE TEXT with `readFileSync` and matches
+ * lines — it never imports the module; `:491` only inspects the redirected
+ * directory paths it already holds.
+ */
+const HANDLER_BUDGET_MS = 20_000
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. THE NEGATIVE HALF — every gated route refuses an anonymous caller
 // ═══════════════════════════════════════════════════════════════════════════
@@ -247,7 +288,7 @@ describe("WS-7 T20R — every gated route answers 401 to an anonymous caller", (
       for (const marker of ["endpoint", "p256dh", "position", "alert", "signal", "watchlist", "prefs", "confidence"]) {
         expect(text.toLowerCase(), `${marker} must not leak through a 401 on ${route.path}`).not.toContain(marker)
       }
-    })
+    }, HANDLER_BUDGET_MS)
   }
 
   it("covers all 21 routes the ruling named, and no more than the guard says are gated", async () => {
@@ -360,7 +401,7 @@ describe("WS-7 T20R — the must-be-public reads still answer anonymously", () =
           route.path === "/api/packs/registry" ? "MarketsRoom" : "a real client"
         }.`
       ).not.toBe(401)
-    })
+    }, HANDLER_BUDGET_MS)
   }
 
   it("/api/health answers for a load balancer and CI, which hold no session", async () => {
@@ -368,7 +409,7 @@ describe("WS-7 T20R — the must-be-public reads still answer anonymously", () =
     const res = await call(api, "GET", "/api/health", null)
     expect(res.status, "a health check behind a session cannot report on an unauthenticated instance").toBe(200)
     expect(res.body?.ok, "the health body must be the liveness answer, not a refusal").toBe(true)
-  })
+  }, HANDLER_BUDGET_MS)
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -397,7 +438,7 @@ describe("WS-7 T20R — the deferred reads were NOT quietly gated", () => {
       const api = await loadHandlers(`def-${route.path.replace(/[^a-z]/gi, "")}`)
       const res = await call(api, route.method, route.path, {})
       expect(res.status, `${route.path} answered ${JSON.stringify(res.body)}`).not.toBe(401)
-    })
+    }, HANDLER_BUDGET_MS)
   }
 })
 
@@ -429,7 +470,7 @@ describe("WS-7 T20R — a FRESH INSTALL with no accounts still bootstraps", () =
     const res = await call(api, "GET", "/api/auth/status", null)
     expect(res.status, "the login page must be able to ask whether anyone exists").toBe(200)
     expect(res.body?.hasUsers, "a fresh install has no users — the UI routes to SIGNUP on this").toBe(false)
-  })
+  }, HANDLER_BUDGET_MS)
 
   it("GET /api/auth/me answers 'no session' rather than destroying anything", async () => {
     // The route T20R was specifically told to investigate before gating. It is
@@ -444,7 +485,7 @@ describe("WS-7 T20R — a FRESH INSTALL with no accounts still bootstraps", () =
       "a 503 here would make fetchMe() treat an inconclusive answer as a rejection and delete the " +
         "session — the WS-6 defect. The store is readable in this test, so 401 is the honest answer."
     ).not.toBe(503)
-  })
+  }, HANDLER_BUDGET_MS)
 
   it("POST /api/auth/signup CREATES the first account", async () => {
     const api = await loadHandlers("fresh-signup")
@@ -458,7 +499,7 @@ describe("WS-7 T20R — a FRESH INSTALL with no accounts still bootstraps", () =
     // And the account really is on disk in the ISOLATED store — not in the real one.
     const users = JSON.parse(readFileSync(join(authDir, "users.json"), "utf8"))
     expect(users.users?.map((u) => u.email) ?? [].concat(users).map((u) => u.email)).toContain("first@example.test")
-  })
+  }, HANDLER_BUDGET_MS)
 
   it("the gates T20R added inherit requireAuth's first-run branch — pinned, not assumed", async () => {
     // INHERITED, NOT INTRODUCED. Every requireAuth site in handlers.mjs admits an
@@ -486,7 +527,7 @@ describe("WS-7 T20R — a FRESH INSTALL with no accounts still bootstraps", () =
       value: 1.2
     })
     expect(refused.status, "and the same route refuses as soon as one account exists").toBe(401)
-  })
+  }, HANDLER_BUDGET_MS)
 
   it("the stores really were redirected away from the live server/data", async () => {
     // Stated rather than assumed, because the round-4 auth incident in this

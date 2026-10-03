@@ -105,6 +105,52 @@ const factFor = (facts, id) => facts.find((f) => f.id === id)
 /** The set of row ids the gate reports as failing. */
 const failingOf = (report) => [...report.failingRooms].sort()
 
+/**
+ * A per-test budget for ONE test in this file, and why the global default stays.
+ *
+ * THE GLOBAL `testTimeout` STAYS AT vitest's 5s, deliberately, for the reason
+ * `ws7RouteAuthCoverageBehaviour.test.mjs` sets out in full: raising it would
+ * let a genuine hang in any of the suite's other ~5,400 tests hide behind a
+ * longer ceiling. Nothing below changes that — this constant is only ever the
+ * PER-TEST argument to one `it`.
+ *
+ * THIS FILE IS NOT A HANDLER-MODULE FILE, and that is the finding. The defect
+ * `0dc9989` fixed in its sibling was a cold `import()` of `handlers.mjs`; this
+ * file never imports it. It has its own, different reason to be slow, and the
+ * discriminator is BULK SYNCHRONOUS FILESYSTEM WORK, not module loading.
+ *
+ * Exactly one test here does bulk work of that kind: `:748` walks the ENTIRE
+ * REPOSITORY ROOT with `readdirSync`/`statSync`/`readFileSync`, reading every
+ * `.mjs`/`.ts`/`.tsx`/`.mts`/`.cts` file it finds, because the claim it proves is
+ * a claim about the WHOLE TREE — "no second module anywhere declares the tier
+ * boundary". That cost is O(repository size) and it cannot be narrowed to make
+ * the assertion mean less.
+ *
+ * MEASURED, not guessed. Run alone: 1583ms. Under full-suite concurrency
+ * (`npm run test`, 386 files on 12 cores): 3859ms, which is 77% of the 5s
+ * ceiling — and it has been observed PAST it, dying on "Test timed out in
+ * 5000ms", which is the flake being fixed here. Its next-slowest sibling in the
+ * same file is 317ms loaded, so this test is a 12x outlier in its own file and
+ * the outlier is the whole story. The other 72 tests are 18-56ms loaded.
+ *
+ * 20s is the value `0dc9989` already ratified for exactly this class in the
+ * sibling file (`ROUTE_BUDGET_MS = 20_000`), reused rather than re-invented: it
+ * is 5.2x this test's worst observed loaded run, and the same magnitude the repo
+ * already accepted for a test whose real cost exceeds 5s under concurrency. A
+ * walk that hangs still fails here; it just no longer fails for being a walk.
+ *
+ * WHAT IS DELIBERATELY NOT HERE. The ten tests that spawn the gate as a real
+ * process — `:150 :341 :349 :356 :1017 :1041 :1048 :1052 :1061 :1069`, all via
+ * `runGateOn`/`runGateFlag`/`spawnSync` — keep the 5s default. Measured under
+ * full-suite load they run 92-317ms, i.e. 16x to 54x of headroom, and each
+ * already carries its own `spawnSync({ timeout: 120_000 })` guard for the case
+ * that actually matters: the child failing to exit at all. A budget wide enough
+ * to matter on a process spawn would be a budget wide enough to hide a hung
+ * child, and the child is already guarded. The remaining 62 tests never touch
+ * the filesystem in bulk and are unchanged.
+ */
+const REPO_WALK_BUDGET_MS = 20_000
+
 /* ==========================================================================
    1. THE GATE IS GREEN OVER THE REAL TWENTY-TWO
    ========================================================================== */
@@ -772,7 +818,7 @@ describe("Risk 9 - no second contract home for ConfluenceScore", () => {
       declarations,
       "exactly one module may declare the tier boundary, or two copies can drift"
     ).toEqual(["apps/dashboard/server/services/copilot/tierBoundaryFixture.mjs"])
-  })
+  }, REPO_WALK_BUDGET_MS)
 
   it("T11's shared fixture is still frozen and still carries AC-023's five integers", () => {
     const src = readFileSync(TIER_FIXTURE_PATH, "utf8")
