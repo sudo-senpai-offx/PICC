@@ -60,7 +60,18 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
     steps:
+      # fetch-depth: 0 is REQUIRED, not a preference. ws5SeamGuard pins a frozen
+      # baseline commit (`const BASELINE = "d400c70"`, the WS-4 spec resolution) and
+      # reads it with `git show`/`git diff`. actions/checkout@v4 defaults to
+      # fetch-depth: 1, so on a shallow clone every baseline read returns null, the
+      # guard's deliberate fail-closed path fires ("an unreadable/absent baseline
+      # for a SURVING path"), and 6 of its 17 tests fail on a runner whose checkout
+      # is at fault. secrets-scan already sets fetch-depth: 0 for the same reason.
+      # Weakening the guard instead would invert a security check that is designed
+      # to fail closed: a gate that cannot fail is not a gate.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
