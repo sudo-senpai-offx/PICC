@@ -157,7 +157,7 @@ export function TradeJournalPanel() {
                 <td style={{ textAlign: "center", padding: "2px 4px" }}>
                   <Badge tone={e.side === "long" ? "success" : "danger"}>{e.side}</Badge>
                 </td>
-                <td style={{ textAlign: "right", padding: "2px 4px" }}>{e.entryPrice.toFixed(4)}</td>
+                <td style={{ textAlign: "right", padding: "2px 4px" }}>{e.entryPrice != null ? e.entryPrice.toFixed(4) : "-"}</td>
                 <td style={{ textAlign: "right", padding: "2px 4px" }}>{e.exitPrice?.toFixed(4) ?? "-"}</td>
                 <td style={{ textAlign: "right", padding: "2px 4px", color: (e.pnl ?? 0) > 0 ? "var(--gain)" : (e.pnl ?? 0) < 0 ? "var(--loss)" : "var(--text-muted)", fontWeight: 600 }}>
                   {e.pnl != null ? `${e.pnl > 0 ? "+" : ""}${e.pnl.toFixed(2)}` : "-"}
