@@ -374,7 +374,15 @@ export function assertContainedPath(root, name, configuredPath, kind, rootLabel 
   }
 
   const canonicalPath = kind === "directory" ? canonicalParent : join(canonicalParent, basename(absolutePath))
-  if (!isStrictlyInside(root, canonicalPath)) {
+  // Compare against the canonical ROOT, not the raw one. `realpathSync.native` above
+  // expands whatever short/aliased spelling the caller passed, so on a platform where
+  // the root's real name differs from its given name the two sides stop matching and a
+  // legitimate child is reported as an escape. Windows is that platform: a runner's
+  // temp root can arrive as the 8.3 short form (`...\Temp\PI3E3~13`) while realpath
+  // returns the long form (`...\Temp\picc-contained-Xkj1pz`), and macOS is the same
+  // defect via `/var` -> `/private/var`. The lexical check above still runs first and
+  // is untouched; this only makes the junction/symlink check compare like with like.
+  if (!isStrictlyInside(canonicalizePath(root), canonicalPath)) {
     throw new Error(`${name} resolves outside the canonical ${rootLabel} root: ${configuredPath}`)
   }
 }
