@@ -55,31 +55,41 @@ function piccPrecachePlugin() {
   }
 }
 
-startTradingHud()
-startLedger()
+export default defineConfig(({ mode, command }) => {
+  // A build is not a boot. startLedger (accuracyLedger.mjs) and startScheduler
+  // (scheduler.mjs) both register setInterval handles that are never unref'd, so
+  // booting them at config-load time — which this file used to do unconditionally —
+  // left the event loop permanently drained-by-nothing: `vite build` emitted a full
+  // dist/ and then hung instead of exiting, and every build rewrote the real
+  // server/data through initErrorLog and the scheduler's job passes. Both runners
+  // are gated here instead. Vitest still gets the two starters it has always had.
+  const isBuild = command === "build"
 
-// Dev launch counts as a launch: empty + rewrite the root-level error log and
-// install the server-side error hooks (gated by PICC_ERROR_LOG in .env).
-// Skipped under vitest — tests must not rewrite the real session log.
-if (!process.env.VITEST) {
-  initErrorLog()
-  // Dev mode is a first-class boot: without this the scheduler registers its
-  // jobs but NEVER runs them (index.mjs does this for the standalone entry,
-  // vite dev was missing it) — ccxt equity polling, EO staleness/liveness,
-  // headless session refresh and paper marking all silently stay dormant.
-  // Liveness monitor FIRST: it registers the eo-liveness job, and jobs added
-  // after startScheduler() never get an interval.
-  startLivenessMonitor()
-  startScheduler()
-  // Boot validation is a first-class boot step for dev/e2e too, exactly as it is for the standalone
-  // server in index.mjs. Without this the first GET performed the "boot" work and wrote the
-  // audit:startup-health row lazily. Read-only and advisory — failures are logged, never fatal.
-  runStartupHealth().catch((error) => {
-    console.warn("[picc] startup health failed (advisory, boot continues):", error?.message ?? error)
-  })
-}
+  if (!isBuild) {
+    startTradingHud()
+    startLedger()
+  }
 
-export default defineConfig(({ mode }) => {
+  // Dev launch counts as a launch: empty + rewrite the root-level error log and
+  // install the server-side error hooks (gated by PICC_ERROR_LOG in .env).
+  // Skipped under vitest — tests must not rewrite the real session log.
+  if (!process.env.VITEST && !isBuild) {
+    initErrorLog()
+    // Dev mode is a first-class boot: without this the scheduler registers its
+    // jobs but NEVER runs them (index.mjs does this for the standalone entry,
+    // vite dev was missing it) — ccxt equity polling, EO staleness/liveness,
+    // headless session refresh and paper marking all silently stay dormant.
+    // Liveness monitor FIRST: it registers the eo-liveness job, and jobs added
+    // after startScheduler() never get an interval.
+    startLivenessMonitor()
+    startScheduler()
+    // Boot validation is a first-class boot step for dev/e2e too, exactly as it is for the standalone
+    // server in index.mjs. Without this the first GET performed the "boot" work and wrote the
+    // audit:startup-health row lazily. Read-only and advisory — failures are logged, never fatal.
+    runStartupHealth().catch((error) => {
+      console.warn("[picc] startup health failed (advisory, boot continues):", error?.message ?? error)
+    })
+  }
   // Load ALL env vars (not just VITE_*) so the single PICC_ERROR_LOG flag
   // controls both the server file sink and the browser-side error capture.
   const allEnv = loadEnv(mode, fileURLToPath(new URL("./", import.meta.url)), "")
