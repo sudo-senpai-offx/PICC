@@ -43,7 +43,6 @@ import { forecastSeries } from "./services/forecast.mjs"
 import { getCryptoMarket, getCryptoPrice } from "./services/crypto.mjs"
 import { yieldSnapshot } from "./services/yields.mjs"
 import { schedulerStatus } from "./services/scheduler.mjs"
-import "./services/copyCorpusScheduler.mjs" // Task 6: registers the corpus-refresh job; startScheduler picks it up, boot order untouched
 import { opportunityCatalog, listWorkflows, monitorBountyBoards } from "./services/opportunities.mjs"
 import { extractKeywords } from "./services/keywords.mjs"
 import {

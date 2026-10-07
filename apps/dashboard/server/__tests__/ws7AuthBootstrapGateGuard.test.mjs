@@ -1096,7 +1096,25 @@ function connectorsSiteIsGated(lines, index) {
     // (`./services/authority/paperLivePermit.mjs`) and statics UNCHANGED at 72.
     // The reach is unchanged for the same reason T7R-B's and T8's were: the permit
     // readout belongs to the authority model, which is not on the boot path.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(83)
+    //
+    // Copytrading research corpus (Task 6) + fix wave, the same protocol, and
+    // the statics figure is what proves the second half is a FIX rather than
+    // growth. Task 6 added +42 lines and ONE static import: the static
+    // `import "./services/copyCorpusScheduler.mjs"` side-effect line plus the
+    // 41-line `GET /api/research/corpus` route (its unconditional
+    // `requireAuth()` gate, FOUR dynamic imports — copyCorpusStore,
+    // copyCorpusSurvival, copyCorpusBehaviour, tradeJournal — the writeJson
+    // branches, and the §5.4/§6 reasoning). The dynamics figure moves 83 -> 87
+    // for exactly those four `await import(...)` calls, each dynamic so the
+    // corpus services stay off the boot path the way T7R-B's, T8's and T9's
+    // were. The fix wave then REMOVES the one static line — the corpus-refresh
+    // job registers via every() in scheduler.mjs beside the news-digest RUN
+    // leg instead, so /api/scheduler/status still lists it — moving statics
+    // 73 -> 72 BACK to the pinned value while dynamics stays 87 and lines
+    // settle at 6,462. Net from the last pin: +41 lines, +4 dynamic, +0
+    // static. The static pin above is NOT moved; it is the tripwire that
+    // caught the regression, and this entry is why it reads 72 again.
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(87)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1359,7 +1377,17 @@ function connectorsSiteIsGated(lines, index) {
     // and 83 comment-stripped dynamic imports are identical before and after, so not
     // one of the 45 lines is a new module binding. The growth is gates and the
     // reasoning attached to them, not structure.
-    expect(lines, "lines in handlers.mjs").toBe(6421)
+    //
+    // 6,421 -> 6,462 in the copytrading research corpus fix wave, the same
+    // protocol: +41 lines net, and every one is accounted for rather than
+    // absorbed. Task 6 added +42 (the 1-line static side-effect import plus
+    // the 41-line `GET /api/research/corpus` route); the fix wave removed
+    // that 1 static line when the corpus-refresh job moved into scheduler.mjs
+    // beside the news-digest RUN leg. The dynamics accounting lives at the
+    // `dynamics` assertion above (+4, all dynamic); the statics figure is
+    // UNCHANGED at 72, which is what proves the removed line was structure
+    // restored rather than growth absorbed.
+    expect(lines, "lines in handlers.mjs").toBe(6462)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

@@ -497,3 +497,33 @@ every(
   },
   { staggerMs: 90_000 }
 )
+
+// ── Copytrading research corpus (Task 6, §8.2/§9) ────────────────────────
+// The corpus-refresh RUN leg, registered here beside the news-digest RUN leg
+// rather than from a side-effect import in handlers.mjs: handlers.mjs keeps
+// a pinned static-import count (ws7AuthBootstrapGateGuard), and a side-effect
+// import is a module-graph edge that count cannot tell apart from a boot-path
+// dependency. Registration is still via every() at module scope, so
+// startScheduler() picks the job up after startLivenessMonitor() has run and
+// both boot invariants in bootSequence.mjs hold unchanged. The job sustains
+// per-regime coverage (§8 decision-2: thousands of samples per regime, never
+// throughput maximised) and emits NO signals or alerts from others' activity
+// (§9 non-goal). Retention pruning stays an explicit store call (Task 5),
+// never a timer side effect.
+every(
+  "corpus-refresh",
+  60 * 60 * 1000,
+  async () => {
+    // Honest skip unless explicitly enabled: with no cadence configured there
+    // is nothing to sustain and the job must not fabricate ingest activity.
+    if (process.env.PICC_COPYCORPUS_REFRESH !== "on") return
+    const { ingestStatus } = await import("./copyCorpusIngest.mjs")
+    const status = ingestStatus()
+    log.info("corpus refresh pass", {
+      lastIngestAt: status.lastIngestAt,
+      lastResult: status.lastResult,
+      reason: status.reason
+    })
+  },
+  { staggerMs: 120_000 }
+)
