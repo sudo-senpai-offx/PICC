@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { computeAdaptiveStops } from "../services/trading.mjs"
+import { computeAdaptiveStops, synthesizeCandles } from "../services/trading.mjs"
 import { predictDirection, backtestModels } from "../services/prediction.mjs"
 import { detectRegime } from "../services/regimeDetection.mjs"
 import { confluenceRead, winProbEstimate, pricePathRR, evGate, mttdEstimate } from "../services/adaptiveConfluence.mjs"
@@ -59,6 +59,55 @@ describe("Adaptive Stops", () => {
     const result = computeAdaptiveStops([], "up")
     expect(result.takeProfit).toBeNull()
     expect(result.stopLoss).toBeNull()
+  })
+})
+
+// ── Candle synthesis honesty (Wave 0 Task 3: absent → null, never 0) ──────
+// Yahoo history legs that cannot be parsed are DROPPED rows, never
+// zero-filled candles. The pre-existing `close > 0` filter semantic stays:
+// a non-positive close is dropped; a genuine 0 elsewhere is parseable.
+describe("synthesizeCandles drops unparseable legs instead of zero-filling", () => {
+  const goodHistory = (n) => ({
+    dates: Array.from({ length: n }, (_, i) => (i + 1) * 60000),
+    opens: Array.from({ length: n }, () => 100),
+    highs: Array.from({ length: n }, () => 101),
+    lows: Array.from({ length: n }, () => 99),
+    closes: Array.from({ length: n }, () => 100)
+  })
+
+  it("keeps fully parseable rows with second-resolution timestamps", () => {
+    const candles = synthesizeCandles(goodHistory(3))
+    expect(candles).toHaveLength(3)
+    expect(candles[0]).toMatchObject({ time: 60, open: 100, high: 101, low: 99, close: 100 })
+  })
+
+  it("drops rows with NaN / junk / null / undefined legs, keeps the rest", () => {
+    const h = goodHistory(5)
+    h.opens[1] = "junk" // NaN leg
+    h.highs[2] = null // absent leg — never a 0-filled high
+    h.lows[3] = undefined // absent leg
+    h.closes[4] = NaN // NaN close
+    const candles = synthesizeCandles(h)
+    expect(candles).toHaveLength(1)
+    expect(candles[0].time).toBe(60)
+  })
+
+  it("keeps the close > 0 filter: non-positive closes drop, genuine 0 legs stay", () => {
+    const h = goodHistory(4)
+    h.closes[1] = 0 // old `|| 0` + `close > 0` filter dropped these; still dropped
+    h.closes[2] = -3
+    h.opens[3] = 0 // a genuine parseable 0 open is NOT an absent leg
+    const candles = synthesizeCandles(h)
+    expect(candles.map((c) => c.time)).toEqual([60, 240])
+    expect(candles[1].open).toBe(0)
+  })
+
+  it("returns [] when no usable candles remain (caller maps this to null)", () => {
+    const h = goodHistory(2)
+    h.closes = ["junk", null]
+    expect(synthesizeCandles(h)).toEqual([])
+    expect(synthesizeCandles(null)).toEqual([])
+    expect(synthesizeCandles({})).toEqual([])
   })
 })
 

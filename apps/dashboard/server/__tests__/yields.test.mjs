@@ -80,6 +80,30 @@ describe("yield snapshot", () => {
     expect(snap.native.length).toBeGreaterThan(0)
   })
 
+  it("reports absent apy legs and tvl as null with a named reason, never 0", async () => {
+    // Wave 0 Task 3: a pool that reports no base/reward split must not read
+    // as "0 base + 0 reward". Observed zeros stay 0. (Absent TVL never
+    // reaches the mapper — the filter requires finite TVL — so the tvlUsd
+    // conversion is unreachable-but-honest defense in depth.)
+    const pools = [
+      { pool: "thin-yet-real", project: "P", symbol: "USDC", chain: "Ethereum", apy: 4.1, tvlUsd: 5e7, il7d: 0 },
+      { pool: "zero-is-observed", project: "Q", symbol: "USDC", chain: "Ethereum", apy: 2.2, apyBase: 0, apyReward: 0, tvlUsd: 5e7, il7d: 0 }
+    ]
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ data: pools })))
+    const snap = await yieldSnapshot()
+    const thin = snap.defi.find((p) => p.pool === "thin-yet-real")
+    expect(thin.apyBase).toBeNull()
+    expect(thin.apyReward).toBeNull()
+    expect(thin.tvlUsd).toBe(5e7)
+    expect(thin.reason).toMatch(/apyBase-unobservable/)
+    expect(thin.reason).toMatch(/apyReward-unobservable/)
+    const zero = snap.defi.find((p) => p.pool === "zero-is-observed")
+    expect(zero.apyBase).toBe(0)
+    expect(zero.apyReward).toBe(0)
+    expect(zero.tvlUsd).toBe(5e7)
+    expect(zero.reason).toBeNull()
+  })
+
   it("rejects honestly when the source is rate-limited", async () => {
     // Consume the yield:defi cooldown directly, then a fresh fetch attempt
     // (cache cleared by resetRateLimits) must report the courtesy limit.

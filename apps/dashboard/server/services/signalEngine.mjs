@@ -24,6 +24,14 @@ import { dispatchAlert, getPrefs } from "./notifier.mjs"
 const CHECK_INTERVAL_MS = 45_000
 const TRIGGER_ATR = 0.5 // distance from zone anchor (in ATRs) that arms an alert
 
+// Wave 0 Task 3 — the Copilot `finiteOrNull` vocabulary, mirrored locally:
+// a finite number, or null. Absent stays null; genuine 0 stays 0.
+const finiteOrNull = (v) => {
+  if (v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 const engine = {
   timer: null,
   running: false,
@@ -135,7 +143,14 @@ export async function evaluateAsset(assetId) {
   if (!zone) return `${assetId}: no ${c.direction === "up" ? "buy" : "sell"} zone`
 
   const spot = Number(levels.spot)
-  const atr = Number(levels.atr) || spot * 0.002
+  // Wave 0 Task 3 — a missing/non-positive ATR is ABSENT (null + named
+  // reason), never the invented `spot * 0.002` constant. A zero ATR cannot
+  // divide a distance either, so it abstains the same way (cf. the
+  // `currentAtr <= 0 → null` guard in trading.mjs computeAdaptiveStops).
+  const atr = finiteOrNull(levels.atr)
+  if (atr == null || atr <= 0) {
+    return `${assetId}: atr unavailable — skipped (no fallback ATR invented)`
+  }
   const distanceAtr = Math.abs(zone.anchor - spot) / atr
 
   if (st.phase !== "alerted") {

@@ -12,6 +12,14 @@
 // large — single-flight + TTL keeps it to one fetch per hour).
 import { cached, throttle } from "./rateLimit.mjs"
 
+// Wave 0 Task 3 — the Copilot `finiteOrNull` vocabulary, mirrored locally:
+// a finite number, or null. Absent stays null; genuine 0 stays 0.
+const finiteOrNull = (v) => {
+  if (v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 const POOLS_URL = "https://yields.llama.fi/pools"
 const CACHE_TTL_MS = 60 * 60 * 1000
 const POOL_MIN_TTL_MS = 60 * 1000
@@ -88,19 +96,33 @@ export async function yieldSnapshot({ minTvlUsd = 10_000_000, maxApy = 100, top 
       const tvl = Number(p?.tvlUsd)
       return Number.isFinite(apy) && Number.isFinite(tvl) && tvl >= minTvlUsd && apy >= 0.1 && apy <= maxApy
     })
-    .map((p) => ({
-      pool: String(p.pool ?? ""),
-      project: String(p.project ?? "unknown"),
-      symbol: String(p.symbol ?? "?"),
-      chain: String(p.chain ?? ""),
-      apy: Number(p.apy),
-      apyBase: Number(p.apyBase) || 0,
-      apyReward: Number(p.apyReward) || 0,
-      tvlUsd: Math.round(Number(p.tvlUsd) || 0),
-      il7d: Number.isFinite(Number(p.il7d)) ? Number(p.il7d) : 0,
-      ilRisk: Number(p.il7d) < -2,
-      poolMeta: p.poolMeta ? String(p.poolMeta) : ""
-    }))
+    .map((p) => {
+      // Wave 0 Task 3 — an unreported base/reward split or TVL is null with a
+      // named reason, never a 0 that would read as "measured zero". (Absent
+      // TVL never reaches this mapper — the filter above requires finite TVL
+      // — so the tvlUsd branch is unreachable-but-honest defense in depth.)
+      const absent = []
+      const apyBase = finiteOrNull(p.apyBase)
+      if (apyBase == null) absent.push("apyBase-unobservable: pool reports no base APY; no 0 substituted")
+      const apyReward = finiteOrNull(p.apyReward)
+      if (apyReward == null) absent.push("apyReward-unobservable: pool reports no reward APY; no 0 substituted")
+      const tvl = finiteOrNull(p.tvlUsd)
+      if (tvl == null) absent.push("tvlUsd-unobservable: pool reports no TVL; no 0 substituted")
+      return {
+        pool: String(p.pool ?? ""),
+        project: String(p.project ?? "unknown"),
+        symbol: String(p.symbol ?? "?"),
+        chain: String(p.chain ?? ""),
+        apy: Number(p.apy),
+        apyBase,
+        apyReward,
+        tvlUsd: tvl == null ? null : Math.round(tvl),
+        il7d: Number.isFinite(Number(p.il7d)) ? Number(p.il7d) : 0,
+        ilRisk: Number(p.il7d) < -2,
+        poolMeta: p.poolMeta ? String(p.poolMeta) : "",
+        reason: absent.length ? absent.join("; ") : null
+      }
+    })
     .sort((a, b) => b.apy - a.apy)
     .slice(0, Math.max(1, Math.min(top, 25)))
 

@@ -45,6 +45,7 @@ vi.mock("../services/autopilot.mjs", () => ({
 
 import { dispatchAlert } from "../services/notifier.mjs"
 import { computeModelMatrix } from "../services/modelMatrix.mjs"
+import { computeEntryLevels } from "../services/entryLevels.mjs"
 import { evaluateAsset, resolveAlertVenue, windowLabel, signalEngineStatus } from "../services/signalEngine.mjs"
 
 describe("windowLabel (T5 / REQ-7)", () => {
@@ -153,5 +154,37 @@ describe("signalEngineStatus per-state `since` (T7 / REQ-8)", () => {
     const st = signalEngineStatus().states["GBPUSD"]
     expect(st.phase).toBe("idle")
     expect("since" in st).toBe(false)
+  })
+})
+
+describe("signal engine null-ATR honesty (Wave 0 Task 3)", () => {
+  it("skips with a named absence instead of inventing spot * 0.002 ATR", async () => {
+    // Consensus aligns and the zone exists, but levels carry no ATR. The old
+    // `Number(levels.atr) || spot * 0.002` fabricated one; now the asset is
+    // skipped and no alert is dispatched for it.
+    vi.mocked(computeEntryLevels).mockImplementationOnce(() => ({
+      ok: true,
+      buyZone: { low: 1.07, high: 1.075, anchor: 1.073, strength: 4, sources: ["pivot"] },
+      sellZone: null,
+      spot: 1.073,
+      atr: null
+    }))
+    vi.mocked(dispatchAlert).mockClear()
+    const note = await evaluateAsset("ATRABSENT")
+    expect(note).toContain("atr unavailable")
+    expect(vi.mocked(dispatchAlert)).not.toHaveBeenCalled()
+    expect(signalEngineStatus().states["ATRABSENT"].phase).toBe("idle")
+  })
+
+  it("treats a zero ATR as absent too (Number(null)/0 both fail finite)", async () => {
+    vi.mocked(computeEntryLevels).mockImplementationOnce(() => ({
+      ok: true,
+      buyZone: { low: 1.07, high: 1.075, anchor: 1.073, strength: 4, sources: ["pivot"] },
+      sellZone: null,
+      spot: 1.073,
+      atr: 0
+    }))
+    const note = await evaluateAsset("ATRZERO")
+    expect(note).toContain("atr unavailable")
   })
 })

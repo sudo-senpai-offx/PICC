@@ -111,4 +111,31 @@ describe("computeAdaptiveStops regime classification (trading.mjs)", () => {
     expect(stops.regime).toBe("ranging")
     expect(stops.multipliers).toEqual({ tp: 1.8, sl: 1.5 })
   })
+
+  it("abstains (unknown, null stops, named reason) when ADX has not warmed up", () => {
+    // 22 candles clear the ≥20 floor with a finite ATR, but ADX(14) needs
+    // ~28 bars before its last value exists. The old `adx || 0` forced a
+    // fabricated ranging regime here; unobserved never counts as neutral.
+    const thin = Array.from({ length: 22 }, (_, i) => ({
+      time: i * 60000,
+      open: 100 + Math.sin(i),
+      high: 100 + Math.sin(i) + 0.5,
+      low: 100 + Math.sin(i) - 0.5,
+      close: 100 + Math.sin(i)
+    }))
+    const stops = computeAdaptiveStops(thin, "up")
+    expect(stops.atr).toBeGreaterThan(0) // ATR itself IS observed
+    expect(stops.adx).toBeNull()
+    expect(stops.regime).toBe("unknown")
+    expect(stops.takeProfit).toBeNull()
+    expect(stops.stopLoss).toBeNull()
+    expect(stops.reason).toMatch(/adx-unobservable/)
+  })
+
+  it("names the absence with a null reason when ADX is observed", () => {
+    const stops = computeAdaptiveStops(trendCandles(), "up")
+    expect(stops.regime).toBe("trending")
+    expect(stops.adx).toBeGreaterThan(25)
+    expect(stops.reason).toBeNull()
+  })
 })

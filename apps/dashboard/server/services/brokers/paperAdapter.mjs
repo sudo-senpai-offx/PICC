@@ -32,17 +32,36 @@ registerBroker({
     // Paper account state comes from the paper ledger, not a live connection.
     // Dynamic import avoids a load-time cycle: trading.mjs imports the broker
     // registry, and the registry must be ready before this adapter registers.
+    //
+    // Wave 0 Task 3 — an unobservable ledger cash balance is null with a
+    // named reason, never a 0 that would read as "zero balance". The
+    // reconciliation path (openPaperTrade's cash checks in trading.mjs)
+    // reads paperOverview() directly and fails closed on unusable amounts;
+    // no production reader of this adapter's getAccountState exists at all (verified
+    // 2026-10-07: only paperOverviewApi.test.mjs reads it), so a null here
+    // propagates as unobservable, never as zero.
+    const finiteOrNull = (v) => {
+      if (v == null) return null
+      const n = Number(v)
+      return Number.isFinite(n) ? n : null
+    }
     try {
-      return import("../trading.mjs").then((t) => t.paperOverview()).then((ov) => ({
-        // Normalized to the same shape every other adapter returns (see
-        // brokers/expertoption.mjs) — the ledger's own field is `cash`, not
-        // `balance`; without this mapping any venue-agnostic reader of
-        // state.balance silently got undefined for the paper venue only.
-        balance: Number(ov?.cash) || 0,
-        demo: true,
-        real: false,
-        currency: "USD"
-      })).catch(() => null)
+      return import("../trading.mjs").then((t) => t.paperOverview()).then((ov) => {
+        const balance = finiteOrNull(ov?.cash)
+        return {
+          // Normalized to the same shape every other adapter returns (see
+          // brokers/expertoption.mjs) — the ledger's own field is `cash`, not
+          // `balance`; without this mapping any venue-agnostic reader of
+          // state.balance silently got undefined for the paper venue only.
+          balance,
+          demo: true,
+          real: false,
+          currency: "USD",
+          reason: balance == null
+            ? "balance-unobservable: the paper ledger reports no cash; no 0 substituted"
+            : null
+        }
+      }).catch(() => null)
     } catch {
       return null
     }

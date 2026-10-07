@@ -281,6 +281,15 @@ export async function paperHistory(limit = 50) {
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 const round2 = (x) => Math.round(x * 100) / 100
 
+// Wave 0 Task 3 — the Copilot `finiteOrNull` vocabulary (copilot/vetoes/
+// outcome.mjs, ccxtConnector.mjs:235), mirrored here rather than reinvented:
+// a finite number, or null. Absent legs stay null; genuine 0 stays 0.
+const finiteOrNull = (v) => {
+  if (v == null) return null // absent (null/undefined) is never coerced to 0
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 /**
  * Compute adaptive SL/TP from volatility regime. Uses ATR (Average True Range)
  * to set dynamic stop-loss and take-profit levels based on the current market
@@ -295,11 +304,20 @@ const round2 = (x) => Math.round(x * 100) / 100
  * @param {Array} candles - OHLC candles [{time, open, high, low, close}]
  * @param {"up"|"down"} direction - trade direction
  * @param {Object} opts - { atrPeriod, regime, tpMult, slMult }
- * @returns {{ takeProfit: number|null, stopLoss: number|null, atr: number, regime: string }}
+ * @returns {{ takeProfit: number|null, stopLoss: number|null, atr: number|null, adx: number|null, regime: string, reason: string|null }}
+ *   `reason` names the absence whenever a null is returned (unobserved ADX →
+ *   regime "unknown", never a neutral default); null when everything observed.
  */
 export function computeAdaptiveStops(candles, direction, opts = {}) {
   if (!Array.isArray(candles) || candles.length < 20 || !direction) {
-    return { takeProfit: null, stopLoss: null, atr: null, regime: "unknown" }
+    return {
+      takeProfit: null,
+      stopLoss: null,
+      atr: null,
+      adx: null,
+      regime: "unknown",
+      reason: "insufficient-candles: computeAdaptiveStops needs ≥20 candles; no regime is claimed"
+    }
   }
   const closes = candles.map((c) => c.close)
   const highs = candles.map((c) => c.high)
@@ -308,14 +326,35 @@ export function computeAdaptiveStops(candles, direction, opts = {}) {
   const atrValues = computeAtr(highs, lows, closes, atrPeriod)
   const currentAtr = atrValues[atrValues.length - 1]
   if (!Number.isFinite(currentAtr) || currentAtr <= 0) {
-    return { takeProfit: null, stopLoss: null, atr: null, regime: "unknown" }
+    return {
+      takeProfit: null,
+      stopLoss: null,
+      atr: null,
+      adx: null,
+      regime: "unknown",
+      reason: "atr-unobservable: no measurable ATR on these candles; no stops or regime are claimed"
+    }
   }
 
-  // Detect regime for multiplier selection
+  // Detect regime for multiplier selection. An ADX that has not warmed up is
+  // null — never forced to 0, because 0 would read as "ranging" and an
+  // unobserved read never counts as a neutral vote (regimeEngine.mjs:10).
   const adxValues = computeAdx(highs, lows, closes, atrPeriod)
-  const currentAdx = adxValues.adx[adxValues.adx.length - 1] || 0
+  const currentAdx = finiteOrNull(adxValues.adx[adxValues.adx.length - 1])
   const avgAtr = atrValues.filter((v) => v != null).reduce((s, v) => s + v, 0) / atrValues.filter((v) => v != null).length || currentAtr
   const atrRatio = avgAtr > 0 ? currentAtr / avgAtr : 1
+
+  if (currentAdx == null) {
+    return {
+      takeProfit: null,
+      stopLoss: null,
+      atr: currentAtr,
+      adx: null,
+      regime: "unknown",
+      atrRatio,
+      reason: "adx-unobservable: ADX has not warmed up on these candles, so no trend regime is claimed (unobserved never counts as neutral)"
+    }
+  }
 
   let regime = "ranging"
   if (currentAdx > 25 && atrRatio > 1.3) regime = "volatile_trend"
@@ -343,7 +382,31 @@ export function computeAdaptiveStops(candles, direction, opts = {}) {
     ? Math.round((last - currentAtr * slMult) * 1e6) / 1e6
     : Math.round((last + currentAtr * slMult) * 1e6) / 1e6
 
-  return { takeProfit, stopLoss, atr: currentAtr, regime, adx: currentAdx, atrRatio, multipliers: { tp: tpMult, sl: slMult } }
+  return { takeProfit, stopLoss, atr: currentAtr, regime, adx: currentAdx, atrRatio, reason: null, multipliers: { tp: tpMult, sl: slMult } }
+}
+
+/**
+ * Wave 0 Task 3 — honest candle synthesis from a Yahoo history frame.
+ * Every OHLC leg goes through `finiteOrNull`: a null/undefined/NaN/"junk"
+ * leg drops the whole row (an unparseable leg is never a 0-filled candle).
+ * The pre-existing `close > 0` filter semantic stays — a non-positive close
+ * is dropped, while a genuine parseable 0 elsewhere is kept.
+ * Returns the usable candles (possibly []); the caller maps [] to null.
+ */
+export function synthesizeCandles(history) {
+  if (!history || !Array.isArray(history.dates)) return []
+  const n = history.dates.length
+  const out = []
+  for (let i = 0; i < n; i++) {
+    const open = finiteOrNull(history.opens?.[i])
+    const high = finiteOrNull(history.highs?.[i])
+    const low = finiteOrNull(history.lows?.[i])
+    const close = finiteOrNull(history.closes?.[i])
+    if (open == null || high == null || low == null || close == null) continue
+    if (!(close > 0)) continue
+    out.push({ time: Math.floor(history.dates[i] / 1000), open, high, low, close })
+  }
+  return out
 }
 
 /**
@@ -362,13 +425,8 @@ async function computeAdaptiveStopsFromSymbol(symbol, timeframe = 60) {
   try {
     const history = await getHistory(symbol, "1mo")
     if (history?.dates?.length >= 30) {
-      const candles = history.dates.map((ts, i) => ({
-        time: Math.floor(ts / 1000),
-        open: Number(history.opens[i]) || 0,
-        high: Number(history.highs[i]) || 0,
-        low: Number(history.lows[i]) || 0,
-        close: Number(history.closes[i]) || 0
-      })).filter((c) => c.close > 0)
+      const candles = synthesizeCandles(history)
+      if (!candles.length) return null // nothing usable observed — never synthesised
       return computeAdaptiveStops(candles, "up")
     }
   } catch { /* Yahoo not available */ }
