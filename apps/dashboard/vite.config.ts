@@ -75,20 +75,31 @@ export default defineConfig(({ mode, command }) => {
   // Skipped under vitest — tests must not rewrite the real session log.
   if (!process.env.VITEST && !isBuild) {
     initErrorLog()
-    // Dev mode is a first-class boot: without this the scheduler registers its
-    // jobs but NEVER runs them (index.mjs does this for the standalone entry,
-    // vite dev was missing it) — ccxt equity polling, EO staleness/liveness,
-    // headless session refresh and paper marking all silently stay dormant.
-    // Liveness monitor FIRST: it registers the eo-liveness job, and jobs added
+    // Broker registry FIRST. index.mjs:188 loads it before anything that can
+    // call getBestCandles (signal engine, decision engine) — and vite dev was
+    // missing it entirely. Without it the broker registry stays EMPTY in dev, so
+    // getBestCandles returns zero candidates and every consumer reports honest
+    // absence (Copilot legs, /api/trading/candles `sources: []`) even though the
+    // scheduler is separately reaching CCXT through brokers.mjs. Third omission
+    // from this boot sequence after startScheduler and runStartupHealth, so the
+    // two entry points can drift apart again; a shared boot sequence would remove
+    // that class of defect entirely.
+    // Liveness monitor SECOND: it registers the eo-liveness job, and jobs added
     // after startScheduler() never get an interval.
-    startLivenessMonitor()
-    startScheduler()
-    // Boot validation is a first-class boot step for dev/e2e too, exactly as it is for the standalone
-    // server in index.mjs. Without this the first GET performed the "boot" work and wrote the
-    // audit:startup-health row lazily. Read-only and advisory — failures are logged, never fatal.
-    runStartupHealth().catch((error) => {
-      console.warn("[picc] startup health failed (advisory, boot continues):", error?.message ?? error)
-    })
+    void import("./server/services/marketDataBus.mjs")
+      .then((m) => m.loadBrokers())
+      .then(() => {
+        console.info("[picc] broker registry loaded (dev)")
+        startLivenessMonitor()
+        startScheduler()
+        // Boot validation is a first-class boot step for dev/e2e too, exactly as it is for the standalone
+        // server in index.mjs. Without this the first GET performed the "boot" work and wrote the
+        // audit:startup-health row lazily. Read-only and advisory — failures are logged, never fatal.
+        return runStartupHealth()
+      })
+      .catch((error: unknown) => {
+        console.warn("[picc] dev boot failed (advisory, boot continues):", (error as Error)?.message ?? error)
+      })
   }
   // Load ALL env vars (not just VITE_*) so the single PICC_ERROR_LOG flag
   // controls both the server file sink and the browser-side error capture.
