@@ -136,15 +136,23 @@ confidence is regime coverage and tight tail estimates — neither of which scal
 with raw volume. Designs that optimise for ingestion throughput will import far
 more than this analysis can use and will make the bias harder to see.
 
-## 8. Open questions
+## 8. Decisions (resolved 2026-10-07, owner)
 
-1. **Validate own strategy, or describe other participants?** §5.2 serves the
-   first well and the second only descriptively. This changes what "success"
-   means and should be settled before §5.2's schema is fixed.
-2. **Ingest cadence and backfill depth.** Not decided. Depends on the venue's
-   API limits and the chosen regime set.
-3. **Storage retention.** Imported samples are third-party-derived; a retention
-   period should be chosen deliberately rather than by omission.
+1. **Validate own strategy.** The corpus exists to extract conditional rules
+   (§5.2) and test them against the owner's own capital and constraints — not
+   to describe other participants. "Success" means a rule from §5.2 is
+   evaluable against owner history with the §5.4 bias header intact. §5.2's
+   schema is therefore fixed on state-conditioned behaviour, never on
+   identity or outcome-selected cohorts.
+2. **Ingest cadence and backfill depth: regime coverage.** Backfill only what
+   is needed to cover each volatility/trend regime with tight tail estimates
+   (§7: thousands of samples per regime, not millions pooled), bounded by the
+   venue's API limits. Continuous ingest sustains per-regime targets; it does
+   not maximise throughput.
+3. **Storage retention: regime-bounded minimal.** Imported third-party-derived
+   samples are kept only while needed to sustain the per-regime sample
+   targets. Anything beyond that is dropped by policy, not by omission. No
+   indefinite accumulation.
 
 ## 9. Non-goals
 
