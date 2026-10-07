@@ -47,6 +47,13 @@ beforeAll(async () => {
   // Only in-app configured → webpush honestly reports "skipped".
   delete process.env.VAPID_PUBLIC_KEY
   delete process.env.VAPID_PRIVATE_KEY
+  // Telegram too. CHANNELS defaults telegram:true (notifier.mjs:50), so a real
+  // TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID inherited from apps/dashboard/.env left
+  // that transport enabled — and it issues its own fetch(). Any test that mocks
+  // globalThis.fetch then counted a telegram POST alongside its webhook POST
+  // ("expected 1, got 2"). Same class of leak as VAPID, different channel.
+  delete process.env.TELEGRAM_BOT_TOKEN
+  delete process.env.TELEGRAM_CHAT_ID
   notifier = await import("../services/notifier.mjs")
 })
 
