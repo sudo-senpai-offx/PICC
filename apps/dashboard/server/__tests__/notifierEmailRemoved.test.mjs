@@ -10,8 +10,30 @@ import { join } from "node:path"
 const tmp = mkdtempSync(join(tmpdir(), "picc-notifier-fixture-"))
 const STATE_FILE = join(tmp, "notifications.json")
 
+// Hermetic: this suite asserts the webpush channel's UNCONFIGURED path
+// (`unavailable` + a VAPID_* reason). Vitest inherits the developer's real
+// process env, so a configured VAPID block in apps/dashboard/.env made the
+// notifier report `no-subscriptions` instead and failed an otherwise-correct
+// assertion. Snapshot and clear the VAPID_* keys for the duration of this file
+// so the intended state is established explicitly rather than assumed.
+const VAPID_KEYS = [
+  "VAPID_PUBLIC_KEY",
+  "VAPID_PRIVATE_KEY",
+  "VAPID_SUBJECT",
+  "VAPID_EMAIL",
+]
+const savedVapid = new Map()
+for (const k of VAPID_KEYS) {
+  if (process.env[k] !== undefined) savedVapid.set(k, process.env[k])
+  delete process.env[k]
+}
+
 describe("email channel removal persistence tolerance (T9 / REQ-11)", () => {
   afterAll(() => {
+    for (const k of VAPID_KEYS) {
+      if (savedVapid.has(k)) process.env[k] = savedVapid.get(k)
+      else delete process.env[k]
+    }
     delete process.env.PICC_NOTIFICATION_DATA_DIR
     rmSync(tmp, { recursive: true, force: true })
   })
