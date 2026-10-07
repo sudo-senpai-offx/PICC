@@ -53,6 +53,38 @@ function setVar(name, value) {
   process.env[name] = value
 }
 
+// ── Hermetic environment: strip real operator configuration ────────────────
+// Vitest inherits the developer's process env, so everything configured in
+// apps/dashboard/.env leaks into the suite. Three separate failures traced back
+// to exactly this (2026-10-07), each of which read as a code bug:
+//
+//   VAPID_*      → notifier saw a CONFIGURED push channel and reported
+//                  'no-subscriptions' instead of the VAPID_* reason its test
+//                  asserted. notifierEmailRemoved.test.mjs.
+//   TELEGRAM_*   → CHANNELS defaults telegram:true, so the transport stayed
+//                  enabled and issued its OWN fetch(); a test mocking
+//                  globalThis.fetch counted a telegram POST alongside its
+//                  webhook one ('expected 1, got 2'). notifier.test.mjs.
+//   PICC_CCXT_SANDBOX_HYPERLIQUID=1 → the hyperliquid adapter booted with
+//                  sandbox ON, so a 'sandbox off ⇒ rail off' suite received
+//                  ok:true live orders instead of the expected refusal.
+//                  hyperliquidPerps.test.mjs.
+//
+// A suite must be able to assert an UNCONFIGURED state without the operator's
+// own configuration silently invalidating the assertion. Tests that need any
+// of these set them themselves, inside their own hooks, after this runs.
+const OPERATOR_ENV_PREFIXES = ["PICC_", "VAPID_", "TELEGRAM_", "NEWSAPI_", "SERPER_"]
+const OPERATOR_ENV_EXACT = new Set(["WEBHOOK_URL"])
+
+for (const name of Object.keys(process.env)) {
+  const isOperatorEnv =
+    OPERATOR_ENV_PREFIXES.some((p) => name.startsWith(p)) || OPERATOR_ENV_EXACT.has(name)
+  if (isOperatorEnv) {
+    PREVIOUS.set(name, process.env[name])
+    delete process.env[name]
+  }
+}
+
 // The value the harness owns for each variable, kept so an `afterEach` that
 // deletes one can be repaired rather than merely complained about. See the
 // note on `beforeEach` below for why repair beats failure there.
