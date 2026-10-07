@@ -43,6 +43,7 @@ import { forecastSeries } from "./services/forecast.mjs"
 import { getCryptoMarket, getCryptoPrice } from "./services/crypto.mjs"
 import { yieldSnapshot } from "./services/yields.mjs"
 import { schedulerStatus } from "./services/scheduler.mjs"
+import "./services/copyCorpusScheduler.mjs" // Task 6: registers the corpus-refresh job; startScheduler picks it up, boot order untouched
 import { opportunityCatalog, listWorkflows, monitorBountyBoards } from "./services/opportunities.mjs"
 import { extractKeywords } from "./services/keywords.mjs"
 import {
@@ -5679,6 +5680,47 @@ const creds = await getVenueCredentials()
   if (path.startsWith("/api/integrations/") && req.method === "GET") {
     const ministry = path.slice("/api/integrations/".length)
     writeJson(res, 200, { ok: true, entries: getUnauthenticatedMinistryIntegrations(ministry) })
+    return
+  }
+
+  // Copytrading research corpus — additive read API (Task 6, §5.4/§6/§9).
+  // ONE GET route only: no ceremony route, no signals, no alerts. Every
+  // statistic carries the §5.4 bias header. Owner history appears ONLY under
+  // ?includeOwner=true, in an origin-labelled block beside (never mixed into)
+  // the external blocks (§6). Existing payloads untouched (ADR-0005).
+  if (path === "/api/research/corpus" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return true
+    const { listExternal, corpusCounts } = await import("./services/copyCorpusStore.mjs")
+    const { survivalByCohort } = await import("./services/copyCorpusSurvival.mjs")
+    const { behaviourGivenState } = await import("./services/copyCorpusBehaviour.mjs")
+    const regime = parsed.searchParams.get("regime")
+    const rows = listExternal(regime ? { regime } : {})
+    const survival = survivalByCohort(rows)
+    const bias = corpusCounts()
+    const regimes = [...new Set(rows.map((r) => r.regime))]
+    if (parsed.searchParams.get("includeOwner") !== "true") {
+      writeJson(res, 200, { regimes, survival, behaviour: behaviourGivenState(rows), bias })
+      return
+    }
+    // §6 separation: the ONLY path placing owner history beside external
+    // rules. Owner journal entries carry no external state vocabulary, so
+    // comparability is exact-match on state buckets only — a mismatch marks
+    // ownerComparable:false rather than inventing comparability.
+    const { listEntries } = await import("./services/tradeJournal.mjs")
+    const journal = listEntries({ limit: 500 }).entries ?? []
+    const ownerRows = journal.map((e) => ({ stateBefore: e.pattern || e.strategy || "unknown" }))
+    const behaviour = behaviourGivenState(rows, { ownerRows })
+    writeJson(res, 200, {
+      regimes,
+      external: { origin: "external", survival, behaviour },
+      owner: {
+        origin: "owner",
+        n: ownerRows.length,
+        states: [...new Set(ownerRows.map((r) => r.stateBefore))],
+        reason: ownerRows.length === 0 ? "no-owner-history" : null
+      },
+      bias
+    })
     return
   }
 
