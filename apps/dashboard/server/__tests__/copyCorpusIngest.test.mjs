@@ -12,6 +12,7 @@ describe("copyCorpusIngest mapping", () => {
     mod = await import("../services/copyCorpusIngest.mjs")
   })
   afterEach(async () => {
+    mod._resetIngestForTest()
     delete process.env.PICC_COPYCORPUS_DATA_DIR
     const { rmSync } = await import("node:fs")
     rmSync(dir, { recursive: true, force: true })
@@ -35,5 +36,26 @@ describe("copyCorpusIngest mapping", () => {
   it("refuses private-broker payloads", () => {
     const r = mod.ingestPublicFills({ venue: "private-broker-export", fills: [{ account: "x" }] })
     expect(r.ok).toBe(false)
+  })
+
+  it("returns honest absence when every fill is unusable, without stamping success", () => {
+    const r = mod.ingestPublicFills({ venue: "hyperliquid", fills: [{}, { noAccount: 1 }] })
+    expect(r.ok).toBe(false)
+    expect(r.ingested).toBe(0)
+    expect(typeof r.reason).toBe("string")
+    expect(mod.ingestStatus().reason).toBe("never-ingested")
+  })
+
+  it("skips fills carrying identity selectors instead of ingesting them", async () => {
+    const r = mod.ingestPublicFills({
+      venue: "hyperliquid",
+      fills: [{ account: "0xgood" }, { account: "0xbad", selectBy: "top-pnl" }],
+    })
+    expect(r.ok).toBe(true)
+    expect(r.ingested).toBe(1)
+    expect(r.skipped).toBe(1)
+    const store = await import("../services/copyCorpusStore.mjs")
+    expect(store.listExternal().length).toBe(1)
+    expect(store.listExternal()[0].accountRef).toBe("0xgood")
   })
 })
