@@ -182,22 +182,11 @@ export function creditResolved(rows, { now = Date.now() } = {}) {
   return out
 }
 
-/**
- * Grant a venue class its ceremony enablement record.
- *
- * WHY THE `authorised` FLAG EXISTS. This function used to refuse unconditionally
- * outside vitest, with the reason "the gate/route modules own the unlock check".
- * That refusal was correct and is preserved for every caller that does NOT go
- * through the owning gate: `authorised` defaults to false, so any direct call
- * still throws `ceremony-action-unreachable`. The ceremony-action route passes
- * `authorised: true` only after ceremonyAction.mjs has independently established
- * that the target rail is in sandbox mode. The check moved; it did not disappear.
- */
-export function unlockVenueClass(venueClass, by, { now = Date.now(), authorised = false } = {}) {
+export function unlockVenueClass(venueClass, by, { now = Date.now() } = {}) {
   if (ceremonyStoreHealth.ok !== true || !store) {
     throw new Error(`ceremony state store: ${ceremonyStoreHealth.reason} — refusing to mutate`)
   }
-  if (process.env.VITEST !== "true" && authorised !== true) {
+  if (process.env.VITEST !== "true") {
     throw new Error("ceremony:deny:ceremony-action-unreachable (no ceremony-action route is wired in production — the gate/route modules own the unlock check)")
   }
   if (typeof venueClass !== "string" || !KNOWN_VENUE_CLASSES.includes(venueClass)) {

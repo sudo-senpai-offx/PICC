@@ -184,7 +184,6 @@ import {
   storeHealth as ceremonyStoreHealth,
   platformVerification as ceremonyPlatformVerification
 } from "./services/commandCentre/ceremonyState.mjs"
-import { authoriseUnlock } from "./services/commandCentre/ceremonyAction.mjs"
 import { ceremonyScaleReadout, evaluateCeremony } from "./services/commandCentre/ceremonyGates.mjs"
 import {
   storeHealth as leaderIdeasStoreHealth,
@@ -1910,44 +1909,6 @@ async function _handleApiInner(req, res, url, reqId) {
       }
     })
     writeJson(res, 200, { ok: true, at: new Date().toISOString(), scaleMinResolves, scaleEnvError, classes })
-    return
-  }
-
-  // Command Centre (WS-7) — ceremony ACTION: the audited door that mints an
-  // enablement record, and the only caller permitted to pass `authorised: true`.
-  //
-  // requireAuthStrict, NOT requireAuth. requireAuth carries an opt-in loopback
-  // bypass, and a ceremony unlock reachable from any local process would be worth
-  // nothing; several of this suite's findings came from exactly that bypass. This
-  // route is deliberately the stricter of the two, with no way to opt out.
-  //
-  // It does not itself decide whether an unlock is allowed — ceremonyAction.mjs does,
-  // and only for a rail that is in sandbox mode. A refusal here is the SAME
-  // `ceremony:deny:gate1-short` the readout already renders, so minting a record
-  // changes nothing about the mainnet position.
-  if (path === "/api/command-centre/ceremony/action" && req.method === "POST") {
-    if (!(await requireAuthStrict(req, res))) return true
-    let body = null
-    try {
-      body = await readBodyMax(req, 4096)
-    } catch {
-      writeJson(res, 400, { error: "malformed or oversized request body" })
-      return
-    }
-    const venueClass = typeof body?.venueClass === "string" ? body.venueClass.trim() : ""
-    try {
-      const granted = authoriseUnlock(venueClass, { by: "operator" })
-      writeJson(res, 200, {
-        ok: true,
-        venueClass: granted.venueClass,
-        enablement: granted.record,
-        sandboxFlag: granted.sandboxVar
-      })
-    } catch (err) {
-      // 403, never 500: a refusal is a normal, named outcome, not a fault. The body
-      // carries the deny code so the operator is told which flag to set.
-      writeJson(res, 403, { ok: false, error: String(err?.message ?? err), venueClass: venueClass || null })
-    }
     return
   }
 
