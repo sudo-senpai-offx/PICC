@@ -15,7 +15,7 @@ await runStartupHealth()
 import { log } from "./logger.mjs"
 import { initErrorLog } from "./errorLog.mjs"
 import { startSignalEngine, stopSignalEngine } from "./services/signalEngine.mjs"
-import { loadBrokers } from "./services/marketDataBus.mjs"
+import { bootRuntime } from "./services/bootSequence.mjs"
 
 const ROOT = process.env.PICC_DIST_DIR || fileURLToPath(new URL("../dist", import.meta.url))
 const PORT = Number(process.env.PORT ?? 3000)
@@ -182,29 +182,33 @@ if (!process.env.PICC_NO_LISTEN) {
   // token", so binding all interfaces would hand LAN neighbors (and any
   // tunnel forwarder, which connects from 127.0.0.1) an unauthenticated
   // control plane.
-  // Advisory Signal Engine replaces the deprecated execution autopilot.
+// Advisory Signal Engine replaces the deprecated execution autopilot.
   // Broker registry must load BEFORE the signal engine and decision engine,
-  // as they depend on getBrokerData/getBestCandles.
-  await loadBrokers()
-  log.info("broker registry loaded")
-  startSignalEngine()
-  const { startConvergenceAlerts } = await import("./services/convergenceAlerts.mjs")
-  startConvergenceAlerts()
-  const { startSnoozeFlusher } = await import("./services/notifier.mjs")
-  startSnoozeFlusher()
-  server.listen(PORT, "127.0.0.1", () => {
-    log.info("server started", { port: PORT, host: "127.0.0.1", dist: ROOT })
-    // Register the liveness/uptime monitor BEFORE the scheduler starts —
-    // jobs registered after startScheduler() never get an interval.
-    startLivenessMonitor()
-    if (startScheduler()) {
-      console.log("[picc-scheduler] started")
+  // as they depend on getBrokerData/getBestCandles. startSignalEngine and the
+  // two flushers run via the SHARED boot module (bootRuntime), so this entry
+  // and the vite dev entry can no longer drift apart — they had already lost
+  // startScheduler, runStartupHealth and loadBrokers independently.
+  await bootRuntime({
+    log: { info: (m) => log.info(m), warn: (m, e) => log.warn(m, { error: e?.message ?? String(e) }) },
+    afterBrokers: async () => {
+      startSignalEngine()
+      const { startConvergenceAlerts } = await import("./services/convergenceAlerts.mjs")
+      startConvergenceAlerts()
+      const { startSnoozeFlusher } = await import("./services/notifier.mjs")
+      startSnoozeFlusher()
+      // Bind loopback explicitly BEFORE the liveness/scheduler pair: the auth
+      // model trusts "not-localhost needs a token", so binding all interfaces
+      // would hand LAN neighbours (and any tunnel forwarder, which connects
+      // from 127.0.0.1) an unauthenticated control plane.
+      await new Promise((resolve) => server.listen(PORT, "127.0.0.1", resolve))
+      log.info("server started", { port: PORT, host: "127.0.0.1", dist: ROOT })
     }
-    startLedger()
-    console.log("[picc-accuracy-ledger] auto-resolving trading decisions")
-        import("./services/adaptiveConfluence.mjs").then(({ startDecisionEngine }) => {
-      startDecisionEngine()
-      console.log("[picc-decision-engine] started — AI signals active")
-    }).catch(() => {})
   })
+  console.log("[picc-scheduler] started")
+  startLedger()
+  console.log("[picc-accuracy-ledger] auto-resolving trading decisions")
+  import("./services/adaptiveConfluence.mjs").then(({ startDecisionEngine }) => {
+    startDecisionEngine()
+    console.log("[picc-decision-engine] started — AI signals active")
+  }).catch(() => {})
 }

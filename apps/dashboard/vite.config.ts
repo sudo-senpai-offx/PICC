@@ -10,7 +10,7 @@ import { startTradingHud } from "./server/services/tradingHud.mjs"
 import { startLedger } from "./server/services/accuracyLedger.mjs"
 import { initErrorLog } from "./server/errorLog.mjs"
 import { runStartupHealth } from "./server/services/commandCentre/startupHealth.mjs"
-import { startLivenessMonitor, startScheduler } from "./server/services/scheduler.mjs"
+import { bootRuntime } from "./server/services/bootSequence.mjs"
 
 // ---------------------------------------------------------------------------
 // T6 — build-time PWA shell precache.
@@ -75,31 +75,18 @@ export default defineConfig(({ mode, command }) => {
   // Skipped under vitest — tests must not rewrite the real session log.
   if (!process.env.VITEST && !isBuild) {
     initErrorLog()
-    // Broker registry FIRST. index.mjs:188 loads it before anything that can
-    // call getBestCandles (signal engine, decision engine) — and vite dev was
-    // missing it entirely. Without it the broker registry stays EMPTY in dev, so
-    // getBestCandles returns zero candidates and every consumer reports honest
-    // absence (Copilot legs, /api/trading/candles `sources: []`) even though the
-    // scheduler is separately reaching CCXT through brokers.mjs. Third omission
-    // from this boot sequence after startScheduler and runStartupHealth, so the
-    // two entry points can drift apart again; a shared boot sequence would remove
-    // that class of defect entirely.
-    // Liveness monitor SECOND: it registers the eo-liveness job, and jobs added
-    // after startScheduler() never get an interval.
-    void import("./server/services/marketDataBus.mjs")
-      .then((m) => m.loadBrokers())
-      .then(() => {
-        console.info("[picc] broker registry loaded (dev)")
-        startLivenessMonitor()
-        startScheduler()
-        // Boot validation is a first-class boot step for dev/e2e too, exactly as it is for the standalone
-        // server in index.mjs. Without this the first GET performed the "boot" work and wrote the
-        // audit:startup-health row lazily. Read-only and advisory — failures are logged, never fatal.
-        return runStartupHealth()
-      })
-      .catch((error: unknown) => {
-        console.warn("[picc] dev boot failed (advisory, boot continues):", (error as Error)?.message ?? error)
-      })
+    // Shared, ordered boot. server/index.mjs uses the SAME module, so the dev and
+    // standalone entry points cannot drift apart again — they had already lost
+    // startScheduler, runStartupHealth and loadBrokers independently. See
+    // services/bootSequence.mjs for the ordering invariants.
+    void bootRuntime({
+      afterBrokers: () =>
+        runStartupHealth().catch((error: unknown) => {
+          console.warn("[picc] startup health failed (advisory, boot continues):", (error as Error)?.message ?? error)
+        })
+    }).catch((error: unknown) => {
+      console.warn("[picc] dev boot failed (advisory, boot continues):", (error as Error)?.message ?? error)
+    })
   }
   // Load ALL env vars (not just VITE_*) so the single PICC_ERROR_LOG flag
   // controls both the server file sink and the browser-side error capture.
