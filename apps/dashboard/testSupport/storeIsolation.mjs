@@ -196,7 +196,8 @@ export const ISOLATION_DIRECTORY_VARIABLES = Object.freeze([
   ["PICC_NOTIFICATION_DATA_DIR", "notification"],
   ["PICC_PROFILE_DATA_DIR", "profile"],
   ["PICC_WATCHLIST_DATA_DIR", "watchlist"],
-  ["PICC_DATA_DIR", "data"]
+  ["PICC_DATA_DIR", "data"],
+  ["PICC_COPYCORPUS_DATA_DIR", "copycorpus"]
 ])
 
 // ---------------------------------------------------------------------------
