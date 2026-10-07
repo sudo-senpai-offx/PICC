@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { rmSync } from "node:fs"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 // Wave 0 Task 3 — streamSnapshot honesty: absent numerics persist as null
 // with a named reason, never as fabricated 0. Hermetic: the snapshot file
@@ -15,8 +14,7 @@ describe("streamSnapshot null-not-zero (Wave 0 Task 3)", () => {
   let saveSnapshot
 
   beforeEach(async () => {
-    dir = mkdtempSync(join(tmpdir(), "picc-stream-snapshot-"))
-    process.env.PICC_AUTOMATOR_DATA_DIR = dir
+    dir = useIsolatedStoreDir("PICC_AUTOMATOR_DATA_DIR", { prefix: "picc-stream-snapshot" })
     vi.resetModules()
     ;({ getSnapshot, saveSnapshot } = await import("../services/streamSnapshot.mjs"))
   })
