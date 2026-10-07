@@ -71,3 +71,25 @@ export function corpusCounts() {
 }
 
 export function _resetCopyCorpusForTest() { rows = [] }
+
+// Regime-bounded minimal retention pruner (§8 decision-3, §7).
+// Keeps newest-first per regime up to its target; drops oldest beyond target.
+// Deletes whole records only — no update/mutate path (read-only after ingest, §6).
+export function pruneToRegimeTargets(targets = {}) {
+  const before = rows.length
+  const byRegime = new Map()
+  for (const r of rows) {
+    const k = r.regime ?? "unlabelled"
+    if (!byRegime.has(k)) byRegime.set(k, [])
+    byRegime.get(k).push(r)
+  }
+  const kept = []
+  for (const [regime, rs] of byRegime) {
+    const max = targets[regime] ?? targets["*"] ?? rs.length
+    kept.push(...rs.slice(-Math.max(0, max)))
+  }
+  const dropped = before - kept.length
+  rows = kept
+  save()
+  return { ok: true, kept: kept.length, dropped, reason: null }
+}
