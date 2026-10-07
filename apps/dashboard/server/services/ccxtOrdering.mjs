@@ -162,7 +162,7 @@ export function ccxtKeysForExchange(exchangeId) {
  * Spot-mode self-check, mirroring the perps adapter's `modeOf()` pattern:
  * every mutating entry re-verifies credentials itself rather than trusting
  * the caller to have gated. Returns `{ ok: true, keys, sandbox }` or
- * `{ ok: false, reason }` with the named `ccxt-keys-not-configured` reason.
+ * `{ ok: false, reason }` carrying the pinned no-credentials refusal verbatim.
  */
 function spotModeOf(exchangeId) {
   const id = String(exchangeId ?? "").trim().toLowerCase()
@@ -170,7 +170,7 @@ function spotModeOf(exchangeId) {
   if (!keys) {
     return {
       ok: false,
-      reason: `ccxt-keys-not-configured: no ${envKey(id)} credentials configured — set either PICC_CCXT_APIKEY_${envKey(id)} + PICC_CCXT_SECRET_${envKey(id)} (CEX-style) or PICC_CCXT_WALLETADDRESS_${envKey(id)} + PICC_CCXT_PRIVATEKEY_${envKey(id)} (Hyperliquid-style) — the execution leg is inoperable without them`
+      reason: `ccxt ordering seam: no ${envKey(id)} credentials configured — set either PICC_CCXT_APIKEY_${envKey(id)} + PICC_CCXT_SECRET_${envKey(id)} (CEX-style) or PICC_CCXT_WALLETADDRESS_${envKey(id)} + PICC_CCXT_PRIVATEKEY_${envKey(id)} (Hyperliquid-style) — the execution leg is inoperable without them`
     }
   }
   return { ok: true, keys, sandbox: keys.sandbox ?? false }
@@ -200,7 +200,7 @@ export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox 
   // caller — neither by cache hit nor by later key removal.
   const mode = spotModeOf(id)
   if (requireKeys && !mode.ok) {
-    throw new Error(`ccxt ordering seam: ${mode.reason}`)
+    throw new Error(mode.reason)
   }
   const keys = mode.keys ?? null
   const presenceKey = `${cacheKey}:${keys ? "k" : "n"}`
@@ -300,7 +300,7 @@ export async function placeCcxtOrder({ exchange, symbol, side, amount, price, cl
   // Internal self-check (mirrors the perps adapter's modeOf pattern): the seam
   // re-verifies credentials itself — a bypassed caller gate still cannot order.
   const placeMode = spotModeOf(id)
-  if (!placeMode.ok) throw new Error(`ccxt ordering seam: ${placeMode.reason}`)
+  if (!placeMode.ok) throw new Error(placeMode.reason)
 
   // Throws when credentials are absent — the seam never silently goes keyless.
   const instance = await ccxtInstanceFor(id, { requireKeys: true })
@@ -365,7 +365,7 @@ export async function amendCcxtOrder({ exchange, symbol, orderId, side, amount, 
 
   // Internal self-check (mirrors the perps adapter's modeOf pattern).
   const amendMode = spotModeOf(id)
-  if (!amendMode.ok) throw new Error(`ccxt ordering seam: ${amendMode.reason}`)
+  if (!amendMode.ok) throw new Error(amendMode.reason)
 
   const instance = await ccxtInstanceFor(id, { requireKeys: true })
   try {
@@ -462,7 +462,7 @@ export async function cancelCcxtOrder({ exchange, symbol = null, orderId = null,
   // Internal self-check (mirrors the perps adapter's modeOf pattern): refused
   // with the cancel transport shape, never a fabricated success.
   const cancelMode = spotModeOf(id)
-  if (!cancelMode.ok) return { ok: false, reason: `cancelCcxtOrder-${cancelMode.reason}` }
+  if (!cancelMode.ok) return { ok: false, reason: cancelMode.reason }
 
   let targetId = oid
   if (!targetId) {
@@ -564,7 +564,7 @@ export async function closeCcxtPosition({ exchange, symbol, positionSide, positi
   // Internal self-check (mirrors the perps adapter's modeOf pattern); the exit
   // itself re-verifies through placeCcxtOrder below.
   const closeMode = spotModeOf(id)
-  if (!closeMode.ok) throw new Error(`ccxt ordering seam: ${closeMode.reason}`)
+  if (!closeMode.ok) throw new Error(closeMode.reason)
 
   const exitSide = side === "long" ? "sell" : "buy"
   const order = await placeCcxtOrder({ exchange: id, symbol: sym, side: exitSide, amount: amountN, price: priceN, clientOrderId })

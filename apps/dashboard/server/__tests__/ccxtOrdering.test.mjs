@@ -792,26 +792,26 @@ describe("ccxtOrdering — Task 2 fail-closed self-checks", () => {
     expect(calls.createOrder, "an unsupported sandbox must never reach the venue").toEqual([])
   })
 
-  it("each mutating entry re-verifies keys itself with a named reason when keyless", async () => {
+  it("each mutating entry re-verifies keys itself with the pinned refusal when keyless", async () => {
     const ex = makeExchange({
       orders: { "o-1": { id: "o-1", symbol: "BTC/USDT", amount: 0.01, price: 500, status: "open" } }
     })
     mod._setCcxtLibForTests(fakeLib({ binance: ex }))
     await expect(
       mod.placeCcxtOrder({ exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 500 })
-    ).rejects.toThrow(/ccxt-keys-not-configured/)
+    ).rejects.toThrow(/no BINANCE credentials configured/)
     await expect(
       mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1", side: "buy", newPrice: 499 })
-    ).rejects.toThrow(/ccxt-keys-not-configured/)
+    ).rejects.toThrow(/no BINANCE credentials configured/)
     expect(ex.calls.fetchOrder, "a keyless amend must not read the venue").toEqual([])
     expect(ex.calls.editOrder, "a keyless amend must not reach the venue").toEqual([])
     const cancelled = await mod.cancelCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1" })
     expect(cancelled.ok).toBe(false)
-    expect(cancelled.reason).toMatch(/ccxt-keys-not-configured/)
+    expect(cancelled.reason).toMatch(/no BINANCE credentials configured/)
     expect(ex.calls.cancelOrder, "a keyless cancel must not reach the venue").toEqual([])
     await expect(
       mod.closeCcxtPosition({ exchange: "binance", symbol: "BTCUSDT", positionSide: "long", positionOrderId: "p-1", filledAmount: 0.01, amount: 0.01, price: 500 })
-    ).rejects.toThrow(/ccxt-keys-not-configured/)
+    ).rejects.toThrow(/no BINANCE credentials configured/)
     expect(ex.calls.createOrder, "a keyless close must not place anything").toEqual([])
   })
 })
