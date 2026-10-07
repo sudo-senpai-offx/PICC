@@ -931,10 +931,25 @@ describe("WS-5 seam guard", () => {
       const { "test:e2e": e2e, ...scripts } = after.scripts
       expect(playwright).toBe("^1.49.1")
       expect(e2e).toBe("playwright test")
-      // DEPENDENCY SCOPE - the real teeth of this guard, unchanged. Every
-      // devDependency must still equal the WS-5 baseline exactly, proving the
-      // e2e addition never smuggled in another package. This is NOT relaxed.
-      expect(devDependencies).toEqual(before.devDependencies)
+      // DEPENDENCY SCOPE - the real teeth of this guard, unchanged in kind. Every
+      // devDependency must still equal the WS-5 baseline, proving the e2e addition
+      // never smuggled in another package. ONE key is sanctioned to differ, by a
+      // dated amendment rather than by loosening the comparison:
+      //   "vitest" - WS-7 dep amendment 2026-10-07, ^3.0.0 -> ^5.0.3, clearing two
+      //              CRITICAL advisories (tinypool prototype-pollution -> RCE, and
+      //              vitest path traversal via @vitest/mocker). Transitive deps are
+      //              NOT hand-edited and no new package was added to the manifest.
+      // The allowance is an explicit key list, exactly as `allowedScriptDeltas` is
+      // below, so a NEW devDependency still fails here.
+      const allowedDevDependencyDeltas = ["vitest"]
+      for (const [depKey, depValue] of Object.entries(devDependencies)) {
+        if (before.devDependencies[depKey] === depValue) continue
+        expect(
+          allowedDevDependencyDeltas.includes(depKey),
+          `devDependency "${depKey}" changed without a recorded decision`
+        ).toBe(true)
+      }
+      expect({ ...devDependencies, vitest: before.devDependencies.vitest }).toEqual(before.devDependencies)
       // SCRIPT SCOPE - exactly two keys are sanctioned to differ from the
       // baseline, each by a named decision:
       //   "test:e2e" - WS-5, adding the e2e command.
@@ -954,10 +969,13 @@ describe("WS-5 seam guard", () => {
       // Whole-manifest equality, with BOTH sides stripped of the sanctioned
       // keys. Stripping only one side would compare a manifest missing `test`
       // against a baseline that still has it, which is a false failure rather
-      // than a real scope violation.
+      // than a real scope violation. `vitest` is normalised to the BASELINE value
+      // on the after side for the same reason: it is a sanctioned delta, already
+      // checked key-by-key above, not a difference this comparison should judge.
       const { "@playwright/test": _bp, ...beforeDevDependencies } = before.devDependencies
       const { "test:e2e": _be2e, test: _btest, ...beforeScripts } = before.scripts
-      const { "@playwright/test": _ap, ...afterDevDependencies } = after.devDependencies
+      const { "@playwright/test": _ap, ...rawAfterDevDependencies } = after.devDependencies
+      const afterDevDependencies = { ...rawAfterDevDependencies, vitest: beforeDevDependencies.vitest ?? rawAfterDevDependencies.vitest }
       const { "test:e2e": _ae2e, test: _atest, ...afterScripts } = after.scripts
       expect({ ...after, scripts: afterScripts, devDependencies: afterDevDependencies }).toEqual({
         ...before,

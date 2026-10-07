@@ -96,7 +96,13 @@ const LOCK_PACKAGES = lockfile.packages ?? {}
 // resolve to. Nothing here is read from `package.json` - see the header.
 const PINNED_OVERRIDES = {
   "undici@7.29.0": "7.29.1",
-  "undici@^8.9.0": "8.10.2"
+  "undici@^8.9.0": "8.10.2",
+  // WS-7 dependency amendment 2026-10-07. `source-map-js` 1.0.0-1.2.1 carries a
+  // HIGH advisory (event-loop denial of service through indexed source-map section
+  // offsets). It is a TRANSITIVE dep of jsdom->css-tree and of vite, so it cannot be
+  // fixed by editing a direct manifest entry - an override is the only lever, which
+  // is why this block exists in the first place. 1.2.2 is the fixed release.
+  "source-map-js@1.2.1": "1.2.2"
 }
 
 /**
