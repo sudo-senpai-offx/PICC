@@ -292,6 +292,9 @@ export function evaluateGate({ template, proposal, state = {}, audit = null }) {
   if (env.maxConcurrent != null && (state.concurrentUnits ?? 0) >= env.maxConcurrent) {
     return block("envelope-within-ceiling", `concurrent units ${state.concurrentUnits ?? 0} >= ceiling ${env.maxConcurrent} (5D)`)
   }
+  if (env.maxDailyLossPct != null && !Number.isFinite(state.dayLossPct)) {
+    return block("envelope-within-ceiling", `day-loss-unobservable — cannot prove today's loss is within ceiling ${env.maxDailyLossPct}% (5D)`)
+  }
   if (env.maxDailyLossPct != null && (state.dayLossPct ?? 0) > env.maxDailyLossPct) {
     return block("envelope-within-ceiling", `today's loss ${state.dayLossPct ?? 0}% > ceiling ${env.maxDailyLossPct}% (5D)`)
   }

@@ -551,3 +551,33 @@ describe("Command Centre — Safety Sidecar: execution power (slice 5 proposals/
     expect(ccxtLive.allow).toBe(true)
   })
 })
+
+describe("Command Centre — Safety Sidecar: null day-loss denies (5D ceiling)", () => {
+  const noCeiling = () => ({ ...ccxt(), envelope: { ...ccxt().envelope, maxDailyLossPct: null } })
+
+  test.each([["null", null], ["undefined", undefined], ["NaN", NaN], ["Infinity", Infinity], ["-Infinity", -Infinity]])(
+    "unobservable day-loss (%s) with ceiling set → blocked with the named reason",
+    (_label, dayLossPct) => {
+      const r = evaluateGate({ template: ccxt(), proposal: greenProposal(), state: greenState({ dayLossPct }) })
+      expect(r.allow).toBe(false)
+      expect(r.blockedBy).toBe("envelope-within-ceiling")
+      expect(r.reason).toContain("day-loss-unobservable")
+    }
+  )
+
+  test("finite loss over ceiling → still blocked (existing comparison)", () => {
+    const r = evaluateGate({ template: ccxt(), proposal: greenProposal(), state: greenState({ dayLossPct: 6 }) })
+    expect(r.allow).toBe(false)
+    expect(r.blockedBy).toBe("envelope-within-ceiling")
+  })
+
+  test("finite loss under ceiling → still passes", () => {
+    const r = evaluateGate({ template: ccxt(), proposal: greenProposal(), state: greenState({ dayLossPct: 2 }) })
+    expect(r.allow).toBe(true)
+  })
+
+  test("ceiling unset + null loss → passes (unchanged)", () => {
+    const r = evaluateGate({ template: noCeiling(), proposal: greenProposal(), state: greenState({ dayLossPct: null }) })
+    expect(r.allow).toBe(true)
+  })
+})
