@@ -122,3 +122,115 @@ describe("vault legacy migration", () => {
     expect(await readSecretJson(file, null)).toEqual({ expertoption: { username: "u", password: "pw-now-encrypted" } })
   })
 })
+
+describe("vault scrypt KDF (v2 envelopes)", () => {
+  it("writes version-tagged envelopes with a fresh salt per encrypt", async () => {
+    const dir = freshDir()
+    process.env.PICC_VAULT_KEY = "unit-test-env-key-0123456789"
+    resetVaultKey()
+    try {
+      const a = await encryptText("same-plaintext", dir)
+      const b = await encryptText("same-plaintext", dir)
+      for (const ct of [a, b]) {
+        const parts = ct.split(":")
+        expect(parts).toHaveLength(5)
+        expect(parts[0]).toBe("v2")
+      }
+      expect(a).not.toBe(b) // fresh salt (+iv) per encrypt
+      expect(a).not.toContain("same-plaintext")
+      expect(await decryptText(a, dir)).toBe("same-plaintext")
+      expect(await decryptText(b, dir)).toBe("same-plaintext")
+    } finally {
+      delete process.env.PICC_VAULT_KEY
+      resetVaultKey()
+    }
+  })
+
+  it("refuses a short PICC_VAULT_KEY with a named reason", async () => {
+    const dir = freshDir()
+    process.env.PICC_VAULT_KEY = "short"
+    resetVaultKey()
+    try {
+      await expect(encryptText("x", dir)).rejects.toThrow(/PICC_VAULT_KEY.*too short/i)
+      expect(() => vaultKeySource()).toThrow(/PICC_VAULT_KEY.*too short/i)
+    } finally {
+      delete process.env.PICC_VAULT_KEY
+      resetVaultKey()
+    }
+  })
+
+  it("wrong key still fails closed on v2 envelopes", async () => {
+    const dir = freshDir()
+    const file = join(dir, "venue-credentials.json")
+    process.env.PICC_VAULT_KEY = "key-A-xxxxxxxxxxxxxxxx"
+    resetVaultKey()
+    const ct = await encryptText("s3cr3t", dir)
+    await writeSecretJson(file, { token: "s3cr3t" })
+
+    process.env.PICC_VAULT_KEY = "key-B-yyyyyyyyyyyyyyyy"
+    resetVaultKey()
+    try {
+      await expect(decryptText(ct, dir)).rejects.toThrow()
+      expect(await readSecretJson(file, {})).toEqual({})
+    } finally {
+      delete process.env.PICC_VAULT_KEY
+      resetVaultKey()
+    }
+  })
+
+  it("old single-SHA256 env-key envelopes still unlock AND transparently upgrade to v2", async () => {
+    // Fixture built with the RETIRED derivation (single SHA256, 3-part payload)
+    // so this test proves the old code path stays readable after the KDF change.
+    const { createCipheriv, createHash, randomBytes } = await import("node:crypto")
+    const dir = freshDir()
+    const KEY = "legacy-key-0123456789abcdef"
+    process.env.PICC_VAULT_KEY = KEY
+    resetVaultKey()
+    try {
+      const k = createHash("sha256").update(KEY).digest()
+      const iv = randomBytes(12)
+      const cipher = createCipheriv("aes-256-gcm", k, iv)
+      const ct = Buffer.concat([cipher.update(JSON.stringify({ token: "legacy-t1" }), "utf8"), cipher.final()])
+      const oldPayload = `${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${ct.toString("base64")}`
+      expect(oldPayload.split(":")).toHaveLength(3)
+      const file = join(dir, "legacy.json")
+      writeFileSync(file, JSON.stringify({ pva1: oldPayload }))
+
+      // Old fixture unlocks ...
+      expect(await readSecretJson(file, null)).toEqual({ token: "legacy-t1" })
+      // ... AND the file was transparently re-encrypted under v2.
+      const upgraded = JSON.parse(readFileSync(file, "utf8"))
+      expect(upgraded.pva1.split(":")[0]).toBe("v2")
+      expect(readFileSync(file, "utf8")).not.toContain("legacy-t1")
+      // Upgraded envelope still reads back.
+      expect(await readSecretJson(file, null)).toEqual({ token: "legacy-t1" })
+    } finally {
+      delete process.env.PICC_VAULT_KEY
+      resetVaultKey()
+    }
+  })
+
+  it("old keyfile-mode envelopes (raw key bytes) still unlock AND upgrade to v2", async () => {
+    const { createCipheriv, randomBytes } = await import("node:crypto")
+    const dir = freshDir()
+    const keyHex = randomBytes(32).toString("hex")
+    writeFileSync(join(dir, "picc-vault.key"), keyHex)
+    resetVaultKey()
+    try {
+      const k = Buffer.from(keyHex, "hex")
+      const iv = randomBytes(12)
+      const cipher = createCipheriv("aes-256-gcm", k, iv)
+      const ct = Buffer.concat([cipher.update(JSON.stringify({ token: "legacy-kf" }), "utf8"), cipher.final()])
+      const oldPayload = `${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${ct.toString("base64")}`
+      const file = join(dir, "legacy-kf.json")
+      writeFileSync(file, JSON.stringify({ pva1: oldPayload }))
+
+      expect(await readSecretJson(file, null)).toEqual({ token: "legacy-kf" })
+      const upgraded = JSON.parse(readFileSync(file, "utf8"))
+      expect(upgraded.pva1.split(":")[0]).toBe("v2")
+      expect(await readSecretJson(file, null)).toEqual({ token: "legacy-kf" })
+    } finally {
+      resetVaultKey()
+    }
+  })
+})
