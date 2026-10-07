@@ -187,6 +187,15 @@ describe("hyperliquidPerps — refusal surface + sandbox ordering (fixture ccxt)
   let seam
   let adapter
   beforeEach(async () => {
+    // Clear PICC_CCXT_* BEFORE importing anything. The afterEach cleanup below is
+    // too late for the FIRST test in this describe: vitest runs that test's
+    // beforeEach before any afterEach has fired, so a real
+    // PICC_CCXT_SANDBOX_HYPERLIQUID=1 inherited from apps/dashboard/.env was still
+    // in process.env when the adapter imported — sandbox came up ON and the
+    // rail-off suite got ok:true orders instead of the expected refusal.
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith("PICC_CCXT_")) delete process.env[k]
+    }
     dir = mkdtempSync(join(tmpdir(), "picc-hlp-"))
     process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
     vi.resetModules()
