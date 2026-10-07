@@ -159,6 +159,24 @@ export function ccxtKeysForExchange(exchangeId) {
 }
 
 /**
+ * Spot-mode self-check, mirroring the perps adapter's `modeOf()` pattern:
+ * every mutating entry re-verifies credentials itself rather than trusting
+ * the caller to have gated. Returns `{ ok: true, keys, sandbox }` or
+ * `{ ok: false, reason }` with the named `ccxt-keys-not-configured` reason.
+ */
+function spotModeOf(exchangeId) {
+  const id = String(exchangeId ?? "").trim().toLowerCase()
+  const keys = ccxtKeysForExchange(id)
+  if (!keys) {
+    return {
+      ok: false,
+      reason: `ccxt-keys-not-configured: no ${envKey(id)} credentials configured — set either PICC_CCXT_APIKEY_${envKey(id)} + PICC_CCXT_SECRET_${envKey(id)} (CEX-style) or PICC_CCXT_WALLETADDRESS_${envKey(id)} + PICC_CCXT_PRIVATEKEY_${envKey(id)} (Hyperliquid-style) — the execution leg is inoperable without them`
+    }
+  }
+  return { ok: true, keys, sandbox: keys.sandbox ?? false }
+}
+
+/**
  * Create (or reuse) the un-guarded exchange instance for the ordering seam.
  * requireKeys=true (the default) refuses an instance without configured
  * credentials — private endpoints (fetchBalance/fetchOrder/createOrder) cannot
@@ -176,15 +194,18 @@ export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox 
     throw new Error(`ccxt ordering seam: unsupported defaultType "${defaultType}" — only "spot" and "swap" are supported`)
   }
   const cacheKey = `${id}:${defaultType}`
-  const cached = sessions.get(cacheKey)
-  if (cached) return cached
-
-  const keys = ccxtKeysForExchange(id)
-  if (requireKeys && !keys) {
-    throw new Error(
-      `ccxt ordering seam: no ${envKey(id)} credentials configured — set either PICC_CCXT_APIKEY_${envKey(id)} + PICC_CCXT_SECRET_${envKey(id)} (CEX-style) or PICC_CCXT_WALLETADDRESS_${envKey(id)} + PICC_CCXT_PRIVATEKEY_${envKey(id)} (Hyperliquid-style) — the execution leg is inoperable without them`
-    )
+  // Fail-closed ordering: the credential refusal runs BEFORE the cache lookup,
+  // and the cache is keyed on credential presence, so a keyless entry cached by
+  // fetchReferencePrice (requireKeys:false) can never satisfy a keys-required
+  // caller — neither by cache hit nor by later key removal.
+  const mode = spotModeOf(id)
+  if (requireKeys && !mode.ok) {
+    throw new Error(`ccxt ordering seam: ${mode.reason}`)
   }
+  const keys = mode.keys ?? null
+  const presenceKey = `${cacheKey}:${keys ? "k" : "n"}`
+  const cached = sessions.get(presenceKey)
+  if (cached) return cached
 
   const lib = await ccxtLib()
   const Ctor = lib[id]
@@ -203,18 +224,27 @@ export async function ccxtInstanceFor(exchangeId, { requireKeys = true, sandbox 
 
   const instance = new Ctor(opts)
   const wantSandbox = sandbox ?? keys?.sandbox ?? false
-  if (wantSandbox && typeof instance.setSandboxMode === "function") {
+  if (wantSandbox) {
+    // Fail-closed: a requested sandbox the venue cannot provide is refused
+    // (sandbox-unsupported) — never a warn-and-continue onto live endpoints.
+    if (typeof instance.setSandboxMode !== "function") {
+      throw new Error(
+        `ccxt ordering seam: sandbox-unsupported — sandbox requested for ${id} but the venue instance has no sandbox mode — refused (never fall through to live)`
+      )
+    }
     // Deliberate: sandbox mode is set BEFORE any order can be placed. The
     // global read-only guard blocks setSandboxMode elsewhere; here it is the
     // first live-verify safeguard (testnet orders spend no capital).
     try {
       instance.setSandboxMode(true)
       instance._piccSandbox = true
-    } catch {
-      log.warn(`sandbox requested but ${id} has no sandbox — live endpoints will be used`)
+    } catch (err) {
+      throw new Error(
+        `ccxt ordering seam: sandbox-unsupported — sandbox requested for ${id} but enabling sandbox mode failed (${String(err?.message ?? err)}) — refused (never fall through to live)`
+      )
     }
   }
-  sessions.set(cacheKey, instance)
+  sessions.set(presenceKey, instance)
   return instance
 }
 
@@ -266,6 +296,11 @@ export async function placeCcxtOrder({ exchange, symbol, side, amount, price, cl
       `ccxt ordering seam: notional $${notional.toFixed(4)} exceeds the $${CCXT_HARD_NOTIONAL_CAP_USD} hard cap — refused (envelope defense-in-depth)`
     )
   }
+
+  // Internal self-check (mirrors the perps adapter's modeOf pattern): the seam
+  // re-verifies credentials itself — a bypassed caller gate still cannot order.
+  const placeMode = spotModeOf(id)
+  if (!placeMode.ok) throw new Error(`ccxt ordering seam: ${placeMode.reason}`)
 
   // Throws when credentials are absent — the seam never silently goes keyless.
   const instance = await ccxtInstanceFor(id, { requireKeys: true })
@@ -327,6 +362,10 @@ export async function amendCcxtOrder({ exchange, symbol, orderId, side, amount, 
   if (priceTouched && (!Number.isFinite(priceN) || priceN <= 0)) {
     throw new Error("ccxt ordering seam: newPrice must be a positive number")
   }
+
+  // Internal self-check (mirrors the perps adapter's modeOf pattern).
+  const amendMode = spotModeOf(id)
+  if (!amendMode.ok) throw new Error(`ccxt ordering seam: ${amendMode.reason}`)
 
   const instance = await ccxtInstanceFor(id, { requireKeys: true })
   try {
@@ -420,6 +459,11 @@ export async function cancelCcxtOrder({ exchange, symbol = null, orderId = null,
     throw new Error("ccxt ordering seam: cancel requires orderId or clientOrderId — a cancel that cannot identify its target is refused before the venue is touched")
   }
 
+  // Internal self-check (mirrors the perps adapter's modeOf pattern): refused
+  // with the cancel transport shape, never a fabricated success.
+  const cancelMode = spotModeOf(id)
+  if (!cancelMode.ok) return { ok: false, reason: `cancelCcxtOrder-${cancelMode.reason}` }
+
   let targetId = oid
   if (!targetId) {
     const open = await fetchCcxtOpenOrders({ exchange: id, symbol: sym })
@@ -431,7 +475,17 @@ export async function cancelCcxtOrder({ exchange, symbol = null, orderId = null,
     targetId = match.id
   }
 
-  const instance = await ccxtInstanceFor(id, { requireKeys: true })
+  let instance
+  try {
+    instance = await ccxtInstanceFor(id, { requireKeys: true })
+  } catch (err) {
+    // Fail-closed with the cancel transport shape: a sandbox the venue cannot
+    // provide is a named refusal, never a fall-through to live.
+    if (String(err?.message ?? err).includes("sandbox-unsupported")) {
+      return { ok: false, reason: `cancelCcxtOrder-sandbox-unsupported: ${String(err?.message ?? err)}` }
+    }
+    throw err
+  }
   try {
     const raw = await instance.cancelOrder(targetId, sym ?? undefined)
     return {
@@ -506,6 +560,11 @@ export async function closeCcxtPosition({ exchange, symbol, positionSide, positi
       `ccxt ordering seam: close amount ${amountN} exceeds the ${filled} observed on position ${String(positionOrderId)} — refused (a close cannot exceed the position it closes)`
     )
   }
+
+  // Internal self-check (mirrors the perps adapter's modeOf pattern); the exit
+  // itself re-verifies through placeCcxtOrder below.
+  const closeMode = spotModeOf(id)
+  if (!closeMode.ok) throw new Error(`ccxt ordering seam: ${closeMode.reason}`)
 
   const exitSide = side === "long" ? "sell" : "buy"
   const order = await placeCcxtOrder({ exchange: id, symbol: sym, side: exitSide, amount: amountN, price: priceN, clientOrderId })

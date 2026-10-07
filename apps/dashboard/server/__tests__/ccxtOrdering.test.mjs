@@ -730,3 +730,88 @@ describe("ccxtOrdering — T17 amend / cancel / close members", () => {
     expect(ex.sandbox).toBe(false)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 2 — spot seam self-checks (fail-closed).
+//
+// (a) a keyless-cached instance (e.g. from fetchReferencePrice) must never
+// satisfy a keys-required caller; (b) each mutating entry re-verifies keys
+// itself with a named reason; (c) sandbox-requested-but-unsupported refuses
+// (sandbox-unsupported) instead of warning through to live.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("ccxtOrdering — Task 2 fail-closed self-checks", () => {
+  let dir
+  let mod
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "picc-ccxt-t2-"))
+    process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
+    vi.resetModules()
+    mod = await import("../services/ccxtOrdering.mjs")
+    mod._resetCcxtOrderingState()
+  })
+  afterEach(() => {
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith("PICC_")) delete process.env[k]
+    }
+    delete process.env.PICC_COMMAND_CENTRE_DATA_DIR
+    vi.resetModules()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("a keyless-cached instance never satisfies a keys-required caller", async () => {
+    // No keys: the reference price caches a keyless instance, and the order leg
+    // must still refuse rather than reuse it.
+    const ex = makeExchange({ tickers: { "BTC/USDT": { last: 500, bid: 499, ask: 501 } } })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    const ref = await mod.fetchReferencePrice({ exchange: "binance", symbol: "BTCUSDT" })
+    expect(ref).toMatchObject({ price: 500 })
+    await expect(mod.ccxtInstanceFor("binance", { requireKeys: true })).rejects.toThrow(/credentials configured/)
+    await expect(
+      mod.placeCcxtOrder({ exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 500 })
+    ).rejects.toThrow(/credentials configured/)
+    expect(ex.calls.createOrder, "a keyless-cached instance must never place").toEqual([])
+  })
+
+  it("sandbox requested but unsupported refuses (sandbox-unsupported), never live", async () => {
+    Object.assign(process.env, BINANCE_KEYS, { PICC_CCXT_SANDBOX_BINANCE: "1" })
+    const calls = { createOrder: [] }
+    const ex = {
+      id: "binance",
+      calls,
+      async createOrder(...args) {
+        calls.createOrder.push(args)
+        return { id: "o-1", symbol: args[0], type: args[1], side: args[2], amount: args[3], price: args[4], status: "closed", timestamp: 1_700_000_000_000 }
+      }
+    }
+    // Deliberately NO setSandboxMode — the venue cannot sandbox.
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    await expect(mod.ccxtInstanceFor("binance", { requireKeys: true })).rejects.toThrow(/sandbox-unsupported/)
+    await expect(
+      mod.placeCcxtOrder({ exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 500 })
+    ).rejects.toThrow(/sandbox-unsupported/)
+    expect(calls.createOrder, "an unsupported sandbox must never reach the venue").toEqual([])
+  })
+
+  it("each mutating entry re-verifies keys itself with a named reason when keyless", async () => {
+    const ex = makeExchange({
+      orders: { "o-1": { id: "o-1", symbol: "BTC/USDT", amount: 0.01, price: 500, status: "open" } }
+    })
+    mod._setCcxtLibForTests(fakeLib({ binance: ex }))
+    await expect(
+      mod.placeCcxtOrder({ exchange: "binance", symbol: "BTC/USDT", side: "buy", amount: 0.01, price: 500 })
+    ).rejects.toThrow(/ccxt-keys-not-configured/)
+    await expect(
+      mod.amendCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1", side: "buy", newPrice: 499 })
+    ).rejects.toThrow(/ccxt-keys-not-configured/)
+    expect(ex.calls.fetchOrder, "a keyless amend must not read the venue").toEqual([])
+    expect(ex.calls.editOrder, "a keyless amend must not reach the venue").toEqual([])
+    const cancelled = await mod.cancelCcxtOrder({ exchange: "binance", symbol: "BTCUSDT", orderId: "o-1" })
+    expect(cancelled.ok).toBe(false)
+    expect(cancelled.reason).toMatch(/ccxt-keys-not-configured/)
+    expect(ex.calls.cancelOrder, "a keyless cancel must not reach the venue").toEqual([])
+    await expect(
+      mod.closeCcxtPosition({ exchange: "binance", symbol: "BTCUSDT", positionSide: "long", positionOrderId: "p-1", filledAmount: 0.01, amount: 0.01, price: 500 })
+    ).rejects.toThrow(/ccxt-keys-not-configured/)
+    expect(ex.calls.createOrder, "a keyless close must not place anything").toEqual([])
+  })
+})
