@@ -944,7 +944,12 @@ describe("T21's other file-list obligation: PICC.md's WS-7 claims are true", () 
       .split(/\r?\n/)
       .filter(Boolean).length
     expect(declared).toBe(actual)
-    expect(declared).toBe(39)
+    // 40 = 39 + the 2026-10-07 WS-7 dependency amendment
+    // (PICC_TRADING_SUITE_WS7_DEPENDENCY_AMENDMENT_2026-10-07.md). Line 946 is the
+    // real check: it compares PICC.md's declared count against `git ls-files`, so the
+    // heading cannot drift from reality. This second assertion is the tripwire that
+    // makes a file ADDITION fail loudly instead of silently re-baselining the heading.
+    expect(declared).toBe(40)
   })
 
   it("the two detector files are EXCLUDED from the scan, and nothing else is", () => {

@@ -518,7 +518,7 @@ report 68–89% of retail accounts losing money — surfaced on the readiness pa
 
 ---
 
-## §10 Specs Registry (39 files in `docs/specs/`; 41 registry rows)
+## §10 Specs Registry (40 files in `docs/specs/`; 41 registry rows)
 
 > **Counted 2026-10-02 (WS-7 T21).** The file count is `git ls-files "docs/specs/*.md"` = **39**
 > (was `35`). The row count follows the rule already documented and enforced by
