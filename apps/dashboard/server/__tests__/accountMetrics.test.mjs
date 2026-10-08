@@ -286,3 +286,40 @@ describe("collector + cadence gate (T5/T7)", () => {
     expect(metricsCadenceMs("iqoption")).toBe(5 * 60 * 1000)
   })
 })
+
+// ---------------------------------------------------------------------
+// Wealth Task 7 — CCXT spot collector extension (collector only; the strict
+// parser, the store shape and the API surface are untouched).
+// Hermetic: the keyed-venue set and the equity observation are injected —
+// no network, no keys, no .env reads.
+// ---------------------------------------------------------------------
+
+describe("collector CCXT spot extension (wealth Task 7)", () => {
+  it("collects one keyed venue with observedAt", async () => {
+    // NOTE: reads go through the SAME dynamically-imported instance that
+    // collects — the "module restart" describe above calls vi.resetModules(),
+    // so the static import binding and a fresh dynamic import are different
+    // store instances after that point.
+    const mod = await import("../services/accountMetrics.mjs")
+    const at = new Date().toISOString()
+    const rec = await mod.collectCcxtSpotMetrics("t7keyed", "binance", {
+      keyed: ["binance"],
+      observeEquity: async () => ({ ok: true, exchange: "binance", equityUsd: 123.45, at })
+    })
+    expect(rec).not.toBeNull()
+    expect(rec.venueId).toBe("binance")
+    expect(rec.observedAt).toBe(at)
+    expect(rec.sourceLeg).toBe("ccxt-spot")
+    expect(mod.getAccountMetrics("t7keyed", "binance")?.balance).toBe(123.45)
+  })
+
+  it("unkeyed registry stores nothing", async () => {
+    const mod = await import("../services/accountMetrics.mjs")
+    const rec = await mod.collectCcxtSpotMetrics("t7unkeyed", "binance", {
+      keyed: [],
+      observeEquity: async () => ({ ok: true, exchange: "binance", equityUsd: 999, at: new Date().toISOString() })
+    })
+    expect(rec).toBeNull()
+    expect(mod.getAccountMetrics("t7unkeyed", "binance")).toBeNull()
+  })
+})

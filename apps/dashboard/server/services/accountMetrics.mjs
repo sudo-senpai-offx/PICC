@@ -272,21 +272,100 @@ async function framesFromWs() {
   return []
 }
 
+// ---------------------------------------------------------------------
+// Wealth Task 7 — CCXT spot collector extension (collector ONLY).
+// The strict parser above, the per-user store shape and the API surface
+// are byte-identical: this adds one more read-only observation source.
+// Per (user, venue): keyed exchanges are observed via observeCcxtEquity
+// (dynamic import, like wealth/legsKeyed.mjs — no ccxt load cost at
+// import time, tests stay hermetic via deps injection); unkeyed venues
+// store nothing (honest absence downstream).
+// ---------------------------------------------------------------------
+
+const CCXT_SPOT_SOURCE_LEG = "ccxt-spot"
+const CCXT_SPOT_DEFAULT_CADENCE_MS = 5 * 60 * 1000
+
+function normalizeExchangeId(id) {
+  return String(id ?? "").trim().toLowerCase()
+}
+
+/** Keyed exchange ids: injected `deps.keyed` in tests, else the live seam. */
+async function ccxtSpotKeyedIds(deps = {}) {
+  if (Array.isArray(deps.keyed)) return deps.keyed.map(normalizeExchangeId).filter(Boolean)
+  try {
+    const { ccxtKeyedExchangeIds } = await import("./ccxtOrdering.mjs")
+    return (ccxtKeyedExchangeIds() ?? []).map(normalizeExchangeId).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/** Read-only spot equity observation: injected in tests, else the live seam. */
+async function observeCcxtSpotEquity(exchangeId, deps = {}) {
+  if (typeof deps.observeEquity === "function") return deps.observeEquity({ exchange: exchangeId })
+  const { observeCcxtEquity } = await import("./ccxtOrdering.mjs")
+  return observeCcxtEquity({ exchange: exchangeId })
+}
+
+/**
+ * Capture the latest CCXT spot equity for one exchange and write it to the
+ * per-user store. Returns the stored record, or null when nothing was
+ * observed (unkeyed venue / unobservable balance) — nothing stored then.
+ */
+export async function collectCcxtSpotMetrics(userId, exchangeId, deps = {}) {
+  const id = normalizeExchangeId(exchangeId)
+  if (!id) return null
+  const keyed = await ccxtSpotKeyedIds(deps)
+  if (!keyed.includes(id)) return null // honest: unkeyed, nothing stored
+  let r
+  try {
+    r = await observeCcxtSpotEquity(id, deps)
+  } catch {
+    return null
+  }
+  const equityUsd = Number(r?.equityUsd)
+  if (!r?.ok || !Number.isFinite(equityUsd)) return null // honest: unobservable, nothing stored
+  const record = {
+    venueId: id,
+    balance: equityUsd,
+    equityUsd,
+    currency: "USD",
+    active: null,
+    demo: null,
+    demoWallet: { balance: null, currency: "USD" },
+    realWallet: { balance: null, currency: "USD" },
+    email: null,
+    name: null,
+    openPositions: null, // not observed here — never a fabricated 0/[]
+    exposurePct: null,
+    sourceLeg: CCXT_SPOT_SOURCE_LEG,
+    observedAt: r.at ?? new Date().toISOString()
+  }
+  await putAccountMetrics(userId, record)
+  return structuredClone(record)
+}
+
 /**
  * Capture the latest metrics observation for one venue and write it to the
  * per-user store. Returns the stored record, or null when nothing was
- * observed (unknown venue / no extractor / no profile frame yet).
+ * observed (unknown venue / no extractor / no profile frame yet /
+ * unkeyed-unobservable CCXT spot).
  */
 export async function collectAccountMetrics(userId, venueId) {
   const profile = getCaptureProfile(venueId)
-  if (!profile || !metricsEnabledFor(profile)) return null
-  const via = profile.metrics?.extractVia ?? []
-  if (!via.includes("ws")) return null
-  const frames = await framesFromWs()
-  const record = extractAccountState({ venueId, frames })
-  if (!record) return null // honest: no observation yet, nothing stored
-  await putAccountMetrics(userId, record)
-  return structuredClone(record)
+  if (profile && metricsEnabledFor(profile)) {
+    const via = profile.metrics?.extractVia ?? []
+    if (via.includes("ws")) {
+      const frames = await framesFromWs()
+      const record = extractAccountState({ venueId, frames })
+      if (!record) return null // honest: no observation yet, nothing stored
+      await putAccountMetrics(userId, record)
+      return structuredClone(record)
+    }
+  }
+  // Wealth Task 7: CCXT spot fallback per (user, venue) — unkeyed venues
+  // store nothing (collectCcxtSpotMetrics returns null without writing).
+  return collectCcxtSpotMetrics(userId, venueId)
 }
 
 /**
@@ -294,8 +373,12 @@ export async function collectAccountMetrics(userId, venueId) {
  * metrics cadence is due. A null observation does NOT refresh the cadence
  * gate (same rule as capture: a failed run retries, it never waited a cadence
  * doing nothing). Returns the records stored this pass.
+ *
+ * Wealth Task 7: a second sweep over the keyed CCXT exchanges follows the
+ * (currently producer-less) ws sweep, under its own `ccxt-spot:<id>` gate
+ * keys so the two cadences never share state.
  */
-export async function accountMetricsRefresh(userId = "default") {
+export async function accountMetricsRefresh(userId = "default", deps = {}) {
   const collected = []
   const profiles = listCaptureProfiles()
   const now = Date.now()
@@ -308,6 +391,17 @@ export async function accountMetricsRefresh(userId = "default") {
     const record = await collectAccountMetrics(userId, profile.id)
     if (record) {
       lastMetricsRun.set(profile.id, now)
+      collected.push(record)
+    }
+  }
+  const keyed = await ccxtSpotKeyedIds(deps)
+  for (const id of keyed) {
+    const gateKey = `ccxt-spot:${id}`
+    const cadenceMs = metricsCadenceMs(id) ?? CCXT_SPOT_DEFAULT_CADENCE_MS
+    if (now - (lastMetricsRun.get(gateKey) ?? 0) < cadenceMs) continue
+    const record = await collectCcxtSpotMetrics(userId, id, { ...deps, keyed })
+    if (record) {
+      lastMetricsRun.set(gateKey, now)
       collected.push(record)
     }
   }
