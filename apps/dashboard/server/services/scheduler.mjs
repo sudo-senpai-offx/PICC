@@ -514,15 +514,26 @@ every(
   "corpus-refresh",
   60 * 60 * 1000,
   async () => {
-    // Honest skip unless explicitly enabled: with no cadence configured there
-    // is nothing to sustain and the job must not fabricate ingest activity.
-    if (process.env.PICC_COPYCORPUS_REFRESH !== "on") return
-    const { ingestStatus } = await import("./copyCorpusIngest.mjs")
-    const status = ingestStatus()
+    // Wave 1.2 cadence ingest: fetch → ingestPublicFills → prune, each step
+    // named-absence-tolerant (discovery-unavailable is honest, never
+    // fabricated). OFF gate stays log-only and never touches the network —
+    // corpusRefreshPass owns the gate so this job stays thin.
+    const { corpusRefreshPass } = await import("./copyCorpusIngest.mjs")
+    const outcome = await corpusRefreshPass()
+    if (outcome.gated) {
+      log.info("corpus refresh pass", {
+        lastIngestAt: outcome.status.lastIngestAt,
+        lastResult: outcome.status.lastResult,
+        reason: outcome.status.reason
+      })
+      return
+    }
     log.info("corpus refresh pass", {
-      lastIngestAt: status.lastIngestAt,
-      lastResult: status.lastResult,
-      reason: status.reason
+      ingested: outcome.ingested,
+      skipped: outcome.skipped,
+      pruned: outcome.pruned,
+      marketSnapshot: outcome.marketSnapshot,
+      reason: outcome.reason
     })
   },
   { staggerMs: 120_000 }
