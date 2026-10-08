@@ -14,22 +14,25 @@ function dailyReturns(prices) {
 }
 
 function mean(arr) {
-  if (!arr.length) return 0
+  if (!arr || arr.length === 0) return null
   return arr.reduce((a, b) => a + b, 0) / arr.length
 }
 
 function stdDev(arr) {
-  if (arr.length < 2) return 0
+  if (!arr || arr.length < 2) return null
   const m = mean(arr)
+  if (m === null) return null
   const variance = arr.reduce((sum, x) => sum + (x - m) ** 2, 0) / (arr.length - 1)
   return Math.sqrt(variance)
 }
 
 function pearsonCorr(x, y) {
+  if (!x || !y) return null
   const n = Math.min(x.length, y.length)
-  if (n < 5) return 0
+  if (n < 5) return null
   const mx = mean(x.slice(0, n))
   const my = mean(y.slice(0, n))
+  if (mx === null || my === null) return null
   let num = 0, denX = 0, denY = 0
   for (let i = 0; i < n; i++) {
     const dx = x[i] - mx
@@ -39,31 +42,33 @@ function pearsonCorr(x, y) {
     denY += dy * dy
   }
   const den = Math.sqrt(denX * denY)
-  return den === 0 ? 0 : num / den
+  return den === 0 ? null : num / den
 }
 
 function sharpeRatio(returns, riskFreeRate = 0.04) {
-  if (returns.length < 2) return 0
+  if (!returns || returns.length < 2) return null
   const rfPerDay = riskFreeRate / 252
   const excessReturns = returns.map((r) => r - rfPerDay)
   const avgExcess = mean(excessReturns)
   const sd = stdDev(excessReturns)
-  return sd === 0 ? 0 : (avgExcess / sd) * Math.sqrt(252)
+  if (avgExcess === null || sd === null) return null
+  return sd === 0 ? null : (avgExcess / sd) * Math.sqrt(252)
 }
 
 function sortinoRatio(returns, riskFreeRate = 0.04) {
-  if (returns.length < 2) return 0
+  if (!returns || returns.length < 2) return null
   const rfPerDay = riskFreeRate / 252
   const excessReturns = returns.map((r) => r - rfPerDay)
   const avgExcess = mean(excessReturns)
+  if (avgExcess === null) return null
   const downsideReturns = excessReturns.filter((r) => r < 0)
-  if (downsideReturns.length === 0) return avgExcess > 0 ? 10 : 0
+  if (downsideReturns.length === 0) return null
   const downsideDev = Math.sqrt(downsideReturns.reduce((sum, r) => sum + r * r, 0) / downsideReturns.length)
-  return downsideDev === 0 ? 0 : (avgExcess / downsideDev) * Math.sqrt(252)
+  return downsideDev === 0 ? null : (avgExcess / downsideDev) * Math.sqrt(252)
 }
 
 function maxDrawdown(cumulativeReturns) {
-  if (cumulativeReturns.length < 2) return 0
+  if (!cumulativeReturns || cumulativeReturns.length < 2) return null
   let peak = cumulativeReturns[0]
   let maxDD = 0
   for (const val of cumulativeReturns) {
@@ -75,10 +80,20 @@ function maxDrawdown(cumulativeReturns) {
 }
 
 function valueAtRisk(returns, confidence = 0.95) {
-  if (returns.length < 5) return 0
+  if (!returns || returns.length < 5) return null
   const sorted = [...returns].sort((a, b) => a - b)
   const idx = Math.floor((1 - confidence) * sorted.length)
   return sorted[Math.max(0, idx)]
+}
+
+// Named exports for the pure stat helpers (additive; lets tests pin null-honesty
+// without network). Formulas for sufficient data are byte-identical to before.
+export { mean, stdDev, pearsonCorr, sharpeRatio, sortinoRatio, maxDrawdown, valueAtRisk }
+
+// Null-propagating rounder: insufficient-data nulls stay null through formatting.
+function roundOrNull(value, factor) {
+  if (value === null || value === undefined || Number.isNaN(value)) return null
+  return Math.round(value * factor) / factor
 }
 
 function cumulativeReturns(returns) {
@@ -128,14 +143,15 @@ export async function computePortfolioAnalytics({ symbols, weights: inputWeights
     ? inputWeights.map((w) => w / inputWeights.reduce((a, b) => a + b, 0))
     : Array(n).fill(1 / n)
 
-  // Correlation matrix
+  // Correlation matrix (null = abstain: too few points or zero variance)
   const corrMatrix = Array.from({ length: n }, () => Array(n).fill(0))
   for (let i = 0; i < n; i++) {
     corrMatrix[i][i] = 1
     for (let j = i + 1; j < n; j++) {
       const r = pearsonCorr(assets[i].returns, assets[j].returns)
-      corrMatrix[i][j] = Math.round(r * 1000) / 1000
-      corrMatrix[j][i] = corrMatrix[i][j]
+      const rounded = r === null ? null : Math.round(r * 1000) / 1000
+      corrMatrix[i][j] = rounded
+      corrMatrix[j][i] = rounded
     }
   }
 
@@ -143,46 +159,56 @@ export async function computePortfolioAnalytics({ symbols, weights: inputWeights
   const pReturns = portfolioReturns(weights, assets.map((a) => a.returns))
   const pCumReturns = cumulativeReturns(pReturns)
 
-  // Risk metrics
-  const totalReturn = pCumReturns.length >= 2 ? pCumReturns[pCumReturns.length - 1] / pCumReturns[0] - 1 : 0
-  const annualizedReturn = totalReturn * (252 / Math.max(pReturns.length, 1))
+  // Risk metrics (null = abstain on insufficient data, never 0)
+  const rawSharpe = sharpeRatio(pReturns)
+  const rawSortino = sortinoRatio(pReturns)
+  const rawMaxDD = maxDrawdown(pCumReturns)
+  const rawVaR = valueAtRisk(pReturns, 0.95)
+  const rawSd = stdDev(pReturns)
+  const totalReturn = pCumReturns.length >= 2 ? pCumReturns[pCumReturns.length - 1] / pCumReturns[0] - 1 : null
+  const annualizedReturn = totalReturn === null ? null : totalReturn * (252 / Math.max(pReturns.length, 1))
 
   const metrics = {
-    sharpeRatio: Math.round(sharpeRatio(pReturns) * 100) / 100,
-    sortinoRatio: Math.round(sortinoRatio(pReturns) * 100) / 100,
-    maxDrawdown: Math.round(maxDrawdown(pCumReturns) * 10000) / 100,
-    valueAtRisk95: Math.round(valueAtRisk(pReturns, 0.95) * 10000) / 100,
-    stdDev: Math.round(stdDev(pReturns) * Math.sqrt(252) * 10000) / 100,
-    totalReturn: Math.round(totalReturn * 10000) / 100,
-    annualizedReturn: Math.round(annualizedReturn * 10000) / 100,
-    beta: 0 // will be computed if SPY is in assets
+    sharpeRatio: roundOrNull(rawSharpe, 100),
+    sortinoRatio: roundOrNull(rawSortino, 100),
+    maxDrawdown: roundOrNull(rawMaxDD === null ? null : rawMaxDD * 100, 100),
+    valueAtRisk95: roundOrNull(rawVaR === null ? null : rawVaR * 100, 100),
+    stdDev: roundOrNull(rawSd === null ? null : rawSd * Math.sqrt(252) * 100, 100),
+    totalReturn: roundOrNull(totalReturn === null ? null : totalReturn * 100, 100),
+    annualizedReturn: roundOrNull(annualizedReturn === null ? null : annualizedReturn * 100, 100),
+    beta: null // not computed (no market leg observed) — abstain, never 0
   }
 
-  // Average correlation (diversification indicator)
+  // Average correlation (diversification indicator; null when no pair observable)
   let corrSum = 0, corrCount = 0
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      corrSum += Math.abs(corrMatrix[i][j])
+      const c = corrMatrix[i][j]
+      if (c === null || c === undefined) continue
+      corrSum += Math.abs(c)
       corrCount++
     }
   }
-  const avgCorrelation = corrCount > 0 ? corrSum / corrCount : 0
+  const avgCorrelation = corrCount > 0 ? corrSum / corrCount : null
 
-  // Diversification score (0-100)
+  // Diversification score (0-100); null when correlation unobservable
   // Lower average correlation = more diversified
   // More assets = better diversification
-  const corrScore = Math.round((1 - avgCorrelation) * 60) // 0-60 points from correlation
-  const assetScore = Math.min(n * 5, 40) // 0-40 points from asset count (max 8 assets)
-  const diversificationScore = Math.min(corrScore + assetScore, 100)
+  const diversificationScore = avgCorrelation === null
+    ? null
+    : Math.min(Math.round((1 - avgCorrelation) * 60) + Math.min(n * 5, 40), 100)
 
   // Weights breakdown
-  const allocation = assets.map((a, i) => ({
-    symbol: a.symbol,
-    weight: Math.round(weights[i] * 10000) / 100,
-    lastPrice: a.lastPrice,
-    change24h: Math.round(a.change24h * 10000) / 100,
-    dailyReturnVol: Math.round(stdDev(a.returns) * Math.sqrt(252) * 10000) / 100
-  }))
+  const allocation = assets.map((a, i) => {
+    const assetSd = stdDev(a.returns)
+    return {
+      symbol: a.symbol,
+      weight: Math.round(weights[i] * 10000) / 100,
+      lastPrice: a.lastPrice,
+      change24h: Math.round(a.change24h * 10000) / 100,
+      dailyReturnVol: roundOrNull(assetSd === null ? null : assetSd * Math.sqrt(252) * 100, 100)
+    }
+  })
 
   return {
     assets: allocation,
@@ -190,7 +216,7 @@ export async function computePortfolioAnalytics({ symbols, weights: inputWeights
     corrMatrix,
     metrics,
     diversificationScore,
-    avgCorrelation: Math.round(avgCorrelation * 1000) / 1000,
+    avgCorrelation: roundOrNull(avgCorrelation, 1000),
     equityCurve: pCumReturns.slice(-60).map((v) => Math.round(v * 10000) / 10000),
     assetCount: n,
     days
