@@ -50,7 +50,8 @@
 //
 // The two readouts are not contradictory, and the difference is deliberate: the
 // Ministry readout reports the state of ITS OWN empty store, and this one reports
-// a store seeded with the brokers in `services/brokers.mjs`. `governance.mjs`'s
+// a store seeded with the brokers in `services/brokers.mjs` (flat
+// `listBrokerStatuses()` status reporter, not the `brokers/index.mjs` registry). `governance.mjs`'s
 // absence reason is untouched, so its pinned assertion keeps passing.
 //
 // ---------------------------------------------------------------------------
@@ -117,13 +118,13 @@ export const D6_LADDER_RULE =
  *
  * These are the three slugs `services/brokers.mjs` pushes into its registry
  * (`ccxt` at `:52`, `yahoo` at `:67`, `paper` at `:80`). The list is duplicated
- * here rather than imported because `listBrokers()` is ASYNC and probes real
+ * here rather than imported because `listBrokerStatuses()` is ASYNC and probes real
  * credentials (`getCredentials()` at `:34`) and a live connector
  * (`connectedExchangeIds()` at `:49`) — reaching it from a governance readout
  * would make a credential fault blank the permit state.
  *
  * A DUPLICATION THAT CANNOT ROT QUIETLY: `paperLivePermitRoute.test.mjs` calls
- * `listBrokers()` under isolated stores, DISCOVERS the slugs it actually
+ * `listBrokerStatuses()` under isolated stores, DISCOVERS the slugs it actually
  * produces, and asserts this list equals that set. So a fourth broker added to
  * `brokers.mjs` fails the test rather than going unpermitted and unreported.
  */

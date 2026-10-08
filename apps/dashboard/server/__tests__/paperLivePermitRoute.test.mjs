@@ -18,7 +18,7 @@
 // `paperLivePermit.mjs` duplicates the slug vocabulary `services/brokers.mjs`
 // registers, and a duplication that could rot would mean a broker added there
 // silently going unpermitted and unreported. So this file DISCOVERS the slugs by
-// actually calling `listBrokers()` and asserts the two sets are equal. The list is
+// actually calling `listBrokerStatuses()` and asserts the two sets are equal. The list is
 // pinned to a fact about the producer rather than trusted.
 //
 // Hermetic: booted through the SHARED store-isolation helper, so no store resolves
@@ -220,15 +220,15 @@ describe("WS-7 T9 — GET /api/trading/paper-live/permits is gated", () => {
 
 describe("WS-7 T9 — the permit readout over REAL broker records (handoff #4)", () => {
   it("the broker id list EQUALS the slugs brokers.mjs actually registers", async () => {
-    // The duplication that cannot rot quietly. `listBrokers()` is the real
+    // The duplication that cannot rot quietly. `listBrokerStatuses()` is the real
     // registry producer; this calls it under isolated stores and compares SETS,
     // so a fourth broker added there fails here rather than going unreported.
     useIsolatedStoreDir("PICC_TRADING_DATA_DIR")
     useIsolatedStoreDir("PICC_DATA_DIR")
     const dir = useIsolatedStoreDir("PICC_AUTH_DATA_DIR")
     try {
-      const { listBrokers } = await import("../services/brokers.mjs")
-      const registry = await listBrokers()
+      const { listBrokerStatuses } = await import("../services/brokers.mjs")
+      const registry = await listBrokerStatuses()
       const discovered = registry.brokers.map((b) => b.slug).sort()
       expect(
         [...PAPER_LIVE_BROKER_IDS].sort(),

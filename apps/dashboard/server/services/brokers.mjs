@@ -30,7 +30,7 @@ import { connectedExchangeIds } from "./ccxtConnector.mjs"
  * Live status of every registered trading surface.
  * @returns {ok, brokers[], activeExecutor}
  */
-export async function listBrokers() {
+export async function listBrokerStatuses() {
   const creds = await getCredentials()
   const brokers = []
 

@@ -23,7 +23,7 @@ afterAll(() => {
 
 describe("broker adapter registry (plug-and-play venue status)", () => {
   it("lists every venue with honest live status", async () => {
-    const out = await brokers.listBrokers()
+    const out = await brokers.listBrokerStatuses()
     expect(out.ok).toBe(true)
     const slugs = out.brokers.map((b) => b.slug)
     expect(slugs).toContain("ccxt")
@@ -48,14 +48,14 @@ describe("broker adapter registry (plug-and-play venue status)", () => {
   it("keeps paper as the executor even when an EO token is stored (D2: the token no longer selects anything)", async () => {
     const trading = await import("../services/trading.mjs")
     await trading.saveCredentials({ expertoptionToken: "tok-123" })
-    const out = await brokers.listBrokers()
+    const out = await brokers.listBrokerStatuses()
     expect(out.brokers.find((b) => b.slug === "expertoption")).toBeUndefined()
     expect(out.activeExecutor).toBe("paper")
     expect(out.summary.configured).toBeGreaterThanOrEqual(1)
   })
 
   it("every broker row declares its capabilities honestly", async () => {
-    const out = await brokers.listBrokers()
+    const out = await brokers.listBrokerStatuses()
     for (const b of out.brokers) {
       expect(b.capabilities.length).toBeGreaterThan(0)
       if (!b.demoOnly) {
@@ -71,7 +71,7 @@ describe("broker adapter registry (plug-and-play venue status)", () => {
   })
 
   it("declares a non-empty timeframes curve per row, matching its adapter", async () => {
-    const out = await brokers.listBrokers()
+    const out = await brokers.listBrokerStatuses()
     const bySlug = new Map(out.brokers.map((b) => [b.slug, b]))
     for (const b of out.brokers) {
       expect(Array.isArray(b.timeframes)).toBe(true)
@@ -83,5 +83,23 @@ describe("broker adapter registry (plug-and-play venue status)", () => {
     expect(bySlug.get("paper").timeframes).toEqual([60, 300, 900, 3600])
     // Yahoo joined the registry in T7 to enable 1D/1W/1M in the chart.
     expect(bySlug.get("yahoo").timeframes).toEqual([86400, 604800, 2592000])
+  })
+
+  it("flat status reporter and registry listBrokers are distinct contracts that must never re-merge", async () => {
+    // The flat `listBrokerStatuses()` (async status object) and the registry
+    // `listBrokers()` (sync adapter array) once shared one name with
+    // incompatible contracts. This pins the split: the flat module must NOT
+    // export `listBrokers`, and the two shapes must stay incompatible.
+    expect(typeof brokers.listBrokerStatuses).toBe("function")
+    expect(brokers.listBrokers).toBeUndefined()
+    const flat = await brokers.listBrokerStatuses()
+    expect(flat.ok).toBe(true)
+    expect(Array.isArray(flat.brokers)).toBe(true)
+    expect(flat.summary).toMatchObject({ total: flat.brokers.length })
+    const registry = await import("../services/brokers/index.mjs")
+    expect(typeof registry.listBrokers).toBe("function")
+    const adapters = registry.listBrokers()
+    expect(Array.isArray(adapters)).toBe(true)
+    expect("summary" in Object(adapters)).toBe(false)
   })
 })

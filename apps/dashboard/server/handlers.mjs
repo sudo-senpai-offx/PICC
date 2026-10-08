@@ -3235,7 +3235,8 @@ async function _handleApiInner(req, res, url, reqId) {
   // route already reads the permit store, but its store holds ZERO brokers by
   // construction and `ministryGovernanceRoute.test.mjs` pins that. Reading it
   // would report "nothing is known" — true of that store and false of one
-  // seeded with the brokers in `services/brokers.mjs`. It would also couple two
+  // seeded with the brokers in `services/brokers.mjs` (flat `listBrokerStatuses()`
+  // status reporter, not the `brokers/index.mjs` registry). It would also couple two
   // rooms at the transport seam, which both their bisect lines forbid. And a
   // second route over one store is the defect T8 refused to create for the
   // ceremony store, so this is ONE store seeded with real broker records,
@@ -4350,9 +4351,9 @@ async function _handleApiInner(req, res, url, reqId) {
     // from a decision. Pinned by ws7AuthBootstrapGateGuard.
     if (!(await requireSessionOrFirstRun(req, res))) return true
     try {
-      const { listBrokers } = await import("./services/brokers.mjs")
+      const { listBrokerStatuses } = await import("./services/brokers.mjs")
       const { dataBusStats } = await import("./services/marketDataBus.mjs")
-      const result = await listBrokers()
+      const result = await listBrokerStatuses()
       // Per-source candle-fetch latency (median/p95 over the ring window).
       // Merged by key so rows that have never served a fetch show "—" honestly.
       result.latency = dataBusStats()
