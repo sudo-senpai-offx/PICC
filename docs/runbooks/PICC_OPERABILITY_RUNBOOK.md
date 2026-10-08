@@ -289,9 +289,9 @@ millisecond timestamp, and 24 random bytes. The root and created directories use
 the platform supports it. The helper does not delete the root after the run; retain it for test
 artifacts or remove that exact hashed directory after inspection.
 
-### 4.3 Full 24-variable contract
+### 4.3 Full 25-variable contract
 
-The isolation map is exactly 20 path variables plus 4 scalar variables. The order below matches
+The isolation map is exactly 21 path variables plus 4 scalar variables. The order below matches
 `REQUIRED_ISOLATION_VARIABLES` in
 `apps/dashboard/e2e/helpers/isolatedEnv.mjs`, which is itself composed from
 `ISOLATION_PATH_VARIABLES` in `apps/dashboard/testSupport/storeIsolation.mjs`.
@@ -319,13 +319,14 @@ turning the build red.
 | 15 | `PICC_WATCHLIST_DATA_DIR` | `<root>/watchlist` |
 | 16 | `PICC_DATA_DIR` | `<root>/data` |
 | 17 | `PICC_COPYCORPUS_DATA_DIR` | `<root>/copycorpus` |
-| 18 | `PICC_SESSION_CAPTURE_SETTINGS_FILE` | `<root>/settings/session-capture-settings.json` |
-| 19 | `PICC_LLM_SETTINGS_FILE` | `<root>/settings/llm-settings.json` |
-| 20 | `PICC_ERROR_LOG_FILE` | `<root>/settings/picc-errors.log` |
-| 21 | `PICC_VAULT_KEY` | Fresh 32 random bytes encoded as 64 lowercase hexadecimal characters |
-| 22 | `PICC_ERROR_LOG` | Exactly `0` |
-| 23 | `PICC_ENV_LOADED` | Exactly `1` |
-| 24 | `PICC_E2E_RUN_ID` | The isolation root's 20-character hex leaf name |
+| 18 | `PICC_WEALTH_DATA_DIR` | `<root>/wealth` |
+| 19 | `PICC_SESSION_CAPTURE_SETTINGS_FILE` | `<root>/settings/session-capture-settings.json` |
+| 20 | `PICC_LLM_SETTINGS_FILE` | `<root>/settings/llm-settings.json` |
+| 21 | `PICC_ERROR_LOG_FILE` | `<root>/settings/picc-errors.log` |
+| 22 | `PICC_VAULT_KEY` | Fresh 32 random bytes encoded as 64 lowercase hexadecimal characters |
+| 23 | `PICC_ERROR_LOG` | Exactly `0` |
+| 24 | `PICC_ENV_LOADED` | Exactly `1` |
+| 25 | `PICC_E2E_RUN_ID` | The isolation root's 20-character hex leaf name |
 
 Four of these were added after this section was first written and are worth calling out, because
 each one is load-bearing in a way the others are not:
@@ -350,9 +351,9 @@ each one is load-bearing in a way the others are not:
 Both `playwright.config.ts` and the helper call `assertIsolatedEnv`. The helper refuses to start the
 run when any of these conditions is false:
 
-- The environment map does not contain exactly the 24 required keys.
+- The environment map does not contain exactly the 25 required keys.
 - A required key is missing or an unexpected key is present.
-- Any of the 20 path values is empty, resolves outside `<root>`, or escapes after canonical parent
+- Any of the 21 path values is empty, resolves outside `<root>`, or escapes after canonical parent
   resolution.
 - `PICC_ERROR_LOG` is not exactly `0`.
 - `PICC_ENV_LOADED` is not exactly `1`.
@@ -371,7 +372,7 @@ decrypt their real vault-backed credentials through those mapped variables.
 The current code does not implement a general secret-scrubbing sandbox. Playwright merges the
 configured `webServer.env` values over its inherited process environment, and
 `apps/dashboard/server/config.mjs` can load `apps/dashboard/.env` when the dev server imports the API
-handlers. The 24-key assertion proves the mapped paths and vault key are isolated; it does not prove
+handlers. The 25-key assertion proves the mapped paths and vault key are isolated; it does not prove
 that unrelated `PICC_CCXT_*`, LLM, payment, broker, or provider secrets are absent from the child
 process.
 
