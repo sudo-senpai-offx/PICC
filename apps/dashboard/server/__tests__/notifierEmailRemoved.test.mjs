@@ -2,6 +2,12 @@
 // file is INERT: it loads, the notifier never surfaces an email row, never
 // sends. Decision H: the channel row is gone from CHANNELS, so a stale key is
 // simply never read — nothing to migrate, nothing to clobber.
+//
+// WAVE 1.4 SUPERSEDES DECISION H ON THE READ PATH: getPrefs() now drops dead
+// channel keys (migrate, don't preserve), so the stale key no longer survives
+// even in memory. The pins below stay: no email row in status, no email send
+// on dispatch — those are unchanged, and the preservation assertion is updated
+// to the migration assertion.
 import { afterAll, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -62,8 +68,10 @@ describe("email channel removal persistence tolerance (T9 / REQ-11)", () => {
     vi.resetModules()
     const notifier = await import("../services/notifier.mjs?emailFixture=1")
 
-    // The stale key survives the load (not silently dropped) but is dead.
-    expect(notifier.getPrefs().channels.email).toBe(true)
+    // Wave 1.4: the stale key is MIGRATED on read (dropped from prefs),
+    // not preserved — while staying dead (never rendered, never sent).
+    expect(notifier.getPrefs().channels.email).toBeUndefined()
+    expect(Object.keys(notifier.getPrefs().channels).sort()).toEqual(["inApp", "telegram", "webhook", "webpush"])
 
     // Status lists exactly the FOUR shipping channels — no email row.
     // T14 added `telegram` (D11's second transport), so the enumeration moves

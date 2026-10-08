@@ -274,6 +274,40 @@ export function saveSessionCaptureSettings(enabled: boolean): Promise<SessionCap
   return post("/settings/session-capture", { enabled })
 }
 
+// ── Notification prefs (Wave 1.4 — GET read + PATCH write, both gated) ──
+
+export interface NotificationChannels {
+  inApp: boolean
+  webpush: boolean
+  telegram: boolean
+  webhook: boolean
+}
+
+export interface NotificationPrefs {
+  minConfidence: number
+  leadMinutes: number
+  windowMinutes: number
+  channels: NotificationChannels
+}
+
+export interface NotificationPrefsInput {
+  minConfidence?: number
+  leadMinutes?: number
+  windowMinutes?: number
+  channels?: Partial<NotificationChannels>
+}
+
+export function getNotificationPrefs(): Promise<{ ok: boolean; prefs: NotificationPrefs }> {
+  return request<{ ok: boolean; prefs: NotificationPrefs }>("/notifications/prefs")
+}
+
+export function saveNotificationPrefs(input: NotificationPrefsInput): Promise<{ ok: boolean; prefs: NotificationPrefs }> {
+  return request<{ ok: boolean; prefs: NotificationPrefs }>("/notifications/prefs", {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  })
+}
+
 // ── Resource governor (G3 — PICC_RESOURCE_GOVERNOR_v1.md §7) ───────────────
 
 export interface ResourceLedgerRow {

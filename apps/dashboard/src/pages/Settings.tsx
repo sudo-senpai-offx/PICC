@@ -15,6 +15,7 @@ import type { SessionCaptureSettingsView } from "@/lib/api"
 import { FEATURES, getFeatureFlags, setFeatureFlag } from "@/lib/settings"
 import type { FeatureKey } from "@/lib/settings"
 import { ResourceGovernorPanel } from "@/components/ResourceGovernorPanel"
+import { NotificationPrefsSection } from "@/components/NotificationPrefsSection"
 
 export function Settings() {
   const [flags, setFlags] = useState(getFeatureFlags())
@@ -224,6 +225,8 @@ export function Settings() {
           </div>
         )}
       </div>
+
+      <NotificationPrefsSection />
 
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Agents — LLM provider</h2>

@@ -32,6 +32,13 @@ vi.mock("@/lib/api", () => ({
   testLLMProvider: vi.fn(async () => ({ ok: true, model: "x", latencyMs: 12, reply: "hi" })),
   getSessionCaptureSettings: vi.fn(async () => ({ ok: true, enabled: true, configured: false })),
   saveSessionCaptureSettings: vi.fn(async (enabled: boolean) => ({ ok: true, settings: { enabled, configured: true } })),
+  // NotificationPrefsSection (Wave 1.4): same whole-module replacement rule —
+  // the section's mount effect calls these, so they must exist.
+  getNotificationPrefs: vi.fn(async () => ({
+    ok: true,
+    prefs: { minConfidence: 65, leadMinutes: 3, windowMinutes: 15, channels: { inApp: true, webpush: true, telegram: true, webhook: true } }
+  })),
+  saveNotificationPrefs: vi.fn(async (input: Record<string, unknown>) => ({ ok: true, prefs: input })),
   // ResourceGovernorPanel smoke: without this, the panel's mount effect hits
   // a missing export (mock factory replaces the whole module) and the tree
   // unmounts. The fixture is a valid, fully-observed overview.

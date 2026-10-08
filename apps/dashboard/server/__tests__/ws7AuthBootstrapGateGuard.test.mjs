@@ -1387,7 +1387,24 @@ function connectorsSiteIsGated(lines, index) {
     // `dynamics` assertion above (+4, all dynamic); the statics figure is
     // UNCHANGED at 72, which is what proves the removed line was structure
     // restored rather than growth absorbed.
-    expect(lines, "lines in handlers.mjs").toBe(6462)
+    //
+    // 6,462 -> 6,483 in Wave 1.4 (notification prefs), the same protocol: +21
+    // lines, and every one is accounted for rather than absorbed. They are the
+    // GET + PATCH /api/notifications/prefs branches: each branch's
+    // unconditional `requireAuth()` gate as its FIRST statement, its writeJson,
+    // and the reasoning recording why the gate sits inside the branch (the
+    // enclosing wrapper is declared-public for vapid-public-key and cannot
+    // carry a gate ahead of the key), why PATCH is the write verb (the repo
+    // has no PUT/PATCH routes, so there is no local verb convention to match,
+    // and the shared body/rate-limit/CSRF plumbing already covers PATCH), and
+    // why the pre-existing POST sibling is untouched.
+    //
+    // THE IMPORT PAIR IS UNCHANGED, and that is the load-bearing part: 72
+    // static and 87 comment-stripped dynamic imports are identical before and
+    // after, so not one of the 21 lines is a new module binding. Both branches
+    // reach the wrapper's existing `await import("./services/notifier.mjs")`,
+    // the way T20R's notifications gates did.
+    expect(lines, "lines in handlers.mjs").toBe(6483)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

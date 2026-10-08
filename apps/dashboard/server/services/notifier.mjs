@@ -155,7 +155,25 @@ export function persist() {
   }, 50)
 }
 
-export function getPrefs() { return state.prefs }
+// Wave 1.4 — read-time channel migration. Persisted files written by older
+// builds may carry DEAD channel keys (e.g. `email`, from before the email
+// channel was removed). getPrefs is the read path every consumer shares, so
+// unknown keys are dropped HERE and the cleaned shape is persisted —
+// migrated, not preserved. setPrefs keeps its semantics untouched (it still
+// accepts whatever patch keys it is given); the next read cleans them.
+const LIVE_CHANNELS = ["inApp", "webpush", "webhook", TELEGRAM_CHANNEL]
+export function getPrefs() {
+  const channels = state.prefs.channels ?? {}
+  let dirty = false
+  for (const key of Object.keys(channels)) {
+    if (!LIVE_CHANNELS.includes(key)) {
+      delete channels[key]
+      dirty = true
+    }
+  }
+  if (dirty) persist()
+  return state.prefs
+}
 export function setPrefs(patch = {}) {
   const p = state.prefs
   if (patch.minConfidence != null) p.minConfidence = Math.min(95, Math.max(30, Number(patch.minConfidence) || 65))

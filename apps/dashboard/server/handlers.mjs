@@ -4216,6 +4216,27 @@ async function _handleApiInner(req, res, url, reqId) {
         writeJson(res, 200, { ok: true, prefs: n.setPrefs(body) })
         return true
       }
+      // Wave 1.4 — prefs READ. Gated as the FIRST statement of its own branch,
+      // beside the other gated sub-routes: the enclosing wrapper is
+      // declared-public for vapid-public-key and cannot carry a gate ahead of
+      // the key. getPrefs() migrates dead channel keys (e.g. stale `email`)
+      // on read, so this never serves a channel the dispatcher no longer has.
+      if (path === "/api/notifications/prefs" && req.method === "GET") {
+        if (!(await requireAuth(req, res))) return true
+        writeJson(res, 200, { ok: true, prefs: n.getPrefs() })
+        return true
+      }
+      // Wave 1.4 — prefs WRITE via PATCH. The repo has no PUT/PATCH routes, so
+      // there is no local verb convention to match; PATCH is the partial-update
+      // verb, and the shared body-parse / invalid-JSON / rate-limit / CSRF
+      // plumbing already covers it. setPrefs validation/clamping applies, so
+      // out-of-range numerics arrive clamped, never rejected. The pre-existing
+      // POST sibling above is untouched (additive-only, ADR-0005).
+      if (path === "/api/notifications/prefs" && req.method === "PATCH") {
+        if (!(await requireAuth(req, res))) return true
+        writeJson(res, 200, { ok: true, prefs: n.setPrefs(body) })
+        return true
+      }
       // WS-7 owner ruling. GET /api/notifications/status is GATED as the FIRST
       // statement of its own branch, ahead of the notifierStatus() call, because it is
       // not the machine-level read its allowlist entry claimed: it serves channel state
