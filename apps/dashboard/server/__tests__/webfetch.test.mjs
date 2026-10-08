@@ -15,6 +15,7 @@ import {
   webFetchStats,
   resetWebFetchLimits,
   solverAdapter,
+  solverDeferredKinds,
   webFetch
 } from "../services/webfetch.mjs"
 
@@ -206,7 +207,19 @@ describe("solverAdapter — declared seam, OFF by default, never a silent bypass
     const s = solverAdapter()
     expect(s.configured).toBe(false)
     expect(s.kind).toBe("none")
+    expect(s.status).toBe("off")
+    expect(s.reason).toBeNull()
     expect(await s.solve()).toBeNull()
+  })
+
+  it.each([["none"], ["off"], ["disabled"], ["  "]])("off alias %j → unconfigured off, solve() null", async (v) => {
+    process.env.PICC_WEBFETCH_SOLVER = v
+    const s = solverAdapter()
+    expect(s.configured).toBe(false)
+    expect(s.status).toBe("off")
+    expect(s.reason).toBeNull()
+    expect(await s.solve()).toBeNull()
+    delete process.env.PICC_WEBFETCH_SOLVER
   })
 
   it("declared but unwired → configured true yet solve() still returns null (honest skip)", async () => {
@@ -215,5 +228,73 @@ describe("solverAdapter — declared seam, OFF by default, never a silent bypass
     expect(s.configured).toBe(true)
     expect(await s.solve()).toBeNull()
     delete process.env.PICC_WEBFETCH_SOLVER
+  })
+
+  it("covers every researched kind (no silent skips)", () => {
+    expect(solverDeferredKinds()).toEqual(
+      expect.arrayContaining([
+        "hcaptcha-challenger",
+        "recaptcha-challenger",
+        "turnstile-capsolver",
+        "capsolver",
+        "turnstile-selenium",
+        "turnstile",
+        "tesseract",
+        "tesseract-ocr",
+        "manual-token",
+        "operator-token"
+      ])
+    )
+  })
+
+  it.each(solverDeferredKinds())("deferred kind %j → status deferred + solver-deferred reason + solve() null", async (kind) => {
+    process.env.PICC_WEBFETCH_SOLVER = kind
+    const s = solverAdapter()
+    expect(s.configured).toBe(true)
+    expect(s.kind).toBe(kind)
+    expect(s.status).toBe("deferred")
+    expect(s.reason).toBe(`solver-deferred:${kind}`)
+    expect(await s.solve()).toBeNull()
+    delete process.env.PICC_WEBFETCH_SOLVER
+  })
+
+  it("deferred matching is case-insensitive (no case-spelling bypass of the decision)", async () => {
+    process.env.PICC_WEBFETCH_SOLVER = "HCAPTCHA-Challenger"
+    const s = solverAdapter()
+    expect(s.status).toBe("deferred")
+    expect(s.reason).toBe("solver-deferred:hcaptcha-challenger")
+    expect(await s.solve()).toBeNull()
+    delete process.env.PICC_WEBFETCH_SOLVER
+  })
+
+  it("unknown kind → explicit solver-unknown reason + solve() null (never silent)", async () => {
+    process.env.PICC_WEBFETCH_SOLVER = "future-magic-solver"
+    const s = solverAdapter()
+    expect(s.configured).toBe(true)
+    expect(s.status).toBe("unknown")
+    expect(s.reason).toBe("solver-unknown:future-magic-solver")
+    expect(await s.solve()).toBeNull()
+    delete process.env.PICC_WEBFETCH_SOLVER
+  })
+
+  it("solve() never yields a token for any kind, and warnings never print other env values", async () => {
+    process.env.FAKE_SECRET_SENTINEL = "s3cr3t-no-print-xyz"
+    const warned = []
+    const orig = console.warn
+    console.warn = (...a) => warned.push(a.join(" "))
+    try {
+      const kinds = ["", ...solverDeferredKinds(), "future-magic-solver"]
+      for (const k of kinds) {
+        if (k) process.env.PICC_WEBFETCH_SOLVER = k
+        else delete process.env.PICC_WEBFETCH_SOLVER
+        const s = solverAdapter()
+        expect(await s.solve()).toBeNull()
+      }
+    } finally {
+      console.warn = orig
+      delete process.env.PICC_WEBFETCH_SOLVER
+      delete process.env.FAKE_SECRET_SENTINEL
+    }
+    expect(warned.join("\n")).not.toContain("s3cr3t-no-print-xyz")
   })
 })

@@ -125,21 +125,87 @@ export function detectCaptchaGate({ status = null, headers = {}, body = "" } = {
 }
 
 /**
- * Optional solver-adapter seam (OFF by default). The interface: solve() may
- * return a token once a real adapter is wired (hcaptcha-challenger etc. are
- * external Python processes — wiring them is a user decision, documented in
- * the S3 notes). Honest default: configured=false, solve() resolves null →
- * webFetch reports the gate and the caller skips.
+ * Solver-kind decision table (Wave 1.5) — every researched option is now a
+ * DECISION, not an open stub.
+ *
+ * Wired (legitimate, non-deceptive): only the OFF state. There is no
+ * legitimate wiring for automated gate-solving: defeating a site's captcha /
+ * challenge / abuse control is OUT (documented refusal per kind below), and
+ * anything needing credentials or paid services is an automatic formal-defer
+ * (single-operator self-hosted holds no such accounts; no credential use, no
+ * new dependencies — see Wave 1.5 brief).
+ *
+ * Deferred kinds return status "deferred" with reason `solver-deferred:<kind>`
+ * and solve() still resolves null → the gate is reported, never faked.
+ * Unrecognised kinds return status "unknown" with `solver-unknown:<kind>` —
+ * explicit, never a silent skip. Only the kind label (operator-chosen, not a
+ * secret) is ever logged; no other env values are read or printed here.
+ */
+const SOLVER_OFF_KINDS = new Set(["none", "off", "disabled"])
+
+const SOLVER_DEFERRED = {
+  // Automated hCaptcha image-label / drag-drop solving defeats the site's
+  // abuse controls — OUT. Also an external Python process + ONNX models,
+  // which would add dependencies.
+  "hcaptcha-challenger": "automated hcaptcha solving defeats site abuse controls (refused); external process + models would add dependencies",
+  // Automated reCAPTCHA (audio-challenge) solving defeats abuse controls — OUT.
+  "recaptcha-challenger": "automated recaptcha solving defeats site abuse controls (refused); external process dependency",
+  // Paid solving API — excluded (no paid APIs, no credentials) — and automated
+  // solving defeats abuse controls — OUT on both counts.
+  "turnstile-capsolver": "paid solving API (excluded) and automated solving defeats site abuse controls (refused)",
+  capsolver: "alias of turnstile-capsolver: paid solving API (excluded) and automated solving defeats site abuse controls (refused)",
+  // ToS-gray browser-automation (Selenium/CDP) challenge bypass — OUT.
+  "turnstile-selenium": "browser-automation challenge bypass is ToS-gray and defeats site abuse controls (refused)",
+  turnstile: "generic turnstile automation defeats site abuse controls (refused); no legitimate mechanism offered",
+  // Legacy text-CAPTCHA OCR still defeats the site's abuse controls — OUT
+  // (and would add a native/binary dependency).
+  tesseract: "ocr-based captcha solving defeats site abuse controls (refused); native dependency",
+  "tesseract-ocr": "ocr-based captcha solving defeats site abuse controls (refused); native dependency",
+  // Operator-supplied token would need credentials the self-hosted operator
+  // does not hold — automatic formal-defer (no credential use).
+  "manual-token": "requires operator-supplied credentials/tokens (none held; no credential use)",
+  "operator-token": "requires operator-supplied credentials/tokens (none held; no credential use)"
+}
+
+/** All formally-deferred solver kind names (for tests: no kind skips silently). */
+export function solverDeferredKinds() {
+  return Object.keys(SOLVER_DEFERRED)
+}
+
+/**
+ * Optional solver-adapter seam (OFF by default). Honest default:
+ * configured=false, solve() resolves null → webFetch reports the gate and
+ * the caller skips. Deferred/unknown kinds likewise resolve null, labelled
+ * with their formal reason.
  */
 export function solverAdapter(env = process.env) {
-  const kind = String(env.PICC_WEBFETCH_SOLVER ?? "").trim()
-  if (!kind) return { configured: false, kind: "none", solve: async () => null }
+  const raw = String(env.PICC_WEBFETCH_SOLVER ?? "").trim()
+  const kind = raw.toLowerCase()
+  if (!kind || SOLVER_OFF_KINDS.has(kind)) {
+    return { configured: false, kind: "none", status: "off", reason: null, solve: async () => null }
+  }
+  if (Object.hasOwn(SOLVER_DEFERRED, kind)) {
+    const reason = `solver-deferred:${kind}`
+    return {
+      configured: true,
+      kind,
+      status: "deferred",
+      reason,
+      // Formally deferred → honest null; the gate is reported, never faked.
+      solve: async () => {
+        console.warn(`[picc] webfetch solver "${kind}" formally deferred (${reason}): ${SOLVER_DEFERRED[kind]} — skipping honestly (no silent bypass)`)
+        return null
+      }
+    }
+  }
+  const reason = `solver-unknown:${kind}`
   return {
     configured: true,
     kind,
-    // Declared but not wired → honest null; the gate is reported, never faked.
+    status: "unknown",
+    reason,
     solve: async () => {
-      console.warn(`[picc] webfetch solver "${kind}" is declared but not wired — skipping honestly (no silent bypass)`)
+      console.warn(`[picc] webfetch solver "${kind}" is not a known kind (${reason}) — skipping honestly (no silent bypass)`)
       return null
     }
   }
@@ -148,9 +214,9 @@ export function solverAdapter(env = process.env) {
 /**
  * One fetch through the global capability. Classifies the outcome honestly
  * from status + headers + body and runs the fair-use limiter FIRST (a local
- * ceiling hit never reaches the wire). Retries AT MOST ONCE through a
- * configured solver when the first response is captcha-gated; default no
- * solver → the gate is reported as-is.
+ * ceiling hit never reaches the wire). No solver retry exists: every solver
+ * kind is OFF or formally deferred (see solverAdapter), so a captcha-gated
+ * response is always reported as-is and never re-attempted through a solver.
  *
  * @param {string} url
  * @param {{headers?:object, timeoutMs?:number, maxBytes?:number, fetcher?:Function,
