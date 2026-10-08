@@ -19,6 +19,8 @@
 //   pack-observation  every 60 sec  Pack-1 step survey (observe-only).
 //   news-digest       every 10 min  free RSS/Atom fetch (OFF-safe honest skip).
 //   corpus-refresh    every 60 min  copytrading corpus prune (OFF-gated).
+//   wealth-refresh    every 24 h    wealth ledger tiered refresh + daily snapshot
+//                                   (date-keyed idempotent, 2-year rolling prune).
 //
 // D2/AC-005: the "eo-staleness" job is removed (see jobs/eo-liveness.mjs).
 // Jobs are concurrency-guarded (a slow run is skipped, not queued) and all
@@ -41,6 +43,7 @@ import { name as sessionName, intervalMs as sessionIntervalMs, staggerMs as sess
 import { name as packName, intervalMs as packIntervalMs, staggerMs as packStaggerMs, run as runPackObservation } from "./jobs/pack-observation.mjs"
 import { name as newsName, intervalMs as newsIntervalMs, staggerMs as newsStaggerMs, run as runNewsDigest } from "./jobs/news-digest.mjs"
 import { name as corpusName, intervalMs as corpusIntervalMs, staggerMs as corpusStaggerMs, run as runCorpusRefresh } from "./jobs/corpus-refresh.mjs"
+import { name as wealthName, intervalMs as wealthIntervalMs, staggerMs as wealthStaggerMs, run as runWealthRefresh } from "./jobs/wealth-refresh.mjs"
 
 export { sessionUptime24h, ccxtSchedulerStatus }
 
@@ -153,3 +156,5 @@ every(packName, packIntervalMs, runPackObservation, { staggerMs: packStaggerMs }
 every(newsName, newsIntervalMs, runNewsDigest, { staggerMs: newsStaggerMs })
 
 every(corpusName, corpusIntervalMs, runCorpusRefresh, { staggerMs: corpusStaggerMs })
+
+every(wealthName, wealthIntervalMs, runWealthRefresh, { staggerMs: wealthStaggerMs })

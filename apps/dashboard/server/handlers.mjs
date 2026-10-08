@@ -3045,6 +3045,110 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // -------------------------------------------------------------------
+  // Wealth ledger (W3-01 Task 9) — cross-venue net-worth overview + transfer log.
+  //
+  // WHY TWO ROUTES AND NOT ONE. The overview is a pure read (it writes
+  // nothing — see the paper note below); the transfer log is an explicit
+  // operator write. Merging them would put a mutation behind a GET-shaped
+  // read, which is the defect the paper-analytics auto-close ruling keeps
+  // fenced behind its own gate.
+  //
+  // PAPER IS STRICTLY READ-ONLY HERE. paperAnalytics() auto-closes TP/SL hits
+  // on its default path — that write is KEPT by owner ruling and pinned in
+  // paperAnalyticsAutoClose.test.mjs, and the paper-mark job owns it. This
+  // branch DELIBERATELY never calls it: the paper block is built through
+  // readPaperSummary with an injected adapter over paperOverview() (two
+  // readJSON calls plus pure math), so the overview cannot mark or close a
+  // position. A reviewer grepping this branch for close or mark calls must
+  // find none, and wealthApi.test.mjs proves it by hash: a seeded tripped-TP
+  // position is byte-identical on disk after the call.
+  //
+  // GATED, NOT ALLOWLISTED. The payload names venue balances and transfer
+  // notes. None of it is declared-public, so both routes carry an
+  // unconditional requireAuth() gate as their FIRST statement.
+  // -------------------------------------------------------------------
+  if (path === "/api/wealth/overview" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
+    try {
+      const wealthStore = await import("./services/wealth/store.mjs")
+      const keyed = await import("./services/wealth/legsKeyed.mjs")
+      const wealthLocal = await import("./services/wealth/legsLocal.mjs")
+      const { overview } = await import("./services/wealth/aggregate.mjs")
+      const { suggestTransfers } = await import("./services/wealth/transfers.mjs")
+      const keyedLegs = await Promise.all([
+        keyed.readCcxtSpotLeg(),
+        keyed.readHyperliquidLeg(),
+        keyed.readBtcpayLeg()
+      ])
+      const [manualLegs, billingLegs, localstoreLegs] = await Promise.all([
+        wealthLocal.readManualLegs(),
+        wealthLocal.readBillingLegs(),
+        wealthLocal.readLocalstoreLegs()
+      ])
+      const legs = [...keyedLegs, ...manualLegs, ...billingLegs, ...localstoreLegs]
+      const paper = await wealthLocal.readPaperSummary({
+        paperAnalytics: async () => ({ overview: await paperOverview() })
+      })
+      const transfers = wealthStore.listTransfers()
+      const result = await overview({
+        legs,
+        transfers,
+        paper,
+        readers: { yahooQuote: keyed.yahooQuote, ccxtQuote: keyed.ccxtQuote }
+      })
+      // Phase 2 candidates: burst-matched opposite flows. Bare-sighting
+      // direction (the earlier sighting reads as the source) is a HEURISTIC,
+      // so every candidate ships unconfirmed and the room labels it "inferred
+      // direction": nothing here confirms — confirmation writes only via POST
+      // /api/wealth/transfers from an explicit operator action.
+      const suggestions = suggestTransfers({ legs: result.legs })
+      writeJson(res, 200, {
+        ...result,
+        ok: true,
+        snapshots: wealthStore.listSnapshots({}),
+        suggestions
+      })
+    } catch (err) {
+      console.warn("[picc] wealth overview failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  if (path === "/api/wealth/transfers" && req.method === "POST") {
+    if (!(await requireAuth(req, res))) return
+    const envelope = body && typeof body === "object" ? body : null
+    if (!envelope) {
+      writeJson(res, 400, { ok: false, reason: "transfer-envelope-required" })
+      return
+    }
+    try {
+      const { validateTransfer } = await import("./services/wealth/transfers.mjs")
+      // AWAITED: validateTransfer is async (it reads the leg registry). A bare
+      // truthiness check on the Promise would admit every invalid transfer,
+      // because a Promise object is always truthy.
+      const verdict = await validateTransfer(envelope)
+      if (!verdict.ok) {
+        writeJson(res, 400, { ok: false, reason: verdict.reason })
+        return
+      }
+      const wealthStore = await import("./services/wealth/store.mjs")
+      writeJson(res, 200, wealthStore.addTransfer({
+        fromLeg: envelope.fromLeg,
+        toLeg: envelope.toLeg,
+        ccy: envelope.ccy,
+        amount: envelope.amount,
+        at: envelope.at,
+        note: envelope.note ?? ""
+      }))
+    } catch (err) {
+      console.warn("[picc] wealth transfer failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/assist" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return
     try {

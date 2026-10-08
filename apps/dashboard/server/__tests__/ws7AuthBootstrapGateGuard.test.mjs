@@ -1114,7 +1114,20 @@ function connectorsSiteIsGated(lines, index) {
     // settle at 6,462. Net from the last pin: +41 lines, +4 dynamic, +0
     // static. The static pin above is NOT moved; it is the tripwire that
     // caught the regression, and this entry is why it reads 72 again.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(87)
+    //
+    // 87 -> 94 in W3-01 Task 9 (wealth ledger route + room + job), the same
+    // protocol: +7 dynamic, +0 static. Five are the GET /api/wealth/overview
+    // branch (wealth store, keyed readers, local readers, aggregator,
+    // transfers suggester), each dynamic so the wealth boundary stays off the
+    // boot path the way T7R-B's, T8's and T9's services did. Two are the POST
+    // /api/wealth/transfers branch (transfers validator, wealth store). The
+    // paper read adds ZERO: it reuses the module-level paperOverview binding
+    // rather than importing anything, which is also what keeps the overview
+    // from ever reaching the auto-closing paperAnalytics path. Statics
+    // UNCHANGED at 72, which is what confirms the growth is two gated routes
+    // and their reasoning rather than new module-level dependencies. The line
+    // figure moves with it; see the accounting at the `lines` assertion below.
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(94)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1410,7 +1423,26 @@ function connectorsSiteIsGated(lines, index) {
     // split into two on the venue-status seed (flat `listBrokerStatuses()`
     // vs registry `listBrokers` disambiguation); both call sites stay
     // dynamic `await import(...)`, so no new module binding.
-    expect(lines, "lines in handlers.mjs").toBe(6484)
+    //
+    // 6,484 -> 6,588 in W3-01 Task 9 (wealth ledger route + room + job), the
+    // same protocol: +104 lines, and every one is accounted for rather than
+    // absorbed. They are the two contiguous wealth branches after the
+    // paper-analytics route: GET /api/wealth/overview (its unconditional
+    // requireAuth() gate as its FIRST statement, five dynamic service
+    // imports, the keyed/local leg assembly, the strictly-read-only paper
+    // adapter over the already-imported paperOverview, the aggregator call,
+    // the unconfirmed-only suggester call, and the reasoning recording WHY
+    // the paper path must never reach paperAnalytics) and POST
+    // /api/wealth/transfers (its FIRST-statement gate, the envelope
+    // precondition, the AWAITED validateTransfer call with its reasoning, and
+    // the addTransfer write). The import pair moves 87 -> 94 dynamic with
+    // statics UNCHANGED at 72 for exactly those seven `await import(...)`
+    // calls, so none of the 104 lines is a new module-level binding. That is
+    // the whole point of pinning all three — a canary that moved because
+    // structure changed is a different signal from one that moved because two
+    // gated routes and their reasoning landed, and the import pair is what
+    // tells them apart.
+    expect(lines, "lines in handlers.mjs").toBe(6588)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

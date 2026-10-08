@@ -172,6 +172,22 @@ export function listSnapshots({ limit = 100 } = {}) {
     .map((s) => ({ ...s }))
 }
 
+// 2-year rolling retention (Task 9; spec decision 9: "snapshots older than
+// 730 days dropped by policy"). Additive export: the daily job in
+// services/jobs/wealth-refresh.mjs calls this after persisting the current
+// snapshot. Returns counts, never throws on an empty register.
+const DAY_MS = 86_400_000
+export const SNAPSHOT_RETENTION_MS = 730 * DAY_MS
+
+export function pruneSnapshots({ now = Date.now(), maxAgeMs = SNAPSHOT_RETENTION_MS } = {}) {
+  const cutoff = Number(now) - Number(maxAgeMs)
+  const before = snapshots.length
+  snapshots = snapshots.filter((s) => new Date(s.at).getTime() >= cutoff)
+  const pruned = before - snapshots.length
+  if (pruned > 0) save()
+  return { pruned, kept: snapshots.length }
+}
+
 export function _resetWealthForTest() {
   legs = seeds()
   transfers = []
