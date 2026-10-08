@@ -506,19 +506,22 @@ every(
 // import is a module-graph edge that count cannot tell apart from a boot-path
 // dependency. Registration is still via every() at module scope, so
 // startScheduler() picks the job up after startLivenessMonitor() has run and
-// both boot invariants in bootSequence.mjs hold unchanged. The job sustains
-// per-regime coverage (§8 decision-2: thousands of samples per regime, never
-// throughput maximised) and emits NO signals or alerts from others' activity
-// (§9 non-goal). Retention pruning stays an explicit store call (Task 5),
-// never a timer side effect.
+// both boot invariants in bootSequence.mjs hold unchanged. The job attempts
+// ingest (currently discovery-unavailable, so it stores nothing) and prunes
+// toward per-regime ceilings (§8 decision-2: thousands of samples per regime
+// as a prune ceiling, never throughput maximised) and emits NO signals or
+// alerts from others' activity (§9 non-goal). Retention pruning stays an
+// explicit store call (Task 5), never a timer side effect.
 every(
   "corpus-refresh",
   60 * 60 * 1000,
   async () => {
-    // Wave 1.2 cadence ingest: fetch → ingestPublicFills → prune, each step
-    // named-absence-tolerant (discovery-unavailable is honest, never
-    // fabricated). OFF gate stays log-only and never touches the network —
-    // corpusRefreshPass owns the gate so this job stays thin.
+    // Wave 1.2 cadence: reachability snapshot → discovery attempt
+    // (discovery-unavailable, stores nothing) → prune to ceilings. Prune-only
+    // until a state-neutral discovery source exists; each step is
+    // named-absence-tolerant (never fabricated). OFF gate stays log-only and
+    // never touches the network — corpusRefreshPass owns the gate so this
+    // job stays thin.
     const { corpusRefreshPass } = await import("./copyCorpusIngest.mjs")
     const outcome = await corpusRefreshPass()
     if (outcome.gated) {

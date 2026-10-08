@@ -47,7 +47,8 @@ export function ingestStatus() {
 }
 export function _resetIngestForTest() { lastIngestAt = null; lastResult = null; lastCadenceReason = null }
 
-// ── Wave 1.2 — cadence ingest sustaining regime coverage (§7/§8 decision-2) ─
+// ── Wave 1.2 — cadence ingest attempt + prune to regime ceilings ─────────
+// (prune-only until a state-neutral discovery source exists; §7/§8 decision-2)
 // Hyperliquid `POST https://api.hyperliquid.xyz/info` surface (researched
 // 2026-10-08, keyless, no auth): market-level reads need no address (`meta`,
 // `metaAndAssetCtxs`, `allMids`, `l2Book`, `recentTrades`, `candleSnapshot`,
@@ -58,7 +59,9 @@ export function _resetIngestForTest() { lastIngestAt = null; lastResult = null; 
 // implementation ingests what IS observable and reports the named absence
 // `discovery-unavailable` for the rest. Never fabricate accounts/fills/regimes.
 export const HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
-// Thousands of samples per regime, never unbounded growth (§7).
+// Prune ceiling per regime (§7): caps stored samples so the corpus shrinks
+// toward targets instead of growing without bound. A ceiling, not inflow —
+// inflow stays discovery-unavailable until a state-neutral source exists.
 export const CORPUS_REGIME_TARGETS = { "*": 3000 }
 const MAX_SNAPSHOT_COINS = 5
 const MAX_TRADES_PER_COIN = 50
@@ -159,8 +162,10 @@ export async function fetchHyperliquidUserFills({ user, fetchFn = globalThis.fet
   }
 }
 
-// Cadence orchestrator: snapshot → discovery → (no fabrication) → prune.
-// Every step is named-absence-tolerant; this function never throws.
+// Cadence orchestrator: reachability snapshot → discovery attempt
+// (currently discovery-unavailable: ingests nothing) → prune to ceilings.
+// Prune-only until discovery exists; every step named-absence-tolerant;
+// this function never throws.
 export async function runCorpusRefreshCadence({ fetchFn = globalThis.fetch, targets = CORPUS_REGIME_TARGETS, windowStart = null, windowEnd = null } = {}) {
   void windowStart
   void windowEnd
@@ -172,8 +177,9 @@ export async function runCorpusRefreshCadence({ fetchFn = globalThis.fetch, targ
   }
   const discovery = discoverCorpusAccounts()
   // No state-neutral accounts are observable → nothing to ingest. This is the
-  // honest path: report the named absence, ingest zero, still prune so the
-  // corpus converges on regime targets instead of growing without bound.
+  // honest path: report the named absence with ok:false, ingest zero, still
+  // prune so the corpus shrinks toward regime ceilings instead of growing
+  // without bound (prune-only: a prune converges by shrinking, not by inflow).
   let pruned
   try {
     pruned = pruneToRegimeTargets(targets)

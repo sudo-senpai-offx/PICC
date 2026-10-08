@@ -1,7 +1,8 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest"
 import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
-// Wave 1.2 — cadence ingest sustaining regime coverage.
+// Wave 1.2 — cadence ingest attempt + prune to regime ceilings
+// (prune-only until a state-neutral discovery source exists).
 // TDD RED: these imports fail until copyCorpusIngest.mjs grows the
 // fetch+map surface (pure mapper stays network-free).
 describe("copyCorpus cadence ingest (wave 1.2)", () => {
@@ -81,11 +82,27 @@ describe("copyCorpus cadence ingest (wave 1.2)", () => {
   it("cadence run ingests nothing observable-free but prunes and names the absence", async () => {
     const fetchFn = vi.fn(async () => ({ ok: true, json: async () => [] }))
     const r = await mod.runCorpusRefreshCadence({ fetchFn, targets: { "*": 3 } })
+    expect(r.ok).toBe(false)
     expect(r.ingested).toBe(0)
     expect(r.reason).toBe("discovery-unavailable")
     expect(r.pruned).toBeDefined()
     // Failure/absence is visible via ingestStatus, never a silent zero.
-    expect(typeof mod.ingestStatus().reason).toBe("string")
+    expect(mod.ingestStatus().reason).toBe("discovery-unavailable")
+  })
+
+  it("prune-only cadence shrinks an over-target store down to the ceilings", async () => {
+    for (let i = 0; i < 5; i++) {
+      store.appendExternalSample({ venue: "hyperliquid", accountRef: `a${i}`, regime: "trend" })
+    }
+    expect(store.listExternal().length).toBe(5)
+    const fetchFn = vi.fn(async () => ({ ok: true, json: async () => [] }))
+    const r = await mod.runCorpusRefreshCadence({ fetchFn, targets: { trend: 3 } })
+    // Prune-only: convergence happens by shrinking, not by inflow.
+    expect(r.ok).toBe(false)
+    expect(r.reason).toBe("discovery-unavailable")
+    expect(r.pruned.kept).toBe(3)
+    expect(r.pruned.dropped).toBe(2)
+    expect(store.listExternal().length).toBe(3)
   })
 
   it("cadence run survives a venue outage with a named reason (no throw)", async () => {
