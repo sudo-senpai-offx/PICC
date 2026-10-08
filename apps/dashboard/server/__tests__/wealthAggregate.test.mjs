@@ -69,6 +69,47 @@ describe("wealth aggregator overview", () => {
     expect(out.paper).not.toHaveProperty("usd")
     expect(out.paper).not.toHaveProperty("totalUsd")
   })
+
+  it("empty legs yield null total with a named reason, never confident zero", async () => {
+    const out = await overview({ legs: [], transfers: [], paper: null, readers: readers(R) })
+    expect(out.totalUsd).toBe(null)
+    expect(out.incomplete).toBe(true)
+    expect(out.reason).toBe("no-convertible-legs")
+  })
+
+  it("all-absent legs yield null total with a named reason", async () => {
+    const legs = [
+      { id: "btcpay", kind: "billing", ccy: "BTC", amount: 0.5, status: "ABSENT", observedAt: null, reason: "btcpay-unconfigured" },
+      { id: "tng-manual", kind: "manual", ccy: "MYR", amount: null, status: "ABSENT", observedAt: null, reason: "manual-unentered" }
+    ]
+    const out = await overview({ legs, transfers: [], paper: null, readers: readers(R) })
+    expect(out.totalUsd).toBe(null)
+    expect(out.incomplete).toBe(true)
+    expect(out.reason).toBe("no-convertible-legs")
+    expect(out.legs.find((l) => l.id === "btcpay").reason).toBe("btcpay-unconfigured")
+  })
+
+  it("FX-missing LIVE leg is excluded with reason and never nulls the total", async () => {
+    const legs = [
+      { id: "cash-usd", kind: "manual", ccy: "USD", amount: 100, status: "LIVE", observedAt: nowIso(), fxSource: "declared-parity", fxAt: null },
+      { id: "exotic", kind: "keyed", ccy: "XXX", amount: 50, status: "LIVE", observedAt: nowIso() }
+    ]
+    const out = await overview({ legs, transfers: [], paper: null, readers: readers({}) })
+    expect(out.totalUsd).toBe(100)
+    const exotic = out.legs.find((l) => l.id === "exotic")
+    expect(exotic.usd).toBe(null)
+    expect(exotic.reason).toMatch(/fx-unobservable/)
+  })
+
+  it("STALE and ENTERED legs convert but keep incomplete:true", async () => {
+    const legs = [
+      { id: "stale-usd", kind: "keyed", ccy: "USD", amount: 10, status: "STALE", observedAt: nowIso(), fxSource: "declared-parity", fxAt: null },
+      { id: "tng-manual", kind: "manual", ccy: "MYR", amount: 100, status: "ENTERED", observedAt: nowIso() }
+    ]
+    const out = await overview({ legs, transfers: [], paper: null, readers: readers(R) })
+    expect(out.totalUsd).toBeCloseTo(30)
+    expect(out.incomplete).toBe(true)
+  })
 })
 
 describe("wealth snapshotAdjust", () => {
@@ -92,6 +133,50 @@ describe("wealth snapshotAdjust", () => {
     const out = snapshotAdjust({
       legs,
       transfers: [{ id: "t2", fromLeg: "venue-a", toLeg: "venue-b", ccy: "USD", amount: 100, at: "2026-10-01T10:00:00+08:00" }],
+      windowStart: "2026-10-08T00:00:00+08:00",
+      windowEnd: "2026-10-08T23:59:59+08:00"
+    })
+    expect(out.legs.map((l) => l.id).sort()).toEqual(["venue-a", "venue-b"])
+    expect(out.excluded).toHaveLength(0)
+  })
+
+  it("null window matches every dated transfer (unbounded both sides)", () => {
+    const out = snapshotAdjust({
+      legs,
+      transfers: [{ id: "t1", fromLeg: "venue-a", toLeg: "venue-b", ccy: "USD", amount: 100, at: "2026-10-01T10:00:00+08:00" }]
+    })
+    expect(out.legs.map((l) => l.id)).toEqual(["venue-a"])
+    expect(out.excluded).toHaveLength(1)
+  })
+
+  it("transfer with an unparseable date is ignored, even match-all", () => {
+    const out = snapshotAdjust({
+      legs,
+      transfers: [{ id: "t9", fromLeg: "venue-a", toLeg: "venue-b", ccy: "USD", amount: 100, at: "not-a-date" }]
+    })
+    expect(out.legs.map((l) => l.id).sort()).toEqual(["venue-a", "venue-b"])
+    expect(out.excluded).toHaveLength(0)
+  })
+
+  it("two in-window transfers to the same destination exclude it once", () => {
+    const out = snapshotAdjust({
+      legs,
+      transfers: [
+        { id: "t1", fromLeg: "venue-a", toLeg: "venue-b", ccy: "USD", amount: 60, at: "2026-10-08T10:00:00+08:00" },
+        { id: "t3", fromLeg: "venue-a", toLeg: "venue-b", ccy: "USD", amount: 40, at: "2026-10-08T11:00:00+08:00" }
+      ],
+      windowStart: "2026-10-08T00:00:00+08:00",
+      windowEnd: "2026-10-08T23:59:59+08:00"
+    })
+    expect(out.legs.map((l) => l.id)).toEqual(["venue-a"])
+    expect(out.excluded).toHaveLength(1)
+    expect(out.excluded[0].transferId).toBe("t1")
+  })
+
+  it("transfer to an unknown leg id is ignored", () => {
+    const out = snapshotAdjust({
+      legs,
+      transfers: [{ id: "t4", fromLeg: "venue-a", toLeg: "venue-zzz", ccy: "USD", amount: 100, at: "2026-10-08T10:00:00+08:00" }],
       windowStart: "2026-10-08T00:00:00+08:00",
       windowEnd: "2026-10-08T23:59:59+08:00"
     })

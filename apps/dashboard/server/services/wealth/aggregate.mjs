@@ -62,20 +62,30 @@ function isConvertibleStatus(status) {
 // { totalUsd, incomplete, legs, paper, transfers }.
 // - totalUsd sums only successfully converted legs (never nulls the total;
 //   FX-missing legs are excluded with reason).
+// - Zero convertible legs (empty registry, all ABSENT, all FX-missing) yield
+//   { totalUsd: null, incomplete: true, reason: "no-convertible-legs" } —
+//   never a confident zero.
 // - incomplete:true unless every in-scope leg is LIVE (decision 2).
 // - paper passes through untouched (decision 1: structural separation — no
 //   shared accumulator, no usd field added).
 export async function overview({ legs = [], transfers = [], paper = null, readers = null, convertFn = defaultConvertToUsd } = {}) {
   const outLegs = []
   let totalUsd = 0
+  let convertedCount = 0
   for (const leg of legs) {
     if (!isConvertibleStatus(leg.status)) {
       outLegs.push({ ...leg, usd: null })
       continue
     }
     const converted = await convertLeg(leg, readers, convertFn)
-    if (converted.usd !== null) totalUsd += converted.usd
+    if (converted.usd !== null) {
+      totalUsd += converted.usd
+      convertedCount += 1
+    }
     outLegs.push(converted)
+  }
+  if (convertedCount === 0) {
+    return { totalUsd: null, incomplete: true, reason: "no-convertible-legs", legs: outLegs, paper, transfers }
   }
   const incomplete = !legs.every((leg) => leg.status === "LIVE")
   return { totalUsd, incomplete, legs: outLegs, paper, transfers }
@@ -87,6 +97,9 @@ export async function overview({ legs = [], transfers = [], paper = null, reader
 // snapshot legs once (decision 16); the transfer log itself is untouched and
 // the exclusion is recorded as evidence. Transfers outside the window — or
 // with unparseable dates — are ignored.
+// Window bounds are inclusive; a null/undefined bound is unbounded on that
+// side, so a fully null window matches every parseable-dated transfer
+// (match-all). An unparseable transfer `at` never matches, even match-all.
 export function snapshotAdjust({ legs = [], transfers = [], windowStart = null, windowEnd = null } = {}) {
   const startMs = windowStart === null || windowStart === undefined ? null : toTimeMs(windowStart)
   const endMs = windowEnd === null || windowEnd === undefined ? null : toTimeMs(windowEnd)
