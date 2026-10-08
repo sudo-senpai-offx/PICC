@@ -1404,7 +1404,13 @@ function connectorsSiteIsGated(lines, index) {
     // after, so not one of the 21 lines is a new module binding. Both branches
     // reach the wrapper's existing `await import("./services/notifier.mjs")`,
     // the way T20R's notifications gates did.
-    expect(lines, "lines in handlers.mjs").toBe(6483)
+    //
+    // 6,483 -> 6,484 in Wave 2.3 (brokers rename), the same protocol: +1 line,
+    // and it is accounted for rather than absorbed. It is one comment line
+    // split into two on the venue-status seed (flat `listBrokerStatuses()`
+    // vs registry `listBrokers` disambiguation); both call sites stay
+    // dynamic `await import(...)`, so no new module binding.
+    expect(lines, "lines in handlers.mjs").toBe(6484)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
