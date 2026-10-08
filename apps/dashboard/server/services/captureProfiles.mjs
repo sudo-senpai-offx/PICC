@@ -74,7 +74,7 @@ export const CAPTURE_PROFILES = [
       storageScan: [{ type: "cookie", key: "ssid", verified: false }],
       hostRe: "iqoption\\.com",
       loginPage: "https://iqoption.com/en/login",
-      note: "T11: promoted to full via the generic storageScan hook (fixture-driven, exact keys only). Token saved under trading.venueTokens in its OWN file (separate from creds — see trading.mjs) with NO live leg yet. Same T9 first-login gate as the venues that had one. HttpOnly keys cannot be read by document.cookie — CDP cookie API needed if ssid proves HttpOnly."
+      note: "T11: promoted to full via the generic storageScan hook (fixture-driven, exact keys only). Token saved under trading.venueTokens in its OWN file (separate from creds — see trading.mjs) with NO live leg yet. Same T9 first-login gate as the venues that had one. Wave 1.7: CDP-cookie fallback present — HttpOnly-configured keys are re-read via bridge context.cookies (HttpOnly included) when the in-page scan finds nothing; in-page hits always win. ssid still verified:false (no live fixture provided — operator work, spike S1-2 BLOCKED)."
     },
     cadence: { tokenMs: 30 * 60 * 1000, metricsMs: 5 * 60 * 1000 },
     metrics: { extractVia: [] }

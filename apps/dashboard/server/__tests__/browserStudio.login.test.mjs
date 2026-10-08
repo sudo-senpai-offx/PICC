@@ -462,4 +462,50 @@ describe("detectLoginState — heuristics", () => {
     // capability with no caller and no profile row.
     expect(m.captureExpertOptionSession).toBeUndefined()
   })
+
+  it("Wave 1.7 (spike S1-1): CDP-cookie fallback captures an HttpOnly ssid invisible to document.cookie", async () => {
+    // document.cookie cannot see HttpOnly cookies: the in-page evaluate finds
+    // nothing, but the bridge profile cookies (context.cookies, HttpOnly
+    // included — same seam as detectLoginCookies) carry the configured key.
+    const p = page()
+    p.setUrl("https://iqoption.com/en/login")
+    p.setEval([]) // in-page scan blind (HttpOnly)
+    h.setCookies([{ name: "ssid", value: "cdp-httponly-token-value-0123456789abcdef", httpOnly: true }])
+    try {
+      const r = await m.captureViaStorageScan(p, IQ_CFG)
+      expect(r.ok).toBe(true)
+      expect(r.token).toBe("cdp-httponly-token-value-0123456789abcdef")
+      expect(r.source).toBe("cookie:ssid")
+      expect(r.saved).toBe(true)
+    } finally {
+      h.setCookies([])
+    }
+  })
+
+  it("Wave 1.7 (spike S1-1): CDP fallback ignores unconfigured cookie keys (exact-keys honesty)", async () => {
+    const p = page()
+    p.setUrl("https://iqoption.com/en/login")
+    p.setEval([]) // in-page scan blind
+    h.setCookies([{ name: "other", value: "some-unconfigured-value", httpOnly: true }])
+    try {
+      await expect(m.captureViaStorageScan(p, IQ_CFG)).rejects.toThrow(/no configured session token/)
+    } finally {
+      h.setCookies([])
+    }
+  })
+
+  it("Wave 1.7 (spike S1-1): in-page hit wins — CDP fallback never overrides a document.cookie hit", async () => {
+    const p = page()
+    p.setUrl("https://iqoption.com/en/login")
+    p.setEval([{ source: "cookie", key: "ssid", value: "in-page-visible-token", score: 0 }])
+    h.setCookies([{ name: "ssid", value: "cdp-stale-token", httpOnly: true }])
+    try {
+      const r = await m.captureViaStorageScan(p, IQ_CFG)
+      expect(r.ok).toBe(true)
+      expect(r.token).toBe("in-page-visible-token")
+      expect(r.source).toBe("cookie:ssid")
+    } finally {
+      h.setCookies([])
+    }
+  })
 })

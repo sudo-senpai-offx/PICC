@@ -3668,6 +3668,42 @@ export async function studioGoogleSession({ navigate = false } = {}) {
 // becoming a generic hook that would guess at any site's storage layout.
 
 /**
+ * Wave 1.7 (spike S1-1): CDP-cookie fallback for fixture-driven capture.
+ *
+ * `document.cookie` is blind to HttpOnly cookies, so a venue whose session
+ * cookie is HttpOnly-only is un-capturable by in-page evaluation. The bridge
+ * profile cookies (`context.cookies`, HttpOnly included — the same seam as
+ * `detectLoginCookies` above) can still carry the key. Exact-keys honesty is
+ * unchanged: ONLY the row's configured `cookie` keys are read, never the whole
+ * jar; token values are never logged. Returns hits in the same
+ * { source, key, value, score } shape as the in-page scan (score = position in
+ * the row's configured list), or [] when nothing configured is present.
+ */
+async function readConfiguredCookiesViaCdp(target, keys) {
+  const wanted = (Array.isArray(keys) ? keys : []).filter((w) => w?.type === "cookie" && typeof w?.key === "string")
+  if (!wanted.length) return []
+  const context = studio.bridge?.context
+  if (!context || typeof context.cookies !== "function") return []
+  let url = ""
+  try {
+    url = String(target?.url?.() ?? "")
+  } catch {
+    return []
+  }
+  if (!/^https?:/i.test(url)) return []
+  const list = await context.cookies([url]).catch(() => [])
+  if (!Array.isArray(list)) return []
+  const found = []
+  for (const want of wanted) {
+    const match = list.find((c) => c?.name === want.key)
+    const v = String(match?.value ?? "")
+    if (!v) continue
+    found.push({ source: "cookie", key: want.key, value: v, score: keys.findIndex((w) => w.type === "cookie" && w.key === want.key) })
+  }
+  return found
+}
+
+/**
  * Generic fixture-driven session capture for a storage-scan venue (T11).
  *
  * Unlike captureExpertOptionSession this hook does NOT know a venue's storage
@@ -3677,9 +3713,12 @@ export async function studioGoogleSession({ navigate = false } = {}) {
  * of guessing — nothing is invented. `verified:false` keys (e.g. the IQ Option
  * `ssid` cookie candidate, from reverse-engineered libs, T10 research log) are
  * honoured the same way: the runtime self-validates, ok only when the key
- * really holds a value at capture time. HttpOnly cookies are INVISIBLE to
- * document.cookie (research log fixture checklist), so keys that are only ever
- * HttpOnly cannot be captured by this hook (they need the CDP cookie API).
+  * really holds a value at capture time. HttpOnly cookies are INVISIBLE to
+  * document.cookie (research log fixture checklist) — the Wave 1.7 CDP-cookie
+  * fallback (readConfiguredCookiesViaCdp) re-reads the row's configured cookie
+  * keys via the bridge profile cookies (HttpOnly included) when the in-page
+  * scan finds nothing. In-page hits always win: the fallback never overrides
+  * them.
  *
  * Tokens are saved per-venue via trading.saveVenueToken (a dedicated file —
  * never the creds object, which handlers spread into API responses). Guest
@@ -3693,7 +3732,7 @@ export async function captureViaStorageScan(page, cfg = {}) {
   if (!hostRe || !hostRe.test(target.url())) {
     throw new Error(`open the ${cfg.name ?? "venue"} tab first`)
   }
-  const hits = await target.evaluate((wanted) => {
+  const inPageHits = await target.evaluate((wanted) => {
     const found = []
     const push = (source, key, value) => {
       const v = String(value ?? "")
@@ -3723,6 +3762,16 @@ export async function captureViaStorageScan(page, cfg = {}) {
     found.sort((a, b) => a.score - b.score)
     return found
   }, keys)
+  let hits = inPageHits ?? []
+  if (!hits.length) {
+    // Wave 1.7 (spike S1-1): in-page scan blind (HttpOnly) → CDP-cookie
+    // fallback on the row's configured cookie keys. In-page hits always win.
+    const cdpHits = await readConfiguredCookiesViaCdp(target, keys).catch(() => [])
+    if (cdpHits.length) {
+      cdpHits.sort((a, b) => a.score - b.score)
+      hits = cdpHits
+    }
+  }
   if (!hits.length) {
     throw new Error(`no configured session token found on this page — log in first (${cfg.name ?? "venue"})`)
   }
