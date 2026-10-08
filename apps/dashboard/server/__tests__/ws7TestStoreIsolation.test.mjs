@@ -1166,6 +1166,7 @@ const LEGACY_HAND_ROLLED_REDIRECTS = {
   "apps/dashboard/server/__tests__/trading.test.mjs": ["PICC_TRADING_DATA_DIR"],
   "apps/dashboard/server/__tests__/tradingRealtime.test.mjs": ["PICC_AUTH_DATA_DIR"],
   "apps/dashboard/server/__tests__/watchlist.test.mjs": ["PICC_WATCHLIST_DATA_DIR"],
+  "apps/dashboard/server/__tests__/wealthLegsLocal.test.mjs": ["PICC_WEALTH_DATA_DIR"],
   "apps/dashboard/server/__tests__/wealthStore.test.mjs": ["PICC_WEALTH_DATA_DIR"],
   "apps/dashboard/server/__tests__/webfetchApi.test.mjs": ["PICC_DATA_DIR"],
   "apps/dashboard/server/__tests__/ws3CeremonySeamGuard.test.mjs": ["PICC_COMMAND_CENTRE_DATA_DIR"],
