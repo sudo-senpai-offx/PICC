@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 // Wave 1.2 — cadence ingest sustaining regime coverage.
 // TDD RED: these imports fail until copyCorpusIngest.mjs grows the
@@ -7,11 +8,7 @@ describe("copyCorpus cadence ingest (wave 1.2)", () => {
   let dir, mod, store
 
   beforeEach(async () => {
-    const { mkdtempSync } = await import("node:fs")
-    const { tmpdir } = await import("node:os")
-    const { join } = await import("node:path")
-    dir = mkdtempSync(join(tmpdir(), "picc-corpus-wave12-"))
-    process.env.PICC_COPYCORPUS_DATA_DIR = dir
+    dir = useIsolatedStoreDir("PICC_COPYCORPUS_DATA_DIR", { prefix: "picc-corpus-wave12" })
     delete process.env.PICC_COPYCORPUS_REFRESH
     vi.resetModules()
     mod = await import("../services/copyCorpusIngest.mjs")
