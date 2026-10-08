@@ -380,8 +380,12 @@ async function tradeRiskFeeds() {
     const closed = await paperHistory(500)
     const ledger = await ledgerHistory(200)
     const resolved = Array.isArray(ledger?.entries) ? ledger.entries : []
+    // Wave 1.6 — cash is honest: finite or null (never `|| 0` fabricated).
+    // The proposeTrade guard below refuses on null (fail-closed).
+    const cashRaw = ov?.cash
+    const balance = cashRaw == null ? null : Number(cashRaw)
     return {
-      balance: Number(ov?.cash) || 0,
+      balance: Number.isFinite(balance) ? balance : null,
       closed: Array.isArray(closed) ? closed : [],
       resolved,
       lastLossAt: lastLossAtFrom({ closed: Array.isArray(closed) ? closed : [], resolved })
@@ -447,6 +451,20 @@ export async function proposeTrade(order = {}, opts = {}) {
   }
 
   const size = u4faAmountFor(feeds.balance, risk)
+  // Wave 1.6 — fail-closed null-amount guard: null/NaN/non-finite sizing (or
+  // null cash upstream) refuses with a named reason, never throws (the old
+  // `amount.toFixed(2)` TypeError), never fabricates. Mirrors the gate
+  // refusal shape above. Explicit order.amount does NOT bypass: sizing on
+  // unobserved balance stays refused.
+  if (feeds.balance == null || !Number.isFinite(feeds.balance) || size.amount == null || !Number.isFinite(size.amount)) {
+    return {
+      ok: false,
+      status: "blocked",
+      dayKey: gate.dayKey,
+      dayPnl,
+      reason: "u4fa-amount-unobservable: sizing balance is null/NaN/non-finite; no proposal on unobservable amount"
+    }
+  }
   const amount = order.amount != null && Number.isFinite(Number(order.amount)) && Number(order.amount) > 0
     ? Math.round(Number(order.amount) * 100) / 100
     : size.amount

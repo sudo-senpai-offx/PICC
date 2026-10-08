@@ -246,3 +246,34 @@ describe("interventions — pendingTradeProposals (T12 M8 compliance.proposalId 
     expect(m.pendingTradeProposals()).toEqual({ EURUSD: r.id })
   })
 })
+
+describe("interventions — U4FA null-amount fail-closed guard (Wave 1.6)", () => {
+  it("null cash refuses with a named reason, never throws, never proposes", async () => {
+    trading.paperOverview.mockResolvedValue({ starting: 10000, cash: null, committed: 0, realizedPnl: 0 })
+    const r = await m.proposeTrade({ ...ORDER }, { now: NOW })
+    expect(r.ok).toBe(false)
+    expect(r.status).toBe("blocked")
+    expect(r.reason).toMatch(/u4fa-amount-unobservable/)
+    expect(m.listInterventions().proposals.filter((x) => x.source === "trade")).toHaveLength(0)
+    expect(trading.openPaperTrade).not.toHaveBeenCalled()
+  })
+
+  it("NaN / non-finite cash refuses the same way", async () => {
+    for (const badCash of [NaN, "junk", Infinity]) {
+      resetU4faRiskState()
+      const fresh = await import("../services/interventions.mjs?case=nullcash-" + Math.random())
+      trading.paperOverview.mockResolvedValue({ starting: 10000, cash: badCash, committed: 0, realizedPnl: 0 })
+      trading.paperHistory.mockResolvedValue([])
+      const r = await fresh.proposeTrade({ ...ORDER }, { now: NOW })
+      expect(r.ok).toBe(false)
+      expect(r.reason).toMatch(/u4fa-amount-unobservable/)
+    }
+  })
+
+  it("finite cash still proposes (no behavior change)", async () => {
+    trading.paperOverview.mockResolvedValue({ starting: 10000, cash: 10000, committed: 0, realizedPnl: 0 })
+    const r = await m.proposeTrade({ ...ORDER }, { now: NOW })
+    expect(r.ok).toBe(true)
+    expect(r.amount).toBe(50)
+  })
+})

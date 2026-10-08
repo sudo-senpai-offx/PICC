@@ -55,6 +55,20 @@ describe("u4faRisk — Decision A amount (three balances × three percents)", ()
     expect(u4faAmountFor(150, { riskPct: 0.5 })).toMatchObject({ amount: 1, floorApplied: true }) // raw = 0.75
     expect(u4faAmountFor(0, { riskPct: 0.5 })).toMatchObject({ amount: 1, floorApplied: true })
   })
+
+  it("an unobservable balance returns null amount with a named reason, never a fabricated floor", () => {
+    for (const bad of [null, undefined, NaN, "junk", Infinity, -Infinity]) {
+      const r = u4faAmountFor(bad, { riskPct: 0.5 })
+      expect(r.amount).toBeNull()
+      expect(r.floorApplied).toBe(false)
+      expect(r.reason).toMatch(/unobservable/)
+    }
+  })
+
+  it("observed balances keep a null reason (additive-only API)", () => {
+    expect(u4faAmountFor(1000, { riskPct: 0.5 }).reason).toBeNull()
+    expect(u4faAmountFor(0, { riskPct: 0.5 }).reason).toBeNull()
+  })
 })
 
 describe("u4faRisk — daily-loss barrier (−X% of UTC-day start blocks next proposal)", () => {

@@ -25,6 +25,14 @@ export const U4FA_POST_LOSS_COOLDOWN_MS = 900000 // 15 min anti-revenge proposal
 
 const round2 = (x) => Math.round(x * 100) / 100
 
+// Wave 0 Task 3 — the Copilot `finiteOrNull` vocabulary, mirrored locally:
+// a finite number, or null. Absent stays null; genuine 0 stays 0.
+const finiteOrNull = (v) => {
+  if (v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 /** UTC day-key for a timestamp — the U4FA risk layer's own 00:00 GMT boundary. */
 export function dayKeyOf(now = Date.now()) {
   return new Date(now).toISOString().slice(0, 10)
@@ -42,11 +50,24 @@ export function utcDayStartMs(dayKey) {
  */
 export function u4faAmountFor(balance, { riskPct = U4FA_RISK_PCT } = {}) {
   const pct = Number(riskPct) || U4FA_RISK_PCT
-  const raw = round2((Number(balance) || 0) * (pct / 100))
+  // Wave 1.6 — an unobservable balance is null with a named reason, never a
+  // fabricated $1 floor (fail-closed; the interventions guard refuses on it).
+  // Observable 0 keeps the declared $1 floor (pinned by u4faRisk.test.mjs:56).
+  const bal = finiteOrNull(balance)
+  if (bal == null) {
+    return {
+      amount: null,
+      floorApplied: false,
+      riskPct: pct,
+      reason: "balance-unobservable: u4fa balance is null/NaN/non-finite; no 0 substituted"
+    }
+  }
+  const raw = round2(bal * (pct / 100))
   return {
     amount: Math.max(U4FA_MIN_UNITS, raw),
     floorApplied: raw < U4FA_MIN_UNITS,
-    riskPct: pct
+    riskPct: pct,
+    reason: null
   }
 }
 
