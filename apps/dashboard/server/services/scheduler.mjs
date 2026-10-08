@@ -480,7 +480,8 @@ every(
 // pass); a gate/rate-limit/parse failure records the observed kind per source,
 // and only ONE bounded summary row is persisted per pass (storeDigestRun
 // prunes to 200 rows / 30 days). Summary synthesis stays OFF unless the
-// operator sets PICC_NEWS_DIGEST_SYNTHESIS=on (governor-routed, stub-not-wired).
+// operator sets PICC_NEWS_DIGEST_SYNTHESIS=on (governor-routed async chatText;
+// digestSynthesis has no caller in this job — grep verified).
 every(
   "news-digest",
   600 * 1000,

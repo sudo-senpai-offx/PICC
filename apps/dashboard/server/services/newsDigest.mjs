@@ -10,9 +10,10 @@
 //   - the per-source fetch budget (≤6 per 10min — B5-strict, rpmCeiling 6)
 //     is enforced before the wire; budget trips are recorded, not hidden;
 //   - LLM synthesis is OPTIONAL (PICC_NEWS_DIGEST_SYNTHESIS=on) and honors
-//     governor routing (routeTask, PICC_GOV_T1_MAX_TOKENS ceiling); the S3
-//     completion call is a deliberate stub — routing is recorded, a summary is
-//     NEVER invented.
+//     governor routing (routeTask, PICC_GOV_T1_MAX_TOKENS ceiling); when
+//     enabled the routed digest text is synthesized via the async chatText
+//     tier call as advisory text only — a summary is NEVER invented and an
+//     LLM failure stays an honest null with a named reason.
 import { localStore } from "./localstore.mjs"
 import { webFetch } from "./webfetch.mjs"
 import { routeTask, defaultBudgets } from "./resourceGovernor.mjs"
@@ -504,15 +505,33 @@ function digestMaxRows() {
 }
 
 /**
- * Optional T3 synthesis routing. OFF unless PICC_NEWS_DIGEST_SYNTHESIS=on;
- * honors governor routing (routeTask with the PICC_GOV_T1_MAX_TOKENS ceiling);
- * never invents a summary. The S3 completion call is a deliberate stub —
- * the routING is recorded, the summary stays null (risk 6 guard).
- *
- * @param {{items?:Array, enabled?:boolean, route?:Function, budgets?:object}} [opts]
- * @returns {{summary:null, reason:string, enabled:boolean, tier:string|null, escalated?:boolean}}
+ * System prompt for digest synthesis. Advisory text only: the model
+ * summarizes what the listed headlines state and never recommends trades,
+ * positions, or any other action, and never invents items not listed.
  */
-export function digestSynthesis({ items = [], enabled = null, route = routeTask, budgets = defaultBudgets() } = {}) {
+const SYNTHESIS_SYSTEM_PROMPT =
+  "You are PICC, a decision-support assistant. Summarize the following market-news headlines " +
+  "into a short advisory digest of at most 5 sentences. Describe only what the headlines state. " +
+  "Never recommend trades, positions, or actions, and never invent headlines that are not listed."
+
+/**
+ * Optional T3 synthesis. OFF unless PICC_NEWS_DIGEST_SYNTHESIS=on; honors
+ * governor routing (routeTask with the PICC_GOV_T1_MAX_TOKENS ceiling); never
+ * invents a summary. When enabled and routed, the digest text is synthesized
+ * via the LLM tier (chatText, governor-recorded) as advisory text only — it
+ * summarizes what the headlines state and never recommends an action. An LLM
+ * failure stays an honest null summary with a NAMED reason, never a
+ * fabricated summary.
+ *
+ * `synthesize` is the hermetic seam (tests inject a double; production
+ * lazy-imports chatText from llm.mjs so this module gains no load-time edge).
+ *
+ * @param {{items?:Array, enabled?:boolean, route?:Function, budgets?:object,
+ *          synthesize?:Function|null}} [opts]
+ * @returns {Promise<{summary:string|null, reason?:string, enabled:boolean,
+ *            tier:string|null, escalated?:boolean}>}
+ */
+export async function digestSynthesis({ items = [], enabled = null, route = routeTask, budgets = defaultBudgets(), synthesize = null } = {}) {
   const isEnabled = enabled ?? process.env.PICC_NEWS_DIGEST_SYNTHESIS === "on"
   if (!Array.isArray(items) || items.length === 0) {
     return { summary: null, reason: "no-items", enabled: isEnabled, tier: null }
@@ -524,5 +543,29 @@ export function digestSynthesis({ items = [], enabled = null, route = routeTask,
   if (routed.tier === "unavailable") {
     return { summary: null, reason: "tier-unavailable", enabled: true, tier: "unavailable" }
   }
-  return { summary: null, reason: "synthesis-stub-not-wired", enabled: true, tier: routed.tier, escalated: routed.escalated === true }
+  const runSynthesis =
+    synthesize ??
+    (async (system, text, opts) => {
+      const { chatText } = await import("./llm.mjs")
+      return chatText(system, text, opts)
+    })
+  const digestText = items
+    .slice(0, 30)
+    .map((item) => {
+      const title = String(item?.title ?? item?.text ?? "").slice(0, 300)
+      const link = String(item?.link ?? item?.sourceUrl ?? "")
+      return `- ${title}${link ? ` (${link})` : ""}`
+    })
+    .join("\n")
+    .slice(0, 6000)
+  try {
+    const summary = await runSynthesis(SYNTHESIS_SYSTEM_PROMPT, digestText, {
+      maxTokens: budgets.t1MaxTokens,
+      task: { taskKind: "synthesis" },
+      governor: true
+    })
+    return { summary, enabled: true, tier: routed.tier, escalated: routed.escalated === true }
+  } catch {
+    return { summary: null, reason: "synthesis-llm-failed", enabled: true, tier: routed.tier, escalated: routed.escalated === true }
+  }
 }

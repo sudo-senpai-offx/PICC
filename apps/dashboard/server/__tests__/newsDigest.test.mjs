@@ -2,7 +2,7 @@
 // no fabricated items, per-source fetch budget enforced BEFORE the wire,
 // captcha/rate-limit/error outcomes recorded as observed, synthesis routing
 // honors the governor and NEVER invents a summary.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -322,31 +322,75 @@ describe("digest store — run ledger, bounded + observable", () => {
   })
 })
 
-describe("digestSynthesis — routing honors the governor, summary is never invented", () => {
-  it("no items → no-items (nothing to synthesize)", () => {
-    const r = digest.digestSynthesis({ items: [], enabled: true })
+describe("digestSynthesis — async LLM wiring honors the governor, summary never invented", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("is async — every caller must await (no sync callers may exist)", () => {
+    expect(digest.digestSynthesis.constructor.name).toBe("AsyncFunction")
+    const pending = digest.digestSynthesis({ items: [], enabled: true })
+    expect(typeof pending?.then).toBe("function")
+    return pending
+  })
+
+  it("no items → no-items (nothing to synthesize)", async () => {
+    const r = await digest.digestSynthesis({ items: [], enabled: true })
     expect(r).toMatchObject({ summary: null, reason: "no-items" })
   })
 
-  it("disabled by default → synthesis-disabled unless PICC_NEWS_DIGEST_SYNTHESIS=on", () => {
-    delete process.env.PICC_NEWS_DIGEST_SYNTHESIS
-    const off = digest.digestSynthesis({ items: [{ title: "x" }] })
+  it("disabled by default → synthesis-disabled unless PICC_NEWS_DIGEST_SYNTHESIS=on", async () => {
+    const off = await digest.digestSynthesis({ items: [{ title: "x" }] })
     expect(off).toMatchObject({ summary: null, reason: "synthesis-disabled", enabled: false })
     vi.stubEnv("PICC_NEWS_DIGEST_SYNTHESIS", "on")
-    const on = digest.digestSynthesis({ items: [{ title: "x" }] })
+    const calls = []
+    const on = await digest.digestSynthesis({
+      items: [{ title: "x" }],
+      synthesize: async (...args) => {
+        calls.push(args)
+        return "Advisory summary."
+      }
+    })
     expect(on.enabled).toBe(true)
+    expect(on.summary).toBe("Advisory summary.")
+    expect(calls).toHaveLength(1)
   })
 
-  it("enabled → routes through the governor but stays an honest stub (no fabrication)", () => {
-    vi.stubEnv("PICC_NEWS_DIGEST_SYNTHESIS", "on")
-    const r = digest.digestSynthesis({ items: [{ title: "x" }] })
-    expect(r).toMatchObject({ summary: null, reason: "synthesis-stub-not-wired", enabled: true })
+  it("enabled + mocked tier → summary passthrough with tier; governor budgets respected", async () => {
+    const calls = []
+    const synthesize = async (system, text, opts) => {
+      calls.push({ system, text, opts })
+      return "Advisory headline roundup."
+    }
+    const budgets = { t1MaxTokens: 500 }
+    const r = await digest.digestSynthesis({
+      items: [{ title: "EUR/USD rallies", link: "https://x.test/a" }],
+      enabled: true,
+      budgets,
+      synthesize
+    })
+    expect(r.summary).toBe("Advisory headline roundup.")
     expect(["T1", "T2"]).toContain(r.tier)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].opts).toMatchObject({ maxTokens: 500, governor: true })
+    expect(calls[0].opts.task).toMatchObject({ taskKind: "synthesis" })
+    expect(calls[0].text).toMatch(/EUR\/USD rallies/)
+    expect(String(calls[0].system)).toMatch(/never recommend/i)
   })
 
-  it("governor says unavailable → honest tier-unavailable (no fake summary)", () => {
+  it("tier throws → null summary with a NAMED reason (never the stub, never fabricated)", async () => {
+    const synthesize = async () => {
+      throw new Error("provider down")
+    }
+    const r = await digest.digestSynthesis({ items: [{ title: "x" }], enabled: true, synthesize })
+    expect(r.summary).toBeNull()
+    expect(r.reason).toBe("synthesis-llm-failed")
+    expect(r.reason).not.toBe("synthesis-stub-not-wired")
+  })
+
+  it("governor says unavailable → honest tier-unavailable (no fake summary)", async () => {
     const route = () => ({ tier: "unavailable", escalated: false, reasons: [] })
-    const r = digest.digestSynthesis({ items: [{ title: "x" }], enabled: true, route })
+    const r = await digest.digestSynthesis({ items: [{ title: "x" }], enabled: true, route })
     expect(r).toMatchObject({ summary: null, reason: "tier-unavailable", tier: "unavailable" })
   })
 })
