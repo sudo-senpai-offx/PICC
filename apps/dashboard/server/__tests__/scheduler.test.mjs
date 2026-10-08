@@ -81,4 +81,41 @@ describe("scheduler (slice 5d coverage)", () => {
     expect(typeof s.stats.pairs).toBe("number")
     expect(typeof s.stats.buffers).toBe("number")
   })
+
+  test("stopScheduler clears pending timers and intervals so jobs stop firing", async () => {
+    await loadScheduler()
+    let runs = 0
+    scheduler.every(
+      "ut-stop",
+      10_000,
+      async () => {
+        runs += 1
+      },
+      { staggerMs: 1 }
+    )
+    scheduler.startScheduler()
+    await vi.advanceTimersByTimeAsync(5) // past the 1 ms stagger
+    expect(runs).toBe(1)
+    scheduler.stopScheduler()
+    expect(scheduler.schedulerStatus().running).toBe(false)
+    await vi.advanceTimersByTimeAsync(60_000) // would have re-fired without the stop
+    expect(runs).toBe(1)
+  })
+
+  test("every() after start warns with the job name instead of silently dropping it", async () => {
+    await loadScheduler()
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      scheduler.startScheduler()
+      scheduler.every("ut-late", 60_000, async () => {})
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("ut-late"))
+      // Loud, not silent: the late job is visible in status but never ran.
+      const job = scheduler.schedulerStatus().jobs.find((j) => j.name === "ut-late")
+      expect(job).toBeTruthy()
+      expect(job.lastRunAt).toBeNull()
+    } finally {
+      warn.mockRestore()
+    }
+    scheduler.stopScheduler()
+  })
 })
