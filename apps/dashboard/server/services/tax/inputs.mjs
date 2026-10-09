@@ -11,13 +11,19 @@
 // paperOverlay precedent: never the route, never a write path). Every source
 // is injectable via `deps` so tests stay hermetic.
 //
-// Paper/testnet exclusion uses ONE shared predicate (no second predicate):
-// paper is the canonical `"paper"` venue string (same value as the costs
-// paper overlay venue); testnet is the Hyperliquid testnet venue kind plus
-// generic testnet/sandbox markers. Wealth-leg convention reused: paper lives
-// outside summed totals and the Hyperliquid leg is the testnet leg
-// (testnet-only rail), so the same kind strings classify tax inputs.
-// Excluded records count into `excludedPaper` / `excludedTestnet`.
+// Paper/testnet exclusion reuses the shared venue convention (no second
+// predicate): paper is the canonical costs overlay venue string, imported
+// here rather than duplicated. Wealth legs were checked first
+// (legsLocal/legsKeyed): they carry no paper/testnet predicate of their own
+// — paper lives as a separate never-summed summary and the Hyperliquid leg
+// is the testnet leg — so the costs overlay venue is the shared source.
+// Hyperliquid testnet-ness is NOT a hardcoded venue substring: it derives
+// from the rail's actual posture (same resolution as the perps adapter's
+// mode gate — sandbox env pins testnet; live mainnet needs BOTH the
+// mainnet env request AND the ceremony unlock for the hyperliquid-perps
+// class). A future mainnet enablement therefore includes real closes instead
+// of silently excluding them. Excluded records count into `excludedPaper` /
+// `excludedTestnet`.
 //
 // Binding carry-forward: opening-balance entries surface ONLY as
 // acquisitions, never as disposals — even when closed via the existing close
@@ -26,19 +32,56 @@
 // Swap halves pair by shared tag; unpaired halves keep their tag and stay
 // listed (the Task 1 matcher flags `swap-half-unpaired`, never infers).
 
-export const PAPER_VENUE = "paper"
+import { PAPER_OVERLAY_VENUE } from "../costs/paperOverlay.mjs"
 
-// Single shared paper predicate (canonical paper venue string).
+export const PAPER_VENUE = PAPER_OVERLAY_VENUE
+
+// Shared paper predicate (canonical overlay venue string, not a local copy).
 export function isPaperVenue(value) {
-  return String(value ?? "").trim().toLowerCase() === PAPER_VENUE
+  return String(value ?? "").trim().toLowerCase() === PAPER_OVERLAY_VENUE
 }
 
-// Single shared testnet predicate: the Hyperliquid testnet venue kind plus
-// generic markers. Paper never counts as testnet (checked first by callers).
-export function isTestnetVenue(value) {
+// Rail posture for the Hyperliquid perps venue: "testnet" | "mainnet" |
+// "rail-off". Mirrors the perps adapter mode gate: sandbox env pins testnet;
+// otherwise live mainnet needs the mainnet env request plus the ceremony
+// unlock; anything else is rail-off (nothing live could have executed).
+// `ceremonyUnlock` injects the unlock state for hermetic tests; when omitted
+// and the mainnet request is present, the ceremony store is read dynamically
+// (fail-closed: an unreadable store locks, never unlocks).
+const PERPS_VENUE_CLASS = "hyperliquid-perps"
+
+export async function resolvePerpsPosture({ env = process.env, ceremonyUnlock } = {}) {
+  const e = env ?? {}
+  if (e.PICC_CCXT_SANDBOX_HYPERLIQUID === "1" || e.PICC_CCXT_SANDBOX === "1") return "testnet"
+  if (e.PICC_CCXT_PERPS_MAINNET_ENABLED !== "1") return "rail-off"
+  let unlocked = ceremonyUnlock
+  if (typeof unlocked === "function") unlocked = await unlocked()
+  if (unlocked === undefined) {
+    try {
+      const { enablementFor } = await import("../commandCentre/ceremonyState.mjs")
+      const rec = enablementFor(PERPS_VENUE_CLASS)
+      unlocked = rec != null && rec.unlocked === true
+    } catch {
+      unlocked = false
+    }
+  }
+  return unlocked === true ? "mainnet" : "rail-off"
+}
+
+function isHyperliquidVenue(value) {
+  return String(value ?? "").trim().toLowerCase().includes("hyperliquid")
+}
+
+// Shared testnet predicate. Explicit testnet/sandbox markers always exclude;
+// the Hyperliquid venue excludes ONLY while the rail is not in mainnet
+// posture (unknown posture defaults to exclusion — safe direction).
+// Paper never counts as testnet (callers check paper first).
+export function isTestnetVenue(value, perpsPosture = "testnet") {
   const v = String(value ?? "").trim().toLowerCase()
-  if (!v || v === PAPER_VENUE) return false
-  return v.includes("hyperliquid") || v.includes("testnet") || v.includes("sandbox")
+  if (!v || v === PAPER_OVERLAY_VENUE) return false
+  if (v.includes("testnet") || v.includes("sandbox")) return true
+  if (isHyperliquidVenue(v)) return perpsPosture !== "mainnet"
+  return false
 }
 
 function lowerTags(rec) {
@@ -46,13 +89,14 @@ function lowerTags(rec) {
 }
 
 // Classify one source record as "paper" | "testnet" | "live".
-function classifyRecord(rec) {
+function classifyRecord(rec, perpsPosture = "testnet") {
   const venues = [rec?.venue, rec?.kind].filter((v) => v !== undefined && v !== null && String(v) !== "")
   if (venues.some(isPaperVenue)) return "paper"
-  if (venues.some(isTestnetVenue)) return "testnet"
+  if (venues.some((v) => isTestnetVenue(v, perpsPosture))) return "testnet"
   const tags = lowerTags(rec)
-  if (tags.some((t) => t === PAPER_VENUE)) return "paper"
-  if (tags.some((t) => t === "hyperliquid" || t.includes("testnet") || t.includes("sandbox"))) return "testnet"
+  if (tags.some((t) => t === PAPER_OVERLAY_VENUE)) return "paper"
+  if (tags.some((t) => t.includes("testnet") || t.includes("sandbox"))) return "testnet"
+  if (tags.some(isHyperliquidVenue)) return perpsPosture === "mainnet" ? "live" : "testnet"
   return "live"
 }
 
@@ -142,6 +186,12 @@ export async function collectInputs({ from = null, to = null, deps = {} } = {}) 
       ? await deps.transfersReader()
       : await defaultTransfers()
 
+  // Rail posture resolved once: hyperliquid records exclude ONLY outside
+  // mainnet posture. Injectable for hermetic tests (`perpsPosture` wins).
+  const perpsPosture = typeof deps.perpsPosture === "string"
+    ? deps.perpsPosture
+    : await resolvePerpsPosture({ env: deps.env ?? process.env, ceremonyUnlock: deps.ceremonyUnlock })
+
   const acquisitions = []
   const disposals = []
   const costs = []
@@ -155,7 +205,7 @@ export async function collectInputs({ from = null, to = null, deps = {} } = {}) 
 
   for (const e of journalEntries ?? []) {
     if (!e || typeof e !== "object") continue
-    const cls = classifyRecord(e)
+    const cls = classifyRecord(e, perpsPosture)
     if (cls !== "live") {
       exclude(cls)
       continue
@@ -193,7 +243,7 @@ export async function collectInputs({ from = null, to = null, deps = {} } = {}) 
 
   for (const c of liveCloses ?? []) {
     if (!c || typeof c !== "object") continue
-    const cls = classifyRecord(c)
+    const cls = classifyRecord(c, perpsPosture)
     if (cls !== "live") {
       exclude(cls)
       continue
@@ -217,7 +267,7 @@ export async function collectInputs({ from = null, to = null, deps = {} } = {}) 
 
   for (const f of fillCosts ?? []) {
     if (!f || typeof f !== "object") continue
-    const cls = classifyRecord(f)
+    const cls = classifyRecord(f, perpsPosture)
     if (cls !== "live") {
       exclude(cls)
       continue

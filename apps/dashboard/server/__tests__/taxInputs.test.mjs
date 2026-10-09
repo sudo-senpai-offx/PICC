@@ -138,4 +138,54 @@ describe("tax inputs assembly", () => {
       expect(src).not.toContain(call)
     }
   })
+
+  it("hyperliquid venue follows the rail posture: testnet posture excludes with count", async () => {
+    const hl = { id: "j-hl", symbol: "BTC", side: "long", entryPrice: 50000, quantity: 0.4, entryTime: ms("2026-01-04T00:00:00Z"), status: "closed", exitPrice: 60000, exitTime: ms("2026-02-11T00:00:00Z"), tags: [], venue: "hyperliquid" }
+    const out = await mod.collectInputs({ ...range, deps: { ...baseDeps(), journalEntries: [...journal(), hl], perpsPosture: "testnet" } })
+    const allIds = [...out.acquisitions.map((a) => a.id), ...out.disposals.map((d) => d.id)]
+    expect(allIds).not.toContain("j-hl")
+    expect(out.excludedTestnet).toBe(2) // fixture testnet + hyperliquid
+  })
+
+  it("simulated mainnet posture includes hyperliquid records as live", async () => {
+    const hl = { id: "j-hl", symbol: "BTC", side: "long", entryPrice: 50000, quantity: 0.4, entryTime: ms("2026-01-04T00:00:00Z"), status: "closed", exitPrice: 60000, exitTime: ms("2026-02-11T00:00:00Z"), tags: [], venue: "hyperliquid" }
+    const out = await mod.collectInputs({
+      ...range,
+      deps: {
+        journalEntries: [hl],
+        liveCloses: [],
+        fillCosts: [{ id: "c-hl", closeId: "j-hl", amountUsd: 4, kind: "fee", venue: "hyperliquid" }],
+        transfers: [],
+        perpsPosture: "mainnet",
+      },
+    })
+    expect(out.acquisitions.map((a) => a.id)).toContain("j-hl")
+    expect(out.disposals.map((d) => d.id)).toContain("j-hl")
+    expect(out.costs.find((c) => c.closeId === "j-hl")).toMatchObject({ feeUsd: 4 })
+    expect(out.excludedTestnet).toBe(0)
+    expect(out.excludedPaper).toBe(0)
+  })
+})
+
+describe("resolvePerpsPosture", () => {
+  it("sandbox env pins testnet posture", async () => {
+    await expect(mod.resolvePerpsPosture({ env: { PICC_CCXT_SANDBOX_HYPERLIQUID: "1" } })).resolves.toBe("testnet")
+    await expect(mod.resolvePerpsPosture({ env: { PICC_CCXT_SANDBOX: "1" } })).resolves.toBe("testnet")
+  })
+
+  it("no flags means rail-off (nothing live could have executed)", async () => {
+    await expect(mod.resolvePerpsPosture({ env: {} })).resolves.toBe("rail-off")
+  })
+
+  it("mainnet request plus ceremony unlock resolves mainnet", async () => {
+    await expect(
+      mod.resolvePerpsPosture({ env: { PICC_CCXT_PERPS_MAINNET_ENABLED: "1" }, ceremonyUnlock: true }),
+    ).resolves.toBe("mainnet")
+  })
+
+  it("mainnet request without the unlock stays rail-off", async () => {
+    await expect(
+      mod.resolvePerpsPosture({ env: { PICC_CCXT_PERPS_MAINNET_ENABLED: "1" }, ceremonyUnlock: false }),
+    ).resolves.toBe("rail-off")
+  })
 })
