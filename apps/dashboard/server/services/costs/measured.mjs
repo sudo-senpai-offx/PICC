@@ -30,7 +30,10 @@ async function convertLeg({ kind, cost, currency }, fx) {
   if (!Number.isFinite(amount)) {
     return { record: null, skip: { kind, reason: `${kind}-amount-not-finite` } }
   }
-  const ccy = currency ?? "USD"
+  if (currency == null || currency === "") {
+    return { record: null, skip: { kind, reason: `${kind}-currency-unobserved` } }
+  }
+  const ccy = currency
   const converted = await fx(ccy, amount)
   if (!converted || converted.usd == null || !Number.isFinite(Number(converted.usd))) {
     return {
@@ -99,6 +102,8 @@ export async function measureFillCost(fill, fx = defaultFx) {
     } else {
       skipped.push(skip)
     }
+  } else if (fundingAccrual === "observed") {
+    skipped.push({ kind: "funding", reason: "funding-observed-but-absent" })
   }
 
   return { records, skipped }

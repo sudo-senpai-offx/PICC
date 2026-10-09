@@ -115,4 +115,37 @@ describe("costs measured recorder", () => {
     expect(records).toEqual([])
     expect(skipped[0]).toMatchObject({ kind: "fee", reason: "fx-unobservable:EUR" })
   })
+
+  it("skips a currency-missing fee instead of assuming USD", async () => {
+    const { records, skipped } = await mod.measureFillCost(
+      { venue: "hyperliquid", route: "close", fee: { cost: 0.01 } },
+      parityFx
+    )
+    expect(records).toEqual([])
+    expect(skipped).toContainEqual({ kind: "fee", reason: "fee-currency-unobserved" })
+  })
+
+  it("skips currency-missing funding instead of assuming USD", async () => {
+    const { records, skipped } = await mod.measureFillCost(
+      {
+        venue: "hyperliquid",
+        route: "close",
+        fee: null,
+        funding: { amount: 0.005 },
+        fundingAccrual: "observed"
+      },
+      parityFx
+    )
+    expect(records.some((r) => r.kind === "funding")).toBe(false)
+    expect(skipped).toContainEqual({ kind: "funding", reason: "funding-currency-unobserved" })
+  })
+
+  it("names explicit observed accrual with an absent funding object", async () => {
+    const { records, skipped } = await mod.measureFillCost(
+      { venue: "hyperliquid", route: "close", fee: null, fundingAccrual: "observed" },
+      parityFx
+    )
+    expect(records.some((r) => r.kind === "funding")).toBe(false)
+    expect(skipped).toContainEqual({ kind: "funding", reason: "funding-observed-but-absent" })
+  })
 })
