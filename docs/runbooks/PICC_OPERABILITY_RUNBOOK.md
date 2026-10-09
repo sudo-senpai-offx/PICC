@@ -332,14 +332,14 @@ turning the build red.
 Four of these were added after this section was first written and are worth calling out, because
 each one is load-bearing in a way the others are not:
 
-- **`PICC_ERROR_LOG_FILE` (#20)** decides where the error log is written. `server/errorLog.mjs`
+- **`PICC_ERROR_LOG_FILE` (#22)** decides where the error log is written. `server/errorLog.mjs`
   defaults it to `<repo>/picc-errors.log` and truncates that file on every launch, so a harness that
   enables the logger without redirecting this variable writes at the repository root.
-- **`PICC_ENV_LOADED` (#23)** is what actually blocks credential loading. Playwright *merges* the
+- **`PICC_ENV_LOADED` (#25)** is what actually blocks credential loading. Playwright *merges* the
   parent environment into the web server, so redirecting the data directories alone does not make a
   run credential-free; `server/config.mjs` calls `process.loadEnvFile()` unless this is already set,
   and `apps/dashboard/.env` holds real provider and CCXT credentials.
-- **`PICC_E2E_RUN_ID` (#24)** is the arming signal for the `/api/auth/me` branch trace. The e2e run
+- **`PICC_E2E_RUN_ID` (#26)** is the arming signal for the `/api/auth/me` branch trace. The e2e run
   marker is what makes `writeAuthMeTrace` write at all; without it the trace is silent in every
   environment, which is the failure mode that made the WS-6 T10 instrumentation useless when it was
   first written. See §4.6.

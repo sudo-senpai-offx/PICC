@@ -3149,6 +3149,64 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // -------------------------------------------------------------------
+  // Fee intelligence (W3-02 Task 7) — GET /api/costs/overview.
+  //
+  // Scorecard (Tasks 1+4+5) + paper cost drag (Task 6), one additive route.
+  // The costs boundary stays off the boot path: every service below is
+  // reached through a dynamic load, so the static count the bootstrap guard
+  // pins does not move. paperOverview is the module-level binding (zero new
+  // edges); the marking analytics entry point is never reached from this
+  // branch — the paper block is built from the read-only history reader plus
+  // pure math, the same adapter the wealth overview uses.
+  //
+  // Paper drag ordering (Task 6 F3): paperHistory serves newest-first while
+  // the curve and the overlay both require oldest-first, so ONE shared
+  // oldest-first ordering feeds both — a positional mapping fed two different
+  // orders would shift attribution silently. The overlay result is
+  // destructured as { lines, skipped } (Task 6 F1), never assumed an array.
+  //
+  // GATED, NOT ALLOWLISTED. The payload names venue spend and paper drag.
+  // None of it is declared-public, so the route carries an unconditional
+  // requireAuth() gate as its FIRST statement.
+  // -------------------------------------------------------------------
+  if (path === "/api/costs/overview" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
+    try {
+      const costsStore = await import("./services/costs/store.mjs")
+      const costsAggregate = await import("./services/costs/aggregate.mjs")
+      const costsAttempts = await import("./services/costs/attempts.mjs")
+      const costsOverlay = await import("./services/costs/paperOverlay.mjs")
+      const costsAnalytics = await import("./services/analytics.mjs")
+      const fills = costsStore.listFillCosts({})
+      const rollups = costsStore.listRollups({})
+      const attempts = costsAttempts.attemptCounts({})
+      const result = costsAggregate.scorecard({ fills, rollups, attempts, window: {} })
+      const closes = await costsOverlay.readPaperCloses({})
+      const oldestFirst = [...closes].sort((a, b) => (a.closedAt < b.closedAt ? -1 : 1))
+      const { lines, skipped } = costsOverlay.overlayForCloses(oldestFirst)
+      const paper = await paperOverview()
+      const curve = costsAnalytics.equitySeries(oldestFirst, paper.starting)
+      const drag = costsOverlay.dragAdjustedEquity(curve, { lines })
+      writeJson(res, 200, {
+        ...result,
+        ok: true,
+        paper: {
+          label: drag.label,
+          starting: paper.starting ?? null,
+          lines,
+          series: drag.series,
+          skipped,
+          reason: oldestFirst.length === 0 ? "paper-closes-absent" : null
+        }
+      })
+    } catch (err) {
+      console.warn("[picc] costs overview failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/assist" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return
     try {

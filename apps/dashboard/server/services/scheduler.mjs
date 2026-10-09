@@ -21,6 +21,8 @@
 //   corpus-refresh    every 60 min  copytrading corpus prune (OFF-gated).
 //   wealth-refresh    every 24 h    wealth ledger tiered refresh + daily snapshot
 //                                   (date-keyed idempotent, 2-year rolling prune).
+//   costs-refresh     every 24 h    fee-intelligence record pass (measure fills,
+//                                   record costs, roll up closed days only).
 //
 // D2/AC-005: the "eo-staleness" job is removed (see jobs/eo-liveness.mjs).
 // Jobs are concurrency-guarded (a slow run is skipped, not queued) and all
@@ -44,6 +46,7 @@ import { name as packName, intervalMs as packIntervalMs, staggerMs as packStagge
 import { name as newsName, intervalMs as newsIntervalMs, staggerMs as newsStaggerMs, run as runNewsDigest } from "./jobs/news-digest.mjs"
 import { name as corpusName, intervalMs as corpusIntervalMs, staggerMs as corpusStaggerMs, run as runCorpusRefresh } from "./jobs/corpus-refresh.mjs"
 import { name as wealthName, intervalMs as wealthIntervalMs, staggerMs as wealthStaggerMs, run as runWealthRefresh } from "./jobs/wealth-refresh.mjs"
+import { name as costsName, intervalMs as costsIntervalMs, staggerMs as costsStaggerMs, run as runCostsRefresh } from "./jobs/costs-refresh.mjs"
 
 export { sessionUptime24h, ccxtSchedulerStatus }
 
@@ -158,3 +161,5 @@ every(newsName, newsIntervalMs, runNewsDigest, { staggerMs: newsStaggerMs })
 every(corpusName, corpusIntervalMs, runCorpusRefresh, { staggerMs: corpusStaggerMs })
 
 every(wealthName, wealthIntervalMs, runWealthRefresh, { staggerMs: wealthStaggerMs })
+
+every(costsName, costsIntervalMs, runCostsRefresh, { staggerMs: costsStaggerMs })

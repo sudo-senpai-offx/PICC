@@ -1127,7 +1127,7 @@ function connectorsSiteIsGated(lines, index) {
     // UNCHANGED at 72, which is what confirms the growth is two gated routes
     // and their reasoning rather than new module-level dependencies. The line
     // figure moves with it; see the accounting at the `lines` assertion below.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(94)
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(99)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1442,7 +1442,25 @@ function connectorsSiteIsGated(lines, index) {
     // structure changed is a different signal from one that moved because two
     // gated routes and their reasoning landed, and the import pair is what
     // tells them apart.
-    expect(lines, "lines in handlers.mjs").toBe(6588)
+    //
+    // 6,588 -> 6,646 in W3-02 Task 7 (fee-intelligence record job + overview
+    // route + wealth-section UI), the same protocol: +58 lines, and every one
+    // is accounted for rather than absorbed. They are the single contiguous
+    // GET /api/costs/overview branch after the wealth transfers route: its
+    // unconditional requireAuth() gate as its FIRST statement, five dynamic
+    // service loads (costs store, aggregator, attempts counter, paper overlay,
+    // pure analytics for the equity curve), the scorecard call, the shared
+    // oldest-first ordering feeding both curve and overlay, the destructured
+    // { lines, skipped } overlay result, and the reasoning recording WHY the
+    // paper path must never reach the marking analytics entry point. The
+    // import pair moves 94 -> 99 dynamic with statics UNCHANGED at 72 for
+    // exactly those five loads — paperOverview is the module-level binding, so
+    // the paper read adds zero — which is what confirms the growth is one
+    // gated route and its reasoning rather than new module-level
+    // dependencies. The record job itself lives in
+    // services/jobs/costs-refresh.mjs and registers via every() beside the
+    // wealth RUN leg in scheduler.mjs, so it adds no lines here at all.
+    expect(lines, "lines in handlers.mjs").toBe(6646)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
