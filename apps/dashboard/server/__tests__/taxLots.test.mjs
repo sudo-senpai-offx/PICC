@@ -41,4 +41,22 @@ describe("fifo lots", () => {
     })
     expect(out.lots.find((l) => l.id === "d-lone").flags).toContain("swap-half-unpaired")
   })
+
+  it("unmatched sell with linked sell fee: no fee-unobserved, proceeds adjusted", () => {
+    const out = matchLots({
+      acquisitions: [], disposals: [dis({})],
+      costs: [{ closeId: "d1", feeUsd: 5, kind: "fee" }], selfTransfers: [],
+    })
+    expect(out.lots[0].flags).not.toContain("fee-unobserved")
+    expect(out.lots[0].feeUsd).toBeCloseTo(5, 8)
+    expect(out.lots[0].proceedsUsd).toBeCloseTo(0.5 * 60000 - 5, 8)
+    expect(out.lots[0].basisUsd).toBe(null)
+    expect(out.lots[0].gainUsd).toBe(null)
+  })
+
+  it("unmatched sell without linked sell fee: fee-unobserved present", () => {
+    const out = matchLots({ acquisitions: [], disposals: [dis({})], costs: [], selfTransfers: [] })
+    expect(out.lots[0].flags).toContain("fee-unobserved")
+    expect(out.lots[0].feeUsd).toBe(null)
+  })
 })

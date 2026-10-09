@@ -114,7 +114,7 @@ export function matchLots({ acquisitions = [], disposals = [], costs = [], selfT
         proceedsUsd: remaining * Number(d.price) - sellFeeSlice,
         basisUsd: null,
         gainUsd: null,
-        flags: ["basis-unobserved", ...feeFlags(false), ...swapFlags],
+        flags: ["basis-unobserved", ...(!sell.linked ? ["fee-unobserved"] : []), ...swapFlags],
       }
       lots.push(line)
       unmatched.push(line)
