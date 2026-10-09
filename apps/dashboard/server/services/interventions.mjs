@@ -36,8 +36,16 @@ import {
   lastLossAtFrom,
   checkProposalGate,
   riskDayState,
-  recordU4faProposal
+  recordU4faProposal,
+  dayKeyOf
 } from "./u4faRisk.mjs"
+import {
+  evaluatePaperCircuit,
+  isPaperCircuitHalted,
+  paperCircuitSnapshot,
+  paperDayLossPctOf,
+  tripPaperCircuitHalt
+} from "./paperCircuit.mjs"
 
 const SERVER_DIR = fileURLToPath(new URL("..", import.meta.url))
 const DATA_DIR = process.env.PICC_DATA_DIR
@@ -396,6 +404,39 @@ async function tradeRiskFeeds() {
 }
 
 /**
+ * Wave3+02 — graduated paper day-loss circuit (PAPER-ONLY helper).
+ *
+ * Pure pre-check shared by proposeTrade/proposeSuiteTrade: the persisted L3
+ * latch dominates (blocks even when feeds are down); otherwise the level is
+ * derived from today's paper day-loss %. Returns null when no circuit block
+ * applies, else the `{ ok:false, status:"blocked", ... }` refusal shape.
+ * L3 readings latch via tripPaperCircuitHalt (manual re-enable only).
+ */
+function paperCircuitRefusal({ dayStartBalance, dayPnl, now }) {
+  if (isPaperCircuitHalted()) {
+    const snap = paperCircuitSnapshot()
+    return {
+      ok: false,
+      status: "blocked",
+      dayKey: dayKeyOf(now),
+      dayPnl,
+      reason: `paper-circuit-l3-halt-all-persisted: tripped ${snap.halted?.dayKey ?? "?"} — manual re-enable required, use clearPaperCircuitHalt({ reviewer })`,
+      circuit: { level: 3, action: "halt-all", sizeFactor: 0, reason: "paper-circuit-l3-halt-all-persisted" }
+    }
+  }
+  const dayLossPct = paperDayLossPctOf({ dayStartBalance, dayPnl })
+  const circuit = evaluatePaperCircuit({ dayLossPct, now })
+  if (circuit.action === "halt-all") {
+    tripPaperCircuitHalt({ dayLossPct, now, reason: circuit.reason })
+    return { ok: false, status: "blocked", dayKey: circuit.dayKey, dayPnl, reason: circuit.reason, circuit }
+  }
+  if (circuit.action === "halt-new") {
+    return { ok: false, status: "blocked", dayKey: circuit.dayKey, dayPnl, reason: circuit.reason, circuit }
+  }
+  return null
+}
+
+/**
  * T11 — the U4FA Augmentation gate. Mirrors proposeCaptureLogin: a normal queue
  * proposal (source "trade") the human resolves via respondIntervention.
  * Idempotent while one is pending (no dupes). A NEW proposal is only created
@@ -424,6 +465,18 @@ export async function proposeTrade(order = {}, opts = {}) {
 
   if (tradeGate && tradeGate.status === "pending") {
     return { ok: true, id: tradeGate.proposalId, status: "pending", duplicate: true }
+  }
+
+  // Wave3+02: persisted L3 latch dominates even when feeds are down (paper-only).
+  if (isPaperCircuitHalted()) {
+    const snap = paperCircuitSnapshot()
+    return {
+      ok: false,
+      status: "blocked",
+      dayKey: dayKeyOf(now),
+      reason: `paper-circuit-l3-halt-all-persisted: tripped ${snap.halted?.dayKey ?? "?"} — manual re-enable required, use clearPaperCircuitHalt({ reviewer })`,
+      circuit: { level: 3, action: "halt-all", sizeFactor: 0, reason: "paper-circuit-l3-halt-all-persisted" }
+    }
   }
 
   const feeds = await tradeRiskFeeds()
@@ -465,13 +518,30 @@ export async function proposeTrade(order = {}, opts = {}) {
       reason: "u4fa-amount-unobservable: sizing balance is null/NaN/non-finite; no proposal on unobservable amount"
     }
   }
-  const amount = order.amount != null && Number.isFinite(Number(order.amount)) && Number(order.amount) > 0
+  // Wave3+02: graduated paper circuit sits ATOP the U4FA barrier AND the
+  // amount guard (paper-only; live 5D gates untouched) — pre-existing
+  // refusals keep their exact named reasons and precedence; L2/L3 refuse
+  // here, L1 halves the stake below.
+  const refusal = paperCircuitRefusal({ dayStartBalance: state.dayStartBalance, dayPnl, now })
+  if (refusal) return refusal
+  const circuit = evaluatePaperCircuit({
+    dayLossPct: paperDayLossPctOf({ dayStartBalance: state.dayStartBalance, dayPnl }),
+    now
+  })
+  const baseAmount = order.amount != null && Number.isFinite(Number(order.amount)) && Number(order.amount) > 0
     ? Math.round(Number(order.amount) * 100) / 100
     : size.amount
+  // Wave3+02 L1: halve the stake on the graduated circuit (paper-only).
+  // Explicit order.amount does NOT bypass the halve (same doctrine as the
+  // fail-closed amount guard above); the $1 floor still binds honestly.
+  const amount = circuit.action === "reduce-size"
+    ? Math.max(1, Math.round(baseAmount * circuit.sizeFactor * 100) / 100)
+    : baseAmount
   const floorNote = size.floorApplied ? ` · risk floor $1 unit applies (0.5% of $${feeds.balance} < $1)` : ""
+  const circuitNote = circuit.action === "reduce-size" ? ` · paper-circuit L1: size halved (${circuit.reason})` : ""
 
   const summary = order.summary || `U4FA ${direction} ${symbol} ${Math.round(expiry)}s`
-  const detail = `${summary} — stake $${amount.toFixed(2)}${floorNote}. PAPER ONLY: approving places a demo order; nothing touches a real account.`
+  const detail = `${summary} — stake $${amount.toFixed(2)}${floorNote}${circuitNote}. PAPER ONLY: approving places a demo order; nothing touches a real account.`
   const p = newProposal({
     workflow: { id: "u4fa-trade", name: "U4FA signal" },
     tabId: null,
@@ -499,7 +569,7 @@ export async function proposeTrade(order = {}, opts = {}) {
   }
   recordU4faProposal({ now, balance: feeds.balance })
   emit()
-  return { ok: true, id: p.id, status: "pending", amount, floorApplied: size.floorApplied, dayKey: gate.dayKey }
+  return { ok: true, id: p.id, status: "pending", amount, floorApplied: size.floorApplied, dayKey: gate.dayKey, circuit: { level: circuit.level, action: circuit.action, sizeFactor: circuit.sizeFactor, reason: circuit.reason } }
 }
 
 /**
@@ -550,6 +620,18 @@ export async function proposeSuiteTrade(input = {}, opts = {}) {
     return { ok: true, id: tradeGate.proposalId, status: "pending", duplicate: true }
   }
 
+  // Wave3+02: persisted L3 latch dominates even when feeds are down (paper-only).
+  if (isPaperCircuitHalted()) {
+    const latched = paperCircuitSnapshot()
+    return {
+      ok: false,
+      status: "blocked",
+      dayKey: dayKeyOf(now),
+      reason: `paper-circuit-l3-halt-all-persisted: tripped ${latched.halted?.dayKey ?? "?"} — manual re-enable required, use clearPaperCircuitHalt({ reviewer })`,
+      circuit: { level: 3, action: "halt-all", sizeFactor: 0, reason: "paper-circuit-l3-halt-all-persisted" }
+    }
+  }
+
   const lastAt = lastSuiteProposalAt.get(symbol) || 0
   if (now - lastAt < SUITE_PROPOSAL_COOLDOWN_MS) {
     const waited = Math.floor((now - lastAt) / 60000)
@@ -564,6 +646,22 @@ export async function proposeSuiteTrade(input = {}, opts = {}) {
   const feeds = await tradeRiskFeeds()
   if (!feeds) return { ok: false, status: "blocked", reason: "risk feed unavailable" }
 
+  // Wave3+02: graduated paper circuit on the suite path too (paper-only; the
+  // u4fa quota ledger stays untouched). UTC-day start is reconstructed as
+  // balance − today's realized paper PnL (documented approximation: ignores
+  // open/unrealized legs and deposits — fail-closed on unobservable inputs).
+  const suiteDayKey = dayKeyOf(now)
+  const suiteDayPnl = pnlByUtcDay({ closed: feeds.closed, dayKey: suiteDayKey })
+  const suiteDayStart = Number.isFinite(Number(feeds.balance)) && Number.isFinite(Number(suiteDayPnl))
+    ? Number(feeds.balance) - Number(suiteDayPnl)
+    : null
+  const suiteRefusal = paperCircuitRefusal({ dayStartBalance: suiteDayStart, dayPnl: suiteDayPnl, now })
+  if (suiteRefusal) return suiteRefusal
+  const suiteCircuit = evaluatePaperCircuit({
+    dayLossPct: paperDayLossPctOf({ dayStartBalance: suiteDayStart, dayPnl: suiteDayPnl }),
+    now
+  })
+
   let riskPct = 2
   try {
     const { getCredentials } = await import("./trading.mjs")
@@ -574,11 +672,16 @@ export async function proposeSuiteTrade(input = {}, opts = {}) {
   }
   const balance = Number(feeds.balance) || 0
   const defaultAmount = Math.max(1, Math.min(Math.round(balance * (riskPct / 100) * 100) / 100, balance))
-  const amount = opts?.amount != null && Number.isFinite(Number(opts.amount)) && Number(opts.amount) > 0
+  const baseSuiteAmount = opts?.amount != null && Number.isFinite(Number(opts.amount)) && Number(opts.amount) > 0
     ? Math.round(Number(opts.amount) * 100) / 100
     : defaultAmount
+  // Wave3+02 L1: halve the suite stake too (explicit opts.amount included).
+  const amount = suiteCircuit.action === "reduce-size"
+    ? Math.max(1, Math.round(baseSuiteAmount * suiteCircuit.sizeFactor * 100) / 100)
+    : baseSuiteAmount
+  const suiteCircuitNote = suiteCircuit.action === "reduce-size" ? ` · paper-circuit L1: size halved (${suiteCircuit.reason})` : ""
 
-  const detail = `${input.reason.trim()} — stake $${amount.toFixed(2)} (${riskPct}% riskPerTradePct of $${balance.toFixed(2)} paper). PAPER ONLY: approving places a demo order; nothing touches a real account.`
+  const detail = `${input.reason.trim()} — stake $${amount.toFixed(2)} (${riskPct}% riskPerTradePct of $${balance.toFixed(2)} paper)${suiteCircuitNote}. PAPER ONLY: approving places a demo order; nothing touches a real account.`
   const p = newProposal({
     workflow: { id: "suite-trade", name: "Suite signal" },
     tabId: null,
@@ -606,7 +709,7 @@ export async function proposeSuiteTrade(input = {}, opts = {}) {
   }
   lastSuiteProposalAt.set(symbol, now)
   emit()
-  return { ok: true, id: p.id, status: "pending", amount, source: "trade", workflowName: "Suite signal" }
+  return { ok: true, id: p.id, status: "pending", amount, source: "trade", workflowName: "Suite signal", circuit: { level: suiteCircuit.level, action: suiteCircuit.action, sizeFactor: suiteCircuit.sizeFactor, reason: suiteCircuit.reason } }
 }
 
 /** Test seam + engine reset — drops the trade gate + its proposals. */
