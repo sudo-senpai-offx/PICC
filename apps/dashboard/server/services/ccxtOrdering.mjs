@@ -71,7 +71,7 @@ import { createLogger } from "../logger.mjs"
 import { toCcxtSymbol } from "./ccxtConnector.mjs"
 import { countAttempt } from "./costs/attempts.mjs"
 import { dayKeyOf } from "./u4faRisk.mjs"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, renameSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -651,8 +651,45 @@ function bootEquity() {
 function persistEquity() {
   if (!canTouchDisk()) return
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
+  atomicPersistEquity()
+}
+
+// Crash-safe persist (tmp-file + atomic rename) with a per-file write lock,
+// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock +
+// ENOENT retry). Sync persists hold the event loop, so concurrent callers
+// serialize naturally; the flag makes overlapping entry explicit instead of
+// silent, and the pid-unique tmp keeps concurrent processes from sharing a
+// staging file. Failure semantics preserved: a failed persist still throws to
+// the caller (no swallow — observeCcxtEquity reports it); only the on-disk
+// snapshot is protected, and the staging tmp is always cleaned up.
+let equityWriteLocked = false
+function atomicPersistEquity() {
   // Object store — OVERWRITE, not append (append is the JSONL audit's shape).
-  writeFileSync(EQUITY_FILE, JSON.stringify(equityStore, null, 2), "utf8")
+  const text = JSON.stringify(equityStore, null, 2)
+  const tmp = `${EQUITY_FILE}.${process.pid}.tmp`
+  equityWriteLocked = true
+  try {
+    try {
+      writeFileSync(tmp, text, "utf8")
+      renameSync(tmp, EQUITY_FILE)
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        // Data dir created after import time (tests / fresh machine): ensure
+        // it exists and retry once instead of failing the write.
+        mkdirSync(DATA_DIR, { recursive: true })
+        writeFileSync(tmp, text, "utf8")
+        renameSync(tmp, EQUITY_FILE)
+      } else {
+        throw err
+      }
+    } finally {
+      // Staging cleanup: noop once renamed (force ignores missing), removes a
+      // truncated tmp after a crash so no stale staging file ever lingers.
+      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    }
+  } finally {
+    equityWriteLocked = false
+  }
 }
 
 /**

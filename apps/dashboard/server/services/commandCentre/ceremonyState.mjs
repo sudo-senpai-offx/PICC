@@ -1,5 +1,5 @@
 // WS-3 F1 ceremonyState — persistent per-venue-class ceremony store (R1). Honesty contract (ADR-0005): this store is a persistent PROJECTION of spendable ledger rows (each credit records ledgerSeq); sim/untagged rows are named denies (ceremony:deny:sim-row / ceremony:deny:untagged-class), never silent skips; enablement/platformVerification are written only by deliberate ceremony actions, never by the credit path.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { dayKeyOf } from "../u4faRisk.mjs"
@@ -90,8 +90,45 @@ function boot() {
 
 function persist() {
   if (!canTouchDisk() || ceremonyStoreHealth.ok !== true || !store) return
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
-  writeFileSync(CEREMONY_FILE, JSON.stringify(store, null, 2), "utf8")
+  atomicPersist()
+}
+
+// Crash-safe persist (tmp-file + atomic rename) with a per-file write lock,
+// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock +
+// ENOENT retry). Sync persists hold the event loop, so concurrent callers
+// serialize naturally; the flag makes overlapping entry explicit instead of
+// silent, and the pid-unique tmp keeps concurrent processes from sharing a
+// staging file. Failure semantics preserved: a failed persist still throws to
+// the caller (no swallow here — callers treat it as a hard error); only the
+// on-disk snapshot is protected, and the staging tmp is always cleaned up.
+let ceremonyWriteLocked = false
+function atomicPersist() {
+  const text = JSON.stringify(store, null, 2)
+  const tmp = `${CEREMONY_FILE}.${process.pid}.tmp`
+  ceremonyWriteLocked = true
+  try {
+    try {
+      if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
+      writeFileSync(tmp, text, "utf8")
+      renameSync(tmp, CEREMONY_FILE)
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        // Data dir created after import time (tests / fresh machine): ensure
+        // it exists and retry once instead of failing the write.
+        mkdirSync(DATA_DIR, { recursive: true })
+        writeFileSync(tmp, text, "utf8")
+        renameSync(tmp, CEREMONY_FILE)
+      } else {
+        throw err
+      }
+    } finally {
+      // Staging cleanup: noop once renamed (force ignores missing), removes a
+      // truncated tmp after a crash so no stale staging file ever lingers.
+      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    }
+  } finally {
+    ceremonyWriteLocked = false
+  }
 }
 
 const seqOf = (row) => {

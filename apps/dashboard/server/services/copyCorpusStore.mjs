@@ -1,7 +1,7 @@
 // Copytrading research corpus store — EXTERNAL samples only (§6).
 // Structurally separate file from all owner stores; origin is set at write,
 // never inferred at read. Read-only after ingest (no update path by design).
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -20,9 +20,45 @@ function load() {
 }
 function save() {
   try {
-    mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(FILE, JSON.stringify(rows, null, 2))
+    atomicSave()
   } catch { /* best-effort */ }
+}
+
+// Crash-safe persist (tmp-file + atomic rename) with a per-file write lock,
+// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock +
+// ENOENT retry). Sync persists hold the event loop, so concurrent callers
+// serialize naturally; the flag makes overlapping entry explicit instead of
+// silent, and the pid-unique tmp keeps concurrent processes from sharing a
+// staging file. Best-effort swallow preserved: failures never propagate.
+let corpusWriteLocked = false
+function atomicSave() {
+  const text = JSON.stringify(rows, null, 2)
+  const tmp = `${FILE}.${process.pid}.tmp`
+  corpusWriteLocked = true
+  try {
+    try {
+      mkdirSync(DATA_DIR, { recursive: true })
+      writeFileSync(tmp, text)
+      renameSync(tmp, FILE)
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        // Data dir created after import time (tests / fresh machine): ensure
+        // it exists and retry once instead of silently dropping the write.
+        try {
+          mkdirSync(dirname(FILE), { recursive: true })
+          writeFileSync(tmp, text)
+          renameSync(tmp, FILE)
+        } catch { /* best-effort: fall through to tmp cleanup */ }
+      }
+      /* best-effort swallow (existing semantics) */
+    } finally {
+      // Staging cleanup: noop once renamed (force ignores missing), removes a
+      // truncated tmp after a crash so no stale staging file ever lingers.
+      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    }
+  } finally {
+    corpusWriteLocked = false
+  }
 }
 load()
 

@@ -22,7 +22,7 @@
 import { readPage } from "./browserBridge.mjs"
 import { studioBroadcast, studioIsOpen, studioPageFor, studioTypeText } from "./browserStudio.mjs"
 import { saveSessionPolicy } from "./captureProfiles.mjs"
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, renameSync, rmSync } from "node:fs"
 import { isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomBytes } from "node:crypto"
@@ -760,8 +760,34 @@ export function saveWorkflow({ id, name, description = "", suite = null, approva
     steps: steps.map((s) => ({ ...s }))
   }
   mkdirSync(WORKFLOWS_DIR, { recursive: true })
-  writeFileSync(join(WORKFLOWS_DIR, `${wf.id}.json`), JSON.stringify(wf, null, 2), "utf8")
+  atomicSaveWorkflow(join(WORKFLOWS_DIR, `${wf.id}.json`), JSON.stringify(wf, null, 2))
   return wf
+}
+
+// Crash-safe per-file persist (tmp-file + atomic rename) with a write lock,
+// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock).
+// Each workflow is its own file, so the staging tmp is per-target (+pid, so
+// concurrent processes never share one); sync saves hold the event loop, so
+// concurrent callers serialize naturally and the flag makes overlapping entry
+// explicit instead of silent. Failure semantics preserved: a failed save
+// still throws to the caller (no swallow); the target is never left
+// truncated, and the staging tmp is always cleaned up.
+let workflowWriteLocked = false
+function atomicSaveWorkflow(target, text) {
+  const tmp = `${target}.${process.pid}.tmp`
+  workflowWriteLocked = true
+  try {
+    try {
+      writeFileSync(tmp, text, "utf8")
+      renameSync(tmp, target)
+    } finally {
+      // Staging cleanup: noop once renamed (force ignores missing), removes a
+      // truncated tmp after a crash so no stale staging file ever lingers.
+      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    }
+  } finally {
+    workflowWriteLocked = false
+  }
 }
 
 export async function runWorkflow({ workflowId, tabId, approval } = {}) {

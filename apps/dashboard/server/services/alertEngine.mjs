@@ -1,6 +1,6 @@
 // Alert engine — evaluates conditions against live price data, stores in-memory, persists to JSON.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -30,9 +30,45 @@ function loadAlerts() {
 
 function saveAlerts() {
   try {
-    mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(ALERTS_FILE, JSON.stringify(alerts, null, 2))
+    atomicSaveAlerts()
   } catch { /* ignore */ }
+}
+
+// Crash-safe persist (tmp-file + atomic rename) with a per-file write lock,
+// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock +
+// ENOENT retry). Sync persists hold the event loop, so concurrent callers
+// serialize naturally; the flag makes overlapping entry explicit instead of
+// silent, and the pid-unique tmp keeps concurrent processes from sharing a
+// staging file. Best-effort swallow preserved: failures never propagate.
+let alertsWriteLocked = false
+function atomicSaveAlerts() {
+  const text = JSON.stringify(alerts, null, 2)
+  const tmp = `${ALERTS_FILE}.${process.pid}.tmp`
+  alertsWriteLocked = true
+  try {
+    try {
+      mkdirSync(DATA_DIR, { recursive: true })
+      writeFileSync(tmp, text)
+      renameSync(tmp, ALERTS_FILE)
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        // Data dir created after import time (tests / fresh machine): ensure
+        // it exists and retry once instead of silently dropping the write.
+        try {
+          mkdirSync(dirname(ALERTS_FILE), { recursive: true })
+          writeFileSync(tmp, text)
+          renameSync(tmp, ALERTS_FILE)
+        } catch { /* best-effort: fall through to tmp cleanup */ }
+      }
+      /* best-effort swallow (existing semantics) */
+    } finally {
+      // Staging cleanup: noop once renamed (force ignores missing), removes a
+      // truncated tmp after a crash so no stale staging file ever lingers.
+      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    }
+  } finally {
+    alertsWriteLocked = false
+  }
 }
 
 loadAlerts()
