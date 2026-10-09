@@ -14,10 +14,10 @@
 // per-kind lines in `byKind` keep each leg's exact label.
 //
 // Rollup honesty: the Task 1 store keeps rollup totals without per-leg
-// provenance, so rollup legs enter all-time totals at the downgraded
+// provenance, so rollup legs always enter all-time totals at the downgraded
 // "modeled" label with `incomplete: true` and an explicit
 // "rollup-provenance-unobserved" reason — a conservative trust downgrade,
-// never an overclaim. Rollups stamped with the window day are skipped with a
+// never an overclaim, regardless of any caller-supplied rollup.provenance. Rollups stamped with the window day are skipped with a
 // "rollup-overlaps-window-day" reason: the day window is built from live
 // fills, and callers must pass rollups for closed days only (the Task 7 job
 // rolls up before fills prune), so same-day rollups would double-count.
@@ -203,14 +203,12 @@ export function scorecard({ fills = [], rollups = [], attempts = {}, window = {}
       skipped.push({ index, venue, reason: "rollup-totals-absent" })
       return
     }
-    // Rollup legs carry no per-leg provenance in the Task 1 store: downgrade
-    // to "modeled" (conservative — never overclaims measured) and say so.
-    const proven = KNOWN_PROVENANCE.has(rollup.provenance) ? rollup.provenance : null
-    if (proven === null) {
-      incomplete = true
-      skipped.push({ index, venue, reason: "rollup-provenance-unobserved" })
-    }
-    const row = touch(venue)
+    // Rollup legs carry no per-leg provenance in the Task 1 store: always
+    // downgrade to "modeled" (conservative — never overclaims measured) and
+    // say so, regardless of any caller-supplied rollup.provenance.
+    incomplete = true
+    skipped.push({ index, venue, reason: "rollup-provenance-unobserved" })
+    const legs = []
     for (const [kind, raw] of Object.entries(totals)) {
       const amountUsd = finiteOrNull(raw)
       if (amountUsd === null) {
@@ -218,8 +216,19 @@ export function scorecard({ fills = [], rollups = [], attempts = {}, window = {}
         skipped.push({ index, venue, reason: `rollup-amount-not-finite:${kind}` })
         continue
       }
-      row.allLegs.push({ kind: String(kind), amountUsd, provenance: proven ?? "modeled" })
+      legs.push({ kind: String(kind), amountUsd, provenance: "modeled" })
     }
+    if (legs.length === 0) {
+      // Degenerate rollup (empty totals or every amount non-finite): every
+      // leg already recorded in skipped[] above (or empty-totals below), so
+      // create no venue row — absent, never a confident zero.
+      if (Object.keys(totals).length === 0) {
+        skipped.push({ index, venue, reason: "rollup-totals-empty" })
+      }
+      return
+    }
+    const row = touch(venue)
+    row.allLegs.push(...legs)
   })
 
   const rows = [...venues.values()].sort((a, b) => (a.venue < b.venue ? -1 : a.venue > b.venue ? 1 : 0))
@@ -257,6 +266,20 @@ export function scorecard({ fills = [], rollups = [], attempts = {}, window = {}
   }
 
   const totals = venuesOut.map((v) => v.allTime).filter((s) => s.totalUsd !== null)
+  if (totals.length === 0) {
+    // Defense-in-depth: rows exist but no valid all-time legs (should be
+    // unreachable after per-source validation) — null total + reason, never
+    // a confident zero.
+    return {
+      venues: venuesOut,
+      totalUsd: null,
+      provenance: null,
+      incomplete: true,
+      reason: "no-observed-costs",
+      skipped,
+      window: { tzDate: dayUnparseable ? null : windowDay, tz }
+    }
+  }
   const totalUsd = totals.reduce((sum, s) => sum + s.totalUsd, 0)
   return {
     venues: venuesOut,

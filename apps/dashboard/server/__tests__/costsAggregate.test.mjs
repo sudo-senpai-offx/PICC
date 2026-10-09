@@ -142,4 +142,37 @@ describe("costs aggregator", () => {
     expect(out.incomplete).toBe(true)
     expect(out.skipped.length).toBeGreaterThanOrEqual(2)
   })
+
+  it("degenerate rollup with all non-finite amounts yields no confident zero", () => {
+    const out = mod.scorecard({
+      fills: [],
+      rollups: [{ venue: "hyperliquid", tzDate: "2026-10-01", totals: { fee: NaN } }],
+      attempts: {},
+      window: { day: "2026-10-08" }
+    })
+    expect(out.totalUsd).toBeNull()
+    expect(out.provenance).toBeNull()
+    expect(out.incomplete).toBe(true)
+    for (const row of out.venues) {
+      expect(row.allTime.totalUsd).toBeNull()
+    }
+  })
+
+  it("modeled zero-amount legs survive as modeled lines, not gaps", () => {
+    const out = mod.scorecard({
+      fills: [
+        measured({ kind: "fee", amountUsd: 0.01 }),
+        measured({ kind: "spread", amountUsd: 0, provenance: "modeled" })
+      ],
+      rollups: [],
+      attempts: {},
+      window: { day: "2026-10-08" }
+    })
+    const row = out.venues[0]
+    expect(row.day.totalUsd).toBeCloseTo(0.01, 10)
+    expect(row.day.provenance).toBe("modeled")
+    const spread = row.day.byKind.find((l) => l.kind === "spread")
+    expect(spread).toMatchObject({ totalUsd: 0, provenance: "modeled" })
+    expect(out.incomplete).toBe(false)
+  })
 })
