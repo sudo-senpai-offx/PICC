@@ -69,6 +69,7 @@
 
 import { createLogger } from "../logger.mjs"
 import { toCcxtSymbol } from "./ccxtConnector.mjs"
+import { countAttempt } from "./costs/attempts.mjs"
 import { dayKeyOf } from "./u4faRisk.mjs"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -462,14 +463,21 @@ export async function cancelCcxtOrder({ exchange, symbol = null, orderId = null,
   // Internal self-check (mirrors the perps adapter's modeOf pattern): refused
   // with the cancel transport shape, never a fabricated success.
   const cancelMode = spotModeOf(id)
-  if (!cancelMode.ok) return { ok: false, reason: cancelMode.reason }
+  if (!cancelMode.ok) {
+    countAttempt({ venue: id, outcome: "refused", reason: cancelMode.reason })
+    return { ok: false, reason: cancelMode.reason }
+  }
 
   let targetId = oid
   if (!targetId) {
     const open = await fetchCcxtOpenOrders({ exchange: id, symbol: sym })
-    if (open === null) return { ok: false, reason: "cancelCcxtOrder-unobservable: the open-order view could not be read" }
+    if (open === null) {
+      countAttempt({ venue: id, outcome: "failed", reason: "cancelCcxtOrder-unobservable: the open-order view could not be read" })
+      return { ok: false, reason: "cancelCcxtOrder-unobservable: the open-order view could not be read" }
+    }
     const match = open.find((o) => o.clientOrderId === cloid)
     if (!match || !match.id) {
+      countAttempt({ venue: id, outcome: "failed", reason: "cancelCcxtOrder-unobservable: no open order matches that clientOrderId" })
       return { ok: false, reason: "cancelCcxtOrder-unobservable: no open order matches that clientOrderId" }
     }
     targetId = match.id
@@ -482,6 +490,7 @@ export async function cancelCcxtOrder({ exchange, symbol = null, orderId = null,
     // Fail-closed with the cancel transport shape: a sandbox the venue cannot
     // provide is a named refusal, never a fall-through to live.
     if (String(err?.message ?? err).includes("sandbox-unsupported")) {
+      countAttempt({ venue: id, outcome: "refused", reason: `cancelCcxtOrder-sandbox-unsupported: ${String(err?.message ?? err)}` })
       return { ok: false, reason: `cancelCcxtOrder-sandbox-unsupported: ${String(err?.message ?? err)}` }
     }
     throw err
@@ -499,6 +508,7 @@ export async function cancelCcxtOrder({ exchange, symbol = null, orderId = null,
       }
     }
   } catch (err) {
+    countAttempt({ venue: id, outcome: "failed", reason: `cancelCcxtOrder-failed: ${String(err?.message ?? err)}` })
     return { ok: false, reason: `cancelCcxtOrder-failed: ${String(err?.message ?? err)}` }
   }
 }

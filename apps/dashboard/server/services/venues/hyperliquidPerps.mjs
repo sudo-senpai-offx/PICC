@@ -49,6 +49,7 @@
 //   Each refusal names its rule and happens BEFORE any network call.
 import { createHash } from "node:crypto"
 import { QUOTE_EQUIVALENTS, ccxtInstanceFor } from "../ccxtOrdering.mjs"
+import { countAttempt } from "../costs/attempts.mjs"
 import { enablementFor as ceremonyEnablementFor } from "../commandCentre/ceremonyState.mjs"
 
 const EXCHANGE_ID = "hyperliquid"
@@ -311,46 +312,86 @@ async function submitOrder({
   position
 } = {}) {
   const mode = modeOf()
-  if (!mode.ok) return { ok: false, reason: mode.reason }
+  if (!mode.ok) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: mode.reason })
+    return { ok: false, reason: mode.reason }
+  }
 
   const rm = readRiskModel()
-  if (!rm.ok) return { ok: false, reason: rm.reason }
+  if (!rm.ok) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: rm.reason })
+    return { ok: false, reason: rm.reason }
+  }
   const risk = rm.model
 
-  if (type != null && type !== "limit") return { ok: false, reason: "limit-only" }
+  if (type != null && type !== "limit") {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: "limit-only" })
+    return { ok: false, reason: "limit-only" }
+  }
 
-  if (side !== "buy" && side !== "sell") return { ok: false, reason: `invalid-order: side=${String(side ?? "")}` }
+  if (side !== "buy" && side !== "sell") {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: `invalid-order: side=${String(side ?? "")}` })
+    return { ok: false, reason: `invalid-order: side=${String(side ?? "")}` }
+  }
   const amountN = Number(amount)
-  if (!Number.isFinite(amountN) || amountN <= 0) return { ok: false, reason: `invalid-order: amount=${String(amount ?? "")}` }
+  if (!Number.isFinite(amountN) || amountN <= 0) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: `invalid-order: amount=${String(amount ?? "")}` })
+    return { ok: false, reason: `invalid-order: amount=${String(amount ?? "")}` }
+  }
   const priceN = Number(price)
-  if (!Number.isFinite(priceN) || priceN <= 0) return { ok: false, reason: `invalid-order: price=${String(price ?? "")}` }
+  if (!Number.isFinite(priceN) || priceN <= 0) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: `invalid-order: price=${String(price ?? "")}` })
+    return { ok: false, reason: `invalid-order: price=${String(price ?? "")}` }
+  }
   const levN = Number(leverage)
-  if (!Number.isFinite(levN) || levN <= 0) return { ok: false, reason: `invalid-order: leverage=${String(leverage ?? "")}` }
+  if (!Number.isFinite(levN) || levN <= 0) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: `invalid-order: leverage=${String(leverage ?? "")}` })
+    return { ok: false, reason: `invalid-order: leverage=${String(leverage ?? "")}` }
+  }
 
-  if (levN < risk.leverageBandMin || levN > risk.leverageBandMax) return { ok: false, reason: "leverage-out-of-band" }
-  if (marginMode !== "isolated") return { ok: false, reason: "cross-not-allowed" }
+  if (levN < risk.leverageBandMin || levN > risk.leverageBandMax) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: "leverage-out-of-band" })
+    return { ok: false, reason: "leverage-out-of-band" }
+  }
+  if (marginMode !== "isolated") {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: "cross-not-allowed" })
+    return { ok: false, reason: "cross-not-allowed" }
+  }
 
   const list = await markets()
   if (!Array.isArray(list)) {
-    return list && list.ok === false ? { ok: false, reason: list.reason } : { ok: false, reason: "symbol-not-swap-market" }
+    const reason = list && list.ok === false ? list.reason : "symbol-not-swap-market"
+    countAttempt({ venue: EXCHANGE_ID, outcome: String(reason).includes("unobservable") ? "failed" : "refused", reason })
+    return { ok: false, reason }
   }
   if (!list.some((row) => row.symbol === symbol && isActiveMarketRow(row))) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: "symbol-not-swap-market" })
     return { ok: false, reason: "symbol-not-swap-market" }
   }
 
   if (reduceOnly) {
     const size = await readPositionSize(symbol, position)
-    if (size && typeof size === "object") return size
-    if (amountN > size) return { ok: false, reason: "reduceonly-exceeds-position" }
+    if (size && typeof size === "object") {
+      countAttempt({ venue: EXCHANGE_ID, outcome: "failed", reason: size.reason ?? "positions-unobservable" })
+      return size
+    }
+    if (amountN > size) {
+      countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: "reduceonly-exceeds-position" })
+      return { ok: false, reason: "reduceonly-exceeds-position" }
+    }
   }
 
   const marginUsd = (amountN * priceN) / levN
   if (marginUsd - risk.marginPerPositionCapUsd > MARGIN_CAP_EPSILON) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "refused", reason: "margin-exceeds-cap" })
     return { ok: false, reason: "margin-exceeds-cap" }
   }
 
   const setup = await ensureSymbolSetup(symbol, levN)
-  if (!setup.ok) return setup
+  if (!setup.ok) {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "failed", reason: setup.reason ?? "setup-failed" })
+    return setup
+  }
 
   const inst = await swapInstance()
   const seed = clientOrderId || [symbol, side, amount, price, levN].join(":")
@@ -359,7 +400,10 @@ async function submitOrder({
   try {
     const raw = await inst.createOrder(symbol, "limit", side, amountN, priceN, params)
     const id = String(raw?.id ?? "")
-    if (!id) return { ok: false, reason: "submitOrder-unobservable" }
+    if (!id) {
+      countAttempt({ venue: EXCHANGE_ID, outcome: "failed", reason: "submitOrder-unobservable" })
+      return { ok: false, reason: "submitOrder-unobservable" }
+    }
     return {
       ok: true,
       order: {
@@ -378,6 +422,7 @@ async function submitOrder({
       }
     }
   } catch {
+    countAttempt({ venue: EXCHANGE_ID, outcome: "failed", reason: "submitOrder-unobservable" })
     return { ok: false, reason: "submitOrder-unobservable" }
   }
 }
