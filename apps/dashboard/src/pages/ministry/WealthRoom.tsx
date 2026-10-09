@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { fetchWealthOverview, postWealthTransfer } from "@/lib/wealth"
 import type { WealthOverview } from "@/lib/wealth"
 import { CostsSection } from "./CostsSection"
+import { TaxLotsSection } from "./TaxLotsSection"
 
 /**
  * Wealth room — the cross-venue net-worth ledger surface (W3-01 Task 9).
@@ -201,6 +202,8 @@ export function WealthRoom() {
           ) : null}
 
           <CostsSection />
+
+          <TaxLotsSection />
         </>
       ) : null}
     </div>

@@ -3207,6 +3207,69 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // -------------------------------------------------------------------
+  // Cost-basis export (Task 5) — GET /api/tax/lots?from&to.
+  //
+  // Report-only FIFO tax-lot CSV (Tasks 1-4 supply the matcher, the renderer,
+  // and the read-only assembly), one additive route. The tax boundary stays
+  // off the boot path: every service below is reached through a dynamic load,
+  // so the static count the bootstrap guard pins does not move.
+  //
+  // Bounds are exitTime bounds on disposals; acquisitions always load whole so
+  // in-range disposals keep their basis. An ABSENT bound is unbounded
+  // (all-time) — never a silent default range — while a PRESENT but
+  // unparseable bound is a 400 with a named reason, never a quiet fallback.
+  //
+  // Live closes are ephemeral rail returns with no close-history store, so the
+  // route reads the assembly defaults like every other caller: the default
+  // reports honest absence rather than a second seam, and the branch reaches
+  // no close/mark path. Rail posture resolves mode-derived without a ceremony
+  // unlock (rail-off outside mainnet), so the export needs no ceremony route
+  // and the boot sequence is untouched.
+  //
+  // GATED, NOT ALLOWLISTED. The payload names disposal lots with proceeds and
+  // basis. None of it is declared-public, so the route carries an
+  // unconditional requireAuth() gate as its FIRST statement.
+  // -------------------------------------------------------------------
+  if (path === "/api/tax/lots" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
+    const boundOf = (raw) => {
+      if (raw === null || raw === "") return { ok: true, iso: null }
+      const t = Date.parse(raw)
+      if (!Number.isFinite(t)) return { ok: false, iso: null }
+      return { ok: true, iso: new Date(t).toISOString() }
+    }
+    const from = boundOf(parsed.searchParams.get("from"))
+    if (!from.ok) {
+      writeJson(res, 400, { ok: false, reason: "tax:deny:invalid-from" })
+      return
+    }
+    const to = boundOf(parsed.searchParams.get("to"))
+    if (!to.ok) {
+      writeJson(res, 400, { ok: false, reason: "tax:deny:invalid-to" })
+      return
+    }
+    try {
+      const { collectInputs } = await import("./services/tax/inputs.mjs")
+      const { matchLots } = await import("./services/tax/lots.mjs")
+      const { renderCsv } = await import("./services/tax/csv.mjs")
+      const inputs = await collectInputs({ from: from.iso, to: to.iso })
+      const { lots, unmatched } = matchLots(inputs)
+      const csv = renderCsv({ lots, unmatched, method: "FIFO", generatedAt: new Date().toISOString() })
+      const day = new Date().toISOString().slice(0, 10)
+      res.writeHead(200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="picc-tax-lots-${day}.csv"`,
+        "Content-Length": Buffer.byteLength(csv)
+      })
+      res.end(csv)
+    } catch (err) {
+      console.warn("[picc] tax lots failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
   if (path === "/api/trading/assist" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return
     try {

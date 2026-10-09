@@ -1127,7 +1127,7 @@ function connectorsSiteIsGated(lines, index) {
     // UNCHANGED at 72, which is what confirms the growth is two gated routes
     // and their reasoning rather than new module-level dependencies. The line
     // figure moves with it; see the accounting at the `lines` assertion below.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(99)
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(102)
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1460,7 +1460,23 @@ function connectorsSiteIsGated(lines, index) {
     // dependencies. The record job itself lives in
     // services/jobs/costs-refresh.mjs and registers via every() beside the
     // wealth RUN leg in scheduler.mjs, so it adds no lines here at all.
-    expect(lines, "lines in handlers.mjs").toBe(6646)
+    //
+    // 6,646 -> 6,709 in cost-basis export Task 5 (lots download route +
+    // wealth-room section), the same protocol: +63 lines, and every one is
+    // accounted for rather than absorbed. They are the single contiguous
+    // GET /api/tax/lots block after the costs overview route: its
+    // unconditional requireAuth() gate as its FIRST statement, the
+    // never-silent from/to bound parsing (absent is unbounded all-time,
+    // present-but-unparseable is a 400 with a named reason), three dynamic
+    // service loads (inputs assembly, FIFO matcher, CSV renderer), the dated
+    // attachment download, and the reasoning recording WHY live closes stay
+    // on the assembly defaults and WHY no ceremony unlock is needed. The
+    // pair moves 99 -> 102 dynamic with statics UNCHANGED at 72 for exactly
+    // those three loads, which is what confirms the growth is one gated
+    // route and its reasoning rather than new module-level dependencies. The
+    // room section itself (TaxLotsSection beside CostsSection) adds no lines
+    // here at all.
+    expect(lines, "lines in handlers.mjs").toBe(6709)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
