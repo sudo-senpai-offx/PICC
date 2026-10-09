@@ -17,7 +17,7 @@ import { randomBytes } from "node:crypto"
 import { getHistory } from "./yahoo.mjs"
 import { predictDirection } from "./prediction.mjs"
 import { metricsFrom } from "./analytics.mjs"
-import { chatText, llmConfigured } from "./llm.mjs"
+import { chatSignalText, llmConfigured } from "./llm.mjs"
 import { env } from "../config.mjs"
 import { news as serperNews } from "./serper.mjs"
 import { kellySnapshot } from "./kellyCriterion.mjs"
@@ -1124,7 +1124,19 @@ export async function tradingAssist(question = "", context = {}) {
   }
 
   try {
-    const advice = await chatText(system, q + contextLine)
+    // Provider-consistency signal (TRADING SIGNALS ONLY, OFF by default):
+    // PICC_PROVIDER_CONSISTENCY=on dual-samples a second provider with the
+    // same input. Agreement → primary advice; divergence → HOLD advisory with
+    // both outputs; advisory ceiling holds (never auto-GO).
+    const advice = await chatSignalText(system, q + contextLine)
+    if (advice !== null && typeof advice === "object") {
+      return {
+        ok: true,
+        source: "llm-consistency-hold",
+        advice: `HOLD — providers diverged, so no signal. Primary (${advice.primary?.provider}): ${String(advice.primary?.output ?? "").slice(0, 500)} | Secondary (${advice.secondary?.provider}): ${String(advice.secondary?.output ?? "").slice(0, 500)}`,
+        consistency: advice
+      }
+    }
     return { ok: true, source: "llm", advice }
   } catch (err) {
     return { ok: true, source: "local", advice: `LLM unavailable (${err.message}). Rule of thumb: 1-2% risk per trade, paper-trade first, and expect most short-dated options to expire worthless.` }

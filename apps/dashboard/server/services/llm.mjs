@@ -19,6 +19,16 @@ const JSON_SYSTEM =
 
 let lastProviderId = null
 
+// Provider-consistency signal (TRADING SIGNALS ONLY, OFF by default).
+// Cost: ~2x spend/latency on signal calls when PICC_PROVIDER_CONSISTENCY=on
+// (primary + one second-provider sample, same input). Advisory ceiling:
+// agreement → primary stands as advisory text; divergence → HOLD advisory
+// with both outputs; never auto-GO; never reorders provider selection.
+let _lastConsistency = null
+
+/** Metadata of the most recent trading-signal consistency check (null when OFF or not yet run). */
+export const lastConsistency = () => _lastConsistency
+
 /** Id of the provider that succeeded on the most recent call (for badges). */
 export const provider = () => lastProviderId
 
@@ -39,6 +49,58 @@ export function chatJSON(system, user, opts = {}) {
 /** Ask the first working provider for free-form text. */
 export function chatText(system, user, opts = {}) {
   return runAll("text", system, user, opts)
+}
+
+/**
+ * Trading-signal text call with optional dual-provider consistency sampling.
+ * Flag OFF (default) → byte-identical to chatText (single provider, one call).
+ * Flag PICC_PROVIDER_CONSISTENCY=on → primary via runAll (order unchanged),
+ * then the same input is sampled on the next configured provider distinct
+ * from the primary. Agreement → primary output; divergence → HOLD advisory
+ * object with both outputs; second-sample failure → primary stands with the
+ * named reason in lastConsistency(). Advisory only — never auto-GO.
+ */
+export async function chatSignalText(system, user, opts = {}) {
+  return chatSignal("text", system, user, opts)
+}
+
+/** JSON sibling of chatSignalText (same flag, same HOLD-on-divergence rule). */
+export async function chatSignalJSON(system, user, opts = {}) {
+  return chatSignal("json", system, user, opts)
+}
+
+async function chatSignal(mode, system, user, opts) {
+  const { isConsistencyEnabled, signalOutputsAgree, holdAdvisory } = await import("./providerConsistency.mjs")
+  if (!isConsistencyEnabled()) {
+    _lastConsistency = null
+    return runAll(mode, system, user, opts)
+  }
+  const failoverOrder = configuredLLMProviders()
+  const primary = await runAll(mode, system, user, opts)
+  const primaryProvider = lastProviderId
+  const secondaryId = failoverOrder.find((id) => id !== primaryProvider)
+  if (!secondaryId) {
+    _lastConsistency = {
+      agree: null,
+      reason: "no-second-provider-configured",
+      primaryProvider,
+      secondaryProvider: null,
+      failoverOrder
+    }
+    return primary
+  }
+  try {
+    const secondary = await PROVIDERS[secondaryId](mode, system, user, opts ?? {})
+    const agree = signalOutputsAgree(primary, secondary)
+    _lastConsistency = { agree, reason: agree ? "agree" : "provider-divergence", primaryProvider, secondaryProvider: secondaryId, failoverOrder }
+    if (agree) return primary
+    return holdAdvisory({ primary, secondary, primaryProvider, secondaryProvider: secondaryId })
+  } catch (err) {
+    const reason = `secondary-failed:${secondaryId}:${err?.message ?? err}`
+    console.warn(`[picc] consistency second sample failed, primary stands: ${reason}`)
+    _lastConsistency = { agree: null, reason, primaryProvider, secondaryProvider: secondaryId, failoverOrder }
+    return primary
+  }
 }
 
 async function runAll(mode, system, user, opts) {
