@@ -273,7 +273,7 @@ async function framesFromWs() {
 }
 
 // ---------------------------------------------------------------------
-// Wealth Task 7 — CCXT spot collector extension (collector ONLY).
+// Wealth Task 7 — CCXT spot collector addition (collector ONLY).
 // The strict parser above, the per-user store shape and the API surface
 // are byte-identical: this adds one more read-only observation source.
 // Per (user, venue): keyed exchanges are observed via observeCcxtEquity
