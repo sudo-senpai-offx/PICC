@@ -76,17 +76,23 @@ describe("interventions workflow durability", () => {
     expect(mod.listWorkflows().some((w) => w.id === "wf-good")).toBe(true)
   })
 
-  it("lock: burst saves serialize with no interleaved corruption", async () => {
+  it("lock: overlapping saves serialize with zero lost updates", async () => {
     const N = 15
-    for (let i = 0; i < N; i++) {
-      mod.saveWorkflow({ id: `wf-burst-${i}`, name: `burst ${i}`, steps })
-    }
+    await Promise.all(
+      Array.from({ length: N }, async (_, i) => {
+        mod.listWorkflows() // read
+        await new Promise((r) => setImmediate(r)) // overlap window between read and write
+        mod.saveWorkflow({ id: `wf-overlap-${i}`, name: `overlap ${i}`, steps })
+      })
+    )
     const files = await readdir(join(dir, "workflows"))
     expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([])
+    // Every distinct file present and whole — no save lost or interleaved.
     for (let i = 0; i < N; i++) {
-      const parsed = JSON.parse(await readFile(join(dir, "workflows", `wf-burst-${i}.json`), "utf8"))
-      expect(parsed.id).toBe(`wf-burst-${i}`)
+      const parsed = JSON.parse(await readFile(join(dir, "workflows", `wf-overlap-${i}.json`), "utf8"))
+      expect(parsed.id).toBe(`wf-overlap-${i}`)
+      expect(parsed.name).toBe(`overlap ${i}`)
     }
-    expect(mod.listWorkflows().filter((w) => w.id.startsWith("wf-burst-"))).toHaveLength(N)
+    expect(mod.listWorkflows().filter((w) => w.id.startsWith("wf-overlap-"))).toHaveLength(N)
   })
 })

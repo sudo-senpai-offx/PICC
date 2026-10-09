@@ -90,44 +90,71 @@ function boot() {
 
 function persist() {
   if (!canTouchDisk() || ceremonyStoreHealth.ok !== true || !store) return
-  atomicPersist()
+  return withFileLockSync(CEREMONY_FILE, persistCeremonyBody)
 }
 
-// Crash-safe persist (tmp-file + atomic rename) with a per-file write lock,
-// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock +
-// ENOENT retry). Sync persists hold the event loop, so concurrent callers
-// serialize naturally; the flag makes overlapping entry explicit instead of
-// silent, and the pid-unique tmp keeps concurrent processes from sharing a
-// staging file. Failure semantics preserved: a failed persist still throws to
-// the caller (no swallow here — callers treat it as a hard error); only the
-// on-disk snapshot is protected, and the staging tmp is always cleaned up.
-let ceremonyWriteLocked = false
-function atomicPersist() {
+// ── Per-file async write mutex — mirrors localstore.mjs withLock ──────────
+// Shared promise chain per file: each writer awaits the previous holder;
+// release in finally. Sync writers enter via withFileLockSync (same Map and
+// discipline, synchronous fast path — identical timing and synchronous throw);
+// genuinely async overlap chains behind the holder via withFileLock, and the
+// returned tail surfaces failure exactly as a direct call would.
+const fileWriteLocks = new Map()
+async function withFileLock(key, fn) {
+  while (fileWriteLocks.get(key)) await fileWriteLocks.get(key)
+  let release
+  const p = new Promise((r) => { release = r })
+  fileWriteLocks.set(key, p)
+  try {
+    return await fn()
+  } finally {
+    fileWriteLocks.delete(key)
+    release()
+  }
+}
+function withFileLockSync(key, fn) {
+  const held = fileWriteLocks.get(key)
+  // Contended (only reachable via async overlap): chain behind the holder;
+  // the tail surfaces failure exactly as a direct call would.
+  if (held) return withFileLock(key, fn)
+  let release
+  const p = new Promise((r) => { release = r })
+  fileWriteLocks.set(key, p)
+  try {
+    return fn()
+  } finally {
+    fileWriteLocks.delete(key)
+    release()
+  }
+}
+
+// Crash-safe persist (tmp-file + atomic rename), mirroring notifier.mjs
+// (tmp+rename) with localstore.mjs ENOENT retry. The pid-unique tmp keeps
+// concurrent processes from sharing a staging file. Failure semantics
+// preserved: a failed persist still surfaces to the caller (no swallow —
+// callers treat it as a hard error); only the on-disk snapshot is protected,
+// and the staging tmp is always cleaned up.
+function persistCeremonyBody() {
   const text = JSON.stringify(store, null, 2)
   const tmp = `${CEREMONY_FILE}.${process.pid}.tmp`
-  ceremonyWriteLocked = true
   try {
-    try {
-      if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
+    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
+    writeFileSync(tmp, text, "utf8")
+    renameSync(tmp, CEREMONY_FILE)
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      // Data dir created after import time (tests / fresh machine): ensure
+      // it exists and retry once instead of failing the write.
+      mkdirSync(DATA_DIR, { recursive: true })
       writeFileSync(tmp, text, "utf8")
       renameSync(tmp, CEREMONY_FILE)
-    } catch (err) {
-      if (err && err.code === "ENOENT") {
-        // Data dir created after import time (tests / fresh machine): ensure
-        // it exists and retry once instead of failing the write.
-        mkdirSync(DATA_DIR, { recursive: true })
-        writeFileSync(tmp, text, "utf8")
-        renameSync(tmp, CEREMONY_FILE)
-      } else {
-        throw err
-      }
-    } finally {
-      // Staging cleanup: noop once renamed (force ignores missing), removes a
-      // truncated tmp after a crash so no stale staging file ever lingers.
-      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    } else {
+      throw err
     }
   } finally {
-    ceremonyWriteLocked = false
+    // Staging cleanup: noop once renamed (force ignores missing), removes a
+    // truncated tmp after a crash so no stale staging file ever lingers.
+    try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
   }
 }
 

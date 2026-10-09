@@ -71,13 +71,22 @@ describe("copyCorpusStore durability", () => {
     expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([])
   })
 
-  it("lock: burst writes serialize with no interleaved corruption", async () => {
+  it("lock: overlapping writers serialize with zero lost updates", async () => {
     const N = 20
-    for (let i = 0; i < N; i++) {
-      expect(mod.appendExternalSample(sample(`a${i}`)).ok).toBe(true)
-    }
+    await Promise.all(
+      Array.from({ length: N }, async (_, i) => {
+        mod.corpusCounts() // read
+        await new Promise((r) => setImmediate(r)) // overlap window between read and write
+        expect(mod.appendExternalSample(sample(`overlap-${i}`)).ok).toBe(true)
+      })
+    )
     const onDisk = JSON.parse(await readFile(join(dir, "copyCorpus.json"), "utf8"))
     expect(onDisk).toHaveLength(N)
+    // Every distinct payload present — no writer lost another's update.
+    expect(new Set(onDisk.map((r) => r.accountRef)).size).toBe(N)
+    for (let i = 0; i < N; i++) {
+      expect(onDisk.some((r) => r.accountRef === `overlap-${i}`)).toBe(true)
+    }
     expect(mod.listExternal({ limit: 100 })).toHaveLength(N)
 
     const files = await readdir(dir)

@@ -760,33 +760,61 @@ export function saveWorkflow({ id, name, description = "", suite = null, approva
     steps: steps.map((s) => ({ ...s }))
   }
   mkdirSync(WORKFLOWS_DIR, { recursive: true })
-  atomicSaveWorkflow(join(WORKFLOWS_DIR, `${wf.id}.json`), JSON.stringify(wf, null, 2))
+  const target = join(WORKFLOWS_DIR, `${wf.id}.json`)
+  withFileLockSync(target, () => persistWorkflowBody(target, JSON.stringify(wf, null, 2)))
   return wf
 }
 
-// Crash-safe per-file persist (tmp-file + atomic rename) with a write lock,
-// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock).
-// Each workflow is its own file, so the staging tmp is per-target (+pid, so
-// concurrent processes never share one); sync saves hold the event loop, so
-// concurrent callers serialize naturally and the flag makes overlapping entry
-// explicit instead of silent. Failure semantics preserved: a failed save
-// still throws to the caller (no swallow); the target is never left
-// truncated, and the staging tmp is always cleaned up.
-let workflowWriteLocked = false
-function atomicSaveWorkflow(target, text) {
-  const tmp = `${target}.${process.pid}.tmp`
-  workflowWriteLocked = true
+// ── Per-file async write mutex — mirrors localstore.mjs withLock ──────────
+// Shared promise chain per file (here: per workflow target path): each writer
+// awaits the previous holder; release in finally. Sync writers enter via
+// withFileLockSync (same Map and discipline, synchronous fast path — identical
+// timing and synchronous throw); genuinely async overlap chains behind the
+// holder via withFileLock, and the returned tail surfaces failure exactly as
+// a direct call would.
+const fileWriteLocks = new Map()
+async function withFileLock(key, fn) {
+  while (fileWriteLocks.get(key)) await fileWriteLocks.get(key)
+  let release
+  const p = new Promise((r) => { release = r })
+  fileWriteLocks.set(key, p)
   try {
-    try {
-      writeFileSync(tmp, text, "utf8")
-      renameSync(tmp, target)
-    } finally {
-      // Staging cleanup: noop once renamed (force ignores missing), removes a
-      // truncated tmp after a crash so no stale staging file ever lingers.
-      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
-    }
+    return await fn()
   } finally {
-    workflowWriteLocked = false
+    fileWriteLocks.delete(key)
+    release()
+  }
+}
+function withFileLockSync(key, fn) {
+  const held = fileWriteLocks.get(key)
+  // Contended (only reachable via async overlap): chain behind the holder;
+  // the tail surfaces failure exactly as a direct call would.
+  if (held) return withFileLock(key, fn)
+  let release
+  const p = new Promise((r) => { release = r })
+  fileWriteLocks.set(key, p)
+  try {
+    return fn()
+  } finally {
+    fileWriteLocks.delete(key)
+    release()
+  }
+}
+
+// Crash-safe per-file persist (tmp-file + atomic rename), mirroring
+// notifier.mjs (tmp+rename). The staging tmp is per-target (+pid, so
+// concurrent processes never share one). Failure semantics preserved: a
+// failed save still throws to the caller (no swallow); the target is never
+// left truncated, and the staging tmp is always cleaned up.
+function persistWorkflowBody(target, text) {
+  const tmp = `${target}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, text, "utf8")
+    renameSync(tmp, target)
+  } finally {
+    // Staging cleanup: noop once renamed (force ignores missing), removes a
+    // truncated tmp after a crash so no stale staging file ever lingers.
+    try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
   }
 }
 

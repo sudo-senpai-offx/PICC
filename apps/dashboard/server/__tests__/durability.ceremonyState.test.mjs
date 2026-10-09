@@ -85,14 +85,20 @@ describe("ceremonyState durability", () => {
     expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([])
   })
 
-  it("lock: burst writes serialize with no interleaved corruption", async () => {
+  it("lock: overlapping writers serialize with zero lost updates", async () => {
     mod.setAssetClasses({ 142: "ccxt-crypto" })
     const N = 20
-    for (let i = 1; i <= N; i++) {
-      expect(mod.creditResolved([row({ id: i })], { now: NOW }).ok).toBe(true)
-    }
+    await Promise.all(
+      Array.from({ length: N }, async (_, i) => {
+        mod.ceremonyState() // read
+        await new Promise((r) => setImmediate(r)) // overlap window between read and write
+        expect(mod.creditResolved([row({ id: 100 + i })], { now: NOW }).ok).toBe(true)
+      })
+    )
     const onDisk = JSON.parse(await readFile(join(dir, "ceremony-state.json"), "utf8"))
+    // Every credit landed — no writer lost another's update.
     expect(onDisk.classes["ccxt-crypto"].spendableResolved).toBe(N)
+    expect(onDisk.classes["ccxt-crypto"].streak).toHaveLength(N)
 
     const files = await readdir(dir)
     expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([])

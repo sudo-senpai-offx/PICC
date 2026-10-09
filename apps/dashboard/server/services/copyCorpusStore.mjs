@@ -20,44 +20,70 @@ function load() {
 }
 function save() {
   try {
-    atomicSave()
+    withFileLockSync(FILE, persistCorpusBody)
   } catch { /* best-effort */ }
 }
 
-// Crash-safe persist (tmp-file + atomic rename) with a per-file write lock,
-// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock +
-// ENOENT retry). Sync persists hold the event loop, so concurrent callers
-// serialize naturally; the flag makes overlapping entry explicit instead of
-// silent, and the pid-unique tmp keeps concurrent processes from sharing a
-// staging file. Best-effort swallow preserved: failures never propagate.
-let corpusWriteLocked = false
-function atomicSave() {
+// ── Per-file async write mutex — mirrors localstore.mjs withLock ──────────
+// Shared promise chain per file: each writer awaits the previous holder;
+// release in finally. Sync writers enter via withFileLockSync (same Map and
+// discipline, synchronous fast path — identical timing and sync completion);
+// genuinely async overlap chains behind the holder via withFileLock.
+const fileWriteLocks = new Map()
+async function withFileLock(key, fn) {
+  while (fileWriteLocks.get(key)) await fileWriteLocks.get(key)
+  let release
+  const p = new Promise((r) => { release = r })
+  fileWriteLocks.set(key, p)
+  try {
+    return await fn()
+  } finally {
+    fileWriteLocks.delete(key)
+    release()
+  }
+}
+function withFileLockSync(key, fn) {
+  const held = fileWriteLocks.get(key)
+  // Contended (only reachable via async overlap): chain behind the holder;
+  // the tail surfaces failure exactly as a direct call would.
+  if (held) return withFileLock(key, fn)
+  let release
+  const p = new Promise((r) => { release = r })
+  fileWriteLocks.set(key, p)
+  try {
+    return fn()
+  } finally {
+    fileWriteLocks.delete(key)
+    release()
+  }
+}
+
+// Crash-safe persist (tmp-file + atomic rename), mirroring notifier.mjs
+// (tmp+rename) with localstore.mjs ENOENT retry. The pid-unique tmp keeps
+// concurrent processes from sharing a staging file. Best-effort swallow
+// preserved: failures never propagate.
+function persistCorpusBody() {
   const text = JSON.stringify(rows, null, 2)
   const tmp = `${FILE}.${process.pid}.tmp`
-  corpusWriteLocked = true
   try {
-    try {
-      mkdirSync(DATA_DIR, { recursive: true })
-      writeFileSync(tmp, text)
-      renameSync(tmp, FILE)
-    } catch (err) {
-      if (err && err.code === "ENOENT") {
-        // Data dir created after import time (tests / fresh machine): ensure
-        // it exists and retry once instead of silently dropping the write.
-        try {
-          mkdirSync(dirname(FILE), { recursive: true })
-          writeFileSync(tmp, text)
-          renameSync(tmp, FILE)
-        } catch { /* best-effort: fall through to tmp cleanup */ }
-      }
-      /* best-effort swallow (existing semantics) */
-    } finally {
-      // Staging cleanup: noop once renamed (force ignores missing), removes a
-      // truncated tmp after a crash so no stale staging file ever lingers.
-      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    mkdirSync(DATA_DIR, { recursive: true })
+    writeFileSync(tmp, text)
+    renameSync(tmp, FILE)
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      // Data dir created after import time (tests / fresh machine): ensure
+      // it exists and retry once instead of silently dropping the write.
+      try {
+        mkdirSync(dirname(FILE), { recursive: true })
+        writeFileSync(tmp, text)
+        renameSync(tmp, FILE)
+      } catch { /* best-effort: fall through to tmp cleanup */ }
     }
+    /* best-effort swallow (existing semantics) */
   } finally {
-    corpusWriteLocked = false
+    // Staging cleanup: noop once renamed (force ignores missing), removes a
+    // truncated tmp after a crash so no stale staging file ever lingers.
+    try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
   }
 }
 load()

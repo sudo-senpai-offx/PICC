@@ -67,13 +67,22 @@ describe("alertEngine durability", () => {
     expect(files.filter((f) => f.endsWith(".tmp"))).toEqual([])
   })
 
-  it("lock: burst writes serialize with no interleaved corruption", async () => {
+  it("lock: overlapping writers serialize with zero lost updates", async () => {
     const N = 20
-    for (let i = 0; i < N; i++) {
-      mod.createAlert({ userId: "u1", symbol: "BTCUSD", condition: "price_above", value: 100 + i })
-    }
+    await Promise.all(
+      Array.from({ length: N }, async (_, i) => {
+        mod.listAlerts() // read
+        await new Promise((r) => setImmediate(r)) // overlap window between read and write
+        mod.createAlert({ userId: "u1", symbol: "BTCUSD", condition: "price_above", value: 1000 + i, message: `writer-${i}` })
+      })
+    )
     const onDisk = JSON.parse(await readFile(join(dir, "alerts.json"), "utf8"))
     expect(onDisk).toHaveLength(N)
+    // Every distinct payload present — no writer lost another's update.
+    expect(new Set(onDisk.map((a) => a.message)).size).toBe(N)
+    for (let i = 0; i < N; i++) {
+      expect(onDisk.some((a) => a.message === `writer-${i}`)).toBe(true)
+    }
     expect(mod.listAlerts()).toHaveLength(N)
 
     const files = await readdir(dir)

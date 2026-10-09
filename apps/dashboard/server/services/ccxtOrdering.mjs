@@ -651,44 +651,58 @@ function bootEquity() {
 function persistEquity() {
   if (!canTouchDisk()) return
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
-  atomicPersistEquity()
+  // No lock claim here: the sole writer (observeCcxtEquityLocked) already
+  // holds the file lock; claiming again would self-deadlock.
+  persistEquityBody()
 }
 
-// Crash-safe persist (tmp-file + atomic rename) with a per-file write lock,
-// mirroring notifier.mjs (tmp+rename) and localstore.mjs (per-table lock +
-// ENOENT retry). Sync persists hold the event loop, so concurrent callers
-// serialize naturally; the flag makes overlapping entry explicit instead of
-// silent, and the pid-unique tmp keeps concurrent processes from sharing a
-// staging file. Failure semantics preserved: a failed persist still throws to
-// the caller (no swallow — observeCcxtEquity reports it); only the on-disk
-// snapshot is protected, and the staging tmp is always cleaned up.
-let equityWriteLocked = false
-function atomicPersistEquity() {
+// ── Per-file async write mutex — mirrors localstore.mjs withLock ──────────
+// Shared promise chain per file: each writer awaits the previous holder;
+// release in finally. observeCcxtEquity (the only equity writer) holds this
+// lock across its whole fetch+update, so persistEquityBody never needs its
+// own claim — claiming again here would self-deadlock (re-entrant acquire
+// behind our own held lock), hence the raw worker below.
+const fileWriteLocks = new Map()
+async function withFileLock(key, fn) {
+  while (fileWriteLocks.get(key)) await fileWriteLocks.get(key)
+  let release
+  const p = new Promise((r) => { release = r })
+  fileWriteLocks.set(key, p)
+  try {
+    return await fn()
+  } finally {
+    fileWriteLocks.delete(key)
+    release()
+  }
+}
+
+// Crash-safe persist (tmp-file + atomic rename), mirroring notifier.mjs
+// (tmp+rename) with localstore.mjs ENOENT retry. The pid-unique tmp keeps
+// concurrent processes from sharing a staging file. Failure semantics
+// preserved: a failed persist still throws to the caller (no swallow —
+// observeCcxtEquity reports it); only the on-disk snapshot is protected,
+// and the staging tmp is always cleaned up.
+function persistEquityBody() {
   // Object store — OVERWRITE, not append (append is the JSONL audit's shape).
   const text = JSON.stringify(equityStore, null, 2)
   const tmp = `${EQUITY_FILE}.${process.pid}.tmp`
-  equityWriteLocked = true
   try {
-    try {
+    writeFileSync(tmp, text, "utf8")
+    renameSync(tmp, EQUITY_FILE)
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      // Data dir created after import time (tests / fresh machine): ensure
+      // it exists and retry once instead of failing the write.
+      mkdirSync(DATA_DIR, { recursive: true })
       writeFileSync(tmp, text, "utf8")
       renameSync(tmp, EQUITY_FILE)
-    } catch (err) {
-      if (err && err.code === "ENOENT") {
-        // Data dir created after import time (tests / fresh machine): ensure
-        // it exists and retry once instead of failing the write.
-        mkdirSync(DATA_DIR, { recursive: true })
-        writeFileSync(tmp, text, "utf8")
-        renameSync(tmp, EQUITY_FILE)
-      } else {
-        throw err
-      }
-    } finally {
-      // Staging cleanup: noop once renamed (force ignores missing), removes a
-      // truncated tmp after a crash so no stale staging file ever lingers.
-      try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
+    } else {
+      throw err
     }
   } finally {
-    equityWriteLocked = false
+    // Staging cleanup: noop once renamed (force ignores missing), removes a
+    // truncated tmp after a crash so no stale staging file ever lingers.
+    try { rmSync(tmp, { force: true }) } catch { /* already renamed */ }
   }
 }
 
@@ -730,7 +744,15 @@ export function ccxtEquityLastObserved() {
  * Never throws on venue/network failure — returns the honest null-equity shape
  * so the caller can feed the 5E gate. `now` is injectable for tests.
  */
-export async function observeCcxtEquity({ exchange, now = Date.now() } = {}) {
+export function observeCcxtEquity({ exchange, now = Date.now() } = {}) {
+  // The whole observation (venue fetch + read-modify-write + persist) runs
+  // inside the per-file mutex, so overlapping observations serialize
+  // end-to-end: the second fetch sees the first observation's committed
+  // baseline instead of racing it (no lost update). Same params, same
+  // resolved shapes, same rejections — only overlap is serialized.
+  return withFileLock(EQUITY_FILE, () => observeCcxtEquityLocked({ exchange, now }))
+}
+async function observeCcxtEquityLocked({ exchange, now }) {
   const id = String(exchange ?? "").trim().toLowerCase()
   if (!id) return { ok: false, exchange: id, reason: "ccxt ordering seam requires an exchange id" }
   if (!ccxtKeysForExchange(id)) {
