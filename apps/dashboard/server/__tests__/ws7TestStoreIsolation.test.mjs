@@ -1109,6 +1109,7 @@ const LEGACY_HAND_ROLLED_REDIRECTS = {
   "apps/dashboard/server/__tests__/copyCorpusIngest.test.mjs": ["PICC_COPYCORPUS_DATA_DIR"],
   "apps/dashboard/server/__tests__/copyCorpusRetention.test.mjs": ["PICC_COPYCORPUS_DATA_DIR"],
   "apps/dashboard/server/__tests__/copyCorpusStore.test.mjs": ["PICC_COPYCORPUS_DATA_DIR"],
+  "apps/dashboard/server/__tests__/costsStore.test.mjs": ["PICC_COSTS_DATA_DIR"],
   "apps/dashboard/server/__tests__/credentials.test.mjs": ["PICC_AUTH_DATA_DIR", "PICC_AUTOMATOR_DATA_DIR", "PICC_DATA_DIR", "PICC_TRADING_DATA_DIR"],
   "apps/dashboard/server/__tests__/csvFeedImport.test.mjs": ["PICC_COMMAND_CENTRE_DATA_DIR"],
   "apps/dashboard/server/__tests__/decisionEngine.test.mjs": ["PICC_DATA_DIR", "PICC_TRADING_DATA_DIR"],
