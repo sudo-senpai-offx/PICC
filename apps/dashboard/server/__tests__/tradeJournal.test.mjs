@@ -114,3 +114,37 @@ describe("tradeJournal.journalStats", () => {
     expect(Number.isFinite(s.winRate)).toBe(true)
   })
 })
+
+describe("tradeJournal.opening-balance (tax Task 2)", () => {
+  it("stores opening-balance entries verbatim with the kind flag", () => {
+    const e = j.addEntry({
+      symbol: "BTC",
+      quantity: 0.5,
+      entryPrice: 50000,
+      entryTime: "2026-01-01T00:00:00Z",
+      kind: "opening-balance",
+    })
+    expect(e.kind).toBe("opening-balance")
+    expect(e.symbol).toBe("BTC")
+    expect(e.quantity).toBe(0.5)
+    expect(e.entryPrice).toBe(50000)
+    expect(e.entryTime).toBe(new Date("2026-01-01T00:00:00Z").getTime())
+  })
+
+  it("requires symbol/quantity/entryPrice/entryTime for opening-balance", () => {
+    expect(() => j.addEntry({ symbol: "BTC", quantity: 1, entryPrice: 1, kind: "opening-balance" })).toThrow()
+    expect(() => j.addEntry({ quantity: 1, entryPrice: 1, entryTime: "2026-01-01T00:00:00Z", kind: "opening-balance" })).toThrow()
+  })
+
+  it("leaves journalStats() identical with and without opening entries", () => {
+    const before = j.journalStats()
+    j.addEntry({ symbol: "OBSTAT", quantity: 3, entryPrice: 10, entryTime: "2026-01-01T00:00:00Z", kind: "opening-balance" })
+    expect(j.journalStats()).toEqual(before)
+  })
+
+  it("listEntries filters opening entries by kind and hides them by default", () => {
+    const e = j.addEntry({ symbol: "OBLIST", quantity: 1, entryPrice: 7, entryTime: "2026-01-02T00:00:00Z", kind: "opening-balance" })
+    expect(j.listEntries({ kind: "opening-balance" }).entries.some((x) => x.id === e.id)).toBe(true)
+    expect(j.listEntries({ symbol: "OBLIST" }).total).toBe(0)
+  })
+})

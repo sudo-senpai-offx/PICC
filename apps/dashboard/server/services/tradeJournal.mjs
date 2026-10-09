@@ -25,8 +25,10 @@ function save() {
 
 load()
 
-export function listEntries({ symbol, tag, limit = 50, offset = 0, startDate, endDate } = {}) {
+export function listEntries({ symbol, tag, kind, limit = 50, offset = 0, startDate, endDate } = {}) {
   let result = [...entries]
+  if (kind) result = result.filter((e) => e.kind === kind)
+  else result = result.filter((e) => e.kind !== "opening-balance") // opening lots are not trades: invisible unless filtered
   if (symbol) result = result.filter((e) => e.symbol === String(symbol).toUpperCase())
   if (tag) result = result.filter((e) => e.tags?.includes(tag))
   if (startDate) result = result.filter((e) => e.entryTime >= startDate)
@@ -36,18 +38,23 @@ export function listEntries({ symbol, tag, limit = 50, offset = 0, startDate, en
 }
 
 export function addEntry({
-  symbol, side, entryPrice, exitPrice = null, quantity = 1,
+  symbol, side, entryPrice, exitPrice = null, quantity,
   reason = "", confidence = 0, strategy = "", tags = [], notes = "",
-  timeframe = "", pattern = "", entryTime = null, exitTime = null
+  timeframe = "", pattern = "", entryTime = null, exitTime = null, kind
 }) {
+  if (kind !== undefined && kind !== "opening-balance") throw new Error(`unknown entry kind: ${kind}`)
+  const isOpening = kind === "opening-balance"
+  if (isOpening && (symbol == null || entryPrice == null || quantity == null || entryTime == null)) {
+    throw new Error("opening-balance entries require symbol, quantity, entryPrice, entryTime")
+  }
   const id = `jrnl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
   const entry = {
     id,
     symbol: String(symbol).toUpperCase(),
-    side: String(side).toLowerCase(), // "long" | "short"
+    side: side != null ? String(side).toLowerCase() : null, // "long" | "short" (opening balances carry no side)
     entryPrice: Number(entryPrice),
     exitPrice: exitPrice != null ? Number(exitPrice) : null,
-    quantity: Number(quantity),
+    quantity: quantity == null ? 1 : Number(quantity),
     reason: String(reason),
     confidence: Math.min(Math.max(Number(confidence), 0), 100),
     strategy: String(strategy),
@@ -61,7 +68,8 @@ export function addEntry({
     pnlPct: null,
     rMultiple: null,
     status: "open", // open | closed
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    ...(isOpening ? { kind: "opening-balance" } : {})
   }
 
   // Auto-calculate PnL if exit price provided
@@ -125,8 +133,9 @@ export function deleteEntry(id) {
 }
 
 export function journalStats() {
-  const closed = entries.filter((e) => e.status === "closed")
-  const open = entries.filter((e) => e.status === "open")
+  const trades = entries.filter((e) => e.kind !== "opening-balance") // opening lots are not trades
+  const closed = trades.filter((e) => e.status === "closed")
+  const open = trades.filter((e) => e.status === "open")
   const wins = closed.filter((e) => (e.pnl ?? 0) > 0)
   const losses = closed.filter((e) => (e.pnl ?? 0) < 0)
 
@@ -171,7 +180,7 @@ export function journalStats() {
   }
 
   return {
-    totalTrades: entries.length,
+    totalTrades: trades.length,
     openTrades: open.length,
     closedTrades: closed.length,
     winRate: closed.length > 0 ? Math.round((wins.length / closed.length) * 10000) / 100 : 0,
