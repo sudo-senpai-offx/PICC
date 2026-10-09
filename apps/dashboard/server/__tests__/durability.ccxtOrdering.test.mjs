@@ -12,9 +12,9 @@
 // Hermetic: PICC_COMMAND_CENTRE_DATA_DIR redirect, dynamic imports,
 // vi.resetModules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const ctl = vi.hoisted(() => ({ armed: false, suffix: "ccxt-equity.json" }))
 
@@ -80,8 +80,7 @@ let dir
 let mod
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "picc-durability-equity-"))
-  process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
+  dir = useIsolatedStoreDir("PICC_COMMAND_CENTRE_DATA_DIR", { prefix: "picc-durability-equity" })
   Object.assign(process.env, BINANCE_KEYS)
   vi.resetModules()
   mod = await import("../services/ccxtOrdering.mjs")

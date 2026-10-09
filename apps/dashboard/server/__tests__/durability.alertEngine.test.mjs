@@ -6,9 +6,9 @@
 // alerts.json (RED); tmp+rename leaves the previous snapshot intact (GREEN).
 // Hermetic: PICC_ALERTS_DATA_DIR redirect, dynamic imports, vi.resetModules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const ctl = vi.hoisted(() => ({ armed: false, suffix: "alerts.json" }))
 
@@ -35,8 +35,7 @@ let dir
 let mod
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "picc-durability-alerts-"))
-  process.env.PICC_ALERTS_DATA_DIR = dir
+  dir = useIsolatedStoreDir("PICC_ALERTS_DATA_DIR", { prefix: "picc-durability-alerts" })
   vi.resetModules()
   mod = await import("../services/alertEngine.mjs")
 })

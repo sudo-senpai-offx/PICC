@@ -3,12 +3,11 @@
 // Hermetic: PICC_DATA_DIR tmp; live gate files untouched (proven by existing
 // sidecar/risk suites staying green).
 import { beforeEach, describe, expect, it, vi, afterAll } from "vitest"
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { rmSync, existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
-const dir = mkdtempSync(join(tmpdir(), "picc-papercircuit-"))
-process.env.PICC_DATA_DIR = dir
+const dir = useIsolatedStoreDir("PICC_DATA_DIR", { prefix: "picc-papercircuit" })
 
 vi.mock("../services/browserStudio.mjs", () => ({
   studioBroadcast: vi.fn(),

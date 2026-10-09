@@ -13,9 +13,9 @@
 // Hermetic: PICC_DATA_DIR redirect (absolute tmp dir), dynamic imports,
 // vi.resetModules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const ctl = vi.hoisted(() => ({ armed: false, suffix: "workflows" }))
 
@@ -44,8 +44,7 @@ let dir
 let mod
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "picc-durability-workflows-"))
-  process.env.PICC_DATA_DIR = dir
+  dir = useIsolatedStoreDir("PICC_DATA_DIR", { prefix: "picc-durability-workflows" })
   vi.resetModules()
   mod = await import("../services/interventions.mjs")
 })

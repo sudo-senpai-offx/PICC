@@ -11,9 +11,9 @@
 // protected. Hermetic: PICC_COMMAND_CENTRE_DATA_DIR redirect, dynamic imports,
 // vi.resetModules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const ctl = vi.hoisted(() => ({ armed: false, suffix: "ceremony-state.json" }))
 
@@ -54,8 +54,7 @@ let dir
 let mod
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "picc-durability-ceremony-"))
-  process.env.PICC_COMMAND_CENTRE_DATA_DIR = dir
+  dir = useIsolatedStoreDir("PICC_COMMAND_CENTRE_DATA_DIR", { prefix: "picc-durability-ceremony" })
   vi.resetModules()
   mod = await import("../services/commandCentre/ceremonyState.mjs")
 })

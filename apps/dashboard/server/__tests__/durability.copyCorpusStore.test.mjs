@@ -6,9 +6,9 @@
 // snapshot intact (GREEN).
 // Hermetic: PICC_COPYCORPUS_DATA_DIR redirect, dynamic imports, vi.resetModules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { readFile, readdir, rm } from "node:fs/promises"
 import { join } from "node:path"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const ctl = vi.hoisted(() => ({ armed: false, suffix: "copyCorpus.json" }))
 
@@ -35,8 +35,7 @@ let dir
 let mod
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "picc-durability-corpus-"))
-  process.env.PICC_COPYCORPUS_DATA_DIR = dir
+  dir = useIsolatedStoreDir("PICC_COPYCORPUS_DATA_DIR", { prefix: "picc-durability-corpus" })
   vi.resetModules()
   mod = await import("../services/copyCorpusStore.mjs")
 })
