@@ -67,7 +67,10 @@ const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/graduationWeighting.test.mjs"
 ])
 
-describe("the shared comment lexer — ONE implementation, four consumers", () => {
+// COUNT DERIVED, NOT WRITTEN. A literal "four" here went stale the moment Task 2
+// registered a fifth consumer, and a consumer-count claim in a title is exactly
+// the kind of comment nobody re-reads before adding the next entry.
+describe(`the shared comment lexer — ONE implementation, ${VITEST_CONSUMERS.length} consumers`, () => {
   it("the two plain-script consumers expose the very same function object", () => {
     // Real `Object.is` identity, not a source-text resemblance. A copy would fail
     // here even if it were character-for-character identical today, which is the

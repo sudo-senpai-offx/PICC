@@ -29,11 +29,13 @@ const NOW = Date.parse("2026-10-01T00:00:00Z")
 /** An ISO stamp `days` before NOW. */
 const daysBefore = (days) => new Date(NOW - days * DAY_MS).toISOString()
 
-// The half-life name is imported from the module rather than written out here on
-// purpose. `ws7TestStoreIsolation` scans test files for path-shaped `PICC_` names
-// and Task 1's suite already learned the hard way that minting such a literal —
-// even inside a control fixture — is a finding. Going through the export means
-// this file never spells the variable at all.
+// The half-life name is imported from the module rather than written out at every
+  // use site, on purpose. `ws7TestStoreIsolation` scans test files for path-shaped
+// `PICC_` names and Task 1's suite already learned the hard way that minting such
+// a literal — even inside a control fixture — is a finding. Going through the
+// export means this file MINT no store variable: the one place the name is spelled
+// out is the single assertion that pins the exported constant to the spec's
+// literal, and it is a `_DAYS` scalar, never a path-shaped store name.
 afterEach(() => {
   vi.unstubAllEnvs()
 })
@@ -284,9 +286,10 @@ describe("weightedMetric", () => {
   //
   // HERMETIC BY INJECTION. `NOW` sits in the fixture's own past, and the two
   // instants below are ~56 and ~74 years away from it, so neither can collide
-  // with whatever the machine running this suite thinks the time is. That is what
-  // lets the wall-clock answer be asserted as DIFFERENT without the test ever
-  // being able to pass by accident.
+  // with whatever the machine running this suite thinks the time is — which is
+  // what lets them be asserted by VALUE rather than by range. The wall-clock
+  // branch at the end of this test cannot be asserted by value at all, so its
+  // clock is faked instead.
   it("measures age against the injected `now`, never the wall clock", () => {
     const end = daysBefore(30)
     // 1970 predates the window, so the window is in the future and maximally recent.
@@ -302,13 +305,42 @@ describe("weightedMetric", () => {
     expect(decayWeight(end, { now: Date.parse("1970-01-01T00:00:00Z") })).not.toBe(
       decayWeight(end, { now: Date.parse("2100-01-01T00:00:00Z") })
     )
-    // Omitting `now` DOES fall back to the wall clock, and that answer differs
-    // from both injected ones — which is the control proving the injected values
-    // above are not simply the wall-clock answer restated.
-    const wallClock = decayWeight(end)
-    expect(typeof wallClock).toBe("number")
-    expect(wallClock).not.toBe(1)
-    expect(wallClock).not.toBe(ancient)
+    // Omitting `now` DOES fall back to the wall clock. That branch is covered for
+    // its CONTRACT — "a finite weight inside (0, 1], for whatever instant the
+    // machine thinks it is" — and NOT for a specific value.
+    //
+    // AN EARLIER VERSION OF THIS ASSERTED `.not.toBe(1)` and was wrong: `end` is a
+    // fixed 2026-09-01 stamp, so on any machine whose clock is BEFORE that (a
+    // restored fixture VM, a CI runner with skewed time, a bisect onto an earlier
+    // snapshot) the weight is exactly 1 and the assertion fails. Asserting a
+    // specific wall-clock value re-creates in the test suite the very dependence
+    // the `now` parameter exists to remove.
+    //
+    // The clock is therefore FAKED, and both regimes are exercised. That is what
+    // turns "probably clock-independent" into a proof: the pre-`end` clock below
+    // is precisely the case that broke the old assertion, and it is now asserted
+    // as the value it genuinely is — exactly 1 — rather than as "not 1".
+    const wallClockAt = (iso) => {
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(Date.parse(iso))
+        return decayWeight(end)
+      } finally {
+        vi.useRealTimers()
+      }
+    }
+
+    // Regime 1 — the machine clock predates the window's end, so the window is
+    // "future-dated" and maximal. This is the case the old assertion got wrong.
+    expect(wallClockAt("2020-01-01T00:00:00Z"), "a clock before the window end yields the maximum weight").toBe(1)
+
+    // Regime 2 — the machine clock is far past it, so the weight is small but
+    // must still be a positive finite number inside the documented range.
+    const after = wallClockAt("2100-01-01T00:00:00Z")
+    expect(typeof after, "the wall-clock branch must return a weight, not absence").toBe("number")
+    expect(Number.isFinite(after), "the wall clock must not yield NaN or Infinity").toBe(true)
+    expect(after, "the documented range is (0, 1] on every clock").toBeGreaterThan(0)
+    expect(after, "the documented range is (0, 1] on every clock").toBeLessThanOrEqual(1)
   })
 
   // An unusable `now` is the same defect as an unusable `windowEnd`, in the other
@@ -337,6 +369,34 @@ describe("weightedMetric", () => {
       expect(w, `weight at ${days} days`).toBeGreaterThan(0)
       expect(w, `weight at ${days} days`).toBeLessThanOrEqual(1)
     }
+  })
+
+  // A FUTURE-DATED WINDOW, and the negative-age case that makes the clamp
+  // load-bearing.
+  //
+  // `ageDays = (now - windowEnd)` is NEGATIVE for a window that has not closed
+  // yet, and `0.5 ** (negative / halfLife)` is therefore GREATER THAN 1. Left
+  // unclamped, a window dated 2030 would carry more weight than one that closed
+  // today — inverting the entire ordering this module exists to express, and
+  // letting a typo in a timestamp argue a strategy over a floor.
+  //
+  // `halfLifeDays: 30` is passed EXPLICITLY on both lines so the counterfactual
+  // below is computed against the same half-life the module is given, rather
+  // than against whatever `PICC_GRADUATION_HALFLIFE_DAYS` happens to hold in the
+  // developer's shell. Without it this test would read ambient configuration.
+  it("clamps a future-dated window to 1 instead of letting the weight exceed the range", () => {
+    const now = Date.parse("2026-10-01T00:00:00Z")
+    const FAR_FUTURE = "2030-01-01T00:00:00.000Z"
+    const NEXT_DAY = "2026-10-02T00:00:00.000Z"
+
+    expect(decayWeight(FAR_FUTURE, { now, halfLifeDays: 30 })).toBe(1)
+    expect(decayWeight(NEXT_DAY, { now, halfLifeDays: 30 })).toBe(1)
+
+    // The counterfactual, written out as plain arithmetic and NOT read back from
+    // the module — so this pins the clamp rather than restating the result. If
+    // the clamp were removed, this value would be what the function returned.
+    const unclamped = 0.5 ** ((now - Date.parse(FAR_FUTURE)) / DAY_MS / 30)
+    expect(unclamped, "the clamp must be doing real work, not describing a no-op").toBeGreaterThan(1)
   })
 
   // An instant no `Date` can hold is the same absence as a malformed one: the age

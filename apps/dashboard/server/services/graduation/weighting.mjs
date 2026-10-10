@@ -199,8 +199,12 @@ function resolveHalfLifeDays(explicit) {
  *
  * `@param {string|number|Date} windowEnd` the window's end instant
  * @param {object} [options]
- * @param {number} [options.halfLifeDays] days; defaults to `HALFLIFE_DAYS_DEFAULT`
- * @param {string|number|Date} [options.now] the instant to measure age from; defaults to the wall clock
+ * @param {number} [options.halfLifeDays] days. PRECEDENCE: this argument first,
+ *   then `PICC_GRADUATION_HALFLIFE_DAYS`, then `HALFLIFE_DAYS_DEFAULT` (30). A
+ *   reader rendering "measured over a 30-day half-life" from the default alone
+ *   would misreport a process running with the override set to 7.
+ * @param {string|number|Date} [options.now] the instant to measure age from.
+ *   Omitting it means the wall clock; an explicit `now: null` means absence.
  * @returns {number|null} a weight in (0, 1], or null when no age could be measured
  */
 export function decayWeight(windowEnd, options = {}) {
