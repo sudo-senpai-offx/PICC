@@ -5,6 +5,16 @@ import {
   collectWindows,
   collectWindowsWithReasons
 } from "../services/graduation/windows.mjs"
+// THE ONE COMMENT LEXER, by import. This file used to declare its own, which is
+// Finding 1 [HIGH] of the two-axis review (0043-TWO_AXIS_REVIEW_FINDINGS, :20):
+// four hand-rolled lexers meant four chances for one to be quietly switched off,
+// and two had already shipped a VACUOUS pass by blanking real code from the `//`
+// of a URL string onward. `ws7TestStoreIsolation`'s `stripLineComment` is NOT a
+// precedent here — it is a single-line trailing-comment helper with no block or
+// string handling. `guard-primitives.mjs` is the string-aware implementation, and
+// `sharedCommentLexer.test.mjs` is what proves every consumer resolves to this
+// one binding.
+import { stripComments } from "../scripts/guard-primitives.mjs"
 
 // Graduation window collector — pure readout normalizer.
 //
@@ -183,6 +193,155 @@ describe("collectWindows", () => {
     expect(w.reasons).toContain(REASONS.RETURN_UNMEASURED)
   })
 
+  // Q1 — an EMPTY STRING is absence, not a measured zero.
+  //
+  // `Number("")` is 0 and `Number("   ")` is 0, so a numeric field that arrived
+  // as an empty string (a CSV import, a DB column read as text, a JSON field
+  // typed `string`) used to become `returnPct: 0` with NO reason attached. That
+  // window passes `Number.isFinite`, so Task 3's gate reads "measured zero" and
+  // can argue the strategy OVER the floor, when the truth is "never measured".
+  // The failure is silent and it lands at the one point in the pipeline where it
+  // matters, so it is pinned here rather than left to a code-reading reviewer.
+  it("treats an empty or whitespace-only numeric field as absence, never as a measured zero", () => {
+    for (const absent of ["", " ", "   ", "\t", "\n", "\t\n", " \r\n "]) {
+      const [w] = collectWindows({
+        paperCloses: [
+          {
+            strategyTag: "b",
+            pnlPct: absent,
+            sharpe: "",
+            maxDd: "  ",
+            entryTime: "2026-01-01T00:00:00Z",
+            exitTime: "2026-01-02T00:00:00Z"
+          }
+        ]
+      })
+      expect(w.returnPct, `pnlPct ${JSON.stringify(absent)} fabricated a measured zero`).toBe(null)
+      expect(w.sharpe, `sharpe ${JSON.stringify(absent)} fabricated a measured zero`).toBe(null)
+      expect(w.maxDd, `maxDd ${JSON.stringify(absent)} fabricated a measured zero`).toBe(null)
+      expect(w.reasons, `pnlPct ${JSON.stringify(absent)} produced no RETURN reason`).toContain(
+        REASONS.RETURN_UNMEASURED
+      )
+      // The load-bearing consequence, stated as the gate will meet it.
+      expect(Number.isFinite(w.returnPct), "an absent return must FAIL CLOSED for Task 3").toBe(false)
+    }
+  })
+
+  // The complement, and it must survive the fix: a REAL zero, however spelled,
+  // is a measurement. `"0"` is a number someone wrote down, not an absence, and
+  // collapsing it to null would be the opposite error — losing real evidence.
+  it("still accepts a real zero however it is spelled", () => {
+    for (const zero of [0, "0", 0.0, "0.00", "-0"]) {
+      const [w] = collectWindows({
+        paperCloses: [
+          {
+            strategyTag: "b",
+            pnlPct: zero,
+            sharpe: 0,
+            maxDd: "0",
+            entryTime: "2026-01-01T00:00:00Z",
+            exitTime: "2026-01-02T00:00:00Z"
+          }
+        ]
+      })
+      // `===` rather than `toBe`, because `-0` is a real measured zero and
+      // `toBe` uses Object.is, which distinguishes `-0` from `+0`.
+      expect(w.returnPct === 0, `a real zero ${JSON.stringify(zero)} must survive as 0`).toBe(true)
+      expect(w.sharpe === 0).toBe(true)
+      expect(w.maxDd === 0).toBe(true)
+      expect(Number.isFinite(w.returnPct)).toBe(true)
+      expect(w.reasons).not.toContain(REASONS.RETURN_UNMEASURED)
+    }
+  })
+
+  it("still accepts a non-zero numeric string and a real number", () => {
+    const out = collectWindows({
+      paperCloses: [
+        { strategyTag: "s", pnlPct: "2.5", entryTime: "2026-01-01T00:00:00Z", exitTime: "2026-01-02T00:00:00Z" },
+        { strategyTag: "n", pnlPct: -1.25, entryTime: "2026-01-01T00:00:00Z", exitTime: "2026-01-02T00:00:00Z" }
+      ]
+    })
+    // Same start AND end, so the documented strategyTag tiebreak orders them:
+    // "n" before "s". Asserting insertion order here would contradict the sort.
+    expect(out.map((w) => w.returnPct)).toEqual([-1.25, 2.5])
+    for (const w of out) expect(w.reasons).not.toContain(REASONS.RETURN_UNMEASURED)
+  })
+
+  // Q2 — cost lines present, but no leg anywhere was MEASURABLE.
+  //
+  // The header says "an absent cost leg is NOT a zero cost leg", but the code
+  // only ever reasoned about a missing leg WITHIN a line. It never asked whether
+  // any line yielded a readable measurement, so `costLines: [{}]` fell through
+  // every `?? 0` and reported a confident `costDragUsd: 0` — the same
+  // "we did not measure" vs "drag was zero" conflation as Q1, one field over.
+  it("reports absence, not zero, when no cost leg anywhere is measurable", () => {
+    for (const [label, costLines] of [
+      ["empty line object", [{}]],
+      ["two empty line objects", [{}, {}]],
+      ["non-object entries", [null, "x", 42]],
+      ["empty-string leg only", [{ feeUsd: "" }]],
+      ["null leg only", [{ spreadUsd: null }]],
+      ["whitespace leg only", [{ slipUsd: "   " }]]
+    ]) {
+      const [w] = collectWindows({
+        paperCloses: [
+          {
+            strategyTag: "b",
+            pnlPct: 1,
+            entryTime: "2026-01-01T00:00:00Z",
+            exitTime: "2026-01-02T00:00:00Z",
+            costLines
+          }
+        ]
+      })
+      expect(w.costDragUsd, `${label} fabricated a measured zero drag`).toBe(null)
+      expect(w.reasons, `${label} produced no COST_DRAG reason`).toContain(REASONS.COST_DRAG_ABSENT)
+      expect(Number.isFinite(w.costDragUsd), `${label} must FAIL CLOSED for Task 3`).toBe(false)
+    }
+  })
+
+  // The complement: a REAL measured zero drag is a measurement. Paper charges no
+  // explicit fee, so an all-zero cost line is the legitimate zero-drag case the
+  // module header promises to report — and it must not be collapsed into null,
+  // which would discard real evidence about the absence of explicit costs.
+  it("still reports a genuinely measured zero drag as 0", () => {
+    const [w] = collectWindows({
+      paperCloses: [
+        {
+          strategyTag: "b",
+          pnlPct: 1,
+          entryTime: "2026-01-01T00:00:00Z",
+          exitTime: "2026-01-02T00:00:00Z",
+          costLines: [{ closeId: "c1", feeUsd: 0, spreadUsd: 0, slipUsd: 0, provenance: "modeled" }]
+        }
+      ]
+    })
+    expect(w.costDragUsd).toBe(0)
+    expect(Number.isFinite(w.costDragUsd)).toBe(true)
+    expect(w.reasons).not.toContain(REASONS.COST_DRAG_ABSENT)
+  })
+
+  // A PARTIALLY readable pile is still a measurement: one legible leg is enough
+  // to sum. Requiring every leg everywhere to be present would throw away real
+  // drag measurements whenever one optional leg was absent, which is the
+  // W3-02 `finiteOrZero` reading the module deliberately inherited.
+  it("still sums a pile where only some legs are measurable", () => {
+    const [w] = collectWindows({
+      paperCloses: [
+        {
+          strategyTag: "b",
+          pnlPct: 1,
+          entryTime: "2026-01-01T00:00:00Z",
+          exitTime: "2026-01-02T00:00:00Z",
+          // First line has no legible leg; the second carries a real 15 spread.
+          costLines: [{}, { closeId: "c2", spreadUsd: 15 }]
+        }
+      ]
+    })
+    expect(w.costDragUsd).toBe(15)
+    expect(w.reasons).not.toContain(REASONS.COST_DRAG_ABSENT)
+  })
+
   // ---- Cost drag from the W3-02 overlay shape ---------------------------
   it("sums W3-02 overlay cost lines into the window's costDragUsd", () => {
     const [w] = collectWindows({
@@ -290,16 +449,20 @@ describe("graduation windows module — advisory-only boundary", () => {
   // and could never pass, which makes it a guard that cries wolf on the
   // documentation, and a guard like that gets deleted rather than believed.
   //
-  // The rule mirrors ws7TestStoreIsolation.test.mjs:447 (`stripLineComment`):
-  // read CODE. Block comments are removed first, then line comments, so a `//`
-  // inside a JSDoc block cannot be mistaken for the start of real code — the
-  // same ordering concern that guard records.
-  const codeOnly = (src) =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .split("\n")
-      .map((line) => line.replace(/(^|\s)\/\/.*$/, "$1"))
-      .join("\n")
+  // THE STRIPPER IS `guard-primitives.mjs`'s, BY IMPORT — this file declares
+  // none. That is Finding 1 [HIGH] of the two-axis review
+  // (`0043-TWO_AXIS_REVIEW_FINDINGS-v1-to-v2.md:20`): four independent lexers
+  // were four chances for one to be switched off, and two already shipped a
+  // vacuous pass. `ws7TestStoreIsolation`'s `stripLineComment` is NOT a
+  // precedent here — it is a single-line trailing-comment helper with no block
+  // or string handling, so citing it is how a fifth lexer gets written.
+  //
+  // STRING CONTENT IS DELIBERATELY PRESERVED by `stripComments` (only the LEXING
+  // is string-aware), which is the contract the other guards' predicates rely on
+  // and is asserted in `sharedCommentLexer.test.mjs`. It does not weaken the
+  // scan below: windows.mjs has no string literal containing a banned token, so
+  // "code only" and "code with string contents" give the same answer here — and
+  // the assertion is about the module's code, which is the claim being made.
 
   it("source contains no permit, ceremony, credential, store or I/O surface", async () => {
     const { readFileSync } = await import("node:fs")
@@ -308,7 +471,7 @@ describe("graduation windows module — advisory-only boundary", () => {
       fileURLToPath(new URL("../services/graduation/windows.mjs", import.meta.url)),
       "utf8"
     )
-    const code = codeOnly(src)
+    const code = stripComments(src)
     for (const banned of [
       "process.env",
       "writeFile",
@@ -331,10 +494,11 @@ describe("graduation windows module — advisory-only boundary", () => {
     expect(code).not.toMatch(/from\s+"\.\.\/(trading|technicalBacktest|hyperopt|prediction|costs)/)
   })
 
-  // THE CONTROLS for the strip above. Without them, "strip comments" and
-  // "strip everything" are indistinguishable: a broken stripper that deletes the
-  // whole file would satisfy every assertion above.
-  it("the strip removes comments but a planted violation in code still fires", () => {
+  // THE CONTROLS. Without them, "strip comments" and "strip everything" are
+  // indistinguishable: a stripper that deleted the whole file would satisfy
+  // every assertion above, which is exactly the vacuous-pass shape Finding 1
+  // describes. These pin that the shared lexer still bites.
+  it("the shared strip removes comments but a planted violation in code still fires", () => {
     // The planted code lines use I/O tokens, deliberately NOT a `PICC_*`
     // variable. An earlier version of this control planted a fabricated
     // store-variable READ (a path-shaped PICC_ env name), and
@@ -342,17 +506,17 @@ describe("graduation windows module — advisory-only boundary", () => {
     // scans test files for path-shaped `PICC_` names, and a name no module
     // reads redirects nothing, which is precisely the round-4 defect it
     // exists to catch. The fixture was reproducing the very pattern the repo
-    // forbids, so the control now plants the same class of violation without
-    // minting a fake store variable. Note the detector reads raw LINES, so
+    // forbids, so the control plants the same class of violation without
+    // minting a fake store variable. Note that detector reads raw LINES, so
     // even MENTIONING such a name in a comment is a finding — hence the
     // paraphrase rather than a quoted example.
     const planted = [
       '// the header says "no writes here"',
-      '/** JSDoc: this module never flips a permit. */',
-      'mkdirSync(dir)',
-      'const stream = createWriteStream(path)'
-    ]
-    const code = codeOnly(planted.join("\n"))
+      "/** JSDoc: this module never flips a permit. */",
+      "mkdirSync(dir)",
+      "const stream = createWriteStream(path)"
+    ].join("\n")
+    const code = stripComments(planted)
     expect(code).not.toContain("//")
     expect(code).not.toContain("permit")
     for (const banned of ["mkdirSync", "createWriteStream"]) {
@@ -360,11 +524,27 @@ describe("graduation windows module — advisory-only boundary", () => {
     }
   })
 
-  it("the strip handles a line comment marker inside a block comment", () => {
-    // Block comments are removed FIRST precisely so this cannot leave a `//`
-    // behind that makes the line-comment pass eat the rest of the file. If the
-    // order were reversed, `codeOnly` below would return "" and pass vacuously.
-    const planted = ["/**\n * see http://example.com\n */", 'const x = 1'].join("\n")
-    expect(codeOnly(planted)).toContain("const x = 1")
+  // THE REGRESSION THE SHARED LEXER EXISTS TO PREVENT, re-pinned here because
+  // THIS is now a consumer of it. A `//`-only stripper blanks the code after a
+  // URL string on the same line, finds ZERO banned tokens, and passes vacuously
+  // — which is how two of the four original lexers shipped. The assertion is
+  // that the string and everything after it survive.
+  it("the shared strip does not blank real code that follows a string literal", () => {
+    const planted = 'const dir = "file:///tmp/store"; const keep = mkdirSync(dir)'
+    const code = stripComments(planted)
+    expect(code, "the code after a URL string was blanked — the scan would pass vacuously").toContain(
+      "const keep = mkdirSync(dir)"
+    )
+  })
+
+  // And the strip preserves LENGTH, so a finding reported against this view still
+  // lines up with the file on disk.
+  it("the shared strip preserves length and line count", () => {
+    const src = ["/* block */", 'const u = "http://x.invalid" // trailing', "// whole line", "const end = 1"].join(
+      "\n"
+    )
+    const code = stripComments(src)
+    expect(code.length).toBe(src.length)
+    expect(code.split("\n")).toHaveLength(src.split("\n").length)
   })
 })

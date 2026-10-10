@@ -73,10 +73,29 @@ const EXCLUDED = Object.freeze({
   END_BEFORE_START: "window:end-before-start"
 })
 
-/** A finite number, or null. Null/undefined is never coerced to 0. */
+/**
+ * A genuinely measured number, or null. Absence is never coerced to a zero.
+ *
+ * THE EMPTY STRING IS ABSENCE, NOT ZERO, and that distinction is the whole
+ * reason this function is not a bare `Number.isFinite(Number(v))`. `Number("")`,
+ * `Number("   ")` and `Number("\t\n")` are all `0`, so a numeric field that
+ * arrived as an empty string — a CSV import, a DB column read as text, a JSON
+ * field typed `string` — used to become a `0` that PASSES `Number.isFinite`.
+ * Downstream that is indistinguishable from a real flat window, so a gate could
+ * read "measured zero" and argue a strategy over the floor on a value nobody
+ * ever measured. Accepting only a real `number` or a non-empty trimmed string
+ * closes it: a written-down zero (`0`, `"0"`, `"-0"`) still survives as a
+ * measurement, and only a BLANK field reads as absence.
+ *
+ * `null`/`undefined` stay null, and a non-numeric string (`"abc"`) is null — an
+ * unparseable value is absence too, never a guess.
+ */
 function finiteOrNull(value) {
-  if (value == null) return null
-  const n = Number(value)
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (trimmed === "") return null
+  const n = Number(trimmed)
   return Number.isFinite(n) ? n : null
 }
 
@@ -98,26 +117,42 @@ function parseInstant(value) {
 }
 
 /**
- * W3-02 cost drag for one window: the sum of `feeUsd + spreadUsd + slipUsd`
- * over the supplied `overlayForCloses` lines.
+ * W3-02 cost drag for one window: the sum of `feeUsd + spreadUsd + slipUsd` over
+ * the supplied `overlayForCloses` lines.
  *
- * A line missing any leg contributes nothing *for that leg only* (the W3-02
- * `finiteOrZero` reading of an absent optional leg, costs/paperOverlay.mjs:43);
- * the window's `costDragUsd` is `null` — with a named reason — only when there
- * are no cost lines at all, because then no drag was measured in either
- * direction. An all-zero sum is a MEASURED zero and is reported as `0`, which
- * is the legitimate case: paper charges no explicit fee.
+ * TWO ABSENCE CLASSES, AND THE SECOND ONE USED TO BE MISSING.
+ *
+ *  1. NO LINES AT ALL → `null`. Nothing was measured in either direction.
+ *  2. LINES EXIST BUT NONE IS MEASURABLE → also `null`. `costLines: [{}]`, or
+ *     `[null, "x"]`, or a line whose only leg is `""`, has a shape but no
+ *     reading. This used to fall through every `?? 0` and report a confident
+ *     `costDragUsd: 0`, which is the identical "we did not measure" vs "drag
+ *     was zero" conflation the empty-string return suffered — the header even
+ *     promised the opposite ("an absent cost leg is NOT a zero cost leg") while
+ *     the code only ever reasoned about a missing leg WITHIN a line and never
+ *     asked whether any line yielded a reading. So the sum is only returned once
+ *     at least one leg has actually been measured.
+ *
+ * A leg that IS readable contributes its value, including an exact zero, so a
+ * partly-readable pile still sums: that is the W3-02 `finiteOrZero` reading of
+ * an absent optional leg (`costs/paperOverlay.mjs:43`), which is why one legible
+ * leg is enough and a pile of all-zero legs is a MEASURED `0` — the legitimate
+ * paper case, where paper charges no explicit fee.
  */
 function costDragUsdFrom(costLines) {
   if (!Array.isArray(costLines) || costLines.length === 0) return null
   let total = 0
+  let measuredAnyLeg = false
   for (const line of costLines) {
     if (!line || typeof line !== "object") continue
-    total += finiteOrNull(line.feeUsd) ?? 0
-    total += finiteOrNull(line.spreadUsd) ?? 0
-    total += finiteOrNull(line.slipUsd) ?? 0
+    for (const leg of ["feeUsd", "spreadUsd", "slipUsd"]) {
+      const amount = finiteOrNull(line[leg])
+      if (amount == null) continue
+      measuredAnyLeg = true
+      total += amount
+    }
   }
-  return total
+  return measuredAnyLeg ? total : null
 }
 
 /**
