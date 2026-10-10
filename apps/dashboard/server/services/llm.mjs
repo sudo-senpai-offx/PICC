@@ -64,11 +64,6 @@ export async function chatSignalText(system, user, opts = {}) {
   return chatSignal("text", system, user, opts)
 }
 
-/** JSON sibling of chatSignalText (same flag, same HOLD-on-divergence rule). */
-export async function chatSignalJSON(system, user, opts = {}) {
-  return chatSignal("json", system, user, opts)
-}
-
 async function chatSignal(mode, system, user, opts) {
   const { isConsistencyEnabled, signalOutputsAgree, holdAdvisory } = await import("./providerConsistency.mjs")
   if (!isConsistencyEnabled()) {

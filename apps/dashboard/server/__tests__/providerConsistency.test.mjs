@@ -1,6 +1,7 @@
 // Wave3+04 — provider-consistency signal (TRADING SIGNALS ONLY, OFF by default).
-// TDD RED: imports providerConsistency.mjs + chatSignalText/chatSignalJSON from
-// llm.mjs, neither of which exists yet. Mocked providers only (stubbed fetch).
+// Covers providerConsistency.mjs + chatSignalText from llm.mjs (the only
+// signal caller is tradingAssist, text-only — there is deliberately no JSON
+// variant). Mocked providers only (stubbed fetch).
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
