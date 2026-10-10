@@ -53,12 +53,18 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
  * its advisory-boundary source scan (W3-04, Task 1). It was initially adopted
  * without registration, and a mutation probe proved the silence was real: a
  * local sixth lexer pasted into it left this file green.
+ *
+ * `graduationWeighting.test.mjs` is here for the same reason and was registered
+ * in the same commit it adopted the lexer (W3-04, Task 2). Its scan is narrower —
+ * one module, banned token list plus a "reads exactly one environment variable"
+ * assertion — but a narrower unregistered scan is still an invisible one.
  */
 const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/importResolutionGuard.test.mjs",
   "apps/dashboard/server/__tests__/ws7AuthBootstrapGateGuard.test.mjs",
   "apps/dashboard/server/__tests__/ws7RouteAuthCoverageGuard.test.mjs",
-  "apps/dashboard/server/__tests__/graduationWindows.test.mjs"
+  "apps/dashboard/server/__tests__/graduationWindows.test.mjs",
+  "apps/dashboard/server/__tests__/graduationWeighting.test.mjs"
 ])
 
 describe("the shared comment lexer — ONE implementation, four consumers", () => {
