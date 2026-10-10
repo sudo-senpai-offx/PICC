@@ -397,6 +397,68 @@ setInterval(() => {
   }
 }, 300_000).unref()
 
+// FNV-1a 32-bit hash rendered as 8 hex chars — a compact bucket identity for
+// a session token without keeping the token itself in the bucket map.
+function shortHash(value) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < value.length; i += 1) {
+    h ^= value.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, "0")
+}
+
+/**
+ * Per-session general bucket key (Wave3+ slice 05).
+ *
+ * A VERIFIED bearer isolates the caller's 60/60s budget from every other
+ * session behind the same IP: multi-panel suites and NAT-shared clients stop
+ * spending each other's budget. The key is a hash of the SESSION TOKEN, so
+ * two tabs sharing one session still share one budget, while two sessions —
+ * even for the same user — do not.
+ *
+ * An UNVERIFIED or absent bearer falls back to the per-IP bucket. Keying on
+ * an unverified header would let any caller mint unlimited budgets by varying
+ * it — the same bypass class as X-Forwarded-For spoofing — so the fallback
+ * is load-bearing, not incidental. verifyUser() flattens store faults to
+ * null, which also lands here: a fault shares the IP budget (fail-closed),
+ * never an unlimited one.
+ */
+async function generalBucketKey(req) {
+  const auth = req.headers?.authorization
+  if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+    let userId = null
+    try {
+      userId = await verifyUser(auth)
+    } catch {
+      userId = null
+    }
+    if (userId) return `general:session:${shortHash(auth.slice(7))}`
+  }
+  return `general:${clientIp(req)}`
+}
+
+// Single-flight for identical in-flight read POSTs (Wave3+ slice 05).
+//
+// Concurrent callers with the same key share one loader invocation; each
+// still writes its own response from the shared result. A rejection evicts
+// the entry so a later call retries (same contract as cached() in
+// services/rateLimit.mjs). Keys must embed the route plus every parameter
+// that changes the result — a key that is too broad serves wrong data, and
+// these routes shape per-request responses from the shared fan-in output.
+const inflightReads = new Map()
+function singleFlightRead(key, loader) {
+  const hit = inflightReads.get(key)
+  if (hit) return hit
+  const p = Promise.resolve()
+    .then(loader)
+    .finally(() => {
+      if (inflightReads.get(key) === p) inflightReads.delete(key)
+    })
+  inflightReads.set(key, p)
+  return p
+}
+
 /**
  * The address of the socket this request arrived on — the ONE thing the server
  * observed rather than was told.
@@ -1253,10 +1315,13 @@ async function _handleApiInner(req, res, url, reqId) {
   const path = parsed.pathname
   const auth = req.headers.authorization
 
-  // General rate limit: 60 requests per 60 seconds per IP for all POST endpoints.
-  // Checked BEFORE consuming the body so a 429 never pays the read cost.
+  // General rate limit: 60 requests per 60 seconds for all POST endpoints.
+  // The bucket is per verified session (generalBucketKey) with a per-IP
+  // fallback — one busy suite session can no longer spend another session's
+  // budget behind the same IP. Checked BEFORE consuming the body so a 429
+  // never pays the read cost.
   if (["POST", "PUT", "PATCH"].includes(req.method)) {
-    const generalKey = `general:${clientIp(req)}`
+    const generalKey = await generalBucketKey(req)
     if (rateLimited(generalKey, 60, 60_000)) {
       writeJson(res, 429, { error: "rate limit exceeded — try again later" })
       return true
@@ -3703,10 +3768,17 @@ async function _handleApiInner(req, res, url, reqId) {
       // trust — "same data across multiple sources is trusted"). Off by default
       // so the standard fan-in shape and cost stay unchanged for other callers.
       const fetchCandles = body?.verify === true ? getCrossSourceCandles : getBestCandles
-      const [out, availableSources] = await Promise.all([
-        fetchCandles(assetId, { timeframe, count, source, preferredSource }),
-        listAvailableSources(assetId, { timeframe })
-      ])
+      // Single-flight: N panels mounting the same asset/timeframe at once
+      // share one fan-in call instead of stamping N identical upstreams.
+      const readKey =
+        `candles:${assetId}:${timeframe}:${count}:${source}:${preferredSource ?? ""}:` +
+        (body?.verify === true ? "verify" : "fanin")
+      const [out, availableSources] = await singleFlightRead(readKey, () =>
+        Promise.all([
+          fetchCandles(assetId, { timeframe, count, source, preferredSource }),
+          listAvailableSources(assetId, { timeframe })
+        ])
+      )
       const feed = out.source
       if (!out.candles.length) {
         return writeJson(res, 200, { ok: true, source: "none", feed: null, assetId, requestedTimeframe: timeframe, timeframe, resolved: false, candles: [], availableSources, sourceMode: out.sourceMode ?? "auto", sources: out.sources ?? [], verifySources: 0, verifiedCount: 0, verifiedRatio: 0 })
@@ -4332,7 +4404,12 @@ async function _handleApiInner(req, res, url, reqId) {
       let source = "none"
       {
         const { getBestCandles } = await import("./services/marketDataBus.mjs")
-        const fanIn = await getBestCandles(assetId, { timeframe, count }).catch(() => null)
+        // Single-flight: concurrent identical levels reads share one fan-in
+        // call (same contract as the candles route above).
+        const fanIn = await singleFlightRead(
+          `levels:${assetId}:${timeframe}:${count}`,
+          () => getBestCandles(assetId, { timeframe, count }).catch(() => null)
+        )
         if (fanIn?.candles?.length) {
           candles = fanIn.candles.slice(-count)
           source = fanIn.source ?? "none"

@@ -672,7 +672,7 @@ const DYNAMIC_AUTH_IMPORTS = dynamicAuthImports(CODE)
     // class as the WS-6 T10 flake on a different store.
     //
     // Pinning the count is what this round does about it: the surface becomes a
-    // number someone has to look at and change deliberately, instead of 36 call
+    // number someone has to look at and change deliberately, instead of 37 call
     // sites nobody has enumerated. Migrating a site is `verifyTokenStrict()` +
     // `strictOrRefuse()`, exactly as the gate does it; that is a separate change
     // with its own review, tracked as a follow-up. Do NOT let this count be
@@ -685,11 +685,14 @@ const DYNAMIC_AUTH_IMPORTS = dynamicAuthImports(CODE)
     const sites = (CODE.match(/\bverifyUser\s*\(/g) ?? []).length
     expect(
       sites,
-      "verifyUser() call sites in handlers.mjs, counted on CODE. Expected 36 as of WS-7 round 2. " +
+      "verifyUser() call sites in handlers.mjs, counted on CODE. Expected 37 as of Wave3+ slice 05 " +
+        "(36 as of WS-7 round 2, plus generalBucketKey's limiter-identity read). " +
         "A decrease means a site was migrated to verifyTokenStrict() + strictOrRefuse() — " +
         "good, update the number in the same change. An increase is a new route that answers " +
-        "401 when the sessions store faults: ask why it does not use requireSessionOrFirstRun()."
-    ).toBe(36)
+        "401 when the sessions store faults: ask why it does not use requireSessionOrFirstRun(). " +
+        "generalBucketKey is NOT such a site: on fault it falls back to the per-IP bucket, " +
+        "so it never answers 401 at all."
+    ).toBe(37)
     const strict = (CODE.match(/\bverifyTokenStrict\s*\(/g) ?? []).length
     expect(
       strict,
@@ -1476,7 +1479,19 @@ function connectorsSiteIsGated(lines, index) {
     // route and its reasoning rather than new module-level dependencies. The
     // room section itself (TaxLotsSection beside CostsSection) adds no lines
     // here at all.
-    expect(lines, "lines in handlers.mjs").toBe(6709)
+    //
+    // 6,709 -> 6,786 in Wave3+ slice 05 (per-session general buckets + read
+    // single-flight), the same protocol: +77 lines, and every one is
+    // accounted for rather than absorbed. They are the contiguous
+    // general-bucket block after the rate-limit eviction interval
+    // (shortHash, generalBucketKey with its fail-closed reasoning, the
+    // inflightReads map + singleFlightRead), the two-line general-limiter
+    // call-site change, and the two single-flight wraps on the candles and
+    // levels fan-in calls. No new static or dynamic imports — verifyUser was
+    // already bound — so the import pair is unchanged, which is what confirms
+    // the growth is limiter logic and its reasoning rather than new
+    // module-level dependencies.
+    expect(lines, "lines in handlers.mjs").toBe(6786)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
