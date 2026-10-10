@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 function geminiText(payload) {
   return {
@@ -36,8 +37,7 @@ let dir
 let llm
 let consistency
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), "picc-consistency-data-"))
-  process.env.PICC_DATA_DIR = dir
+  dir = useIsolatedStoreDir("PICC_DATA_DIR", { prefix: "picc-consistency-data" })
   process.env.GEMINI_API_KEY = "test-key-gemini"
   process.env.GROQ_API_KEY = "test-key-groq"
   process.env.LLM_PROVIDERS = "gemini,groq"
