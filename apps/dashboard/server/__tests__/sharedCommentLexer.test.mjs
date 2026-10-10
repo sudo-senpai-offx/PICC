@@ -38,11 +38,27 @@ const SHARED = join(REPO_ROOT, "apps/dashboard/server/scripts/guard-primitives.m
 
 const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
 
-/** The three vitest consumers, which cannot be imported without re-running their suites. */
+/**
+ * The vitest consumers, which cannot be imported without re-running their suites.
+ *
+ * REGISTERING A NEW CONSUMER IS PART OF ADOPTING THE SHARED LEXER, not an
+ * optional extra. A consumer missing from this list is invisible to BOTH halves
+ * of the proof below: the negative half ("no consumer RETAINS a declaration")
+ * and the resolution half ("resolves to the SAME absolute module"). That is
+ * exactly the drift this file exists to close — a hand-rolled lexer pasted into
+ * an unregistered consumer would pass silently, which is how the original four
+ * came to disagree in the first place.
+ *
+ * `graduationWindows.test.mjs` is here because it imports `stripComments` for
+ * its advisory-boundary source scan (W3-04, Task 1). It was initially adopted
+ * without registration, and a mutation probe proved the silence was real: a
+ * local sixth lexer pasted into it left this file green.
+ */
 const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/importResolutionGuard.test.mjs",
   "apps/dashboard/server/__tests__/ws7AuthBootstrapGateGuard.test.mjs",
-  "apps/dashboard/server/__tests__/ws7RouteAuthCoverageGuard.test.mjs"
+  "apps/dashboard/server/__tests__/ws7RouteAuthCoverageGuard.test.mjs",
+  "apps/dashboard/server/__tests__/graduationWindows.test.mjs"
 ])
 
 describe("the shared comment lexer — ONE implementation, four consumers", () => {

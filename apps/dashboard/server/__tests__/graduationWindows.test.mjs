@@ -547,4 +547,67 @@ describe("graduation windows module — advisory-only boundary", () => {
     expect(code.length).toBe(src.length)
     expect(code.split("\n")).toHaveLength(src.split("\n").length)
   })
+
+  // FINDING 2 — THE BLOCK-BEFORE-LINE ORDERING SHAPE, re-pinned here.
+  //
+  // This coverage was LOST when the local `codeOnly` was deleted: the fixture
+  // that held the ordering was a test OF the local helper, so removing the
+  // helper removed its pin. `sharedCommentLexer.test.mjs` does not plant this
+  // shape either, so at the moment of this fix nothing held it.
+  //
+  // WHY IT MATTERS. A block comment may legitimately contain a `//` — this very
+  // module's headers do, in prose like "see http://example.com". A stripper that
+  // removed LINE comments first would see that inner `//`, blank everything from
+  // there to the end of the line, and leave a fragment of `*/` behind. The
+  // `*/` then becomes real code that no comment rule can reach, so every
+  // subsequent line of the file is read as code rather than comment — and if
+  // that fragment is the last thing on a line, the NEXT line's comment survives
+  // unblanked and can satisfy a ban by naming the very token it forbids.
+  //
+  // The assertion is behavioural, not structural: block comments are removed
+  // before line comments, so the inner `//` never becomes a comment opener and
+  // the real code after the block survives.
+  it("a `//` inside a block comment does not eat the code that follows the block", () => {
+    const planted = [
+      "/* see // note */",
+      "const codeAfterBlock = mkdirSync(dir)",
+      "/* end */",
+      "const keep = 1"
+    ].join("\n")
+    const code = stripComments(planted)
+    expect(code, "comment text leaked into the code view").not.toContain("note")
+    expect(
+      code,
+      "a `//` inside the first block comment ate the second block's `*/`, so the pair merged and swallowed the real code between them — block comments must be removed BEFORE line comments"
+    ).toContain("const codeAfterBlock = mkdirSync(dir)")
+    expect(code).toContain("const keep = 1")
+  })
+
+  // THE CONTROL for the ordering claim above, because "the fixture happens to
+  // work" is not the same as "the fixture would fail on the wrong implementation".
+  // This is a deliberately LINE-FIRST stripper with no shared lexer underneath.
+  // If the assertion above does not fail against it, the test is not pinning the
+  // ordering at all and would pass against any stripper whatsoever.
+  //
+  // The mechanism it demonstrates, in one line of output: the inner `//` blanks
+  // the first block's own `*/`, the two remaining `/*` then pair with the SECOND
+  // block's `*/`, and one comment span swallows the real code in between.
+  it("CONTROL: a line-first stripper FAILS that fixture, so the ordering is really pinned", () => {
+    const lineFirst = (src) =>
+      src
+        .split("\n")
+        .map((line) => line.replace(/(^|\s)\/\/.*$/, "$1"))
+        .join("\n")
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+    const planted = [
+      "/* see // note */",
+      "const codeAfterBlock = mkdirSync(dir)",
+      "/* end */",
+      "const keep = 1"
+    ].join("\n")
+    expect(
+      lineFirst(planted),
+      "the control must FAIL: if this line-first stripper also preserved the code, the fixture would not be pinning ordering at all"
+    ).not.toContain("const codeAfterBlock = mkdirSync(dir)")
+  })
 })
