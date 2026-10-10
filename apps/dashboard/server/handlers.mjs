@@ -1838,6 +1838,45 @@ async function _handleApiInner(req, res, url, reqId) {
     return
   }
 
+  // Bookmarklet click-to-capture leg (Wave 3+ backlog, capture-hooks gap).
+  // The operator saves the `javascript:` snippet MANUALLY (GET returns it with
+  // manual-install docs — never auto-installed) and clicks it on a venue page;
+  // the snippet POSTs the visible-text snapshot with the dashboard session.
+  // Same auth as the sibling trading routes; oversize is a 413 before any
+  // store write; unknown venues are an honest 400; non-hook venues report
+  // their verbatim not-enabled state with a 200 (a state, not a failure).
+  if (path === "/api/trading/bookmarklet-capture") {
+    if (!(await requireAuth(req, res))) return true
+    const userId = (await verifyUser(req.headers.authorization)) ?? "default"
+    // Dynamic so the bookmarklet service stays off the boot path, the way
+    // every copilot/authority/wealth/costs service in this file is reached.
+    const { BOOKMARKLET_MAX_BYTES, BOOKMARKLET_USAGE, bookmarkletSnippet, ingestBookmarkletCapture, validateBookmarkletPayload } = await import("./services/bookmarkletCapture.mjs")
+    if (req.method === "GET") {
+      writeJson(res, 200, { ok: true, endpoint: path, usage: BOOKMARKLET_USAGE, snippet: bookmarkletSnippet(path) })
+      return
+    }
+    if (req.method === "POST") {
+      if (JSON.stringify(body ?? {}).length > BOOKMARKLET_MAX_BYTES) {
+        writeJson(res, 413, { ok: false, error: "payload-too-large: over 128KB cap" })
+        return
+      }
+      const validated = validateBookmarkletPayload(body)
+      if (!validated.ok) {
+        writeJson(res, 400, { ok: false, error: validated.error })
+        return
+      }
+      const report = await ingestBookmarkletCapture({ ...validated, userId })
+      if (report.state === "error") {
+        writeJson(res, 400, { ok: false, report })
+        return
+      }
+      writeJson(res, 200, { ok: true, userId, report })
+      return
+    }
+    writeJson(res, 405, { ok: false, error: "method not allowed" })
+    return
+  }
+
   // Command Centre (slice 4) — per-site overview + the runtime kill switch.
   // Every cell of the overview is OBSERVED state or an explicit "not-wired"
   // label (composeCommandCentreOverview enforces that contract); the mode

@@ -672,7 +672,7 @@ const DYNAMIC_AUTH_IMPORTS = dynamicAuthImports(CODE)
     // class as the WS-6 T10 flake on a different store.
     //
     // Pinning the count is what this round does about it: the surface becomes a
-    // number someone has to look at and change deliberately, instead of 37 call
+    // number someone has to look at and change deliberately, instead of 38 call
     // sites nobody has enumerated. Migrating a site is `verifyTokenStrict()` +
     // `strictOrRefuse()`, exactly as the gate does it; that is a separate change
     // with its own review, tracked as a follow-up. Do NOT let this count be
@@ -682,17 +682,28 @@ const DYNAMIC_AUTH_IMPORTS = dynamicAuthImports(CODE)
     // Counted on CODE, not SRC, so the three comment mentions of `verifyUser(`
     // in this file's neighbourhood do not inflate the number. A comment is not a
     // call site, and a pin that counted them would be measuring prose.
+    //
+    // 37 -> 38 in the bookmarklet click-to-capture leg (Wave 3+ backlog): the
+    // new /api/trading/bookmarklet-capture route resolves its per-user metrics
+    // bucket with `(await verifyUser(req.headers.authorization)) ?? "default"`,
+    // the byte-identical idiom of its three sibling trading routes
+    // (capture-config, session-policy, headless-status). It does not use
+    // requireSessionOrFirstRun because that gate's bootstrap semantics differ
+    // from the requireAuth sibling block this route extends — consistency with
+    // the adjacent per-user store routes wins over a second auth spelling.
     const sites = (CODE.match(/\bverifyUser\s*\(/g) ?? []).length
     expect(
       sites,
-      "verifyUser() call sites in handlers.mjs, counted on CODE. Expected 37 as of Wave3+ slice 05 " +
-        "(36 as of WS-7 round 2, plus generalBucketKey's limiter-identity read). " +
+      "verifyUser() call sites in handlers.mjs, counted on CODE. Expected 38 as of the " +
+        "bookmarklet leg (37 as of Wave3+ slice 05: 36 as of WS-7 round 2, plus " +
+        "generalBucketKey's limiter-identity read, plus the bookmarklet route's " +
+        "per-user bucket read). " +
         "A decrease means a site was migrated to verifyTokenStrict() + strictOrRefuse() — " +
         "good, update the number in the same change. An increase is a new route that answers " +
         "401 when the sessions store faults: ask why it does not use requireSessionOrFirstRun(). " +
         "generalBucketKey is NOT such a site: on fault it falls back to the per-IP bucket, " +
         "so it never answers 401 at all."
-    ).toBe(37)
+    ).toBe(38)
     const strict = (CODE.match(/\bverifyTokenStrict\s*\(/g) ?? []).length
     expect(
       strict,
@@ -1087,6 +1098,10 @@ function connectorsSiteIsGated(lines, index) {
     const lines = SRC.split("\n").length
 
     expect(statics, "static import statements in handlers.mjs").toBe(72)
+    // Bookmarklet leg: statics UNCHANGED at 72 — the new route reaches
+    // ./services/bookmarkletCapture.mjs through ONE `await import(...)` in its
+    // own branch (see the dynamics move 102 -> 103 below), the T7R-B/T8/T9
+    // protocol for keeping services off the boot path.
     // 81 -> 82 in WS-7 T8, which added ONE route — GET /api/trading/ministry —
     // importing its service with a dynamic import so the authority model stays
     // off the boot path. Statics are UNCHANGED, which is what confirms the growth
@@ -1130,7 +1145,13 @@ function connectorsSiteIsGated(lines, index) {
     // UNCHANGED at 72, which is what confirms the growth is two gated routes
     // and their reasoning rather than new module-level dependencies. The line
     // figure moves with it; see the accounting at the `lines` assertion below.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(102)
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(103)
+    // 102 -> 103 in the bookmarklet click-to-capture leg (Wave 3+ backlog),
+    // the same protocol: exactly ONE new `await import(...)` — the route's own
+    // branch-local load of ./services/bookmarkletCapture.mjs — with statics
+    // UNCHANGED at 72 (asserted above). The route's comment block contains no
+    // occurrence of the word `import`, so the comment-stripped and raw figures
+    // do not diverge this round.
     // 5,938 -> 5,952 in WS-7 slice C, which added a requireAuth() gate plus its
     // reasoning to /api/trading/alerts/delete and /api/trading/watchlists/delete —
     // the two unauthenticated destructive deletes. The pin is still EXACT, which is
@@ -1491,7 +1512,18 @@ function connectorsSiteIsGated(lines, index) {
     // already bound — so the import pair is unchanged, which is what confirms
     // the growth is limiter logic and its reasoning rather than new
     // module-level dependencies.
-    expect(lines, "lines in handlers.mjs").toBe(6786)
+    // 6,786 -> 6,825 in the bookmarklet click-to-capture leg (Wave 3+ backlog),
+    // the same protocol: +39 lines, and every one is accounted for rather than
+    // absorbed. They are the single contiguous /api/trading/bookmarklet-capture
+    // block after the headless-status route: 29 CODE lines (the dispatch line,
+    // the unconditional requireAuth() gate as its FIRST statement, the sibling-
+    // idiom per-user bucket read, ONE branch-local dynamic service load, the
+    // GET snippet branch, the POST branch with its 413 size cap / 400
+    // validation / honest 400-vs-200 report mapping, and the 405 fallthrough)
+    // plus 9 comment lines (why the snippet is manual-install-only, why the
+    // gate mirrors the sibling trading routes, why the service loads
+    // dynamically) plus 1 blank separator line. 29 + 9 + 1 = 39 exactly.
+    expect(lines, "lines in handlers.mjs").toBe(6825)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
