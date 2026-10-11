@@ -114,7 +114,9 @@ Deferred minors from the review ledger, one line each:
 - T1: `strategyTag` type validation (a non-string tag value is not rejected at
   the boundary).
 - T1: trailing newlines on generated/edited files.
-- T2: `guard-primitives.mjs` stale consumer count in `sharedCommentLexer.test.mjs`.
+- T2: stale consumer count in `guard-primitives.mjs:4` and `:28-29` ("four
+  sites" / "four consumers"); `sharedCommentLexer.test.mjs` derives its own
+  count from `VITEST_CONSUMERS.length` and is not stale.
 - T2: the self-verifying assertion (the guard proving its own probe is real).
 - T2/T3: cycles recorded with no observed RED — no test was seen to fail before
   its fix, so TDD was not demonstrably followed for them.
@@ -133,6 +135,16 @@ Deferred minors from the review ledger, one line each:
   the word "absent" and nothing else).
 - `maxDd.pct` can vanish without a marker on a row where the dollar figure
   renders.
+- `metricsFrom` annualises a 2-close pile to a wild Sharpe — `analytics.mjs`
+  still annualises unconditionally; the disclosure (the sample size) is now
+  rendered everywhere, but the underlying behaviour is unchanged.
+- `collectWindows(null)` is safe at runtime but has no test — confirmed absent
+  from `graduationWindows.test.mjs`.
+- `ministryRooms.test.tsx` is a second load-sensitive flake (a `waitFor`
+  timeout under a large worker pool), alongside PERPS-1. Root cause unrooted.
+- the recursive advisory-boundary walk is prefix-anchored, so a nested name
+  like `allowsPermit` would pass; mitigated because the exact top-level key pin
+  is airtight.
 
 ### Parked findings and their rulings
 
