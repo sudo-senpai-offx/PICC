@@ -29,13 +29,24 @@ const NOW = Date.parse("2026-10-01T00:00:00Z")
 /** An ISO stamp `days` before NOW. */
 const daysBefore = (days) => new Date(NOW - days * DAY_MS).toISOString()
 
-// The half-life name is imported from the module rather than written out at every
-  // use site, on purpose. `ws7TestStoreIsolation` scans test files for path-shaped
+// The half-life name is imported from the module and referenced through that
+// binding, because `ws7TestStoreIsolation` scans test files for path-shaped
 // `PICC_` names and Task 1's suite already learned the hard way that minting such
-// a literal — even inside a control fixture — is a finding. Going through the
-// export means this file MINT no store variable: the one place the name is spelled
-// out is the single assertion that pins the exported constant to the spec's
-// literal, and it is a `_DAYS` scalar, never a path-shaped store name.
+// a literal — even inside a control fixture — is a finding.
+//
+// THE NAME IS SPELLED OUT LITERALLY IN EXACTLY THREE PLACES, and that is fine
+// because none of them can be a store: the `it` title of the override test, the
+// assertion inside it that pins the exported constant to the spec's literal name,
+// and the prose that explains the dotted-read rule. Two are documentation and one
+// is a comparison; the `vi.stubEnv` calls that actually SET the variable all use
+// the imported binding, so no test ever assigns a literal.
+//
+// An earlier version of this comment claimed the name appeared only once, which
+// was false — I wrote the counterexamples into this very block while asserting
+// their absence. What the guard actually enforces, and what this file therefore
+// guarantees, is narrower and checkable: this file MINTS NO STORE VARIABLE. Every
+// literal here is a `_DAYS` scalar, never a `_DIR`/`_FILE`/`_PATH` name, so nothing
+// in this file can be mistaken for a redirectable store.
 afterEach(() => {
   vi.unstubAllEnvs()
 })
@@ -310,7 +321,8 @@ describe("weightedMetric", () => {
     // machine thinks it is" — and NOT for a specific value.
     //
     // AN EARLIER VERSION OF THIS ASSERTED `.not.toBe(1)` and was wrong: `end` is a
-    // fixed 2026-09-01 stamp, so on any machine whose clock is BEFORE that (a
+    // fixed `daysBefore(30)` stamp (2026-08-02), so on any machine whose clock is
+    // BEFORE that (a
     // restored fixture VM, a CI runner with skewed time, a bisect onto an earlier
     // snapshot) the weight is exactly 1 and the assertion fails. Asserting a
     // specific wall-clock value re-creates in the test suite the very dependence
@@ -341,6 +353,21 @@ describe("weightedMetric", () => {
     expect(Number.isFinite(after), "the wall clock must not yield NaN or Infinity").toBe(true)
     expect(after, "the documented range is (0, 1] on every clock").toBeGreaterThan(0)
     expect(after, "the documented range is (0, 1] on every clock").toBeLessThanOrEqual(1)
+
+    // THE TWO THAT GIVE THIS REGIME ITS TEETH. All four assertions above are
+    // satisfied by the constant 1 — `typeof 1 === "number"`, `Number.isFinite(1)`,
+    // `1 > 0`, `1 <= 1` — so on their own they cannot tell "read the clock and got
+    // a tiny weight" from "stopped reading the clock and returned the ceiling".
+    // That regression PASSES the four above, which is how an earlier version of
+    // this suite lost the discrimination the pre-fix assertions had.
+    //
+    // `ancient` is the same window measured through the INJECTED clock at the
+    // SAME instant, so equality is the claim that the absent-`now` branch and the
+    // explicit-`now` branch compute one thing rather than two. The real value is
+    // ~1.7e-269, against which `<= 1` has ~268 orders of magnitude of slack and
+    // the exact comparison has none.
+    expect(after, "the wall-clock branch must agree with the injected clock at the same instant").toBe(ancient)
+    expect(after, "and that value must be tiny, not merely in range").toBeLessThan(1e-100)
   })
 
   // An unusable `now` is the same defect as an unusable `windowEnd`, in the other
