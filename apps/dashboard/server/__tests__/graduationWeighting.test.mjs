@@ -37,9 +37,10 @@ const daysBefore = (days) => new Date(NOW - days * DAY_MS).toISOString()
 // THE NAME IS SPELLED OUT LITERALLY IN EXACTLY THREE PLACES, and that is fine
 // because none of them can be a store: the `it` title of the override test, the
 // assertion inside it that pins the exported constant to the spec's literal name,
-// and the prose that explains the dotted-read rule. Two are documentation and one
-// is a comparison; the `vi.stubEnv` calls that actually SET the variable all use
-// the imported binding, so no test ever assigns a literal.
+// and a comment in the clamp test explaining why that test passes `halfLifeDays`
+// explicitly rather than reading ambient configuration. Two are documentation and
+// one is a comparison; the `vi.stubEnv` calls that actually SET the variable all
+// use the imported binding, so no test ever assigns a literal.
 //
 // An earlier version of this comment claimed the name appeared only once, which
 // was false — I wrote the counterexamples into this very block while asserting
@@ -321,12 +322,11 @@ describe("weightedMetric", () => {
     // machine thinks it is" — and NOT for a specific value.
     //
     // AN EARLIER VERSION OF THIS ASSERTED `.not.toBe(1)` and was wrong: `end` is a
-    // fixed `daysBefore(30)` stamp (2026-08-02), so on any machine whose clock is
-    // BEFORE that (a
-    // restored fixture VM, a CI runner with skewed time, a bisect onto an earlier
-    // snapshot) the weight is exactly 1 and the assertion fails. Asserting a
-    // specific wall-clock value re-creates in the test suite the very dependence
-    // the `now` parameter exists to remove.
+    // fixed `daysBefore(30)` stamp, which evaluates to 2026-09-01, so on any
+    // machine whose clock is BEFORE that (a restored fixture VM, a CI runner with
+    // skewed time, a bisect onto an earlier snapshot) the weight is exactly 1 and
+    // the assertion fails. Asserting a specific wall-clock value re-creates in the
+    // test suite the very dependence the `now` parameter exists to remove.
     //
     // The clock is therefore FAKED, and both regimes are exercised. That is what
     // turns "probably clock-independent" into a proof: the pre-`end` clock below
@@ -420,8 +420,15 @@ describe("weightedMetric", () => {
     expect(decayWeight(NEXT_DAY, { now, halfLifeDays: 30 })).toBe(1)
 
     // The counterfactual, written out as plain arithmetic and NOT read back from
-    // the module — so this pins the clamp rather than restating the result. If
-    // the clamp were removed, this value would be what the function returned.
+    // the module.
+    //
+    // THIS LINE IS DOCUMENTATION, NOT A PIN. It computes from constants and
+    // asserts on its own value, so it cannot fail whatever the module does — an
+    // earlier version of this comment claimed it "pins the clamp rather than
+    // restating the result", which was the opposite of true. The lines that
+    // actually pin the clamp are the two `.toBe(1)` assertions above.
+    // `unclamped` says only that the clamp is doing real work: without it, a
+    // future-dated window's weight would exceed the documented ceiling.
     const unclamped = 0.5 ** ((now - Date.parse(FAR_FUTURE)) / DAY_MS / 30)
     expect(unclamped, "the clamp must be doing real work, not describing a no-op").toBeGreaterThan(1)
   })
