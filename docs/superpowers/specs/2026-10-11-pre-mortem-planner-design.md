@@ -79,8 +79,16 @@ New `server/services/premortem/` boundary, mirroring the `graduation/` layout:
 - `mutate.mjs` — the mutation tier. Runs a claimed guard against a deliberately
   broken implementation and reports whether it actually bites. Opt-in; slow.
 
-Plus one additive route, `GET /api/premortem/overview`, `requireAuth` as its
-first statement, dynamic imports only. No UI in this wave.
+Plus one additive route, `GET /api/premortem/overview`, dynamic imports only.
+No UI in this wave.
+
+**Gating: `requireAuthStrict`, not the plain `requireAuth`.** The payload names
+which safety guards in this system are broken and which failure modes have no
+coverage at all — a map of the system's defensive holes, which is more sensitive
+than any trading performance already served. The strict variant is the one this
+repo reserves for credential- and venue-disclosing routes, and this belongs with
+them. The cost is no first-user bootstrap convenience on this route, which is
+the right trade for a readout that names missing coverage.
 
 ### Verdicts
 
@@ -135,8 +143,8 @@ Pure-function tests per module, hermetic, injected data.
   `unverified-manual` survives any inventory contents.
 - `mutate.mjs` — one guard built to pass vacuously (the tier must catch it) and
   one that genuinely bites (the tier must not false-positive).
-- Route — the `graduationApi.test.mjs` pattern: auth first, no state mutation,
-  additive only, dynamic imports only.
+- Route — the `graduationApi.test.mjs` pattern: `requireAuthStrict` first, no
+  state mutation, additive only, dynamic imports only.
 
 Every new hand-rolled test file is staged before the isolation guard runs;
 `ws7TestStoreIsolation` enumerates tracked files via `git ls-files` and passes
