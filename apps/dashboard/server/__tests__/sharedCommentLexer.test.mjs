@@ -58,13 +58,21 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
  * in the same commit it adopted the lexer (W3-04, Task 2). Its scan is narrower —
  * one module, banned token list plus a "reads exactly one environment variable"
  * assertion — but a narrower unregistered scan is still an invisible one.
+ *
+ * `graduationGates.test.mjs` is here for the same reason (W3-04, Task 3), registered
+ * in the same commit that adopted the lexer. It carries a third distinct scan: the
+ * advisory-boundary check over the gates module, whose ban list deliberately
+ * EXCLUDES `ceremony` and `credential` — those two tokens are how the layer names
+ * its unmet preconditions, so the scan bans importing or calling them rather than
+ * naming them. A guard cannot enforce a rule the module is obliged to break.
  */
 const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/importResolutionGuard.test.mjs",
   "apps/dashboard/server/__tests__/ws7AuthBootstrapGateGuard.test.mjs",
   "apps/dashboard/server/__tests__/ws7RouteAuthCoverageGuard.test.mjs",
   "apps/dashboard/server/__tests__/graduationWindows.test.mjs",
-  "apps/dashboard/server/__tests__/graduationWeighting.test.mjs"
+  "apps/dashboard/server/__tests__/graduationWeighting.test.mjs",
+  "apps/dashboard/server/__tests__/graduationGates.test.mjs"
 ])
 
 // COUNT DERIVED, NOT WRITTEN. A literal "four" here went stale the moment Task 2
