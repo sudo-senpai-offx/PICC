@@ -150,8 +150,14 @@ function StrategyRow({ row }: { row: GraduationStrategy }) {
       </div>
 
       <div data-testid={`graduation-row-${row.tag}-stats`}>
+        {/* THE SAMPLE SIZE HERE TOO, and here it matters most: `GATE_PLANS.paper.stat` IS
+            `returnPct` (`gates.mjs:118`), so return is the statistic the verdict is
+            argued from — and it was the one statistic this panel printed bare. The
+            count is `windowsMeasured`, not `windowsSeen`, because a window whose
+            `amount` is not strictly positive yields a null return and is dropped
+            rather than averaged in as a zero. */}
         <div data-testid={`graduation-row-${row.tag}-return`}>
-          return (recency-weighted):{" "}
+          return (recency-weighted over {row.stats.returnPct.windowsMeasured} windows):{" "}
           {formatStat(row.stats.returnPct.value, row.stats.returnPct.reason)}
         </div>
         {/* THE SAMPLE SIZE IS PART OF EACH STATISTIC, not a footnote. A Sharpe
@@ -173,7 +179,7 @@ function StrategyRow({ row }: { row: GraduationStrategy }) {
           {Number.isFinite(row.stats.maxDd.pct) ? ` (${row.stats.maxDd.pct}% of committed capital)` : ""}
         </div>
         <div data-testid={`graduation-row-${row.tag}-capital`}>
-          capital committed:{" "}
+          capital committed (over {row.stats.capitalBaseRows} closes):{" "}
           {formatStat(
             row.stats.capitalCommittedUsd,
             row.stats.capitalCommittedReason,

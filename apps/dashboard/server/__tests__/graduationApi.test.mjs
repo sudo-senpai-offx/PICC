@@ -447,6 +447,52 @@ describe("graduation API (W3-04 Task 4) — overview route", () => {
     expect(stats.maxDd.reason).toBeNull()
   })
 
+  it("SURFACES capitalBaseRows: a close that moves the equity path but commits no capital is visible", async () => {
+    // THE CAPITAL BASE IS A SUBSET OF THE EQUITY PILE, and nothing said so.
+    //
+    // `graduationPaperLegStats` filters the equity pile on `pnl` ALONE
+    // (`handlers.mjs:1526`), while the capital base additionally requires a
+    // STRICTLY POSITIVE `amount` (`graduationPositive`, `handlers.mjs:1416`). A
+    // zero-amount close therefore contributes a P&L step to the equity path and
+    // contributes NOTHING to the capital sum — so `sharpe.count` can exceed the
+    // number of rows the dollar base is a sum over, and the ratio is annualised
+    // against a base that excludes one of its own observations. Nothing anywhere
+    // reconciled the two: `capitalBaseRows` was computed at both return paths of
+    // `graduationPaperLegStats` and then dropped at the payload boundary.
+    //
+    // The four closes below are the minimal instance: three commit capital, the
+    // zero-amount one does not, and all four have usable bounds and usable pnl so
+    // all four are windows and all four move the equity curve.
+    seedCloses(tradingDir, [
+      { id: "c1", symbol: "BTCUSD", amount: 1000, pnl: 10, openedAt: "2026-09-01T09:00:00.000Z", closedAt: "2026-09-01T10:00:00.000Z" },
+      { id: "c2", symbol: "BTCUSD", amount: 1000, pnl: -5, openedAt: "2026-09-02T09:00:00.000Z", closedAt: "2026-09-02T10:00:00.000Z" },
+      // usable bounds, usable pnl, NO committed capital: a real equity step and
+      // a real gap in the dollar base, which is the whole point of this fixture
+      { id: "c3", symbol: "BTCUSD", amount: 0, pnl: 3, openedAt: "2026-09-03T09:00:00.000Z", closedAt: "2026-09-03T10:00:00.000Z" },
+      { id: "c4", symbol: "BTCUSD", amount: 500, pnl: -2, openedAt: "2026-09-04T09:00:00.000Z", closedAt: "2026-09-04T10:00:00.000Z" }
+    ])
+    const { api, headers } = await authed()
+    const res = await call(api, "GET", OVERVIEW, undefined, headers)
+    expect(res.status).toBe(200)
+    const row = res.body.strategies[0]
+
+    // All four are windows and all four are equity steps.
+    expect(row.windowsSeen).toBe(4)
+    expect(row.stats.rowsInEquityPile).toBe(4)
+    expect(row.stats.rowsUnmeasured).toBe(0)
+    expect(row.stats.sharpe.count).toBe(4)
+
+    // The dollar base is a sum over a STRICTLY SMALLER pile, and it says so.
+    expect(row.stats.capitalCommittedUsd).toBe(2500)
+    expect(row.stats.capitalBaseRows, "three of the four closes committed capital").toBe(3)
+
+    // THE RECONCILIATION, which is what makes the ratio readable: the base pile
+    // is a subset of the equity pile, never larger, and the shortfall is exactly
+    // the number of rows that moved the curve without committing anything.
+    expect(row.stats.capitalBaseRows).toBeLessThan(row.stats.rowsInEquityPile)
+    expect(row.stats.rowsInEquityPile - row.stats.capitalBaseRows).toBe(1)
+  })
+
   it("reads a SINGLE close's sharpe and drawdown as absent with a reason, never zero", async () => {
     seedCloses(tradingDir, [
       { id: "c1", symbol: "BTCUSD", amount: 1000, pnl: 2, openedAt: "2026-09-01T09:00:00.000Z", closedAt: "2026-09-01T10:00:00.000Z" }

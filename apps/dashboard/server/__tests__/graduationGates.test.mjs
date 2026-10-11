@@ -375,7 +375,25 @@ describe("a gate with no bar says so rather than inventing one", () => {
   })
 })
 
-describe("a throwing reader is absence, never a crash", () => {
+describe("the GATE statistic's reader is total: a stat that throws is absence, never a crash", () => {
+  // SCOPE, STATED PRECISELY, because the previous title ("a throwing reader is
+  // absence, never a crash") claimed more than the fixture tests. `safePick`
+  // (`gates.mjs:169`) wraps the STAT read and nothing else, so this describes the
+  // stat read only. Two other reads in the path are still UNGUARDED, and are
+  // byte-identical to the merge base:
+  //
+  //   - `GATE_PLANS[window?.source]` (`gates.mjs:380`) — the plan lookup, which
+  //     reads `source` through the optional chain but does not catch a throw.
+  //   - `window?.windowEnd` (`weighting.mjs:287`) — the recency read, likewise.
+  //
+  // Both are LATENT AND UNREACHABLE FROM THE ROUTE: a window reaching
+  // `evaluateStrategy` is a plain object built by `collectWindows`, so neither
+  // getter can throw on the only call path that exists. They are left exactly as
+  // they are — widening this fixture's scope to cover them would be a change to
+  // the modules' behaviour, not a correction to a test title, and that was not
+  // this wave's mandate. What this describe block asserts is the half that IS
+  // guarded, and the title now says so.
+  //
   // `weightedMetric` does NOT catch a throwing `pick` — it calls the reader and
   // uses the result. A reader that throws therefore turns "this window measured
   // nothing" into "the readout exploded", which is the worst possible failure for a

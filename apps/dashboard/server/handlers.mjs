@@ -1502,8 +1502,18 @@ function graduationWindowFromPaperClose(close, costLine) {
  * its own closes committed: the sum of their `amount` fields. That is cumulative
  * turnover across sequential trades rather than one account balance, so it is
  * reported as `capitalCommittedUsd` and the percentage drawdown is reported
- * alongside the dollar drawdown, which does not depend on the base at all. A
- * reader who wants the ratio knows exactly what it is a ratio of.
+ * alongside the dollar drawdown, which does not depend on the base at all.
+ *
+ * AND THE BASE PILE IS A SUBSET OF THE EQUITY PILE, WHICH THIS FUNCTION NOW
+ * REPORTS. The two filters differ on purpose: the equity pile admits any close
+ * with a readable `pnl`, while the capital sum additionally requires a strictly
+ * positive `amount`. So a zero-amount close contributes a P&L step to the equity
+ * curve and nothing to the dollar base, and `sharpe.count` can exceed the number
+ * of rows the base is a sum over. `capitalBaseRows` is that number, and it is
+ * what makes the ratio readable: a reader who wants the ratio can now see exactly
+ * what it is a ratio of, rather than inferring it from a pile they cannot size.
+ * Whether CUMULATIVE TURNOVER is the right base at all is an owner decision, not
+ * one this route settles — see the deferred-decisions section of the design spec.
  *
  * THE EQUITY PILE IS BUILT FROM THE WINDOW PILE, and that is the fix for a real
  * defect rather than a presentational choice. The two piles were previously
@@ -3820,6 +3830,15 @@ async function _handleApiInner(req, res, url, reqId) {
             maxDd: leg.maxDd,
             capitalCommittedUsd: leg.capitalCommittedUsd,
             capitalCommittedReason: leg.capitalCommittedReason,
+            // THE CAPITAL BASE'S OWN SAMPLE SIZE, because the base pile is NOT
+            // the equity pile. `graduationPaperLegStats` filters the equity pile
+            // on `pnl` alone, while the capital sum additionally requires a
+            // STRICTLY POSITIVE `amount` — so a zero-amount close contributes a
+            // P&L step to the equity curve and nothing at all to the dollar base.
+            // Without this count the two piles are silently different sizes: a
+            // Sharpe annualised over 4 closes reads beside a capital figure that
+            // is a sum over 3 of them, with nothing reconciling 4 against 3.
+            capitalBaseRows: leg.capitalBaseRows,
             // THE SAMPLE SIZE, AND THE SHORTFALL, BOTH IN THE PAYLOAD. A reader
             // of the API gets `count` on every statistic that has one, plus the
             // two counts whose sum is this tag's window count — so a statistic

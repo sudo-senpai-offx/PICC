@@ -1569,7 +1569,21 @@ function connectorsSiteIsGated(lines, index) {
     //     the uniform per-leg reason list and readLimit.
     // 75 + 39 = 114 exactly, which is what makes the number auditable rather
     // than merely updated.
-    expect(lines, "lines in handlers.mjs").toBe(7450)
+    //
+    // 7,450 -> 7,469 in the FINAL REVIEW WAVE (the `capitalBaseRows` disclosure),
+    // the same protocol: +19 lines, and statics stay at 72 and dynamics at 109 —
+    // the wave surfaced one already-computed field, so it reached no module. Both
+    // regions are re-measured rather than asserted, and both boundaries moved with
+    // the growth above them:
+    //   - adapter, lines 1265-1609: 335 -> 345 (+10). The capital-base doc block
+    //     grows by 12 comment lines and loses 2, and the net +10 is the corrected
+    //     claim that the capital base is a SUBSET of the equity pile rather than
+    //     the same pile.
+    //   - route branch, lines 3659-3957: 290 -> 299 (+9). 8 comment lines naming
+    //     why the two piles differ, plus the 1 payload line shipping
+    //     `capitalBaseRows`.
+    // 10 + 9 = 19 exactly.
+    expect(lines, "lines in handlers.mjs").toBe(7469)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

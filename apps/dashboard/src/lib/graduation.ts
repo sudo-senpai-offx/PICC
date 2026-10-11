@@ -62,7 +62,18 @@ export interface GraduationStrategy {
   reasons: string[]
   warnings: string[]
   stats: {
-    returnPct: GraduationStat & { windowsMeasured: number }
+    returnPct: GraduationStat & {
+      /**
+       * The windows this average was actually taken over — NOT `windowsSeen`.
+       *
+       * `weightedMetric` drops a window whose picked statistic is `null`
+       * (`weighting.mjs:283`), so a window with no strictly positive `amount`
+       * contributes neither value nor count. Return is the statistic the paper
+       * verdict is argued from (`GATE_PLANS.paper.stat` is `returnPct`), so
+       * reading it without this is reading the number that moves the verdict.
+       */
+      windowsMeasured: number
+    }
     sharpe: GraduationSharpe
     maxDd: GraduationMaxDd
     capitalCommittedUsd: number | null
@@ -77,6 +88,17 @@ export interface GraduationStrategy {
      * API later; the UI would keep rendering its own stale string.
      */
     capitalCommittedReason: string | null
+    /**
+     * How many closes `capitalCommittedUsd` is a sum over.
+     *
+     * IT IS A SUBSET OF THE EQUITY PILE, NOT THE SAME PILE. The equity pile
+     * admits any close with a readable `pnl`; the capital sum additionally
+     * requires a strictly positive `amount`. So a zero-amount close moves the
+     * equity curve and commits no capital, and without this count a reader sees
+     * a Sharpe annualised over 4 closes beside a dollar figure summed over 3 of
+     * them, with nothing in the payload reconciling 4 against 3.
+     */
+    capitalBaseRows: number
     /**
      * The sample `sharpe.count` and `maxDd.count` were computed over.
      *

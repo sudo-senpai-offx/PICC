@@ -68,6 +68,7 @@ function fixture(): GraduationOverview {
           maxDd: { value: null, reason: "insufficient-observations", pct: null, count: 1 },
           capitalCommittedUsd: 1000,
           capitalCommittedReason: null,
+          capitalBaseRows: 1,
           rowsInEquityPile: 3,
           rowsUnmeasured: 0,
           costDragUsd: { value: 4.2, reason: null, provenances: ["modeled"], adjusted: false }
@@ -91,6 +92,7 @@ function fixture(): GraduationOverview {
           maxDd: { value: null, reason: "insufficient-observations", pct: null, count: 1 },
           capitalCommittedUsd: 500,
           capitalCommittedReason: null,
+          capitalBaseRows: 1,
           rowsInEquityPile: 1,
           rowsUnmeasured: 0,
           costDragUsd: { value: null, reason: "costDragUsd:no-cost-lines", provenances: [], adjusted: false }
@@ -347,6 +349,66 @@ legs: {
     expect(sample).toContain("3")
     expect(sample).toContain("1")
     expect(sample).toMatch(/of 4|dropped/)
+  })
+
+  it("shows the sample size on the RETURN statistic too, not only on sharpe and drawdown", async () => {
+    // Return is not a side statistic: `GATE_PLANS.paper.stat` IS `returnPct`
+    // (`gates.mjs:118`), so return is the number the verdict is argued from — and
+    // it was the ONE statistic rendered with no sample size at all, directly
+    // against this component's own stated rule at the sharpe cell below ("THE
+    // SAMPLE SIZE IS PART OF EACH STATISTIC, not a footnote").
+    //
+    // The fixture sets `windowsMeasured: 2` against `windowsSeen: 4`, which is the
+    // real shape: a window whose `amount` is not strictly positive yields a null
+    // `returnPct` and is dropped by `weightedMetric` (`weighting.mjs:283`), so the
+    // return is averaged over fewer windows than the tag holds.
+    mockedFetch.mockResolvedValue({
+      ...fixture(),
+      strategies: [
+        {
+          ...fixture().strategies[0],
+          windowsSeen: 4,
+          stats: {
+            ...fixture().strategies[0].stats,
+            returnPct: { value: 4.2, reason: null, windowsMeasured: 2 }
+          }
+        }
+      ]
+    })
+    flushSync(() => { root.render(<GraduationSection />) })
+    await waitFor(() => !!host.querySelector("[data-testid='graduation-row-BTCUSD-return']"), "return cell")
+    const ret = text(host, "graduation-row-BTCUSD-return")
+    expect(ret, "the measured return still prints").toContain("4.2")
+    // THE SAMPLE SIZE, beside it, exactly as sharpe and maxDd already do.
+    expect(ret, "return must render its own sample size").toContain("2")
+    expect(ret).toMatch(/2 windows|over 2 windows/)
+  })
+
+  it("shows the CAPITAL BASE's own sample size, so the dollar sum is never read bare", async () => {
+    // `capitalBaseRows` is computed in the adapter and now shipped; the panel has
+    // to render it. Without it, `capital committed: USD 2500` sits beside
+    // "sharpe (aggregated over 4 closes)" and a reader has no way to know the
+    // 2500 is a sum over 3 of those 4.
+    mockedFetch.mockResolvedValue({
+      ...fixture(),
+      strategies: [
+        {
+          ...fixture().strategies[0],
+          windowsSeen: 4,
+          stats: {
+            ...fixture().strategies[0].stats,
+            capitalCommittedUsd: 2500,
+            capitalBaseRows: 3,
+            rowsInEquityPile: 4
+          }
+        }
+      ]
+    })
+    flushSync(() => { root.render(<GraduationSection />) })
+    await waitFor(() => !!host.querySelector("[data-testid='graduation-row-BTCUSD-capital']"), "capital cell")
+    const capital = text(host, "graduation-row-BTCUSD-capital")
+    expect(capital).toContain("2500")
+    expect(capital, "the base must state how many closes it sums over").toContain("3")
   })
 
   it("renders the capital base's absence with the reason the API SENT, not one the UI invented", async () => {
