@@ -1356,7 +1356,8 @@ const GRADUATION_TAG_SEMANTICS = Object.freeze({
 const GRADUATION_LEG_REASONS = Object.freeze({
   BACKTEST_NOT_PERSISTED: "backtest-windows-not-persisted",
   STRATEGY_TAG_UNAVAILABLE: "strategy-tag-unavailable",
-  PAPER_CLOSES_TRUNCATED: "paper-closes-read-limit-reached"
+  PAPER_CLOSES_TRUNCATED: "paper-closes-read-limit-reached",
+  LIVE_FILLS_TRUNCATED: "live-fills-read-limit-reached"
 })
 
 /**
@@ -1372,6 +1373,18 @@ const GRADUATION_LEG_REASONS = Object.freeze({
  * history rather than the history.
  */
 const GRADUATION_CLOSE_READ_LIMIT = 500
+
+/**
+ * The same cap, and the same disclosure, for the LIVE leg.
+ *
+ * `listFillCosts` declares `limit = 500` and applies `result.slice(0, limit)`
+ * (`costs/store.mjs:84-91`), so the live leg was capped identically while
+ * reporting no limit at all. The route's own comment claimed the live absence
+ * was "a MEASURED one ('we looked, there are N rows')" — which stops being true
+ * the moment N is the cap rather than the population, so the claim and the
+ * disclosure were fixed together rather than one being deleted.
+ */
+const GRADUATION_LIVE_FILL_READ_LIMIT = 500
 
 /** Why a tag-level statistic is absent. Stable strings, like the sibling modules'. */
 const GRADUATION_STAT_REASONS = Object.freeze({
@@ -1410,6 +1423,42 @@ function graduationTagOf(value) {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   return trimmed === "" ? null : trimmed
+}
+
+/**
+ * The paper closes that actually became windows, keyed by tag.
+ *
+ * DERIVED FROM `collectWindowsWithReasons`' OWN EXCLUSION REPORT, and never by
+ * re-checking the bounds here. `windows.mjs` owns the bounds predicate and owns
+ * the decision to exclude a row; a second copy of that predicate in this file
+ * would be a second definition of "is this row evidence", and the two would
+ * eventually disagree — at which point a close could be a window for the gate
+ * and a non-window for the equity curve, which is the exact defect this function
+ * exists to remove. `excluded` reports `{ source, index, reason }` against the
+ * INPUT pile, so filtering by the indices it names is exact and needs no second
+ * opinion about why a row was dropped.
+ *
+ * The close objects are returned, not the windows, because the equity helpers in
+ * `services/analytics.mjs` consume `{ pnl, symbol, closedAt, holdingMs }`.
+ *
+ * @param {Array} closesOldestFirst the closes in the order they were handed to the collector
+ * @param {Array} excluded `collectWindowsWithReasons`'s `excluded` array
+ * @returns {Map<string, Array>} tag -> the closes that became windows
+ */
+function graduationWindowedPaperCloses(closesOldestFirst, excluded) {
+  const dropped = new Set()
+  for (const row of excluded ?? []) {
+    if (row?.source === "paper" && Number.isInteger(row.index)) dropped.add(row.index)
+  }
+  const byTag = new Map()
+  closesOldestFirst.forEach((close, index) => {
+    if (dropped.has(index)) return
+    const tag = graduationTagOf(close?.symbol)
+    if (tag === null) return
+    if (!byTag.has(tag)) byTag.set(tag, [])
+    byTag.get(tag).push(close)
+  })
+  return byTag
 }
 
 /**
@@ -1456,9 +1505,22 @@ function graduationWindowFromPaperClose(close, costLine) {
  * alongside the dollar drawdown, which does not depend on the base at all. A
  * reader who wants the ratio knows exactly what it is a ratio of.
  *
- * A close whose `pnl` is unusable is EXCLUDED from the equity path rather than
- * contributing a zero step, and the count is reported as `rowsUnmeasured` so the
- * path is never silently short.
+ * THE EQUITY PILE IS BUILT FROM THE WINDOW PILE, and that is the fix for a real
+ * defect rather than a presentational choice. The two piles were previously
+ * different sets: `collectWindows` drops a close with no usable start or end,
+ * while the equity path filtered on `pnl` alone. So a close already rejected as
+ * UNMEASURABLE-IN-TIME still contributed a P&L step to Sharpe and drawdown. With
+ * five closes of which two lacked bounds, `sharpe.count` reported 5 against
+ * `windowsSeen` of 3, and because the count difference had no field explaining
+ * it, nothing anywhere revealed the gap. The caller now passes the windowed
+ * closes only (see `graduationWindowedPaperCloses`), so a close contributes to
+ * the gate's streak and to the equity curve on the same terms or not at all.
+ *
+ * A close whose `pnl` is unusable is then EXCLUDED from the equity path rather
+ * than contributing a zero step. That remaining difference IS reported, as
+ * `rowsUnmeasured` beside `rowsInEquityPile`, and the two always sum to the
+ * window count — so the sample size behind a statistic is checkable against the
+ * pile the readout reports, instead of being a number a reader has to trust.
  */
 function graduationPaperLegStats(analytics, closesOldestFirst) {
   const rows = closesOldestFirst.filter((c) => graduationFiniteOrNull(c?.pnl) !== null)
@@ -1481,7 +1543,14 @@ function graduationPaperLegStats(analytics, closesOldestFirst) {
       sharpe: { value: null, reason, count: rows.length },
       maxDd: { value: null, reason, count: rows.length, pct: null },
       capitalCommittedUsd: capitalRows > 0 ? capital : null,
+      // SENT, NOT LEFT FOR THE RENDERER TO GUESS. The UI previously hardcoded
+      // its own string for this absence while the API sent a bare null, so the
+      // two vocabularies could drift apart with nothing to catch it — and the
+      // UI's version had already dropped the `paper-leg:` prefix this module
+      // uses. The reason travels with the value now.
+      capitalCommittedReason: capitalRows > 0 ? null : reason,
       capitalBaseRows: capitalRows,
+      rowsInEquityPile: rows.length,
       rowsUnmeasured
     }
   }
@@ -1517,7 +1586,13 @@ function graduationPaperLegStats(analytics, closesOldestFirst) {
       count: rows.length
     },
     capitalCommittedUsd: capital,
+    capitalCommittedReason: null,
     capitalBaseRows: capitalRows,
+    // NAMED, not just returned. This is the sample the Sharpe and the drawdown
+    // were computed over, and `rowsInEquityPile + rowsUnmeasured` is always the
+    // window count the route reports — so the two are checkable against each
+    // other rather than one having to be believed.
+    rowsInEquityPile: rows.length,
     rowsUnmeasured
   }
 }
@@ -3626,13 +3701,17 @@ async function _handleApiInner(req, res, url, reqId) {
       const backtestRows = []
 
       // LIVE. `listFillCosts` IS read, so the absence below is a MEASURED one
-      // ("we looked, there are N rows") rather than an assumed one. A row cannot
-      // become a window: `costs/store.mjs:59-78` gives it `observedAt` and no
-      // second bound, and reusing that one instant as both ends would fabricate a
-      // zero-width window that then counts toward a consecutive-window gate. Nor
-      // does it carry a strategy identity — `venue`, `route`, `kind`, `amountUsd`
-      // and `ccy` name a cost, not a strategy.
-      const liveRows = costsStore.listFillCosts({})
+      // ("we looked, there are N rows") rather than an assumed one — WHICH IS
+      // TRUE ONLY UP TO THE CAP. The read is bounded by
+      // GRADUATION_LIVE_FILL_READ_LIMIT below and reported beside its count, so
+      // "we looked" and "we looked at everything" cannot be confused. A row
+      // cannot become a window: `costs/store.mjs:59-78` gives it `observedAt` and
+      // no second bound, and reusing that one instant as both ends would
+      // fabricate a zero-width window that then counts toward a
+      // consecutive-window gate. Nor does it carry a strategy identity —
+      // `venue`, `route`, `kind`, `amountUsd` and `ccy` name a cost, not a
+      // strategy.
+      const liveRows = costsStore.listFillCosts({ limit: GRADUATION_LIVE_FILL_READ_LIMIT })
 
       // ---- WINDOWS ---------------------------------------------------------
       const { windows, excluded } = collectWindowsWithReasons({
@@ -3664,6 +3743,12 @@ async function _handleApiInner(req, res, url, reqId) {
       // the value actually applied.
       const options = {}
 
+      // THE WINDOWED CLOSE PILE, derived from the collector's own exclusion
+      // report. This is what closes the second half of the pile-consistency
+      // defect: the gate argues over `windows`, the equity path is built over
+      // these, and both are therefore decided by ONE bounds predicate.
+      const windowedClosesByTag = graduationWindowedPaperCloses(closesOldestFirst, excluded)
+
       const byTag = new Map()
       let unattributed = 0
       for (const window of windows) {
@@ -3684,7 +3769,11 @@ async function _handleApiInner(req, res, url, reqId) {
         const tagWindows = byTag.get(tag)
         const gate = evaluateStrategy({ tag, windows: tagWindows, bars, options })
 
-        const paperCloses = closesOldestFirst.filter((close) => graduationTagOf(close?.symbol) === tag)
+        // THE EQUITY PILE IS THE WINDOW PILE, narrowed to the closes this tag owns.
+        // Not `closesOldestFirst` filtered by symbol: that pile still contained
+        // closes `collectWindows` had rejected for unusable bounds, which is how
+        // `sharpe.count` came to report 5 against a `windowsSeen` of 3.
+        const paperCloses = windowedClosesByTag.get(tag) ?? []
         const leg = graduationPaperLegStats(costsAnalytics, paperCloses)
 
         // COST DRAG IS SURFACED, NOT APPLIED. `windows.mjs` reports
@@ -3730,6 +3819,15 @@ async function _handleApiInner(req, res, url, reqId) {
             sharpe: leg.sharpe,
             maxDd: leg.maxDd,
             capitalCommittedUsd: leg.capitalCommittedUsd,
+            capitalCommittedReason: leg.capitalCommittedReason,
+            // THE SAMPLE SIZE, AND THE SHORTFALL, BOTH IN THE PAYLOAD. A reader
+            // of the API gets `count` on every statistic that has one, plus the
+            // two counts whose sum is this tag's window count — so a statistic
+            // can always be checked against the pile it came from rather than
+            // taken on trust. The identity is asserted in
+            // `SURFACES rowsUnmeasured` below.
+            rowsInEquityPile: leg.rowsInEquityPile,
+            rowsUnmeasured: leg.rowsUnmeasured,
             costDragUsd: {
               value: dragUsd,
               reason: dragUsd === null ? "costDragUsd:no-cost-lines" : null,
@@ -3742,16 +3840,24 @@ async function _handleApiInner(req, res, url, reqId) {
 
       // ---- LEG ACCOUNTING --------------------------------------------------
       //
-      // EVERY LEG REPORTS PRESENCE AND A REASON. A leg with no usable identity
-      // field is absent with that field named, NOT bucketed under a placeholder:
-      // a row under a fabricated label is a claim nobody can audit.
+      // EVERY LEG REPORTS PRESENCE, ITS REASONS, AND THE CAP ITS READ WAS BOUNDED
+      // BY. A leg with no usable identity field is absent with that field named,
+      // NOT bucketed under a placeholder: a row under a fabricated label is a
+      // claim nobody can audit. And every leg carries `readLimit`, because the
+      // first version gave it to paper alone and left the live leg structurally
+      // unable to disclose a cap it was subject to all along.
       const paperWindows = windows.filter((window) => window?.source === "paper").length
       const paperTruncated = closesOldestFirst.length >= GRADUATION_CLOSE_READ_LIMIT
+      const liveTruncated = liveRows.length >= GRADUATION_LIVE_FILL_READ_LIMIT
       const legs = {
         backtest: {
           present: false,
-          reason: GRADUATION_LEG_REASONS.BACKTEST_NOT_PERSISTED,
+          // NO READ WAS ATTEMPTED, so there is no population to be capped below
+          // and the limit is reported as `null` rather than as a number implying
+          // a bound that was never applied.
+          reasons: [GRADUATION_LEG_REASONS.BACKTEST_NOT_PERSISTED],
           rowsSeen: backtestRows.length,
+          readLimit: null,
           windows: 0
         },
         paper: {
@@ -3769,8 +3875,16 @@ async function _handleApiInner(req, res, url, reqId) {
         },
         live: {
           present: false,
-          reason: GRADUATION_LEG_REASONS.STRATEGY_TAG_UNAVAILABLE,
+          // THE IDENTITY REASON AND THE CAP REASON ARE BOTH KEPT. A capped read
+          // does not explain why the leg cannot be bucketed, and dropping the
+          // identity reason to make room for the cap would leave a reader with a
+          // cap and no reason.
+          reasons: [
+            GRADUATION_LEG_REASONS.STRATEGY_TAG_UNAVAILABLE,
+            ...(liveTruncated ? [GRADUATION_LEG_REASONS.LIVE_FILLS_TRUNCATED] : [])
+          ],
           rowsSeen: liveRows.length,
+          readLimit: GRADUATION_LIVE_FILL_READ_LIMIT,
           windows: 0
         }
       }

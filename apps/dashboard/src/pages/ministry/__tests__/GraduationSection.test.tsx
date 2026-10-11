@@ -33,9 +33,21 @@ function fixture(): GraduationOverview {
       note: "A paper close carries no strategy identity."
     },
     legs: {
-      backtest: { present: false, reason: "backtest-windows-not-persisted", rowsSeen: 0, windows: 0 },
-      paper: { present: true, reason: null, reasons: [], rowsSeen: 4, readLimit: 500, windows: 4 },
-      live: { present: false, reason: "strategy-tag-unavailable", rowsSeen: 0, windows: 0 }
+      backtest: {
+        present: false,
+        reasons: ["backtest-windows-not-persisted"],
+        rowsSeen: 0,
+        readLimit: null,
+        windows: 0
+      },
+      paper: { present: true, reasons: [], rowsSeen: 4, readLimit: 500, windows: 4 },
+      live: {
+        present: false,
+        reasons: ["strategy-tag-unavailable"],
+        rowsSeen: 0,
+        readLimit: 500,
+        windows: 0
+      }
     },
     strategies: [
       {
@@ -55,6 +67,9 @@ function fixture(): GraduationOverview {
           sharpe: { value: null, reason: "insufficient-observations", count: 1 },
           maxDd: { value: null, reason: "insufficient-observations", pct: null, count: 1 },
           capitalCommittedUsd: 1000,
+          capitalCommittedReason: null,
+          rowsInEquityPile: 3,
+          rowsUnmeasured: 0,
           costDragUsd: { value: 4.2, reason: null, provenances: ["modeled"], adjusted: false }
         }
       },
@@ -75,6 +90,9 @@ function fixture(): GraduationOverview {
           sharpe: { value: null, reason: "insufficient-observations", count: 1 },
           maxDd: { value: null, reason: "insufficient-observations", pct: null, count: 1 },
           capitalCommittedUsd: 500,
+          capitalCommittedReason: null,
+          rowsInEquityPile: 1,
+          rowsUnmeasured: 0,
           costDragUsd: { value: null, reason: "costDragUsd:no-cost-lines", provenances: [], adjusted: false }
         }
       }
@@ -160,10 +178,40 @@ describe("GraduationSection", () => {
     const sharpe = text(host, "graduation-row-BTCUSD-sharpe")
     expect(sharpe).toContain("absent")
     expect(sharpe).toContain("insufficient-observations")
-    // The forbidden readings: a measured 0, and a bare dash. A dash reads as
-    // "no data, and that is fine", which is exactly the claim being refused.
-    expect(sharpe).not.toMatch(/^[-\s–—]*$/)
-    expect(sharpe).not.toMatch(/\b0(\.0+)?\b/)
+    // THE MEASURED-ZERO FORBIDDEN READING. A STAT is rendered as one cell whose
+    // value is read AFTER its label, so this is the assertion that bites:
+    // rendering `-8.11` here would satisfy a bare "contains a dash" check while
+    // being precisely the measured number the contract refuses to show.
+    // (The previous form of this assertion, /^[-\s–—]*$/, could never match:
+    // `text()` returns a full string and the pattern is whole-string anchored.)
+    const value = sharpe.slice(sharpe.indexOf(":") + 1).trim()
+    expect(value.startsWith("absent")).toBe(true)
+    expect(value).not.toMatch(/^-?\d/)
+    // And it is not a bare glyph either: the cell carries words AND a reason.
+    expect(value.length).toBeGreaterThan("absent".length)
+  })
+
+  it("still renders a genuine measured zero as 0, so absence and zero stay distinct", async () => {
+    // The control for the assertion above. If "0" were rendered as absent, the
+    // distinction the whole readout rests on would be gone, and only this test
+    // would notice.
+    mockedFetch.mockResolvedValue({
+      ...fixture(),
+      strategies: [
+        {
+          ...fixture().strategies[0],
+          stats: {
+            ...fixture().strategies[0].stats,
+            returnPct: { value: 0, reason: null, windowsMeasured: 3 }
+          }
+        }
+      ]
+    })
+    flushSync(() => { root.render(<GraduationSection />) })
+    await waitFor(() => !!host.querySelector("[data-testid='graduation-row-BTCUSD-return']"), "return cell")
+    const value = text(host, "graduation-row-BTCUSD-return").split(":").slice(1).join(":").trim()
+    expect(value).toContain("0")
+    expect(value).not.toContain("absent")
   })
 
   it("renders an absent COST DRAG leg as absent, not as USD 0", async () => {
@@ -210,17 +258,28 @@ describe("GraduationSection", () => {
     mockedFetch.mockResolvedValue({
       ...fixture(),
       strategies: [],
-      legs: {
-        backtest: { present: false, reason: "backtest-windows-not-persisted", rowsSeen: 0, windows: 0 },
+legs: {
+        backtest: {
+          present: false,
+          reasons: ["backtest-windows-not-persisted"],
+          rowsSeen: 0,
+          readLimit: null,
+          windows: 0
+        },
         paper: {
-        present: false,
-        reason: null,
-        reasons: ["paper-closes-absent"],
-        rowsSeen: 0,
-        readLimit: 500,
-        windows: 0
-      },
-        live: { present: false, reason: "strategy-tag-unavailable", rowsSeen: 0, windows: 0 }
+          present: false,
+          reasons: ["paper-closes-absent"],
+          rowsSeen: 0,
+          readLimit: 500,
+          windows: 0
+        },
+        live: {
+          present: false,
+          reasons: ["strategy-tag-unavailable"],
+          rowsSeen: 0,
+          readLimit: 500,
+          windows: 0
+        }
       },
       unattributed: { rows: 0, reason: null },
       incomplete: true,
@@ -240,6 +299,106 @@ describe("GraduationSection", () => {
     await waitFor(() => !!host.querySelector("[data-testid='graduation-error']"), "error")
     expect(text(host, "graduation-error")).toContain("502")
     expect(host.querySelectorAll("li[data-testid^='graduation-row-']")).toHaveLength(0)
+  })
+
+  it("shows the SAMPLE SIZE beside every aggregated statistic, so a Sharpe is never read bare", async () => {
+    // I2. The UI previously rendered `sharpe (aggregated): -8.11` with no
+    // sample size at all, which is exactly the misreading the payload's own
+    // `count` field exists to prevent.
+    mockedFetch.mockResolvedValue({
+      ...fixture(),
+      strategies: [
+        {
+          ...fixture().strategies[0],
+          stats: {
+            ...fixture().strategies[0].stats,
+            sharpe: { value: -8.11, reason: null, count: 3 },
+            maxDd: { value: 5, reason: null, pct: 0.25, count: 3 }
+          }
+        }
+      ]
+    })
+    flushSync(() => { root.render(<GraduationSection />) })
+    await waitFor(() => !!host.querySelector("[data-testid='graduation-row-BTCUSD-sharpe']"), "sharpe cell")
+    expect(text(host, "graduation-row-BTCUSD-sharpe")).toContain("-8.11")
+    expect(text(host, "graduation-row-BTCUSD-sharpe")).toContain("3")
+    expect(text(host, "graduation-row-BTCUSD-maxdd")).toContain("3")
+    // M1: the payload carries `maxDd.pct` and the route's justification for
+    // shipping a DOLLAR drawdown rested on it being reported alongside. That
+    // holds for API consumers, not for the readers this UI serves.
+    expect(text(host, "graduation-row-BTCUSD-maxdd")).toContain("0.25")
+  })
+
+  it("names how many windows dropped out of the equity path, rather than only how many stayed", async () => {
+    // I1. The dropped-row count must be visible, not just the surviving sample.
+    mockedFetch.mockResolvedValue({
+      ...fixture(),
+      strategies: [
+        {
+          ...fixture().strategies[0],
+          windowsSeen: 4,
+          stats: { ...fixture().strategies[0].stats, rowsInEquityPile: 3, rowsUnmeasured: 1 }
+        }
+      ]
+    })
+    flushSync(() => { root.render(<GraduationSection />) })
+    await waitFor(() => !!host.querySelector("[data-testid='graduation-row-BTCUSD-sample']"), "sample line")
+    const sample = text(host, "graduation-row-BTCUSD-sample")
+    expect(sample).toContain("3")
+    expect(sample).toContain("1")
+    expect(sample).toMatch(/of 4|dropped/)
+  })
+
+  it("renders the capital base's absence with the reason the API SENT, not one the UI invented", async () => {
+    // M2. The UI hardcoded "no-measured-capital-base" while the API sent no
+    // reason at all and used a different vocabulary prefix. The UI must render
+    // exactly what the payload carries, so the two cannot drift apart silently.
+    mockedFetch.mockResolvedValue({
+      ...fixture(),
+      strategies: [
+        {
+          ...fixture().strategies[0],
+          stats: {
+            ...fixture().strategies[0].stats,
+            capitalCommittedUsd: null,
+            capitalCommittedReason: "paper-leg:no-measured-capital-base"
+          }
+        }
+      ]
+    })
+    flushSync(() => { root.render(<GraduationSection />) })
+    await waitFor(() => !!host.querySelector("[data-testid='graduation-row-BTCUSD-capital']"), "capital cell")
+    const capital = text(host, "graduation-row-BTCUSD-capital")
+    expect(capital).toContain("absent")
+    // EXACTLY the string the payload carried, including its `paper-leg:` prefix.
+    expect(capital).toContain("paper-leg:no-measured-capital-base")
+  })
+
+  it("discloses the LIVE leg's read cap, which the first version could not render", async () => {
+    // I3. `GraduationLeg` had no `readLimit`, so this cell was structurally
+    // unable to say the live count was bounded.
+    mockedFetch.mockResolvedValue({
+      ...fixture(),
+      legs: {
+        ...fixture().legs,
+        live: {
+          present: false,
+          reasons: ["strategy-tag-unavailable", "live-fills-read-limit-reached"],
+          rowsSeen: 500,
+          readLimit: 500,
+          windows: 0
+        }
+      }
+    })
+    flushSync(() => { root.render(<GraduationSection />) })
+    await waitFor(() => !!host.querySelector("[data-testid='graduation-leg-live']"), "live leg")
+    const live = text(host, "graduation-leg-live")
+    expect(live).toContain("strategy-tag-unavailable")
+    expect(live).toContain("live-fills-read-limit-reached")
+    expect(text(host, "graduation-leg-live-limit")).toContain("500")
+    // Every leg shows a limit cell, including the one with no read attempted.
+    expect(host.querySelector("[data-testid='graduation-leg-backtest-limit']")).not.toBeNull()
+    expect(text(host, "graduation-leg-backtest-limit")).toContain("no read attempted")
   })
 })
 

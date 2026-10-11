@@ -72,15 +72,9 @@ export function GraduationSection() {
           <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0 }} data-testid="graduation-legs">
             {(["backtest", "paper", "live"] as const).map((name) => {
               const leg = overview.legs[name]
-              // The paper leg carries a LIST: a capped read and an empty pile are
-              // different facts that can hold at once, and collapsing them into
-              // one string would lose whichever one did not win.
-              const reasons =
-                name === "paper"
-                  ? (overview.legs.paper as { reasons: string[] }).reasons
-                  : leg.reason
-                    ? [leg.reason]
-                    : []
+              // EVERY LEG RENDERS ITS OWN REASON LIST. The first version gave
+              // paper a list and the other two a single string, so a capped live
+              // read had nowhere to put its reason.
               return (
                 <li key={name} className="muted small" data-testid={`graduation-leg-${name}`}>
                   {name}:{" "}
@@ -88,18 +82,21 @@ export function GraduationSection() {
                     <>present — {leg.rowsSeen} rows, {leg.windows} windows</>
                   ) : (
                     <>
-                      absent{reasons.length > 0 ? ` — ${reasons.join(" · ")}` : ""} ({leg.rowsSeen} rows
+                      absent
+                      {leg.reasons.length > 0 ? ` — ${leg.reasons.join(" · ")}` : ""} ({leg.rowsSeen} rows
                       read)
                     </>
                   )}
-                  {/* The read limit is shown beside the count it bounds, so a
-                      count sitting at the cap cannot be read as a whole history. */}
-                  {name === "paper" ? (
-                    <span data-testid="graduation-leg-paper-limit">
-                      {" "}
-                      · read limit {overview.legs.paper.readLimit} closes
-                    </span>
-                  ) : null}
+                  {/* THE CAP, ON EVERY LEG. The first version showed it for paper
+                      only, and the live leg was capped by the same default
+                      `listFillCosts` applies while being unable to say so. */}
+                  <span data-testid={`graduation-leg-${name}-limit`}>
+                    {" "}
+                    ·{" "}
+                    {Number.isFinite(leg.readLimit)
+                      ? `read limit ${leg.readLimit} rows`
+                      : "no read attempted"}
+                  </span>
                 </li>
               )
             })}
@@ -115,13 +112,7 @@ export function GraduationSection() {
               {[
                 ...(["backtest", "paper", "live"] as const)
                   .filter((name) => !overview.legs[name].present)
-                  .flatMap((name) =>
-                    name === "paper"
-                      ? overview.legs.paper.reasons
-                      : overview.legs[name].reason
-                        ? [overview.legs[name].reason as string]
-                        : []
-                  ),
+                  .flatMap((name) => overview.legs[name].reasons),
                 ...(overview.unattributed.reason ? [overview.unattributed.reason] : []),
                 ...(overview.reason ? [overview.reason] : [])
               ].join(" · ")}
@@ -163,15 +154,42 @@ function StrategyRow({ row }: { row: GraduationStrategy }) {
           return (recency-weighted):{" "}
           {formatStat(row.stats.returnPct.value, row.stats.returnPct.reason)}
         </div>
+        {/* THE SAMPLE SIZE IS PART OF EACH STATISTIC, not a footnote. A Sharpe
+            read without one is the misreading this readout is most likely to
+            cause: two closes a day apart annualise into a large-looking number
+            that means nothing, and a bare figure gives a reader nothing to
+            discount it with. */}
         <div data-testid={`graduation-row-${row.tag}-sharpe`}>
-          sharpe (aggregated): {formatStat(row.stats.sharpe.value, row.stats.sharpe.reason)}
+          sharpe (aggregated over {row.stats.sharpe.count} closes):{" "}
+          {formatStat(row.stats.sharpe.value, row.stats.sharpe.reason)}
         </div>
+        {/* BOTH DRAWDOWNS. The route's reason for shipping a dollar figure at
+            all was that the percentage is reported alongside it — which holds for
+            an API consumer but not for the reader looking at this panel, so the
+            percentage is rendered rather than merely sent. */}
         <div data-testid={`graduation-row-${row.tag}-maxdd`}>
-          max drawdown: {formatStat(row.stats.maxDd.value, row.stats.maxDd.reason)}
+          max drawdown (over {row.stats.maxDd.count} closes):{" "}
+          {formatStat(row.stats.maxDd.value, row.stats.maxDd.reason, "USD ")}
+          {Number.isFinite(row.stats.maxDd.pct) ? ` (${row.stats.maxDd.pct}% of committed capital)` : ""}
         </div>
         <div data-testid={`graduation-row-${row.tag}-capital`}>
           capital committed:{" "}
-          {formatStat(row.stats.capitalCommittedUsd, row.stats.capitalCommittedUsd === null ? "no-measured-capital-base" : null, "USD ")}
+          {formatStat(
+            row.stats.capitalCommittedUsd,
+            row.stats.capitalCommittedReason,
+            "USD "
+          )}
+        </div>
+        {/* THE DROPPED ROWS, STATED. `rowsInEquityPile` is the sample every
+            aggregated statistic above was computed over; the shortfall against
+            this tag's window count is the number of windows that produced no
+            step in the equity path. Showing only the sample would leave a reader
+            unable to tell a small pile from a lossy one. */}
+        <div className="muted small" data-testid={`graduation-row-${row.tag}-sample`}>
+          equity sample: {row.stats.rowsInEquityPile} of {row.windowsSeen} windows
+          {row.stats.rowsUnmeasured > 0
+            ? ` — ${row.stats.rowsUnmeasured} dropped, pnl unreadable`
+            : " — none dropped"}
         </div>
         <div className="muted small" data-testid={`graduation-row-${row.tag}-drag`}>
           cost drag: {formatDrag(row)}

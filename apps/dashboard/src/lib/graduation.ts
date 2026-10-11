@@ -66,28 +66,53 @@ export interface GraduationStrategy {
     sharpe: GraduationSharpe
     maxDd: GraduationMaxDd
     capitalCommittedUsd: number | null
+    /**
+     * Why the capital base is absent, SENT rather than rendered from a string the
+     * UI holds itself.
+     *
+     * The first version made the UI hardcode this reason while the API sent a
+     * bare `null`, and the two vocabularies had already diverged — the UI's copy
+     * had dropped the `paper-leg:` prefix this server uses. A renderer that
+     * invents vocabulary the API does not send cannot be corrected by fixing the
+     * API later; the UI would keep rendering its own stale string.
+     */
+    capitalCommittedReason: string | null
+    /**
+     * The sample `sharpe.count` and `maxDd.count` were computed over.
+     *
+     * IT TRAVELS BESIDE THE STATISTICS BECAUSE THE SAMPLE IS THE POINT. A Sharpe
+     * read without its sample size is the misreading this readout is most likely
+     * to cause: two closes a day apart annualise to a large-looking number that
+     * means nothing, and a bare figure gives a reader nothing to discount it with.
+     */
+    rowsInEquityPile: number
+    /**
+     * Windows in this tag's pile whose `pnl` could not be read, so they
+     * contribute no step to the equity path. `rowsInEquityPile + rowsUnmeasured`
+     * is always `windowsSeen`, which is what makes the two checkable.
+     */
+    rowsUnmeasured: number
     costDragUsd: GraduationCostDrag
   }
 }
 
 export interface GraduationLeg {
   present: boolean
-  reason: string | null
+  /** A list, not one string: an absent pile and a capped read are different facts. */
+  reasons: string[]
   rowsSeen: number
+  /**
+   * The cap the read was bounded by, or `null` when no read was attempted (the
+   * backtest leg), so the number cannot imply a bound that was never applied.
+   */
+  readLimit: number | null
   windows: number
 }
 
-/**
- * The paper leg's own shape, which is NOT the other two.
- *
- * It carries a REASON LIST rather than one reason string because a capped read
- * and an empty pile are different facts that can hold at once, and it carries the
- * read limit beside the count that limit bounds — without which "12 rows" reads
- * as "the whole paper history", which is a claim the route cannot support.
- */
-export interface GraduationPaperLeg extends GraduationLeg {
-  reasons: string[]
-  readLimit: number
+export type GraduationLegs = {
+  backtest: GraduationLeg
+  paper: GraduationLeg
+  live: GraduationLeg
 }
 
 export interface GraduationOverview {
@@ -96,7 +121,7 @@ export interface GraduationOverview {
   advisory: boolean
   bars: { supplied: boolean; reason: string | null }
   tagSemantics: { field: string; scope: string; note: string }
-  legs: { backtest: GraduationLeg; paper: GraduationPaperLeg; live: GraduationLeg }
+  legs: GraduationLegs
   strategies: GraduationStrategy[]
   unattributed: { rows: number; reason: string | null }
   excluded: Array<{ key: string; count: number }>

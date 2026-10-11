@@ -155,9 +155,9 @@ describe("graduation API (W3-04 Task 4) — overview route", () => {
     // Every leg reports presence AND its reason when absent. None is bucketed
     // under a placeholder.
     expect(res.body.legs.backtest.present).toBe(false)
-    expect(typeof res.body.legs.backtest.reason).toBe("string")
+    expect(res.body.legs.backtest.reasons).toContain("backtest-windows-not-persisted")
     expect(res.body.legs.live.present).toBe(false)
-    expect(res.body.legs.live.reason).toBe("strategy-tag-unavailable")
+    expect(res.body.legs.live.reasons).toContain("strategy-tag-unavailable")
     expect(typeof res.body.legs.paper.present).toBe("boolean")
     // The read limit is DISCLOSED beside the count it bounds. `paperHistory`
     // answers the most recent `limit` closes, so a count is a window onto the
@@ -190,6 +190,44 @@ describe("graduation API (W3-04 Task 4) — overview route", () => {
     // Still `present` — a capped read is not an absent one, and the two reasons
     // are separate fields precisely so neither can overwrite the other.
     expect(res.body.legs.paper.present).toBe(true)
+  })
+
+  it("discloses the LIVE leg's read cap with the same treatment the paper leg gets", async () => {
+    // I3. `listFillCosts` defaults to `limit = 500` and applies `.slice(0, limit)`
+    // (costs/store.mjs:84-91). The route passed no limit and reported none, so
+    // past 500 rows `legs.live.rowsSeen` was a bare capped number — contradicting
+    // the route's own "the absence below is a MEASURED one" comment.
+    const costsStore = await import("../services/costs/store.mjs")
+    for (let i = 0; i < 500; i += 1) {
+      costsStore.recordFillCost({
+        venue: "hyperliquid",
+        route: "close",
+        kind: "fee",
+        amountUsd: 0.01,
+        ccy: "USDT",
+        provenance: "measured"
+      })
+    }
+    const { api, headers } = await authed()
+    const res = await call(api, "GET", OVERVIEW, undefined, headers)
+    expect(res.status).toBe(200)
+
+    expect(res.body.legs.live.readLimit).toBeGreaterThan(0)
+    expect(res.body.legs.live.rowsSeen).toBe(500)
+    expect(res.body.legs.live.reasons).toContain("live-fills-read-limit-reached")
+    // The identity reason is kept alongside it — a capped read does not replace
+    // the reason the leg cannot be bucketed at all.
+    expect(res.body.legs.live.reasons).toContain("strategy-tag-unavailable")
+    // Every leg carries the read-limit field, so no leg can be structurally
+    // unable to disclose its cap.
+    for (const name of ["backtest", "paper", "live"]) {
+      // Every leg carries the field, so no leg is structurally unable to
+      // disclose a cap. `backtest` reports `null` because no read was attempted
+      // and there is no population to be capped below.
+      expect(res.body.legs[name], `${name} must carry readLimit`).toHaveProperty("readLimit")
+      expect(res.body.legs[name].readLimit === null || Number.isInteger(res.body.legs[name].readLimit)).toBe(true)
+    }
+    expect(res.body.legs.backtest.readLimit).toBeNull()
   })
 
   it("buckets paper closes per traded symbol and maps pnl/amount onto returnPct in percent", async () => {
@@ -280,6 +318,85 @@ describe("graduation API (W3-04 Task 4) — overview route", () => {
     // inflated the measured count — a blank field that became 0 would have made
     // this three, and would have argued the tag over a line nobody measured.
     expect(res.body.strategies[0].stats.returnPct.windowsMeasured).toBe(1)
+  })
+
+  it("builds the equity pile from the WINDOW pile, so a close with no usable bounds contributes no P&L step", async () => {
+    // I2. The window pile drops a close with no usable start/end; the equity
+    // pile must be built FROM that pile, not from the raw closes. In this
+    // fixture all five closes carry a usable `pnl`, so before the fix sharpe and
+    // maxDd reported a count of FIVE against windowsSeen of THREE: two closes
+    // the window pile had already rejected as unmeasurable-in-time still moved
+    // the equity curve.
+    seedCloses(tradingDir, [
+      { id: "ok-1", symbol: "BTCUSD", amount: 1000, pnl: 2, openedAt: "2026-09-01T09:00:00.000Z", closedAt: "2026-09-01T10:00:00.000Z" },
+      { id: "ok-2", symbol: "BTCUSD", amount: 1000, pnl: -5, openedAt: "2026-09-02T09:00:00.000Z", closedAt: "2026-09-02T10:00:00.000Z" },
+      { id: "ok-3", symbol: "BTCUSD", amount: 1000, pnl: 4, openedAt: "2026-09-03T09:00:00.000Z", closedAt: "2026-09-03T10:00:00.000Z" },
+      // rejected by the window pile for a missing bound — must NOT reach the
+      // equity path, even though its pnl is perfectly readable
+      { id: "no-open", symbol: "BTCUSD", amount: 1000, pnl: 999, closedAt: "2026-09-04T10:00:00.000Z" },
+      { id: "no-close", symbol: "BTCUSD", amount: 1000, pnl: -999, openedAt: "2026-09-05T09:00:00.000Z" }
+    ])
+    const { api, headers } = await authed()
+    const res = await call(api, "GET", OVERVIEW, undefined, headers)
+    expect(res.status).toBe(200)
+    const row = res.body.strategies[0]
+    expect(row.windowsSeen).toBe(3)
+
+    // The equity statistics are built over exactly the window pile.
+    expect(row.stats.sharpe.count).toBe(3)
+    expect(row.stats.maxDd.count).toBe(3)
+    // And nothing anywhere reports a count of five.
+    expect(row.stats.sharpe.count).not.toBe(5)
+    expect(row.stats.maxDd.count).not.toBe(5)
+
+    // THE VALUE PROVES IT, not just the count: recomputing over the three
+    // windowed closes must reproduce the shipped figures exactly. Recomputing
+    // over all five would fold in +999 and -999 and change the answer.
+    const analytics = await import("../services/analytics.mjs")
+    const windowed = [
+      { pnl: 2, amount: 1000, closedAt: "2026-09-01T10:00:00.000Z", holdingMs: 3_600_000 },
+      { pnl: -5, amount: 1000, closedAt: "2026-09-02T10:00:00.000Z", holdingMs: 3_600_000 },
+      { pnl: 4, amount: 1000, closedAt: "2026-09-03T10:00:00.000Z", holdingMs: 3_600_000 }
+    ]
+    expect(row.stats.maxDd.value).toBe(
+      Math.max(
+        ...analytics
+          .drawdownSeries(analytics.equitySeries(windowed, 3000))
+          .map((p) => p.drawdownDollars)
+      )
+    )
+    expect(row.stats.sharpe.value).toBe(analytics.metricsFrom(windowed, 3000).annualizedSharpe)
+  })
+
+  it("SURFACES rowsUnmeasured: a window whose pnl cannot be read is counted, not silently dropped", async () => {
+    // I1. The field was computed and returned by the adapter but never reached
+    // the payload, while a comment claimed it was reported. A tag whose closes
+    // have an unreadable pnl loses them from the equity path with nothing
+    // anywhere saying how many were lost.
+    seedCloses(tradingDir, [
+      { id: "ok-1", symbol: "BTCUSD", amount: 1000, pnl: 2, openedAt: "2026-09-01T09:00:00.000Z", closedAt: "2026-09-01T10:00:00.000Z" },
+      { id: "ok-2", symbol: "BTCUSD", amount: 1000, pnl: -5, openedAt: "2026-09-02T09:00:00.000Z", closedAt: "2026-09-02T10:00:00.000Z" },
+      { id: "ok-3", symbol: "BTCUSD", amount: 1000, pnl: 4, openedAt: "2026-09-03T09:00:00.000Z", closedAt: "2026-09-03T10:00:00.000Z" },
+      // usable BOUNDS (so it IS a window) but an unusable pnl (blank string):
+      // it is counted in windowsSeen and must also be counted as unmeasured.
+      { id: "blank-pnl", symbol: "BTCUSD", amount: 1000, pnl: "  ", openedAt: "2026-09-04T09:00:00.000Z", closedAt: "2026-09-04T10:00:00.000Z" }
+    ])
+    const { api, headers } = await authed()
+    const res = await call(api, "GET", OVERVIEW, undefined, headers)
+    expect(res.status).toBe(200)
+    const row = res.body.strategies[0]
+
+    // Four windows, one of which measured no pnl.
+    expect(row.windowsSeen).toBe(4)
+    // THE DISCLOSURE: the gap between the pile size and the sample that produced
+    // the statistics is stated, with both halves, rather than left to be inferred.
+    expect(row.stats.rowsUnmeasured).toBe(1)
+    expect(row.stats.rowsInEquityPile).toBe(3)
+    // And the sample size that produced each statistic travels with it.
+    expect(row.stats.sharpe.count).toBe(3)
+    expect(row.stats.maxDd.count).toBe(3)
+    // The identity is checkable: window pile = equity pile + unmeasured.
+    expect(row.stats.rowsInEquityPile + row.stats.rowsUnmeasured).toBe(row.windowsSeen)
   })
 
   it("reports a close with no usable symbol as UNATTRIBUTED, never under a placeholder tag", async () => {

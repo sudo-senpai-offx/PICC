@@ -1536,22 +1536,40 @@ function connectorsSiteIsGated(lines, index) {
     // 6,825 -> 7,336 in W3-04 Task 4 (graduation overview route), the same
     // protocol: +511 lines, and every one is accounted for rather than
     // absorbed. They are two contiguous regions and nothing else moved:
-    //   - 260 lines, lines 1265-1524: the module-level EVIDENCE ADAPTER, which is
-    //     where the mapping lives because `windows.mjs` fixes the division of
-    //     labour in its own header ("the route (Task 4) does the adapting"). It
-    //     holds `graduationBars()` - the single named place the owner adds a
-    //     promotion bar - the tag-semantics record, the reason vocabularies, the
+    //   - 260 lines: the module-level EVIDENCE ADAPTER, which is where the
+    //     mapping lives because `windows.mjs` fixes the division of labour in
+    //     its own header ("the route (Task 4) does the adapting"). It holds
+    //     `graduationBars()` - the single named place the owner adds a promotion
+    //     bar - the tag-semantics record, the reason vocabularies, the
     //     paper-close read limit and the constant that discloses it, the
     //     `finiteOrNull`/`positive`/`tag` readers, the paper-close window mapper,
-    //     and the paper-leg sharpe/drawdown aggregator.
-    //   - 251 lines, lines 3574-3824: the single GET /api/graduation/overview
-    //     branch (dispatch line, unconditional requireAuth() as its FIRST
-    //     statement, six branch-local dynamic loads, the read-only evidence
-    //     reads, the window collection, the per-tag bucketing, the per-tag
-    //     readout, the leg accounting, the writeJson and the catch).
+//     //     and the paper-leg sharpe/drawdown aggregator.
+    //   - 251 lines: the single GET /api/graduation/overview branch (dispatch
+    //     line, unconditional requireAuth() as its FIRST statement, six
+    //     branch-local dynamic loads, the read-only evidence reads, the window
+    //     collection, the per-tag bucketing, the per-tag readout, the leg
+    //     accounting, the writeJson and the catch).
     // 260 + 251 = 511 exactly. The import pair above is what confirms nothing
     // ELSE changed: +6 dynamic, +0 static.
-    expect(lines, "lines in handlers.mjs").toBe(7336)
+    //
+    // 7,336 -> 7,450 in the Task 4 FIX ROUND, the same protocol: +114 lines, and
+    // the import pair is what proves it is NOT structural growth. Statics stay at
+    // 72 and dynamics at 109 — the fix added `graduationWindowedPaperCloses`, a
+    // read limit and some accounting, and reached no new module.
+    //
+    // The +114 is all inside the two regions this task already owns, and they
+    // are re-measured rather than asserted:
+    //   - adapter, lines 1265-1599: 260 -> 335 (+75). `graduationWindowedPaperCloses`
+    //     (which derives the equity pile from the collector's OWN exclusion
+    //     report rather than re-implementing the bounds predicate), the live read
+    //     limit and its doc, the equity-pile consistency rationale, and
+    //     `rowsInEquityPile` / `capitalCommittedReason` on both return paths.
+    //   - route branch, lines 3649-3938: 251 -> 290 (+39). The windowed-pile
+    //     derivation, the corrected live comment, the two new payload fields, and
+    //     the uniform per-leg reason list and readLimit.
+    // 75 + 39 = 114 exactly, which is what makes the number auditable rather
+    // than merely updated.
+    expect(lines, "lines in handlers.mjs").toBe(7450)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
