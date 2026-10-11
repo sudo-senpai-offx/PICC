@@ -1,3 +1,5 @@
+import { weightedMetric } from "./weighting.mjs"
+
 // Graduation analytics — gates engine (W3-04, layer 3 of 4).
 //
 // WHAT THIS IS. The layer that decides what LABEL a strategy tag may carry
@@ -182,8 +184,6 @@ function barFor(bars, plan) {
   return finiteOrNull(bars?.[plan.source]?.[plan.stat])
 }
 
-import { weightedMetric } from "./weighting.mjs"
-
 /**
  * How many windows of one source arrived, with the bar they are argued against and
  * the recency-weighted evidence they carry.
@@ -197,6 +197,28 @@ import { weightedMetric } from "./weighting.mjs"
  * layers. A third convention — treating null as "now" here — is the one thing this
  * forwarding rules out.
  *
+ * TWO COUNTS, AND THE DISTINCTION IS THE POINT OF THIS STRUCTURE.
+ *
+ * `windowsUsed` (top level) counts windows that are EVIDENCE FOR THE STREAK: a
+ * measured statistic AND a bar to compare it against.
+ *
+ * `windowsMeasured` (here) counts windows that produced a WEIGHTED READING: a
+ * measured statistic AND a computable recency weight. No bar is consulted, because
+ * weighting answers a different question — how much a stale reading counts, not
+ * whether it clears a line.
+ *
+ * They diverge whenever exactly one of the two extra conditions fails, and both
+ * divergences are real and worth showing:
+ *
+ *   bars: {}          -> windowsUsed 0, windowsMeasured 12  (measured, no bar to judge)
+ *   options:{now:null}-> windowsUsed 12, windowsMeasured 0   (judgeable, no clock)
+ *
+ * The field was named `windowsQualifying` until this was written, which made the two
+ * read as the same number and let a readout report "12 measured / 0 used" on one row
+ * with nothing to explain the gap. `measured` says what happened to the statistic;
+ * `used` says what the gate did with it. Collapsing either one away would lose a
+ * true fact, so both are kept and both are named for what they count.
+ *
  * @param {Array} windows Task 1 windows
  * @param {string} [options.now] forwarded to `decayWeight`. Omitted means the wall
  *   clock; an explicit `now: null` means absence, and the weighted summary then
@@ -206,13 +228,28 @@ import { weightedMetric } from "./weighting.mjs"
  *   an unreadable `now` silently demote a strategy on evidence that did exist.
  * @param {object} [options.halfLifeDays] forwarded unchanged
  */
+/**
+ * The key a window is filed under when it carries no usable `source` string.
+ *
+ * It exists so the arithmetic closes. Such a window is still a window: the main
+ * loop counts it as a skip, and if the summary dropped it the per-source rows would
+ * enumerate fewer windows than the top level accounted for — a reader auditing the
+ * evidence would find the columns irreconcilable and have no way to tell which side
+ * was wrong. Filing it under a visible key keeps every window accounted for on both
+ * sides, and names the problem instead of hiding it.
+ */
+const UNATTRIBUTED = "unattributed"
+
 function summariseSources(windows, bars, options) {
   const bySource = new Map()
   for (const window of windows) {
     const source = window?.source
-    if (typeof source !== "string" || source === "") continue
-    if (!bySource.has(source)) bySource.set(source, [])
-    bySource.get(source).push(window)
+    // A window whose source is not a usable string is filed under UNATTRIBUTED
+    // rather than DROPPED, so that `ΣwindowsSeen` here equals `windowsUsed + Σskipped`
+    // at the top level for every pile, malformed windows included.
+    const key = typeof source === "string" && source !== "" ? source : UNATTRIBUTED
+    if (!bySource.has(key)) bySource.set(key, [])
+    bySource.get(key).push(window)
   }
 
   const sources = {}
@@ -222,15 +259,27 @@ function summariseSources(windows, bars, options) {
     // deliberately dropped: `weightedMetric` appends one entry per skipped window,
     // so passing it through would make this readout grow with the size of the pile
     // and reintroduce exactly the unbounded output this module is built to avoid.
+    //
+    // A SOURCE WITH NO PLAN GETS A NAMED REASON, NOT A BLANK ONE. `weightedMetric`
+    // is never called for such a source — there is no statistic to read — so its
+    // result would carry `reason: null`, and a renderer reading this row would
+    // render an empty cell on exactly the row whose message is "this source is
+    // absent". The top-level `reasons` array already says `bar-unavailable` for
+    // these windows; the row now says it too, so the two agree.
     const { value, totalWeight, windowCount, reason } = plan
       ? weightedMetric(pile, safePick(plan.stat), options)
-      : { value: null, totalWeight: 0, windowCount: 0, reason: null }
+      : {
+          value: null,
+          totalWeight: 0,
+          windowCount: 0,
+          reason: GATE_REASONS.BAR_UNAVAILABLE
+        }
 
     sources[source] = Object.freeze({
       stat: plan ? plan.stat : null,
       bar: plan ? barFor(bars, plan) : null,
       windowsSeen: pile.length,
-      windowsQualifying: windowCount,
+      windowsMeasured: windowCount,
       weighted: Object.freeze({ value, totalWeight, windowCount, reason })
     })
   }
@@ -247,6 +296,29 @@ function summariseSources(windows, bars, options) {
  *   `windowStart`. The order is NOT re-sorted here: `collectWindows` already
  *   applies one documented tiebreak (start, end, source, tag) and re-sorting with
  *   a different one would silently disagree with the collector this layer reads.
+ *
+ *   TWO PRECONDITIONS ON THE PILE, both consequences of the above and neither
+ *   checked at runtime, because neither can be checked without re-implementing the
+ *   collector:
+ *
+ *   1. ORDER IS THE CALLER'S TO KEEP. "Consecutive" is a predicate against a
+ *      chronology, so a pile handed in newest-first measures a different run than
+ *      the same pile chronological — correctly, and silently.
+ *
+ *   2. NO DUPLICATED WINDOWS. A repeated window object is counted twice: two copies
+ *      of one reading satisfy "6 windows below 70% of bar" on their own. Deduping is
+ *      the collector's job — it has the bounds that make a repeat identifiable — and
+ *      doing it here would mean trusting a key this layer cannot verify.
+ *
+ *   SOURCES SHARE ONE STREAK. "Promote on 12 consecutive windows above bar" (spec
+ *   section 2, decision 5) against a PER-SOURCE bar means a single counter over the
+ *   merged chronology, with each window compared to the bar for its own source. Six
+ *   above-bar backtest windows interleaved with six above-bar paper windows is
+ *   therefore TWELVE consecutive above-bar windows — each window is judged once, on
+ *   its own source's bar, and contributes one count to the shared run. This is the
+ *   endorsed reading; the suite pins it, including the consequence that a paper
+ *   window below its own demote line breaks a streak that backtest windows are
+ *   otherwise carrying.
  * @param {object} [input.bars] per-source bars, e.g. `{ backtest: { hitRateNet: 0.55 } }`.
  *   A bar the caller does not supply is a bar this layer refuses to invent; see
  *   `GATE_REASONS.BAR_UNAVAILABLE`.
@@ -261,16 +333,32 @@ function summariseSources(windows, bars, options) {
  *   verdict: string,                        the single terminal field, one of `GATE_VERDICTS`
  *   promoted: boolean,                      a reported FACT about the evidence, not a decision
  *   demoted: boolean,                       likewise, and never true at the same time as `promoted`
- *   windowsUsed: number,                    qualifying windows: those with a measured statistic AND a bar
+ *   windowsUsed: number,                    STREAK evidence: a measured statistic AND a bar.
+ *                                           Distinct from `windowsMeasured` below — see
+ *                                           `summariseSources`, which documents the difference.
  *   skipped: Readonly<Record<string, number>>,  one COUNT per distinct skip reason
  *   sources: Readonly<Record<string, {stat: string|null, bar: number|null,
- *     windowsSeen: number, windowsQualifying: number,
+ *     windowsSeen: number, windowsMeasured: number,
  *     weighted: Readonly<{value: number|null, totalWeight: number, windowCount: number, reason: string|null}>}>>,
  *   reasons: string[],
  *   warnings: string[]
  * }} `reasons` and `warnings` are bounded vocabularies, never one entry per window.
  */
-export function evaluateStrategy({ tag = null, windows, bars, options = {} } = {}) {
+export function evaluateStrategy(input) {
+  // THE INPUT IS NORMALISED, NOT DESTRUCTURED IN THE SIGNATURE, because a
+  // destructuring default only rescues `undefined`. `evaluateStrategy(null)` throws
+  // before the first line of the body, and `options = {}` would rescue an omitted
+  // options bag while letting an explicit `options: null` sail through into
+  // `weightedMetric(pile, pick, null)` and then into `decayWeight(end, null)`, where
+  // `options.now` reads a property off `null`. That crash lands AFTER the verdict has
+  // been computed, so a correct answer is built and then thrown away.
+  //
+  // `?? {}` ON THE BAG, NOT ON ITS FIELDS: it normalises `options: null` into "no
+  // options", which is the same state as omitting it entirely, while an explicit
+  // `{ now: null }` still arrives at `decayWeight` with its `now` intact. The clock
+  // convention above therefore survives this guard unchanged.
+  const { tag = null, windows, bars, options } = input ?? {}
+  const clock = options ?? {}
   const pile = Array.isArray(windows) ? windows : []
   let qualifying = 0
   let aboveRun = 0
@@ -298,19 +386,35 @@ export function evaluateStrategy({ tag = null, windows, bars, options = {} } = {
     // module exists to avoid: `"" == 0` and `"0" == 0` are both true, so a blank
     // field would satisfy an absence test as readily as a written-down zero would
     // satisfy a measurement one.
-    // A window that cannot be argued from is an ABSENCE, and it breaks both runs
-    // exactly as a measured sub-bar window would. Letting an absence "pass
-    // through" a streak would let a pile of unmeasured windows accumulate twelve
-    // of them and be called twelve consecutive above-bar windows.
+    // A window that cannot be argued from is an ABSENCE — but the two absences are
+    // NOT the same fact, and the difference decides whether a strategy is judged on
+    // its evidence or on someone else's missing configuration.
     //
-    // The two reasons are kept apart because they are different failures with
-    // different fixes: `BAR_UNAVAILABLE` is the CALLER's (no bar supplied, or a
-    // source with no gateable statistic at all — the live pile today carries none),
-    // while `STAT_UNMEASURED` is the PRODUCER's (the window existed and measured
-    // nothing). Collapsing them would hide a wiring mistake behind a data gap.
+    //   `STAT_UNMEASURED` is a MEASUREMENT FAILURE. The source can be gated, a bar
+    //   exists, and the window simply did not produce a reading. That is a real
+    //   failure to produce evidence, so it BREAKS both runs. Letting it pass through
+    //   would let a pile of unmeasured windows accumulate twelve of them and be
+    //   called twelve consecutive above-bar windows.
+    //
+    //   `BAR_UNAVAILABLE` is a CONSTANT PROPERTY OF THE SOURCE, not of this window:
+    //   either no bar was supplied for it, or the source has no gateable statistic
+    //   at all — `live` has no `GATE_PLANS` entry by construction, so every live
+    //   fill lands here forever. Such a window is not evidence in EITHER direction,
+    //   so it is EXCLUDED and the runs are left untouched.
+    //
+    // The distinction is load-bearing, and getting it wrong was a real defect: Task 1
+    // merges all three sources into ONE chronological sort (`windows.mjs:273-279`),
+    // so live fills arrive INTERLEAVED with backtest windows. Treating the excluded
+    // live windows as failures reset the run on every one of them, and a strategy
+    // that also trades live could never be promoted no matter how good its backtest
+    // record was — the live pile vetoed the argument it was absent from.
     if (stat === null) {
-      const why = bar === null ? GATE_REASONS.BAR_UNAVAILABLE : GATE_REASONS.STAT_UNMEASURED
-      skipped[why] = (skipped[why] ?? 0) + 1
+      if (bar === null) {
+        skipped[GATE_REASONS.BAR_UNAVAILABLE] =
+          (skipped[GATE_REASONS.BAR_UNAVAILABLE] ?? 0) + 1
+        continue
+      }
+      skipped[GATE_REASONS.STAT_UNMEASURED] = (skipped[GATE_REASONS.STAT_UNMEASURED] ?? 0) + 1
       aboveRun = 0
       belowRun = 0
       continue
@@ -417,7 +521,7 @@ export function evaluateStrategy({ tag = null, windows, bars, options = {} } = {
     demoted,
     windowsUsed: qualifying,
     skipped: Object.freeze(skipped),
-    sources: summariseSources(pile, bars, options),
+    sources: summariseSources(pile, bars, clock),
     reasons,
     warnings: Object.freeze(warnings)
   }

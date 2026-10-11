@@ -406,6 +406,42 @@ describe("a throwing reader is absence, never a crash", () => {
     expect(out.stage, "a throwing reader breaks the streak rather than extending it").toBe("paper")
   })
 
+  // EVERY FIELD OF `input` IS NULL-SAFE, INCLUDING `options`. `windows: null` and
+  // `bars: null` are already guarded, and a destructuring default (`options = {}`)
+  // applies to `undefined` ONLY — an explicit `null` sails straight through it into
+  // `weightedMetric(pile, pick, null)` and then into `decayWeight(end, null)`, where
+  // `options.now` reads a property off `null`. It throws, and it throws AFTER the
+  // verdict has already been computed, so a correct answer is computed and thrown
+  // away — the worst place for a crash to land.
+  it("treats a null options bag as no options at all", () => {
+    const pile = backtestRun(12, 0.9)
+    let out = null
+    expect(() => {
+      out = evaluateStrategy({ tag: "trend", windows: pile, bars: BARS, options: null })
+    }, "options: null must not throw").not.toThrow()
+
+    expect(out.stage, "a null options bag is the same as omitting it").toBe("testnet")
+    expect(out.verdict).toBe(GATE_VERDICTS.PROMOTE)
+  })
+
+  // ...AND THE NEIGHBOURS, so the totality of the input contract is pinned rather
+  // than half-asserted. A `null` input object is the same story one level up.
+  it("survives null in every input field", () => {
+    for (const input of [
+      { tag: "t", windows: null, bars: null, options: null },
+      { tag: "t", windows: undefined, bars: undefined, options: undefined },
+      { tag: "t" },
+      null
+    ]) {
+      let out = null
+      expect(() => {
+        out = evaluateStrategy(input)
+      }, `evaluateStrategy(${JSON.stringify(input)}) must not throw`).not.toThrow()
+      expect(out.stage).toBe("paper")
+      expect(out.windowsUsed).toBe(0)
+    }
+  })
+
   // NOTHING IN THE READOUT IS EVER NON-FINITE. A divide-by-zero on an empty
   // weighted set yields `Infinity`, `NaN` or `0` depending on the spelling, and all
   // three are worse than `null`: a renderer draws them, a comparison silently
@@ -623,6 +659,254 @@ describe("demotion warns on the same math that promotes, and no sooner", () => {
     const out = evaluateStrategy({ tag: "trend", windows: backtestRun(12, 0.9), bars: BARS, options: OPTIONS })
     expect(out.promoted).toBe(true)
     expect(out.warnings).toEqual([])
+  })
+})
+
+describe("an ungateable source is excluded from the streak, never a veto on it", () => {
+  // THE SHAPE `collectWindows` ACTUALLY EMITS. Task 1 merges backtest, paper and
+  // live into ONE chronological sort (`windows.mjs:273-279`), so a pile reaches
+  // this layer already interleaved. The existing `bar-unavailable` tests use a
+  // pure-backtest pile and the live test uses a pure-live pile — neither is
+  // interleaved, which is exactly why the bug survived them.
+  const liveFill = (daysAgo) => ({
+    source: "live",
+    strategyTag: "trend",
+    windowStart: daysBefore(daysAgo + 1),
+    windowEnd: daysBefore(daysAgo),
+    returnPct: null,
+    sharpe: null,
+    maxDd: null,
+    costDragUsd: null,
+    provenance: "live",
+    reasons: []
+  })
+
+  // CONTRIBUTING NOTHING MEANS EXCLUDED, NOT VETOING. `live` has no gateable
+  // statistic and no plan, so every live window is absent from the argument in both
+  // directions — it is neither evidence for promotion nor a failure that should
+  // interrupt a run. A strategy that also trades live must therefore reach the same
+  // verdict as one with no live history at all.
+  it("still promotes when an ungateable source is interleaved with a usable one", () => {
+    const interleaved = []
+    for (let i = 0; i < 12; i += 1) {
+      interleaved.push(backtestWindow(23 - i * 2, { hitRateNet: 0.9 }))
+      interleaved.push(liveFill(22 - i * 2))
+    }
+
+    const withLive = evaluateStrategy({ tag: "trend", windows: interleaved, bars: BARS, options: OPTIONS })
+    const backtestOnly = evaluateStrategy({
+      tag: "trend",
+      windows: Array.from({ length: 12 }, (_, i) => backtestWindow(23 - i * 2, { hitRateNet: 0.9 })),
+      bars: BARS,
+      options: OPTIONS
+    })
+
+    expect(backtestOnly.verdict).toBe(GATE_VERDICTS.PROMOTE)
+    expect(
+      withLive.verdict,
+      "a live fill is not a backtest failure and must not break a backtest streak"
+    ).toBe(backtestOnly.verdict)
+    expect(withLive.stage).toBe(backtestOnly.stage)
+    expect(withLive.windowsUsed, "the live windows contribute nothing, in either direction").toBe(12)
+  })
+
+  // ...AND THE VETO IS NOT WEAKENED FOR A GENUINE MEASUREMENT FAILURE. A window
+  // whose SOURCE can be gated but whose statistic was not measured is a real
+  // failure to produce evidence, and it still breaks the streak. If this were also
+  // excluded, a pile of unmeasured backtest windows would silently stop mattering.
+  it("still breaks the streak when a gateable source fails to measure", () => {
+    const interleaved = []
+    for (let i = 0; i < 12; i += 1) {
+      interleaved.push(backtestWindow(23 - i * 2, { hitRateNet: 0.9 }))
+      interleaved.push(backtestWindow(22 - i * 2, { hitRateNet: null }))
+    }
+
+    const out = evaluateStrategy({ tag: "trend", windows: interleaved, bars: BARS, options: OPTIONS })
+    expect(out.stage, "an unmeasured gateable window is a failure, and it breaks the run").toBe("paper")
+    expect(out.skipped[GATE_REASONS.STAT_UNMEASURED]).toBe(12)
+  })
+})
+
+describe("the two evidence counts answer different questions and say so", () => {
+  // THERE ARE TWO COUNTS AND THEY ARE BOTH TRUE, which is why neither may be
+  // collapsed. They differ on exactly one input:
+  //
+  //   `windowsUsed` (top level)  — windows that count as EVIDENCE FOR THE STREAK:
+  //                                 a measured statistic AND a bar to compare it to.
+  //   `windowsMeasured` (per source) — windows that produced a WEIGHTED READING:
+  //                                 a measured statistic AND a computable recency
+  //                                 weight. No bar is consulted at all, because
+  //                                 weighting answers a different question.
+  //
+  // The old name for the second was `windowsQualifying`, which made them read as the
+  // same number and produced a Task 4 table saying "12 measured / 0 used" on one row
+  // without explaining itself. The rename is the fix; the data is not.
+  it("names the per-source count `windowsMeasured`, and never `windowsQualifying`", () => {
+    const out = evaluateStrategy({ tag: "trend", windows: backtestRun(12, 0.9), bars: BARS, options: OPTIONS })
+    expect(out.sources.backtest).toHaveProperty("windowsMeasured")
+    expect(
+      out.sources.backtest,
+      "a name that says 'qualifying' for the weighted count reintroduces the ambiguity"
+    ).not.toHaveProperty("windowsQualifying")
+  })
+
+  // THE NO-BAR CASE IS WHERE THEY DIVERGE MOST, so it is the one to pin: a pile of
+  // twelve well-measured windows with no bar available measures everything and
+  // qualifies for nothing.
+  it("pins the relationship between the two counts when no bar exists", () => {
+    const pile = backtestRun(12, 0.9)
+    const out = evaluateStrategy({ tag: "trend", windows: pile, bars: {}, options: OPTIONS })
+    const source = out.sources.backtest
+
+    expect(out.windowsUsed, "no bar means no window is evidence for the streak").toBe(0)
+    expect(source.windowsMeasured, "but every window was still measured").toBe(12)
+    expect(source.bar, "and the reason there is no bar is visible on the row itself").toBeNull()
+    expect(source.weighted.value, "a weighted reading needs no bar to be computed").not.toBeNull()
+    expect(out.reasons).toContain(GATE_REASONS.BAR_UNAVAILABLE)
+  })
+
+  // ...AND THE MIRROR: an unreadable clock suppresses the weighted reading without
+  // touching the streak, because the two counts fail on different inputs.
+  it("pins the relationship when the clock cannot be read", () => {
+    const pile = backtestRun(12, 0.9)
+    const out = evaluateStrategy({
+      tag: "trend",
+      windows: pile,
+      bars: BARS,
+      options: { now: null, halfLifeDays: HALF_LIFE_DAYS }
+    })
+
+    expect(out.windowsUsed, "an unreadable clock does not un-measure a statistic").toBe(12)
+    expect(out.sources.backtest.windowsMeasured, "but it does prevent a weighted reading").toBe(0)
+    expect(out.sources.backtest.weighted.value).toBeNull()
+  })
+})
+
+describe("sources share ONE streak, each judged against its OWN bar", () => {
+  // THE ENDORSED SEMANTICS, PINNED. "Promote on 12 consecutive windows above bar"
+  // (spec section 2, decision 5) with a PER-SOURCE bar means one counter across the
+  // merged chronology, with each window compared against the bar for its own source.
+  // So six above-bar backtest windows plus six above-bar paper windows is twelve
+  // consecutive above-bar windows — twelve windows, not six, and not twelve of the
+  // same kind. This is the reading the controller endorsed; it is pinned here so the
+  // next reader does not have to rediscover whether it was deliberate.
+  const paperClose = (daysAgo, returnPct) => ({
+    source: "paper",
+    strategyTag: "trend",
+    windowStart: daysBefore(daysAgo + 1),
+    windowEnd: daysBefore(daysAgo),
+    returnPct,
+    sharpe: null,
+    maxDd: null,
+    costDragUsd: null,
+    provenance: "paper",
+    reasons: []
+  })
+
+  it("counts six backtest plus six paper above their own bars as twelve", () => {
+    const interleaved = []
+    for (let i = 0; i < 6; i += 1) {
+      interleaved.push(backtestWindow(11 - i * 2, { hitRateNet: 0.9 }))
+      interleaved.push(paperClose(10 - i * 2, 0.8))
+    }
+
+    const out = evaluateStrategy({ tag: "trend", windows: interleaved, bars: BARS, options: OPTIONS })
+    expect(out.windowsUsed).toBe(12)
+    expect(out.verdict, "twelve windows above their own bars, shared counter").toBe(
+      GATE_VERDICTS.PROMOTE
+    )
+  })
+
+  // ...AND THE COUNT IS TWELVE, NOT SIXTEEN: each window is judged once, against its
+  // own bar. A paper window at 0.8 clears the PAPER bar of 0.5, not the backtest
+  // bar of 0.55, and neither window is counted twice because two bars exist.
+  it("judges each window against its own source's bar, never both", () => {
+    // 0.52 clears the paper bar (0.5) but not the backtest bar (0.55). As a PAPER
+    // window it is above-bar evidence; the same number on a backtest window would
+    // not be. Six of each is still twelve — the arithmetic is per window, not per bar.
+    const interleaved = []
+    for (let i = 0; i < 6; i += 1) {
+      interleaved.push(backtestWindow(11 - i * 2, { hitRateNet: 0.56 }))
+      interleaved.push(paperClose(10 - i * 2, 0.52))
+    }
+    const out = evaluateStrategy({ tag: "trend", windows: interleaved, bars: BARS, options: OPTIONS })
+    expect(out.verdict).toBe(GATE_VERDICTS.PROMOTE)
+    expect(out.windowsUsed, "twelve windows, counted once each").toBe(12)
+  })
+
+  // THE SHARED COUNTER DOES NOT BLIND THE GATE TO A SOURCE GOING BAD. A paper
+  // window below its own demote line breaks the shared run even though the
+  // backtest windows around it are fine, so a decaying source cannot be masked by
+  // a healthy one.
+  it("is not blinded when one source falls below its own demote line", () => {
+    const interleaved = []
+    for (let i = 0; i < 6; i += 1) {
+      interleaved.push(backtestWindow(11 - i * 2, { hitRateNet: 0.9 }))
+      interleaved.push(paperClose(10 - i * 2, 0.1))
+    }
+    const out = evaluateStrategy({ tag: "trend", windows: interleaved, bars: BARS, options: OPTIONS })
+    expect(out.verdict, "a paper window below its demote line breaks the shared run").toBe(
+      GATE_VERDICTS.HOLD
+    )
+    expect(out.promoted).toBe(false)
+  })
+})
+
+describe("the per-source evidence row is never blank where the readout is not", () => {
+  const liveFill = (daysAgo) => ({
+    source: "live",
+    strategyTag: "trend",
+    windowStart: daysBefore(daysAgo + 1),
+    windowEnd: daysBefore(daysAgo),
+    returnPct: null,
+    provenance: "live",
+    reasons: []
+  })
+
+  // A PER-SOURCE RENDERER READS THE ROW, NOT THE TOP-LEVEL LIST. `live` has no plan
+  // and no gateable statistic, so its weighted summary is null — but leaving
+  // `weighted.reason` null handed a renderer a blank reason cell on the one row
+  // whose whole message is "this source is absent", while the same fact sat
+  // unrendered in the top-level `reasons` array.
+  it("names bar-unavailable on the live row itself", () => {
+    const out = evaluateStrategy({
+      tag: "trend",
+      windows: [liveFill(1), liveFill(2)],
+      bars: BARS,
+      options: OPTIONS
+    })
+
+    expect(out.reasons).toContain(GATE_REASONS.BAR_UNAVAILABLE)
+    expect(
+      out.sources.live.weighted.reason,
+      "the row a renderer reads must carry the same reason the readout does"
+    ).toBe(GATE_REASONS.BAR_UNAVAILABLE)
+    expect(out.sources.live.weighted.value, "and still no reading").toBeNull()
+  })
+
+  // THE ARITHMETIC CLOSES. `windowsUsed + Σskipped` is every window in the pile, so
+  // `ΣwindowsSeen` across the source rows has to be every window too. A window whose
+  // `source` is not a usable string was counted by the main loop but silently dropped
+  // by the summary, so the two sides disagreed by exactly the number of malformed
+  // windows — and a reader auditing the evidence could not reconcile the columns.
+  it("makes windowsUsed plus every skip equal the sum of windowsSeen", () => {
+    const pile = [
+      ...backtestRun(12, 0.9),
+      { ...backtestWindow(1, { hitRateNet: 0.9 }), source: 42 },
+      { ...backtestWindow(1, { hitRateNet: 0.9 }), source: "" }
+    ]
+    const out = evaluateStrategy({ tag: "trend", windows: pile, bars: BARS, options: OPTIONS })
+
+    const skips = Object.values(out.skipped).reduce((a, n) => a + n, 0)
+    const seen = Object.values(out.sources).reduce((a, s) => a + s.windowsSeen, 0)
+
+    expect(out.windowsUsed).toBe(12)
+    expect(skips, "both unusable-source windows are accounted for").toBe(2)
+    expect(seen, "and both are visible in the per-source evidence").toBe(14)
+    expect(
+      out.windowsUsed + skips,
+      "the top-level counts must exhaust the pile the per-source rows enumerate"
+    ).toBe(seen)
   })
 })
 
