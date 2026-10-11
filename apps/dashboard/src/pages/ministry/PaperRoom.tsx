@@ -7,6 +7,7 @@ import { getPaperPositions, getPaperHistory } from "@/lib/trading"
 import type { PaperPosition, ClosedTrade } from "@/lib/trading"
 import { PaperLiveRoom } from "@/terminal/routes/PaperLiveRoom"
 import type { PaperLiveReadouts } from "@/terminal/routes/PaperLiveRoom"
+import { GraduationSection } from "./GraduationSection"
 import {
   fetchPaperLivePermit,
   fetchBrokerRegistry,
@@ -41,6 +42,11 @@ import {
  * projection turns any missing one into `unknown` — never into a derived denial.
  * `Promise.allSettled` so one refused request cannot cancel the other three and
  * turn a partial answer into no answer at all.
+ *
+ * W3-04 TASK 4 ADDED A THIRD REGION, NOT A THIRD ROOM. The graduation readout
+ * ships inside this room because the graduation evidence IS paper evidence; no
+ * room key, nav entry or `MINISTRY_ROOMS` entry is added, so the WS-6 T0 room-key
+ * contract is untouched.
  */
 export function PaperRoom() {
   const [positions, setPositions] = useState<PaperPosition[]>([])
@@ -113,6 +119,17 @@ export function PaperRoom() {
         <LedgerPanel />
         <TradeJournalPanel />
         <RiskMetricsCard />
+      </div>
+
+      {/* W3-04 Task 4, in its OWN region so neither documented one changes
+          meaning: the boundary half still contributes zero interactive controls
+          and the ledger half still holds exactly the pre-existing controls. This
+          region is a read-only table with no buttons and no form fields, so the
+          affordance audit in PaperLiveRoom.test.tsx is unaffected — which is a
+          claim that test re-proves over the whole room rather than this comment
+          asserting it. */}
+      <div data-paper-region="graduation">
+        <GraduationSection />
       </div>
     </div>
   )

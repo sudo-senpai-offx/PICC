@@ -1263,6 +1263,266 @@ function incomeSummaryFromServer(streams, snapshots) {
 }
 
 // ---------------------------------------------------------------------
+// Graduation analytics (W3-04 Task 4) — the read-only evidence adapter.
+//
+// WHY THE ADAPTER LIVES HERE AND NOT IN A FOURTH MODULE. `windows.mjs` fixes the
+// division of labour in its own header: the three graduation modules are pure,
+// take plain arrays, and "the caller hands over plain arrays and the route
+// (Task 4) does the adapting". So this is the adapting layer, it is reachable
+// only from the graduation route, and it holds no state of its own.
+//
+// WHAT IT MAPS, AND THE REAL FIELD NAMES IT MAPS THEM FROM. The record shapes
+// below were read off the producers, not assumed:
+//
+//   - a paper close: `trading.mjs:761-774` writes the open position with
+//     `openedAt`, and `trading.mjs:794-803` writes the close with `closedAt`,
+//     `pnl` and the same `amount`. `costs/paperOverlay.mjs:49` documents the
+//     same record as `{ id, amount, closedAt }` with `amount` the cash committed
+//     (notional USD), and `costsApi.test.mjs:172` seeds a fuller one.
+//     So `openedAt -> windowStart`, `closedAt -> windowEnd`, and the return is
+//     `pnl / amount` expressed in PERCENT.
+//
+//   - a fill-cost row: `costs/store.mjs:59-78` writes `{ id, venue, route,
+//     kind, amountUsd, ccy, provenance, observedAt }`.
+//
+// ABSENCE IS NEVER COERCED. A close with no usable `openedAt`, no usable `pnl`
+// or no usable `amount` is NOT bent into a window and NOT turned into a zero
+// return: `windowStart: null` is left for `windows.mjs` to EXCLUDE with a named
+// reason, and a `null` returnPct is left for it to name. A blank string is
+// absence here for the same reason it is there: `Number("")` is `0`.
+// ---------------------------------------------------------------------
+
+/**
+ * THE ONE PLACE THE OWNER ADDS A PROMOTION BAR.
+ *
+ * NO BAR EXISTS IN THE PLATFORM, and that is a checked fact rather than a
+ * limitation of this file. `gates.mjs` takes bars as a caller argument by
+ * design (see its `barFor`), and the nearest-looking candidate is not one:
+ * `accuracyLedger.backtestGates()` groups resolved ledger entries and demo
+ * deals by EXPIRY DURATION and reports per-bucket rates — a reporting
+ * aggregation, not a threshold any window's statistic is compared against. No
+ * promotion floor is exported anywhere.
+ *
+ * SO THIS RETURNS NOTHING, DELIBERATELY, and every strategy therefore reports
+ * `bar-unavailable`. That is the correct shipped state, not a defect to paper
+ * over with an invented default: a bar this route made up would be a number no
+ * owner chose, arguing a strategy over a line nobody drew.
+ *
+ * WIRING ONE LATER IS A ONE-LINE CHANGE, and this function exists so it is
+ * exactly that. `gates.mjs` reads `bars[source][stat]`, where the statistic per
+ * source is fixed by its own `GATE_PLANS` — `backtest` is argued on `hitRateNet`,
+ * `paper` on `returnPct` — so a real bar lands here as:
+ *
+ *     return Object.freeze({
+ *       paper: { returnPct: <number> },
+ *       backtest: { hitRateNet: <number> }
+ *     })
+ *
+ * Nothing else in this file decides whether a bar exists.
+ */
+function graduationBars() {
+  return Object.freeze({})
+}
+
+/**
+ * The strategy tag this readout groups by, and what that word means.
+ *
+ * THE PLATFORM RECORDS NO STRATEGY IDENTITY, and that is why this field exists.
+ * `strategyTag` appears nowhere in the server outside the graduation modules
+ * themselves, and no execution record carries one. What IS on the record:
+ * a backtest trial carries `config`, `index` and `label`
+ * (`technicalBacktest.mjs:249-257`, where `label` is the same constant for
+ * every trial and so identifies nothing), a paper close carries `symbol`
+ * (`trading.mjs:765`), and a fill-cost row carries no identity field at all.
+ *
+ * SO THE SHIPPED TAG IS THE ASSET, AND `scope` SAYS SO IN THE PAYLOAD. A
+ * `symbol` is not a strategy: every paper trade on BTCUSD is pooled under
+ * "BTCUSD" no matter which strategy placed it. That is a real grouping over
+ * real evidence — it is simply a narrower claim than "per strategy tag", which
+ * is what the feature was approved as, and a reader who does not see `scope`
+ * would over-read the row. The field name is reported so the scope is visible
+ * in the readout itself rather than only in a commit message.
+ */
+const GRADUATION_TAG_SEMANTICS = Object.freeze({
+  field: "paperClose.symbol",
+  scope: "per-asset",
+  note:
+    "A paper close carries no strategy identity. The tag is the traded symbol, so every " +
+    "paper trade on one asset is pooled under that asset regardless of which strategy " +
+    "placed it. Read a row as per-asset performance, not per-strategy performance."
+})
+
+/** Why a leg contributes nothing, when nothing was contributed. */
+const GRADUATION_LEG_REASONS = Object.freeze({
+  BACKTEST_NOT_PERSISTED: "backtest-windows-not-persisted",
+  STRATEGY_TAG_UNAVAILABLE: "strategy-tag-unavailable",
+  PAPER_CLOSES_TRUNCATED: "paper-closes-read-limit-reached"
+})
+
+/**
+ * How many paper closes this readout reads, and why the number is DISCLOSED.
+ *
+ * `readPaperCloses` defaults to 500 and `paperHistory` answers
+ * `ledger.closed.slice(-limit).reverse()` — the most RECENT `limit` closes, so a
+ * longer history is silently truncated rather than paged. A readout that reported
+ * "12 rows" without saying the pile was capped would let a reader conclude 12 is
+ * the whole paper history, which is a claim the route cannot support either way.
+ * The limit is therefore passed explicitly and reported next to the count it
+ * bounds, so a reader at the cap can see that the number is a window onto the
+ * history rather than the history.
+ */
+const GRADUATION_CLOSE_READ_LIMIT = 500
+
+/** Why a tag-level statistic is absent. Stable strings, like the sibling modules'. */
+const GRADUATION_STAT_REASONS = Object.freeze({
+  NO_CAPITAL_BASE: "paper-leg:no-measured-capital-base",
+  INSUFFICIENT_OBSERVATIONS: "insufficient-observations",
+  NO_VARIANCE: "sharpe:no-variance",
+  NO_CLOSES: "paper-leg:no-closes"
+})
+
+/**
+ * A genuinely measured number, or null.
+ *
+ * THE EMPTY STRING IS ABSENCE, NOT ZERO — the same rule the three graduation
+ * modules each had to fix separately, and the same reason: `Number("")`,
+ * `Number("   ")` and `Number("\t\n")` are all `0`, so a blank field read as a
+ * measured zero would be indistinguishable downstream from a genuinely flat
+ * window. A written-down zero (`0`, `"0"`) still survives as a measurement.
+ */
+function graduationFiniteOrNull(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (trimmed === "") return null
+  const n = Number(trimmed)
+  return Number.isFinite(n) ? n : null
+}
+
+/** A strictly positive finite number, or null. Notional of zero measures no return. */
+function graduationPositive(value) {
+  const n = graduationFiniteOrNull(value)
+  return n !== null && n > 0 ? n : null
+}
+
+/** A non-empty trimmed string, or null. A blank identity field names nothing. */
+function graduationTagOf(value) {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed === "" ? null : trimmed
+}
+
+/**
+ * One paper close -> one graduation window, or the absence of one.
+ *
+ * `openedAt`/`closedAt` are passed through UNCHANGED, including when absent: a
+ * close with no usable `openedAt` must be EXCLUDED by `windows.mjs` with
+ * `windowStart:missing`, not defaulted to "now" or an epoch, because a window
+ * with invented bounds would sort into a chronology it never belonged to and
+ * then count toward a consecutive-window gate.
+ *
+ * The return is `pnl / amount` in PERCENT, and only when BOTH are usable. A
+ * zero-amount close has no capital committed and so no return to express; a
+ * close with no pnl was never resolved. Either way the answer is `null` plus a
+ * reason from `windows.mjs`, never `0`.
+ */
+function graduationWindowFromPaperClose(close, costLine) {
+  const amount = graduationPositive(close?.amount)
+  const pnl = graduationFiniteOrNull(close?.pnl)
+  return {
+    windowStart: close?.openedAt ?? null,
+    windowEnd: close?.closedAt ?? null,
+    strategyTag: graduationTagOf(close?.symbol),
+    returnPct: amount !== null && pnl !== null ? (pnl / amount) * 100 : null,
+    costLines: costLine ? [costLine] : undefined,
+    provenance: "paper-close"
+  }
+}
+
+/**
+ * Sharpe and drawdown for one tag's paper leg, by AGGREGATION over its closes.
+ *
+ * A single round trip has no equity path, so per-window `sharpe` and `maxDd` are
+ * unmeasurable (`windows.mjs:158-160`) and no single close may be back-filled
+ * with them. They are therefore computed once per tag over its closes, using
+ * the EXISTING helpers in `services/analytics.mjs` — read-only, never
+ * reimplemented here.
+ *
+ * THE CAPITAL BASE IS STATED, not assumed. `metricsFrom`/`equitySeries` need a
+ * starting balance, and the only balance a single tag genuinely owns is the cash
+ * its own closes committed: the sum of their `amount` fields. That is cumulative
+ * turnover across sequential trades rather than one account balance, so it is
+ * reported as `capitalCommittedUsd` and the percentage drawdown is reported
+ * alongside the dollar drawdown, which does not depend on the base at all. A
+ * reader who wants the ratio knows exactly what it is a ratio of.
+ *
+ * A close whose `pnl` is unusable is EXCLUDED from the equity path rather than
+ * contributing a zero step, and the count is reported as `rowsUnmeasured` so the
+ * path is never silently short.
+ */
+function graduationPaperLegStats(analytics, closesOldestFirst) {
+  const rows = closesOldestFirst.filter((c) => graduationFiniteOrNull(c?.pnl) !== null)
+  const rowsUnmeasured = closesOldestFirst.length - rows.length
+
+  let capital = 0
+  let capitalRows = 0
+  for (const close of rows) {
+    const amount = graduationPositive(close?.amount)
+    if (amount !== null) {
+      capital += amount
+      capitalRows += 1
+    }
+  }
+
+  if (rows.length === 0 || capitalRows === 0) {
+    const reason =
+      rows.length === 0 ? GRADUATION_STAT_REASONS.NO_CLOSES : GRADUATION_STAT_REASONS.NO_CAPITAL_BASE
+    return {
+      sharpe: { value: null, reason, count: rows.length },
+      maxDd: { value: null, reason, count: rows.length, pct: null },
+      capitalCommittedUsd: capitalRows > 0 ? capital : null,
+      capitalBaseRows: capitalRows,
+      rowsUnmeasured
+    }
+  }
+
+  // FEWER THAN TWO CLOSES IS NOT A DISTRIBUTION, AND NOT AN EQUITY PATH. One
+  // observation has no spread for a Sharpe and no peak-to-trough for a
+  // drawdown, so both stay absent with the reason rather than reading as a
+  // measured zero drawdown on a lucky single win.
+  const metrics = analytics.metricsFrom(rows, capital)
+  const dd = analytics.drawdownSeries(analytics.equitySeries(rows, capital))
+  const maxDdUsd = dd.length ? Math.max(...dd.map((p) => p.drawdownDollars)) : null
+  const maxDdPct = dd.length ? Math.max(...dd.map((p) => p.drawdown)) : null
+  const tooFew = rows.length < 2
+
+  // `metricsFrom` answers null for a pile with no pnl spread, which is a
+  // genuinely different fact from "not enough observations"; both are named
+  // rather than collapsed into one "unmeasured".
+  const sharpe = tooFew ? null : graduationFiniteOrNull(metrics.annualizedSharpe)
+  return {
+    sharpe: {
+      value: sharpe,
+      reason: sharpe !== null
+        ? null
+        : tooFew
+          ? GRADUATION_STAT_REASONS.INSUFFICIENT_OBSERVATIONS
+          : GRADUATION_STAT_REASONS.NO_VARIANCE,
+      count: rows.length
+    },
+    maxDd: {
+      value: tooFew ? null : maxDdUsd,
+      reason: tooFew ? GRADUATION_STAT_REASONS.INSUFFICIENT_OBSERVATIONS : null,
+      pct: tooFew ? null : maxDdPct,
+      count: rows.length
+    },
+    capitalCommittedUsd: capital,
+    capitalBaseRows: capitalRows,
+    rowsUnmeasured
+  }
+}
+
+// ---------------------------------------------------------------------
 // Routing
 // ---------------------------------------------------------------------
 
@@ -3306,6 +3566,257 @@ async function _handleApiInner(req, res, url, reqId) {
       })
     } catch (err) {
       console.warn("[picc] costs overview failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return
+  }
+
+  // -------------------------------------------------------------------
+  // Graduation analytics (W3-04 Task 4) — GET /api/graduation/overview.
+  //
+  // ADVISORY READOUT, ONE ADDITIVE ROUTE. It reads evidence and labels it; it
+  // moves no permit, unlocks no venue class, and touches no ceremony path. The
+  // graduation boundary stays off the boot path: every service below is reached
+  // through a dynamic load, so the static-import count the bootstrap guard pins
+  // does not move.
+  //
+  // GATED, NOT ALLOWLISTED. The payload names per-asset paper performance. None
+  // of it is declared-public, so the route carries an unconditional requireAuth()
+  // gate as its FIRST statement.
+  // -------------------------------------------------------------------
+  if (path === "/api/graduation/overview" && req.method === "GET") {
+    if (!(await requireAuth(req, res))) return
+    try {
+      const { collectWindowsWithReasons } = await import("./services/graduation/windows.mjs")
+      const { weightedMetric } = await import("./services/graduation/weighting.mjs")
+      const { evaluateStrategy } = await import("./services/graduation/gates.mjs")
+      const costsStore = await import("./services/costs/store.mjs")
+      const costsOverlay = await import("./services/costs/paperOverlay.mjs")
+      const costsAnalytics = await import("./services/analytics.mjs")
+
+      // ---- EVIDENCE, ONE SOURCE AT A TIME ---------------------------------
+      //
+      // PAPER. `readPaperCloses` is the read-only close-history reader the costs
+      // overview already uses; it reaches the paper service by dynamic import and
+      // never the auto-closing marking path, so this branch cannot mark or close
+      // a position. It serves NEWEST-FIRST (`trading.mjs:277`), while the equity
+      // path and the overlay both require oldest-first — so ONE shared
+      // oldest-first ordering feeds both, the same positional hazard the costs
+      // route already documents.
+      const closesNewestFirst = await costsOverlay.readPaperCloses({ limit: GRADUATION_CLOSE_READ_LIMIT })
+      const closesOldestFirst = [...closesNewestFirst].sort((a, b) =>
+        String(a?.closedAt ?? "").localeCompare(String(b?.closedAt ?? ""))
+      )
+      // Overlay lines are bound to their close BY ID, not by position: the
+      // overlay skips closes with no positive notional, so a positional mapping
+      // would shift every later close's cost onto the wrong trade.
+      const { lines: costLines, skipped: costLinesSkipped } =
+        costsOverlay.overlayForCloses(closesOldestFirst)
+      const costLineByCloseId = new Map()
+      for (const line of costLines) {
+        if (line?.closeId != null) costLineByCloseId.set(line.closeId, line)
+      }
+
+      // BACKTEST. There is NO persisted walk-forward window pile to read, so none
+      // is invented. `runTechnicalBacktest` is exported and never called from the
+      // server: it evaluates a `series` handed to it and returns trials in
+      // memory, and its trial summary carries no window bounds at all. Calling it
+      // would require fabricating candles and would produce windows that never
+      // ran. The leg is therefore absent with the reason that says so.
+      const backtestRows = []
+
+      // LIVE. `listFillCosts` IS read, so the absence below is a MEASURED one
+      // ("we looked, there are N rows") rather than an assumed one. A row cannot
+      // become a window: `costs/store.mjs:59-78` gives it `observedAt` and no
+      // second bound, and reusing that one instant as both ends would fabricate a
+      // zero-width window that then counts toward a consecutive-window gate. Nor
+      // does it carry a strategy identity — `venue`, `route`, `kind`, `amountUsd`
+      // and `ccy` name a cost, not a strategy.
+      const liveRows = costsStore.listFillCosts({})
+
+      // ---- WINDOWS ---------------------------------------------------------
+      const { windows, excluded } = collectWindowsWithReasons({
+        backtests: backtestRows,
+        paperCloses: closesOldestFirst.map((close) =>
+          graduationWindowFromPaperClose(close, costLineByCloseId.get(close?.id))
+        ),
+        liveFills: []
+      })
+
+      // ---- BUCKET BY TAG ---------------------------------------------------
+      //
+      // `now` IS OMITTED, DELIBERATELY, and this is the clock convention for
+      // this route. `decayWeight` reads an OMITTED `now` as the wall clock and an
+      // explicit `now: null` as "unmeasurable" — opposite behaviours on the same
+      // field. The wall clock is chosen because the readout's question is "how
+      // much does a stale window count", and freezing `now` would answer a
+      // different question with a recency nobody chose. Nothing here reads a
+      // clock directly: `decayWeight` owns it, so the route has no `Date.now()`
+      // to drift.
+      //
+      // WHAT THE WALL CLOCK CANNOT MOVE. The stage and verdict come from the
+      // STREAK, and `gates.mjs` asks "was a statistic measured", which no clock
+      // can change — so the label is stable across reads while only the weighted
+      // summaries move. The half-life itself is resolved inside `weighting.mjs`
+      // (argument, then `PICC_GRADUATION_HALFLIFE_DAYS`, then its documented
+      // default); this route does not echo it back, because reading the same
+      // precedence a second time here is how a renderer would come to misreport
+      // the value actually applied.
+      const options = {}
+
+      const byTag = new Map()
+      let unattributed = 0
+      for (const window of windows) {
+        const tag = graduationTagOf(window.strategyTag)
+        if (tag === null) {
+          unattributed += 1
+          continue
+        }
+        if (!byTag.has(tag)) byTag.set(tag, [])
+        byTag.get(tag).push(window)
+      }
+
+      // ---- PER-TAG READOUT -------------------------------------------------
+      const bars = graduationBars()
+      const barSupplied = Object.keys(bars).length > 0
+      const strategies = []
+      for (const tag of [...byTag.keys()].sort((a, b) => a.localeCompare(b))) {
+        const tagWindows = byTag.get(tag)
+        const gate = evaluateStrategy({ tag, windows: tagWindows, bars, options })
+
+        const paperCloses = closesOldestFirst.filter((close) => graduationTagOf(close?.symbol) === tag)
+        const leg = graduationPaperLegStats(costsAnalytics, paperCloses)
+
+        // COST DRAG IS SURFACED, NOT APPLIED. `windows.mjs` reports
+        // `costDragUsd` as the UNADJUSTED W3-02 total, and no layer in this stack
+        // adjusts a return or a bar by it — no drag policy is defined anywhere, so
+        // a drag-adjusted return here would be one this route invented. What is
+        // summed below is measured evidence, and its provenance is READ OFF the
+        // overlay lines rather than assumed: W3-02 models spread and slippage and
+        // charges paper a modeled zero fee, and a reader who cannot see that label
+        // would read a modeled number as a measured one.
+        const tagCostLines = paperCloses
+          .map((close) => costLineByCloseId.get(close?.id))
+          .filter((line) => line !== undefined)
+        let dragUsd = null
+        for (const window of tagWindows) {
+          if (!Number.isFinite(window.costDragUsd)) continue
+          dragUsd = (dragUsd ?? 0) + window.costDragUsd
+        }
+        const returnPct = weightedMetric(tagWindows, "returnPct", options)
+
+        strategies.push({
+          tag,
+          stage: gate.stage,
+          verdict: gate.verdict,
+          promoted: gate.promoted,
+          demoted: gate.demoted,
+          windowsUsed: gate.windowsUsed,
+          windowsSeen: tagWindows.length,
+          skipped: { ...gate.skipped },
+          // ITERATED, NEVER INDEXED. `gates.mjs` may file a window under a
+          // `sources` key this route has never heard of (an `unattributed` key
+          // exists for a window with no usable `source`), so the key set is read
+          // rather than assumed to be the three known names.
+          sources: Object.fromEntries(Object.entries(gate.sources ?? {})),
+          reasons: [...gate.reasons],
+          warnings: [...gate.warnings],
+          stats: {
+            returnPct: {
+              value: returnPct.value,
+              reason: returnPct.reason,
+              windowsMeasured: returnPct.windowCount
+            },
+            sharpe: leg.sharpe,
+            maxDd: leg.maxDd,
+            capitalCommittedUsd: leg.capitalCommittedUsd,
+            costDragUsd: {
+              value: dragUsd,
+              reason: dragUsd === null ? "costDragUsd:no-cost-lines" : null,
+              provenances: [...new Set(tagCostLines.map((line) => line.provenance))],
+              adjusted: false
+            }
+          }
+        })
+      }
+
+      // ---- LEG ACCOUNTING --------------------------------------------------
+      //
+      // EVERY LEG REPORTS PRESENCE AND A REASON. A leg with no usable identity
+      // field is absent with that field named, NOT bucketed under a placeholder:
+      // a row under a fabricated label is a claim nobody can audit.
+      const paperWindows = windows.filter((window) => window?.source === "paper").length
+      const paperTruncated = closesOldestFirst.length >= GRADUATION_CLOSE_READ_LIMIT
+      const legs = {
+        backtest: {
+          present: false,
+          reason: GRADUATION_LEG_REASONS.BACKTEST_NOT_PERSISTED,
+          rowsSeen: backtestRows.length,
+          windows: 0
+        },
+        paper: {
+          present: paperWindows > 0,
+          // BOTH reasons can hold at once — an absent pile AND a capped read are
+          // different facts — so the row carries its own list rather than one
+          // string that has to mean both.
+          reasons: [
+            ...(paperWindows > 0 ? [] : ["paper-closes-absent"]),
+            ...(paperTruncated ? [GRADUATION_LEG_REASONS.PAPER_CLOSES_TRUNCATED] : [])
+          ],
+          rowsSeen: closesOldestFirst.length,
+          readLimit: GRADUATION_CLOSE_READ_LIMIT,
+          windows: paperWindows
+        },
+        live: {
+          present: false,
+          reason: GRADUATION_LEG_REASONS.STRATEGY_TAG_UNAVAILABLE,
+          rowsSeen: liveRows.length,
+          windows: 0
+        }
+      }
+
+      // EXCLUSIONS ARE COUNTED PER REASON, NOT LISTED PER ROW. A pile of a
+      // thousand unusable closes would otherwise return a thousand entries and
+      // grow with the evidence, which is the failure `gates.mjs` names when it
+      // collapses `weightedMetric`'s per-window reasons for the same reason.
+      const excludedByReason = {}
+      for (const row of excluded) {
+        const key = `${row.source}:${row.reason}`
+        excludedByReason[key] = (excludedByReason[key] ?? 0) + 1
+      }
+
+      const incomplete =
+        !barSupplied ||
+        !legs.backtest.present ||
+        !legs.paper.present ||
+        !legs.live.present ||
+        unattributed > 0 ||
+        excluded.length > 0
+
+      writeJson(res, 200, {
+        ok: true,
+        advisory: true,
+        bars: {
+          supplied: barSupplied,
+          reason: barSupplied ? null : "bar-unavailable"
+        },
+        tagSemantics: GRADUATION_TAG_SEMANTICS,
+        legs,
+        strategies,
+        unattributed: {
+          rows: unattributed,
+          reason: unattributed > 0 ? GRADUATION_LEG_REASONS.STRATEGY_TAG_UNAVAILABLE : null
+        },
+        excluded: Object.entries(excludedByReason).map(([key, count]) => ({ key, count })),
+        costLinesSkipped: costLinesSkipped.map((row) => ({
+          closeId: row.closeId ?? null,
+          reason: row.reason
+        })),
+        incomplete,
+        reason: incomplete ? (barSupplied ? null : "bar-unavailable") : null
+      })
+    } catch (err) {
+      console.warn("[picc] graduation overview failed:", err.message)
       writeJson(res, 502, { ok: false, error: err.message })
     }
     return

@@ -1145,7 +1145,17 @@ function connectorsSiteIsGated(lines, index) {
     // UNCHANGED at 72, which is what confirms the growth is two gated routes
     // and their reasoning rather than new module-level dependencies. The line
     // figure moves with it; see the accounting at the `lines` assertion below.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(103)
+    // 103 -> 109 in W3-04 Task 4 (graduation overview route), the same protocol:
+    // +6 dynamic, +0 static. All six are inside the single
+    // GET /api/graduation/overview branch: the three graduation modules
+    // (windows, weighting, gates) plus three read-only collaborators the
+    // adapter needs (costs store, costs paper overlay, analytics). Each is
+    // dynamic so the graduation boundary stays off the boot path, exactly as
+    // the wealth and bookmarklet legs did before it. Statics UNCHANGED at 72 is
+    // the figure that matters here: it is what proves this is a new GATED READ
+    // ROUTE and its reasoning rather than a new module-level dependency, and it
+    // is the tripwire that would have caught a static `import` of any of the six.
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(109)
     // 102 -> 103 in the bookmarklet click-to-capture leg (Wave 3+ backlog),
     // the same protocol: exactly ONE new `await import(...)` — the route's own
     // branch-local load of ./services/bookmarkletCapture.mjs — with statics
@@ -1523,7 +1533,25 @@ function connectorsSiteIsGated(lines, index) {
     // plus 9 comment lines (why the snippet is manual-install-only, why the
     // gate mirrors the sibling trading routes, why the service loads
     // dynamically) plus 1 blank separator line. 29 + 9 + 1 = 39 exactly.
-    expect(lines, "lines in handlers.mjs").toBe(6825)
+    // 6,825 -> 7,336 in W3-04 Task 4 (graduation overview route), the same
+    // protocol: +511 lines, and every one is accounted for rather than
+    // absorbed. They are two contiguous regions and nothing else moved:
+    //   - 260 lines, lines 1265-1524: the module-level EVIDENCE ADAPTER, which is
+    //     where the mapping lives because `windows.mjs` fixes the division of
+    //     labour in its own header ("the route (Task 4) does the adapting"). It
+    //     holds `graduationBars()` - the single named place the owner adds a
+    //     promotion bar - the tag-semantics record, the reason vocabularies, the
+    //     paper-close read limit and the constant that discloses it, the
+    //     `finiteOrNull`/`positive`/`tag` readers, the paper-close window mapper,
+    //     and the paper-leg sharpe/drawdown aggregator.
+    //   - 251 lines, lines 3574-3824: the single GET /api/graduation/overview
+    //     branch (dispatch line, unconditional requireAuth() as its FIRST
+    //     statement, six branch-local dynamic loads, the read-only evidence
+    //     reads, the window collection, the per-tag bucketing, the per-tag
+    //     readout, the leg accounting, the writeJson and the catch).
+    // 260 + 251 = 511 exactly. The import pair above is what confirms nothing
+    // ELSE changed: +6 dynamic, +0 static.
+    expect(lines, "lines in handlers.mjs").toBe(7336)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
