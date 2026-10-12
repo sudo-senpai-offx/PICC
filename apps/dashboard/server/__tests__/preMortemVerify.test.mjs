@@ -455,6 +455,130 @@ describe("verify", () => {
       expect(r.verdict).toBe("stale-catalog-entry")
     }
   })
+
+  it("an unreadable assertion count is never reported as coverage, in either direction", () => {
+    // THE FAILURE MODE THIS MODULE EXISTS TO PREVENT, IN ITS FLATTERING FORM.
+    // `asserts: 0` is a positive statement from the extractor that the file
+    // asserts nothing; a MISSING count is the extractor having said nothing.
+    // Collapse the two and a guard that was never measured renders as a verified
+    // row — which is the one outcome this feature is capable of producing, and the
+    // one it must never produce. It is also the failure a suite cannot see: the
+    // fabrication happens while every test stays green.
+    //
+    // THE SHAPE IS THE WHOLE LESSON, and it is the same one the malformed-guard
+    // test above records. A SHIPPING mode with a SUFFIXED claim is what actually
+    // reaches the branch at `verify.mjs`'s `asserts === null` guard. The suite's
+    // only fixture carrying a non-finite `asserts` sat in the capital-gate test,
+    // whose mode returns `unverified-manual` before the branch is ever consulted —
+    // so it implied coverage it never provided. A fixture inside a test that
+    // short-circuits before the branch is not a test of that branch.
+    //
+    // `describes` DELIBERATELY CONTAINS the claimed title, and that is what gives
+    // the guard below something to resolve against. With the guard present and
+    // its title declared, the ONLY thing standing between this input and a green
+    // row is the branch under test — so deleting the branch lands on `verified`
+    // rather than on some neighbouring verdict that would make the mutation look
+    // like it had been caught by accident.
+    const claim = "apps/dashboard/server/__tests__/g.test.mjs :: counts every assertion"
+    const readable = {
+      file: "apps/dashboard/server/__tests__/g.test.mjs",
+      describes: ["counts every assertion"],
+      unresolvedTitles: 0
+    }
+    // All four shapes the guard has to survive: the field absent, explicitly
+    // null, a non-finite number, and a string. `Number.isFinite` rejects every
+    // one of them, which is why four separate fixtures rather than one.
+    const unreadableCounts = [
+      ["absent", { ...readable }],
+      ["null", { ...readable, asserts: null }],
+      ["NaN", { ...readable, asserts: NaN }],
+      ["a string", { ...readable, asserts: "many" }]
+    ]
+    expect(unreadableCounts).toHaveLength(4)
+    for (const [label, guard] of unreadableCounts) {
+      const r = verifyMode({ mode: shipping({ claim }), inventory: { guards: [guard], unreadable: [] } })
+      // NOT `verified` — the flattering direction, the row a renderer paints
+      // green. Asserted first because it is the direction that costs the reader.
+      expect(r.verdict, label).not.toBe("verified")
+      // NOT `guard-cannot-fail` EITHER, and the reason it is called out
+      // separately is the point: that verdict means `asserts === 0`, a count that
+      // was ESTABLISHED by the extractor. This count was never obtained at all,
+      // which is a different claim, and it lands on the pessimistic side of the
+      // line rather than borrowing the neighbour's reason string.
+      expect(r.verdict, label).not.toBe("guard-cannot-fail")
+      expect(r.verdict, label).toBe("stale-catalog-entry")
+      // The reason is pinned as well as the verdict, so a future edit cannot
+      // answer `stale-catalog-entry` here for an unrelated reason and keep this
+      // test green — `claim-title-unreadable` reaches the same verdict one branch
+      // further down.
+      expect(r.evidence.reason, label).toBe("guard-assertion-count-unreadable")
+    }
+  })
+
+  it("reads only null and undefined as an absent disposition, never falsiness", () => {
+    // `hasNoDisposition`'s own doc comment claims the test is
+    // `null`-and-`undefined`-tolerant RATHER THAN truthiness-based, so that an
+    // empty string or an empty object, "which ARE claims of a sort", are not
+    // swept into the malformed branch by accident. Nothing held that claim:
+    // rewriting the predicate as truthiness left every test in this file passing.
+    // Both halves are pinned here because they discriminate DIFFERENTLY, and a
+    // test that pinned only one would keep passing after the other was broken.
+    //
+    // An empty-string CLAIM is a disposition of sorts, so the mode is not
+    // malformed and falls through to the splitter, which refuses it as a path.
+    // Under truthiness it would have been reported malformed instead — the same
+    // verdict, a different reason, which is what this half pins.
+    const emptyClaim = verifyMode({ mode: shipping({ claim: "" }), inventory: withGuard() })
+    expect(emptyClaim.verdict).toBe("stale-catalog-entry")
+    expect(emptyClaim.evidence.reason).toBe("claim-is-not-a-path")
+
+    // An empty-string DISPOSITION is the stronger half, because here the two
+    // implementations disagree on the VERDICT rather than only on the reason:
+    // truthiness calls this mode malformed and reports `stale-catalog-entry`,
+    // while `null`-tolerance lets it through to the accepted-unclaimed branch and
+    // reports `unclaimed`.
+    const emptyDisposition = verifyMode({
+      mode: shipping({ claim: null, acceptedUnclaimed: "" }),
+      inventory: withGuard()
+    })
+    expect(emptyDisposition.verdict).toBe("unclaimed")
+  })
+})
+
+// `resolved()` originally read `guard.asserts` while `verifyMode` compared the
+// NORMALISED `asserts` — two derivations of one value, which is SHIP-1's shape in
+// miniature and exactly what this planner is meant to catch. It cannot produce a
+// difference TODAY, because the `asserts === null` branch returns before either
+// `resolved()` call site, so no behavioural assertion anywhere in this file can
+// distinguish the two. The normalisation is therefore threaded through as an
+// argument and what is pinned below is the single derivation itself, read off the
+// module's comments-blanked source — the same technique as the audit-ordering
+// check below, for the same reason: when nothing observable distinguishes two
+// implementations, only the source can.
+describe("verify.mjs derives the assertion count once", () => {
+  // `stripComments` preserves newlines exactly, so the closing brace of the
+  // function is the first `}` at column zero after the declaration.
+  const resolvedBody = (source) => {
+    const code = stripComments(source)
+    const start = code.indexOf("function resolved(")
+    if (start === -1) return ""
+    return code.slice(start, code.indexOf("\n}", start))
+  }
+
+  it("carries the normalised count into the resolved outcome instead of re-reading the record", () => {
+    const body = resolvedBody(VERIFY_SOURCE)
+    // Scoped and non-empty, so this cannot pass by matching nothing — the same
+    // failure the count-guard check guards against.
+    expect(body.length).toBeGreaterThan(0)
+    expect(body).not.toMatch(/\bguard\s*\.\s*asserts\b/)
+  })
+
+  it("bites: the derivation check fails on a body that re-reads the raw record", () => {
+    const reverted = `function resolved(mode, guard, title) {
+  return outcome({ evidence: { asserts: guard.asserts } })
+}`
+    expect(resolvedBody(reverted)).toMatch(/\bguard\s*\.\s*asserts\b/)
+  })
 })
 
 // The purity guard. `verify.mjs` must be reachable from a route as a pure

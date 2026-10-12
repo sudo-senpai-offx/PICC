@@ -337,7 +337,7 @@ export function verifyMode({ mode, inventory }) {
   // read, which matters only when a claim asks about a specific one. `asserts`
   // HAS been established above, so this can still be `verified`.
   if (title === null) {
-    return resolved(mode, guard, null)
+    return resolved(mode, guard, null, asserts)
   }
 
   // THE TITLE LIST ITSELF WAS UNREADABLE, so the question "does this guard
@@ -356,7 +356,7 @@ export function verifyMode({ mode, inventory }) {
   const titleFound = describes.includes(title)
 
   if (titleFound) {
-    return resolved(mode, guard, title)
+    return resolved(mode, guard, title, asserts)
   }
 
 
@@ -421,8 +421,21 @@ export function verifyMode({ mode, inventory }) {
  *
  * The gap text travels in the evidence so a renderer can show the reader WHAT is
  * uncovered rather than only that something is.
+ *
+ * `asserts` IS PASSED IN RATHER THAN READ OFF `guard`, and that is the whole reason
+ * for the fourth parameter. `verifyMode` normalises the count once — to a finite
+ * number or to `null` — and every decision about it is made against that single
+ * value. This function previously re-derived the same quantity by reading
+ * `guard.asserts`, which is SHIP-1's shape in miniature: two derivations of one
+ * value, free to drift, agreeing only for as long as nobody changes one of them.
+ * They cannot disagree TODAY, because every call site here is downstream of the
+ * `asserts === null` branch, but "cannot disagree yet" is how the second pile gets
+ * built in the first place. Taking the normalised value closes the gap rather than
+ * documenting it.
+ *
+ * @param {number} asserts the count `verifyMode` already established as finite
  */
-function resolved(mode, guard, title) {
+function resolved(mode, guard, title, asserts) {
   return outcome({
     mode,
     verdict: mode.gap === null || mode.gap === undefined ? "verified" : "partially-covered",
@@ -430,7 +443,7 @@ function resolved(mode, guard, title) {
       reason: title === null ? "claim-file-resolves" : "claim-title-resolves",
       claimPath: guard.file,
       claimTitle: title,
-      asserts: guard.asserts,
+      asserts,
       gap: mode.gap ?? null
     }
   })
