@@ -65,6 +65,19 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
  * EXCLUDES `ceremony` and `credential` — those two tokens are how the layer names
  * its unmet preconditions, so the scan bans importing or calling them rather than
  * naming them. A guard cannot enforce a rule the module is obliged to break.
+ *
+ * `services/premortem/inventory.mjs` is here for the sharpest reason of the six
+ * (W3-05, Task 2), and the irony is worth stating plainly rather than leaving for
+ * a reader to notice. Catalog entry SHIP-2 IS "a hand-maintained guard inventory
+ * that omits a consumer, so the omitted consumer is invisible to the guard that is
+ * supposed to police it." This module derives the guard inventory the pre-mortem
+ * planner verifies claims against. If IT were allowed to sit outside this array
+ * unregistered, then a hand-rolled lexer pasted into it would pass this file green,
+ * and the planner's own first concrete output would certify a guard that is itself
+ * incomplete — in the precise way the planner exists to detect. It carries a fourth
+ * distinct scan: it reads every tracked guard file through this lexer to count its
+ * assertions and declared titles, so its correctness depends on the lexer the same
+ * way the other five depend on it.
  */
 const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/importResolutionGuard.test.mjs",
@@ -72,7 +85,8 @@ const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/ws7RouteAuthCoverageGuard.test.mjs",
   "apps/dashboard/server/__tests__/graduationWindows.test.mjs",
   "apps/dashboard/server/__tests__/graduationWeighting.test.mjs",
-  "apps/dashboard/server/__tests__/graduationGates.test.mjs"
+  "apps/dashboard/server/__tests__/graduationGates.test.mjs",
+  "apps/dashboard/server/services/premortem/inventory.mjs"
 ])
 
 // COUNT DERIVED, NOT WRITTEN. A literal "four" here went stale the moment Task 2

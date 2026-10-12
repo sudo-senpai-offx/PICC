@@ -165,7 +165,107 @@ describe("guardInventory", () => {
     expect(out.guards).toHaveLength(1)
     expect(out.guards[0].asserts).toBe(0)
     expect(out.guards[0].describes).toEqual(["nothing here", "passes"])
+    expect(out.guards[0].unresolvedTitles).toBe(0)
     expect(out.unreadable).toEqual([])
+  })
+
+  it("never turns a missing reader into a guard asserting nothing", async () => {
+    // FIX ROUND 1 C-1. `String(text ?? "")` was converting NO CONTENT into EMPTY
+    // CONTENT, so omitting `readFile` produced a full inventory of guards with
+    // `asserts: 0` — a fourth invented state, against a module header promising
+    // three honest ones. The shape of the bug is an asymmetry: a missing
+    // `listTrackedFiles` correctly yields an EMPTY inventory because there is no
+    // evidence anything exists, while a missing `readFile` yielded a FULL one
+    // because missing evidence about CONTENT was being read as evidence that the
+    // content is empty. The scenario that bites is a map-backed reader whose lookup
+    // misses: no throw, so the rejection path never fires, and that one file
+    // verifies GREEN on a file nobody read.
+    const out = await guardInventory({
+      listTrackedFiles: files([`${TESTS}/a.test.mjs`, `${TESTS}/b.test.mjs`])
+    })
+    expect(out.guards).toEqual([])
+    expect(out.unreadable).toEqual([`${TESTS}/a.test.mjs`, `${TESTS}/b.test.mjs`])
+  })
+
+  it("treats a reader that resolves to something other than text as unreadable", async () => {
+    // The same defect by the other road. A map-backed reader returning `undefined`
+    // for a missing key resolves without throwing, so a `catch`-only guard sees a
+    // success. One bad path among good ones is the worst case: it verifies
+    // normally-looking GREEN while sitting in a file nobody opened.
+    const out = await guardInventory({
+      listTrackedFiles: files([`${TESTS}/a.test.mjs`, `${TESTS}/b.test.mjs`]),
+      readFile: async (path) => (path.endsWith("a.test.mjs") ? 'describe("d", () => {})' : undefined)
+    })
+    expect(out.unreadable).toEqual([`${TESTS}/b.test.mjs`])
+    expect(out.guards.map((g) => g.file)).toEqual([`${TESTS}/a.test.mjs`])
+  })
+
+  it("refuses a backslash traversal, and never reads it", async () => {
+    // FIX ROUND 1 C-3. The containment check split on `/` only, so on the platform
+    // where the backslash is the native separator this path walked out of the
+    // repository root, passed the check, and was READ. `git ls-files` cannot
+    // produce it; a caller resolving paths with `path.join` on Windows can.
+    const escape = `${TESTS}/sub\\..\\..\\..\\outside.test.mjs`
+    const attempted = []
+    const out = await guardInventory({
+      listTrackedFiles: files([escape]),
+      readFile: spyReader('describe("g", () => { expect(1).toBe(1) })', attempted)
+    })
+    expect(attempted).toEqual([])
+    expect(out.guards).toEqual([])
+    expect(out.unreadable).toEqual([escape])
+  })
+
+  it("records a backslash-separated guard path as unreadable, never as silence", async () => {
+    // FIX ROUND 1 C-3, second half. Such a path used to land in NEITHER array: it
+    // failed the `/`-split guard-shape test, so it was dropped, and a dropped path
+    // in a module whose whole purpose is to avoid silence is the worst available
+    // outcome — a reader cannot distinguish "not a guard" from "nobody looked".
+    const winStyle = "apps\\dashboard\\server\\__tests__\\x.test.mjs"
+    const attempted = []
+    const out = await guardInventory({
+      listTrackedFiles: files([winStyle]),
+      readFile: spyReader('describe("g", () => { expect(1).toBe(1) })', attempted)
+    })
+    expect(attempted).toEqual([])
+    expect(out.guards).toEqual([])
+    expect(out.unreadable).toEqual([winStyle])
+  })
+
+  it("counts titles it could not resolve instead of dropping them silently", async () => {
+    // FIX ROUND 1 C-4. `unresolvedTitles` is the channel that keeps "covered by
+    // nothing" distinguishable from "nobody looked". Before it existed, a claim on
+    // one of these titles returned `guard-missing` and a reader had no way to tell
+    // a genuinely uncovered title from a title this extractor never looked at —
+    // the exact absence-as-coverage conflation this feature exists to prevent.
+    const source = [
+      'const SHAPES = ["a", "b"]',
+      'describe.each(["x"])("suite %s", () => {})',
+      'it.each(SHAPES)("refuses %s", (s) => { expect(1).toBe(1) })',
+      'it("plain", () => { expect(1).toBe(1) })'
+    ].join("\n")
+    const out = await guardInventory({
+      listTrackedFiles: files([`${TESTS}/each.test.mjs`]),
+      readFile: async () => source
+    })
+    expect(out.guards[0].describes).toEqual(["plain"])
+    expect(out.guards[0].unresolvedTitles).toBe(2)
+    expect(out.guards[0].asserts).toBe(2)
+  })
+
+  it("propagates a rejecting tracked-file listing rather than inventing an empty inventory", async () => {
+    // FIX ROUND 1 M-1. There is no partial evidence here to salvage: a listing that
+    // failed is not a listing that found nothing, and reporting the second would be
+    // a clean empty readout for a git error — the failure mode this whole feature
+    // was built against.
+    await expect(
+      guardInventory({
+        listTrackedFiles: async () => {
+          throw new Error("git ls-files failed")
+        },
+        readFile: async () => ""
+      })
+    ).rejects.toThrow("git ls-files failed")
   })
 
   it("counts assertions and declared titles from CODE, not from the comments describing them", async () => {
@@ -222,22 +322,25 @@ describe("guardInventory", () => {
 })
 
 describe("isGuardPath", () => {
-  it("is a SHAPE test, and refuses anything that is not a tracked test file", () => {
+  it("is a SHAPE test, matching the rule vitest itself collects by", () => {
     expect(isGuardPath(`${TESTS}/g.test.mjs`)).toBe(true)
-    expect(isGuardPath("apps/dashboard/server/services/copilot/__tests__/g.test.mjs")).toBe(true)
-    // Not guard-shaped, in the four distinct ways a path can fail to be one.
+    // NO `__tests__` SEGMENT IS REQUIRED, and this is the M-2 change rather than an
+    // oversight. vitest's default include is the `{test,spec}.?(c|m)[jt]s?(x)` glob at
+    // every depth (`node_modules/vitest/dist/defaults.D2ip7f-X.js:5` spells it with
+    // a leading two-star path prefix), which collects any
+    // `*.test.mjs` under the root. Requiring the segment here would make this
+    // module STRICTER than the runner, and the cost of being stricter runs the
+    // expensive way: a guard vitest collects would be reported missing. Both rules
+    // select the same paths today, so nothing is lost and one unexercised
+    // exclusion is gone — the same principle that forbade a `fixtures` exclusion
+    // now applied to this one.
+    expect(isGuardPath("apps/dashboard/server/g.test.mjs")).toBe(true)
+    expect(isGuardPath(`${TESTS}/fixtures/g.test.mjs`)).toBe(true)
+    expect(isGuardPath("scripts/g.test.mjs")).toBe(true)
+    // Not guard-shaped: wrong extension, no test extension, and the two degenerate
+    // inputs, which are not paths at all.
     expect(isGuardPath(`${TESTS}/g.test.ts`)).toBe(false)
     expect(isGuardPath("apps/dashboard/server/__tests__/g.mjs")).toBe(false)
-    expect(isGuardPath("apps/dashboard/server/g.test.mjs")).toBe(false)
-    // A `.test.mjs` NESTED under a data directory is still in scope, and this is
-    // asserted rather than left to be discovered. The rule names two conditions
-    // because those are the two that hold for every tracked guard today: a
-    // separate `fixtures/` exclusion would be a third hand-written condition
-    // protecting against zero real files (`git ls-files '*.test.mjs'` returns
-    // nothing under a `fixtures/` or `__mocks__` segment), and an unexercised
-    // exclusion is a rule that can silently start excluding real guards.
-    expect(isGuardPath(`${TESTS}/fixtures/g.test.mjs`)).toBe(true)
-    // And the two degenerate inputs, which are not paths at all.
     expect(isGuardPath("")).toBe(false)
     expect(isGuardPath(null)).toBe(false)
   })

@@ -17,13 +17,22 @@
  * the two grew the lexer below and then one of them was copy-pasted into the
  * other - prose included - which is duplication with the defect already merged.
  *
- * WHY IT LIVES HERE AND NOT IN THE TESTS. This module is consumed from BOTH
+ * WHY IT LIVES HERE AND NOT IN THE TESTS. This module is consumed from THREE
  * trees, and the mechanism is the one `server/scripts/absence-scope.mjs` already
  * established: a vitest file under `server/__tests__/` reaches it as
- * `../scripts/guard-primitives.mjs`, and a plain script under `scripts/` reaches
- * it as `../apps/dashboard/server/scripts/guard-primitives.mjs`. Both are plain
- * relative ESM specifiers, so there is no build step, no path alias and no
- * workspace coupling between the two trees.
+ * `../scripts/guard-primitives.mjs`, a plain script under `scripts/` reaches it as
+ * `../apps/dashboard/server/scripts/guard-primitives.mjs`, and a production service
+ * under `server/services/` reaches it as `../../scripts/guard-primitives.mjs`. All
+ * are plain relative ESM specifiers, so there is no build step, no path alias and no
+ * workspace coupling between the trees.
+ *
+ * THE THIRD TREE IS NEW SINCE THE HEADER ABOVE WAS FIRST WRITTEN, and it is worth
+ * naming rather than leaving the text to read as a contradiction.
+ * `services/premortem/inventory.mjs` adopted this lexer in W3-05 Task 2 and is
+ * registered in `sharedCommentLexer.test.mjs` in the same commit, because that
+ * module's whole job is to derive the guard inventory the pre-mortem planner
+ * verifies claims against — an unregistered lexer there would let the planner
+ * certify an incomplete guard, which is catalog entry SHIP-2 restated.
  *
  * IT IS ONE FUNCTION, NOT FOUR COPIES. `sharedCommentLexer.test.mjs` imports
  * this module and each of the four consumers and asserts the five bindings are

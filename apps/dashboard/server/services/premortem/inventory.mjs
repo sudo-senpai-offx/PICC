@@ -52,24 +52,23 @@ import { stripComments } from "../../scripts/guard-primitives.mjs"
  */
 export const CLAIM_SEPARATOR = " :: "
 
-/** The suffix a tracked path must carry to be a candidate guard. */
-export const GUARD_FILE_SUFFIX = ".test.mjs"
-
 /**
- * The path segment a candidate guard must sit under.
+ * The suffix a tracked path must carry to be a candidate guard.
  *
- * `.mjs` ONLY, deliberately. This module is Node 22 ESM, it is reached from a
+ * THIS CONSTANT IS ALSO THE SCOPE DECLARATION, and a later resolver needs it as
+ * one. A claim path ending in some other test extension is not merely "not found"
+ * — it is outside what this inventory was built to examine, and a caller must be
+ * able to say so rather than report a guard as missing. 111 tracked non-`.mjs`
+ * tests exist in this repository, so the distinction is not theoretical.
+ *
+ * `.mjs` only, deliberately. This module is Node 22 ESM, it is reached from a
  * server service, and every claim in the catalog is an `.mjs` file; the frontend
- * `.tsx` suites are not guards of this service and are out of scope by
- * construction. The `__tests__` segment is the second half of the same structural
- * rule and costs nothing today: measured over the tracked tree, EVERY `.test.mjs`
- * file already sits under one, so this condition excludes no real guard while
- * still refusing a test-shaped file parked somewhere else.
+ * `.tsx` suites are not guards of this service.
  *
- * NEITHER CONDITION IS A LIST OF NAMES. "Ends in `.test.mjs`, under `__tests__`"
- * is a shape; "is `ws7RouteAuthCoverageGuard.test.mjs`" is the defect.
+ * This is a SHAPE, not a list of names. "Ends in `.test.mjs`" is a rule anyone can
+ * evaluate; "is `ws7RouteAuthCoverageGuard.test.mjs`" is the defect.
  */
-export const GUARD_TEST_SEGMENT = "__tests__"
+export const GUARD_FILE_SUFFIX = ".test.mjs"
 
 /**
  * A call site whose first argument is a string or template literal.
@@ -80,6 +79,18 @@ export const GUARD_TEST_SEGMENT = "__tests__"
  * required too, or the identifier would match text that merely abuts a quote.
  */
 const CALL_SITE = /(^|[^\w$.])(describe|it|test)(\s*\(\s*)(["'`])/g
+
+/**
+ * A MODIFIER-CHAINED call site — `it.each(…)`, `describe.skip(…)`, `test.only(…)`.
+ *
+ * Counted, never read. `CALL_SITE` cannot see these because the title follows the
+ * chain, so without this count they would contribute nothing at all and a claim on
+ * one of them would return `guard-missing` indistinguishable from a genuinely
+ * uncovered title. That conflation — "covered by nothing" reading as "nobody
+ * looked" — is the exact failure this feature exists to prevent, so the gap is
+ * reported as a number instead of being swallowed.
+ */
+const MODIFIER_CHAIN = /(^|[^\w$.])(describe|it|test)(\s*\.\s*[A-Za-z_$][\w$]*\s*\()/g
 
 /**
  * vitest's assertion entry point.
@@ -96,8 +107,20 @@ const ASSERTION_CALL = /\bexpect\s*\(/g
  *
  * A SHAPE test, never a membership test. Callers must not read `false` as "this
  * file is not a guard in the sense of being unimportant" — it means "this path is
- * not a path this inventory examines", which for every path `git ls-files` can
- * actually produce is the same answer.
+ * not a path this inventory examines".
+ *
+ * ONE CONDITION, AND THE `__tests__` SEGMENT IS DELIBERATELY GONE. It used to be
+ * required as well, on the reasoning that an unexercised exclusion can silently
+ * start excluding real guards. The same reasoning applies to it as to any other
+ * exclusion, and the rule is now exactly the runner's own: vitest's default include
+ * is the `{test,spec}.?(c|m)[jt]s?(x)` glob at every depth
+ * (`node_modules/vitest/dist/defaults.D2ip7f-X.js:5` spells it with a leading
+ * two-star path prefix), which requires no `__tests__` segment. Requiring one
+ * would make this module
+ * STRICTER than the runner that actually collects the tests, and the failure mode
+ * of being stricter is the expensive direction — a guard vitest happily collects
+ * would be reported missing. Measured, the two rules select the same 327 tracked
+ * paths today, so nothing is lost and one unexercised condition is gone.
  *
  * @param {unknown} path a repository-relative path as `git ls-files` emits it,
  *   with `/` separators
@@ -105,11 +128,11 @@ const ASSERTION_CALL = /\bexpect\s*\(/g
  */
 export function isGuardPath(path) {
   if (typeof path !== "string" || path === "") return false
-  return path.endsWith(GUARD_FILE_SUFFIX) && path.split("/").includes(GUARD_TEST_SEGMENT)
+  return path.endsWith(GUARD_FILE_SUFFIX)
 }
 
 /**
- * Could this path escape the repository root?
+ * Could this path escape the repository root, or fail to BE one?
  *
  * Controller ruling 5: a path the tracked list yields from outside the repository
  * root is `unreadable`, never a guard. `git ls-files` cannot produce one, so this
@@ -118,15 +141,22 @@ export function isGuardPath(path) {
  * wrong root would have this module read a file outside the repository and report
  * whatever assertions it found as coverage of something else entirely.
  *
- * Windows drives and UNC paths are caught by the leading-separator test; `..` is
- * caught by segment, so a path that climbs out and comes back is still refused
- * rather than normalised into something that looks safe.
+ * A BACKSLASH IS REJECTED WHEREVER IT APPEARS, not only in the leading position,
+ * and that is the half that was missing. Splitting on `/` alone let
+ * `apps/dashboard/server/__tests__/sub\..\..\..\outside.test.mjs` through on the
+ * platform where the backslash is the native separator: the `/`-split found no
+ * `..` segment, the path escaped, and this module READ it. Rejecting the character
+ * outright closes the traversal and the fully-backslash-separated path in one
+ * rule, and the latter matters on its own — before this, such a path landed in
+ * NEITHER output array, and a path a reader cannot account for is the silence this
+ * module exists to eliminate.
  */
-function escapesRepository(path) {
-  if (path.includes("\0")) return true
-  if (path.startsWith("/") || path.startsWith("\\")) return true
-  if (/^[A-Za-z]:/.test(path)) return true
-  return path.split("/").includes("..")
+function isRepoRelativePath(path) {
+  if (path.includes("\0")) return false
+  if (path.includes("\\")) return false
+  if (path.startsWith("/")) return false
+  if (/^[A-Za-z]:/.test(path)) return false
+  return !path.split("/").includes("..")
 }
 
 /**
@@ -154,30 +184,53 @@ export function splitClaim(claim) {
 
 /**
  * Every string-literal first argument of a `describe` / `it` / `test` call, in
- * source order.
+* source order.
+  *
+  * THE FIELD NAME IS NARROWER THAN ITS CONTENTS, AND THE CONTENTS ARE THE POINT.
+  * `describes` holds the title of every `describe`, `it` AND `test` call, in source
+  * order — a superset of describe-block titles. The name was inherited from the
+  * brief's interface and kept rather than renamed, because a claim's suffix is an
+  * `it` title in every catalog entry that carries one, and a consumer matching a
+  * suffix against the superset cannot be surprised by an extra `describe` title.
+  * Renaming it to `titles` would say the same thing more honestly; it is a rename
+  * no consumer exists to break yet, and it was not made here to keep this round to
+  * the reviewed findings.
+  *
+  * `describes` is the field a later resolver matches a claim's suffix against, so
+  * it must carry what the file DECLARES, not what it would evaluate to. A template
+  * literal with an interpolation is therefore reported with the `${...}` text
+  * intact: resolving it would mean running the file, and a title that only exists
+  * after evaluation is not a title anyone can grep for. Measured, 19 call sites
+ * across 12 of the tracked guards declare one, so this is a shape a reader meets
+  * rather than a theoretical one.
+  *
+  * COMMENTS ARE BLANKED FIRST, through the one shared lexer, because a guard's
+  * header routinely quotes its own `it` titles back to the reader. Counting those
+  * would let a guard appear to declare a test it removed.
+  *
+* WHAT THIS DOES NOT CAPTURE IS COUNTED, NOT SWALLOWED. Modifier-chained titles
+ * (`it.each(…)`) follow the chain rather than the call, so `declaredTitles` cannot
+ * read them; `unresolvedTitles` counts them instead, because a claim landing on
+ * one must be able to report "this extractor did not look" rather than "nothing
+ * covers this".
  *
- * `describes` is the field a later resolver matches a claim's suffix against, so
- * it must carry what the file DECLARES, not what it would evaluate to. A template
- * literal with an interpolation is therefore reported with the `${...}` text
- * intact: resolving it would mean running the file, and a title that only exists
- * after evaluation is not a title anyone can grep for. Measured, 19 call sites
- * across 12 of the 327 tracked guards declare one, so this is a shape a reader
- * meets rather than a theoretical one.
+ * MEASURED over the 328 tracked guards this inventory sees: `it.each` 19,
+ * `describe.each` 1, `test.each` 1 — 21 modifier-chained CALL sites, which is the
+ * tree-wide `unresolvedTitles` sum. Two of those 21 are `it.each(…)` and
+ * `describe.each(…)` written inside string literals in THIS TASK'S OWN test
+ * fixtures, which is the residual limit below observed in the one file this change
+ * controls. `describe.skip` appears in the corpus only as a VALUE
+ * (`hyperliquidPerps.sandboxE2E.test.mjs:37`, `ready ? describe : describe.skip`),
+ * never as a call, so it declares no title and is not counted — an earlier
+ * revision of this comment claimed a `describe.skip` call site that does not exist.
  *
- * COMMENTS ARE BLANKED FIRST, through the one shared lexer, because a guard's
- * header routinely quotes its own `it` titles back to the reader. Counting those
- * would let a guard appear to declare a test it removed.
- *
- * THE BOUND, MEASURED RATHER THAN IMPLIED. This captures the direct `name(`
- * spelling. Over the tracked tree the only modifiers present are `it.each` and
- * `test.each` (19 call sites between them) plus `describe.skip` (1), and those 20
- * sites declare no entry here, because the title follows a modifier chain this
- * does not walk. One call site in the whole tree sits inside a string literal and
- * so contributes a single phantom title; `stripComments` preserves string
- * CONTENT by design (the dispatch predicates depend on it), so it cannot blank
- * that, and closing the gap here would mean a second string lexer in a second
- * home — the exact duplication `guard-primitives.mjs` exists to prevent.
- */
+  * ONE RESIDUAL LIMIT, STATED RATHER THAN IMPLIED. One call site in the whole tree
+  * sits inside a string literal and contributes a single phantom title;
+  * `stripComments` preserves string CONTENT by design (the dispatch predicates
+  * depend on it), so it cannot blank that, and closing the gap here would mean a
+  * second string lexer in a second home — the exact duplication
+  * `guard-primitives.mjs` exists to prevent.
+  */
 function declaredTitles(view) {
   const titles = []
   for (const match of view.matchAll(CALL_SITE)) {
@@ -201,14 +254,21 @@ function declaredTitles(view) {
 /**
  * One readable guard, read through the injected reader.
  *
+ * `text` is a PRECONDITION, not a hint: `guardInventory` has already established
+ * that the reader resolved it to a string, and a non-string arriving here would
+ * otherwise be coerced into `""` — which is the exact defect fix round 1 removed,
+ * because `""` is indistinguishable from "this file really does assert nothing".
+ * Coercion is not defensive here; it is how a missing read became a present guard.
+ *
  * The entry is FROZEN so a consumer cannot rewrite a guard's assertion count in
  * place and leave every other reader of the inventory seeing the original.
  */
 function inspectGuard(file, text) {
-  const view = stripComments(typeof text === "string" ? text : String(text ?? ""))
+  const view = stripComments(text)
   return Object.freeze({
     file,
     describes: Object.freeze(declaredTitles(view)),
+    unresolvedTitles: (view.match(MODIFIER_CHAIN) ?? []).length,
     asserts: (view.match(ASSERTION_CALL) ?? []).length
   })
 }
@@ -223,15 +283,24 @@ function inspectGuard(file, text) {
  *
  * ORDER IS LOAD-BEARING AND IS NOT INTERCHANGEABLE. Shape, then containment, then
  * read. A path that is not guard-shaped says nothing about guards and is dropped
- * without being read; a path that IS guard-shaped but escapes the repository is
- * refused without being read and lands in `unreadable`; only what survives both is
- * handed to `readFile`. Running containment first would report unrelated
+ * without being read; a path that IS guard-shaped but is not a repository-relative
+ * path is refused without being read and lands in `unreadable`; only what survives
+ * both is handed to `readFile`. Running containment first would report unrelated
  * repository paths as unreadable guards and bury the real ones.
  *
- * ZERO ASSERTIONS IS REPORTED, NOT OMITTED (controller ruling 6). A guard-shaped
- * file with no `expect(` is real information — it asserts nothing — and dropping it
- * would fabricate an absence in the opposite direction from the one this module
- * exists to prevent.
+ * A READ THAT PRODUCES NOTHING IS `unreadable`, NOT AN EMPTY GUARD (fix round 1,
+ * C-1). A missing or non-function `readFile`, a rejection, and a resolution that
+ * is not a string all take the same path, because they are the same fact: no
+ * content was obtained for this path. The earlier code coerced a missing read to
+ * `""`, which turned "nobody read this file" into "this guard asserts nothing" —
+ * a fourth invented state in a module whose header promises three, and reachable
+ * in production by a map-backed reader whose lookup simply misses, with no throw
+ * for the rejection branch to catch. NO EVIDENCE IS NOT EVIDENCE OF NOTHING.
+ *
+ * ZERO ASSERTIONS IS REPORTED, NOT OMITTED (controller ruling 6) — but ONLY for a
+ * file that was actually read. A guard-shaped file with no `expect(` is real
+ * information; dropping it would fabricate an absence in the opposite direction
+ * from the one this module exists to prevent.
  *
  * OUTPUT IS DETERMINISTIC AND DEDUPED. `git ls-files` never repeats a path, but a
  * mis-wired caller might, and a guard counted twice would double-count its
@@ -242,11 +311,14 @@ function inspectGuard(file, text) {
  * @param {() => Promise<ReadonlyArray<string>>} [input.listTrackedFiles] the ONLY
  *   way this module learns what exists; repository-relative paths with `/`
  *   separators, as `git ls-files` emits them. A missing or non-function value is
- *   read as NO EVIDENCE, so the inventory is empty rather than fabricated.
+ *   read as NO EVIDENCE, so the inventory is empty rather than fabricated — but a
+ *   value that REJECTS is propagated, because there is no partial listing to
+ *   salvage and reporting "nothing found" for a git error is a clean empty readout
+ *   lying about why.
  * @param {(path: string) => Promise<string>} [input.readFile] the ONLY way this
- *   module reads content. Every rejection is caught and recorded as `unreadable`;
- *   this module never propagates a read failure as a guard.
- * @returns {Promise<{guards: ReadonlyArray<{file: string, describes: ReadonlyArray<string>, asserts: number}>, unreadable: ReadonlyArray<string>}>}
+ *   module reads content. A missing value, a rejection, and a non-string
+ *   resolution are all recorded as `unreadable`; none is ever reported as a guard.
+ * @returns {Promise<{guards: ReadonlyArray<{file: string, describes: ReadonlyArray<string>, unresolvedTitles: number, asserts: number}>, unreadable: ReadonlyArray<string>}>}
  */
 export async function guardInventory({ listTrackedFiles, readFile } = {}) {
   const listed = typeof listTrackedFiles === "function" ? await listTrackedFiles() : []
@@ -256,7 +328,7 @@ export async function guardInventory({ listTrackedFiles, readFile } = {}) {
   const guards = []
   const unreadable = []
   for (const file of candidates) {
-    if (escapesRepository(file)) {
+    if (!isRepoRelativePath(file)) {
       unreadable.push(file)
       continue
     }
@@ -264,6 +336,10 @@ export async function guardInventory({ listTrackedFiles, readFile } = {}) {
     try {
       text = typeof readFile === "function" ? await readFile(file) : undefined
     } catch {
+      unreadable.push(file)
+      continue
+    }
+    if (typeof text !== "string") {
       unreadable.push(file)
       continue
     }
