@@ -114,12 +114,19 @@ the right trade for a readout that names missing coverage.
 |---|---|
 | `verified` | Guard exists, is tracked, registered, and carries real assertions, and covers the whole failure mode |
 | `partially-covered` | A claim exists and resolves, but the entry carries a `gap` — the guard does not cover the whole failure mode |
-| `guard-missing` | The claim names a guard that does not exist |
-| `guard-unregistered` | The guard exists but is absent from its own inventory (GUARD-1) |
+| `guard-missing` | The claim names a guard that does not exist, or names a file type outside the inventory's declared scope |
 | `guard-cannot-fail` | Registered, but its assertion shape is vacuous |
 | `unclaimed` | A catalog mode with no guard claim — the gap-finding half. (Distinct from the `gap` FIELD, which marks a claim that does not cover the whole failure mode) |
 | `unverified-manual` | A capital-risk mode whose guard is a human judgement, not a file |
 | `stale-catalog-entry` | The catalog itself is unsound: a claim that no longer resolves, a subsystem that no longer exists, or a mode carrying neither a claim nor an `acceptedUnclaimed` disposition |
+
+**Withdrawn: `guard-unregistered`.** It was designed to catch GUARD-1 — a guard that
+exists but is absent from a hand-maintained consumer list. The derived inventory has no
+such list, so the verdict had no data source and would have required reintroducing the
+exact defect it exists to catch. The failure mode is still covered: SHIP-1 and SHIP-2 are
+catalog entries whose claims point at `sharedCommentLexer.test.mjs`, both carry a `gap`,
+and both therefore report `partially-covered` — which says precisely what
+`guard-unregistered` was reaching for, and does it from evidence the planner actually has.
 
 ### The honest limit
 
@@ -158,9 +165,12 @@ this repo governs this one — **absence is never a pass**.
 
 Pure-function tests per module, hermetic, injected data.
 
-- `inventory.mjs` — real temp-dir fixtures with tracked and untracked files,
-  proving it never reads an untracked file, and that a hand-maintained list is
-  not consulted.
+- `inventory.mjs` — real fixtures with tracked and untracked files, proving it never
+  reads an untracked file, and that a hand-maintained list is not consulted. Injected
+  fixtures are the binding form: "git cannot see this file" is expressible as `[]` with
+  no git process and no filesystem in play, which is strictly stronger than a temp dir
+  for the property being proved. A file the reader cannot resolve, or a non-function
+  reader, is `unreadable` — never a guard asserting nothing.
 - `verify.mjs` — a matrix test pinning all seven verdicts, including that
   `unverified-manual` survives any inventory contents.
 - `mutate.mjs` — one guard built to pass vacuously (the tier must catch it) and

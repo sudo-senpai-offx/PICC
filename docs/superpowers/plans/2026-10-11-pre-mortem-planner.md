@@ -199,9 +199,10 @@ git commit -m "feat(premortem): derive the guard inventory from tracked files"
 - Test: `apps/dashboard/server/__tests__/preMortemVerify.test.mjs`
 
 **Interfaces:**
-- Consumes: `FAILURE_MODES` (Task 1), and an inventory shaped as Task 2 produces.
+- Consumes: `FAILURE_MODES` (Task 1), and an inventory shaped as Task 2 produces. **Import `splitClaim` and `CLAIM_SEPARATOR` from `inventory.mjs` — never re-implement the `" :: "` split locally.** Splitting the separator twice is how the two copies drift.
 - Produces:
-  - `VERDICTS = Object.freeze(["verified", "guard-missing", "guard-unregistered", "guard-cannot-fail", "unclaimed", "unverified-manual", "stale-catalog-entry"])`
+  - `VERDICTS = Object.freeze(["verified", "partially-covered", "guard-missing", "guard-cannot-fail", "unclaimed", "unverified-manual", "stale-catalog-entry"])` — **`guard-unregistered` was withdrawn**: the derived inventory has no registry for it to check, and reintroducing one would recreate the defect the feature exists to catch. SHIP-1/SHIP-2 carry a `gap` and report `partially-covered` instead.
+  - A claim naming a file outside the inventory's declared scope (`.ts`/`.tsx`) reports `stale-catalog-entry`, NOT `guard-missing`. 111 tracked non-`.mjs` tests are out of scope; calling that "uncovered" would be a confident false miss.
   - `auditCatalog({ modes, knownSubsystems })` → array of `stale-catalog-entry` findings (the self-audit; runs FIRST)
   - `verifyMode({ mode, inventory })` → `{ id, verdict, evidence, manualCheck }`
   - `verifyAll({ modes, inventory, knownSubsystems })` → `{ catalogFindings, results, counts }`
