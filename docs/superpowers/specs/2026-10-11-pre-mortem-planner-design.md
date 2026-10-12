@@ -148,9 +148,14 @@ this repo governs this one — **absence is never a pass**.
    tracked files. A guard it cannot locate is `guard-missing`, never assumed.
 3. **The planner audits itself first.** A pre-mortem that has silently drifted is
    worse than no pre-mortem, so catalog staleness is reported at the top of its
-   own output, before any claim is evaluated. The audit covers all three catalog
-   defects: a claim that no longer resolves, a subsystem that no longer exists,
-   and a mode carrying neither a `claim` nor an `acceptedUnclaimed` disposition.
+   own output, before any claim is evaluated. Staleness surfaces across two
+   channels that together cover every catalog defect: `auditCatalog` — which
+   deliberately takes no inventory, so it can only see the entry's own shape —
+   reports a subsystem that no longer exists and a mode carrying neither a
+   `claim` nor an `acceptedUnclaimed` disposition; and the `stale-catalog-entry`
+   VERDICT, which resolves claims, reports a claim that no longer resolves. A
+   defect may legitimately appear in both channels: they are independent views,
+   and neither defers to the other.
 4. **Structural verification is not biting.** Where mutation has not run, the
    output says so. "Guard present" and "guard bites" are different claims and are
    never collapsed.
