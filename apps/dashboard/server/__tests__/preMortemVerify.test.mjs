@@ -100,6 +100,53 @@ describe("verify", () => {
     expect(verifyMode({ mode, inventory: { guards: [], unreadable: [] } }).verdict).toBe("stale-catalog-entry")
   })
 
+  it("the audit reports a malformed mode even when its subsystem is perfectly well known", () => {
+    // Spec rule 3 names three catalog defects and this is the third. Until the
+    // ruling, `auditCatalog` inspected `subsystem` only, so a malformed mode
+    // whose subsystem happened to still exist produced an EMPTY findings array
+    // while its own verdict said `stale-catalog-entry` — the audit channel was
+    // silent about the defect rule 3 requires it to surface.
+    //
+    // The subsystem here is deliberately a real one. That is the whole point:
+    // the finding must come from the mode's MALFORMEDNESS, not from a
+    // subscription failure that would otherwise produce one anyway.
+    const mode = shipping({ id: "SHIP-7", claim: null, acceptedUnclaimed: null })
+    const findings = auditCatalog({ modes: [mode], knownSubsystems: ["apps/dashboard/server"] })
+    expect(findings.map((f) => f.id)).toEqual(["SHIP-7"])
+    expect(findings[0].verdict).toBe("stale-catalog-entry")
+    expect(findings[0].evidence.reason).toBe("mode-has-no-disposition")
+  })
+
+  it("the audit reports a malformed CAPITAL mode, whose verdict is also stale", () => {
+    // The case the reviewer's failure scenario describes: `CAP-6` with a known
+    // subsystem, no claim and no disposition. Both channels must report it. If
+    // either went quiet the defect would be invisible to any consumer that
+    // reads one channel rather than both.
+    const mode = shipping({ id: "CAP-6", kind: "capital", claim: null, acceptedUnclaimed: null })
+    const out = verifyAll({
+      modes: [mode],
+      inventory: withGuard(),
+      knownSubsystems: ["apps/dashboard/server"]
+    })
+    expect(out.results[0].verdict).toBe("stale-catalog-entry")
+    expect(out.catalogFindings.map((f) => f.id)).toEqual(["CAP-6"])
+    expect(out.catalogFindings[0].evidence.reason).toBe("mode-has-no-disposition")
+  })
+
+  it("an entry carrying two catalog defects appears twice, once per defect", () => {
+    // A `findings` array that reported only the FIRST defect would leave a
+    // known defect unreported, which is the same under-claiming rule 3 exists
+    // to prevent — just with a different symptom. These two are different fixes
+    // for whoever is repairing the catalog: re-path the subsystem versus add a
+    // disposition. Collapsing them would hide the second.
+    const mode = shipping({ id: "SHIP-8", subsystem: "apps/dashboard/server/gone", claim: null, acceptedUnclaimed: null })
+    const findings = auditCatalog({ modes: [mode], knownSubsystems: ["apps/dashboard/server"] })
+    expect(findings.map((f) => f.evidence.reason).sort()).toEqual([
+      "mode-has-no-disposition",
+      "subsystem-not-found"
+    ])
+  })
+
   it("reports a vanished subsystem as a catalog finding without touching the claim", () => {
     const mode = shipping({
       subsystem: "apps/dashboard/server/gone",
@@ -202,12 +249,12 @@ describe("verify", () => {
     // THE STRONG FORM OF RULING 1, BEYOND the controller's own test. That one
     // passes a MATCHING guard, which shows the verdict is not upgraded BY
     // evidence; this one shows it is decided before the inventory is consulted
-    // AT ALL. The list below spans every shape the argument needs, and its
-    // length is asserted below so this comment cannot drift away from it: a
-    // guard matching by path with a thousand assertions, a two-guard inventory,
-    // an unreadable-list one, an empty one, a missing one, a non-array one,
-    // an object carrying neither field, a null one, an undefined one, and one
-    // holding a guard whose own fields are malformed.
+    // AT ALL. The nine shapes below are the nine the loop actually runs, and the
+    // count is asserted so this comment cannot drift away from the array again:
+    // a guard matching by path with a thousand assertions, a two-guard
+    // inventory, an unreadable-list one, an empty one, an object carrying
+    // neither field, one whose fields are the wrong types, a null one, an
+    // undefined one, and one holding a guard whose own fields are malformed.
     const mode = shipping({
       id: "CAP-1",
       kind: "capital",
@@ -244,33 +291,70 @@ describe("verify", () => {
     // inventory shapes. This one pins it against the OTHER verdicts a capital
     // mode could conceivably report, so a future edit cannot make a capital
     // mode silently downgrade into something a renderer would render as coverage.
-    const mode = shipping({ id: "CAP-9", kind: "capital", claim: null, acceptedUnclaimed: { owner: "o", date: "d", check: "c" } })
-    const verdicts = new Set()
+    //
+    // The sweep is a full 2x2x2 cross-product and EVERY cell now contributes:
+    // the earlier version iterated over both kinds but recorded only capital, so
+    // four of its sixteen iterations decided nothing while the comment read as
+    // if the sweep were exhaustive. Recording both kinds is also what makes this
+    // a boundary rather than a restatement — the shipping column pins that the
+    // same inputs reach four DIFFERENT verdicts, so `capital` collapsing into one
+    // of them would show up here as a diff.
+    const verdictsByKind = { capital: new Set(), shipping: new Set() }
     for (const claim of [null, "apps/dashboard/server/__tests__/g.test.mjs"]) {
       for (const gap of [null, "half uncovered"]) {
         for (const kind of ["capital", "shipping"]) {
           const r = verifyMode({
-            mode: shipping({ id: "x", kind, claim, gap, acceptedUnclaimed: { owner: "o", date: "d", check: "c" } }),
+            mode: shipping({ kind, claim, gap, acceptedUnclaimed: { owner: "o", date: "d", check: "c" } }),
             inventory: withGuard()
           })
-          if (kind === "capital") verdicts.add(r.verdict)
+          verdictsByKind[kind].add(r.verdict)
         }
       }
     }
-    expect([...verdicts]).toEqual(["unverified-manual"])
+    expect([...verdictsByKind.capital]).toEqual(["unverified-manual"])
+    expect([...verdictsByKind.shipping].sort()).toEqual([
+      "partially-covered",
+      "unclaimed",
+      "verified"
+    ])
   })
 
-  it("a capital mode whose disposition is absent still reports unverified-manual", () => {
-    // There is nothing to verify and nothing to check off, which is the worst
-    // case in the set. `unverified-manual` is still the honest verdict: `null`
-    // manualCheck says no one has claimed the check, and it must NOT become
-    // `stale-catalog-entry` — that verdict means the catalog entry is unsound,
-    // and a capital entry without a disposition is a real catalog defect but is
-    // ALSO capital, and the capital gate runs first by design.
+  it("a capital mode carrying neither claim nor disposition is stale, not unverified-manual", () => {
+    // THE RULING THAT OVERTURNED AN EARLIER JUDGEMENT CALL, RECORDED RATHER
+    // THAN SILENTLY REVERSED. This assertion previously pinned
+    // `unverified-manual` here, on the reasoning that the capital gate runs
+    // first by design. Spec rule 5 now settles the case the other way and rule 6
+    // is what makes that decision rather than a contradiction: the capital
+    // gate's unconditionality is scoped to INVENTORY CONTENT, so it protects a
+    // mode that is already known well-formed and does not rescue one the catalog
+    // itself left malformed. A mode carrying neither a claim nor a disposition
+    // is a catalog defect for EVERY kind, and saying `unverified-manual` about it
+    // would have reported a well-formed capital entry instead — the flattering
+    // direction, which is the one this module is not permitted to guess in.
     const mode = shipping({ id: "CAP-0", kind: "capital", claim: null, acceptedUnclaimed: null })
     const r = verifyMode({ mode, inventory: withGuard() })
+    expect(r.verdict).toBe("stale-catalog-entry")
+    expect(r.evidence.reason).toBe("no-claim-and-no-disposition")
+  })
+
+  it("the capital gate still holds for a WELL-FORMED capital mode with no claim", () => {
+    // The companion to the test above, and the one that keeps the ruling from
+    // over-reaching. A capital mode that carries a disposition and simply no
+    // claim is exactly the shape rule 6 protects: nothing about it is
+    // malformed, and `unverified-manual` with the disposition's own check text
+    // is the honest verdict. If a future edit widened the malformed branch to
+    // fire on "no claim" ALONE, this test fails while the one above still
+    // passes — which is what makes the pair a real boundary rather than one
+    // assertion restated twice.
+    const mode = shipping({
+      id: "CAP-4",
+      kind: "capital",
+      claim: null,
+      acceptedUnclaimed: { owner: "platform owner", date: "2026-10-11", check: "name the human who does" }
+    })
+    const r = verifyMode({ mode, inventory: withGuard() })
     expect(r.verdict).toBe("unverified-manual")
-    expect(r.manualCheck).toBeNull()
+    expect(r.manualCheck).toBe("name the human who does")
   })
 
   it("a capital verdict is decided without the inventory being read at all", () => {
@@ -331,6 +415,46 @@ describe("verify", () => {
     expect(r.verdict).toBe("stale-catalog-entry")
     expect(r.evidence.reason).toBe("claim-guard-unreadable")
   })
+
+  it("a malformed guard resolves no claim rather than throwing", () => {
+    // THE INVARIANT AT verify.mjs's inventory-normalisation comment, TESTED ON
+    // THE PATH THAT USED TO BREAK IT. "A thrown error is a worse outcome than a
+    // pessimistic verdict, since it takes the whole readout down instead of
+    // reporting one entry honestly" was true of the `inventory` object and was
+    // not true of the guard RECORDS inside it: a guard carrying `describes: null`
+    // reached `guard.describes.includes(title)` and raised a TypeError.
+    //
+    // The earlier nine-shape hostile test includes this exact guard shape, but
+    // only for a capital mode, which returns before reaching the title check —
+    // so it implied coverage it did not provide. A shipping mode with a
+    // SUFFIXED claim is what actually gets there, which is why both halves
+    // matter: without a suffix the claim resolves on the file alone and never
+    // reads `describes`.
+    const claim = "apps/dashboard/server/__tests__/g.test.mjs :: a title"
+    const malformedGuards = [
+      { file: "apps/dashboard/server/__tests__/g.test.mjs", asserts: 3, describes: null, unresolvedTitles: 0 },
+      { file: "apps/dashboard/server/__tests__/g.test.mjs", asserts: 3, unresolvedTitles: 0 },
+      { file: "apps/dashboard/server/__tests__/g.test.mjs", asserts: 3, describes: "not an array", unresolvedTitles: 0 },
+      { file: "apps/dashboard/server/__tests__/g.test.mjs", asserts: 3, describes: [], unresolvedTitles: null }
+    ]
+    for (const guard of malformedGuards) {
+      const r = verifyMode({ mode: shipping({ claim }), inventory: { guards: [guard], unreadable: [] } })
+      expect(VERDICTS).toContain(r.verdict)
+    }
+  })
+
+  it("a guard whose title list is unreadable is stale, never an absent title", () => {
+    // The pessimistic direction the throw used to replace with an exception.
+    // An unreadable title list is exactly the same evidence gap as
+    // `unresolvedTitles > 0` — the extractor did not give us a complete list —
+    // so it reports the same way rather than asserting a title is missing.
+    const claim = "apps/dashboard/server/__tests__/g.test.mjs :: a title"
+    for (const describes of [null, undefined, "not an array"]) {
+      const guard = { file: "apps/dashboard/server/__tests__/g.test.mjs", asserts: 3, describes, unresolvedTitles: 0 }
+      const r = verifyMode({ mode: shipping({ claim }), inventory: { guards: [guard], unreadable: [] } })
+      expect(r.verdict).toBe("stale-catalog-entry")
+    }
+  })
 })
 
 // The purity guard. `verify.mjs` must be reachable from a route as a pure
@@ -385,6 +509,68 @@ describe("verify.mjs is a pure module", () => {
 })
 
 describe("the self-audit is reported separately from the verdicts", () => {
+  // THE ORDERING RULE, MECHANICALLY CHECKED. Spec rule 3 puts the self-audit at
+  // the top of the readout, "before any claim is evaluated". That ordering is
+  // invisible to every behavioural probe in this file: `auditCatalog` is pure,
+  // so swapping it after `modes.map(...)` returns byte-identical results and
+  // leaves the whole suite green. The only thing that can tell the two apart is
+  // the module's own source text, so that is what is checked — and, per the
+  // "a guard that has never been shown to fire is not a guard" principle the
+  // purity guard below already states, the detector is run against a planted
+  // violation so a passing assertion proves the DETECTOR works.
+  const auditRunsFirst = (source) => {
+    const body = stripComments(source).slice(stripComments(source).indexOf("export function verifyAll"))
+    return body.indexOf("auditCatalog(") < body.indexOf(".map(")
+  }
+
+  it("runs the self-audit before evaluating any claim", () => {
+    expect(auditRunsFirst(VERIFY_SOURCE)).toBe(true)
+  })
+
+  it("bites: the ordering check fails when the audit is moved after the claims", () => {
+    const swapped = `export function verifyAll({ modes }) {
+      const results = modes.map((m) => m)
+      const catalogFindings = auditCatalog({ modes })
+      return { catalogFindings, results }
+    }`
+    expect(auditRunsFirst(swapped)).toBe(false)
+  })
+
+  it("bites: the count guard rejects a verdict outside the vocabulary", () => {
+    // Rule 1 — "every outcome is one of the seven above, or nothing is emitted"
+    // — is a claim about this module's OWN output, so a fabricated verdict is an
+    // internal invariant breach rather than bad input from outside. `counts` is
+    // seeded from `VERDICTS` exactly so that a renderer iterating it can trust
+    // every key is in the vocabulary; an unguarded `counts[result.verdict] += 1`
+    // would quietly append an eighth key and break that contract, which is why
+    // the increment is guarded rather than merely documented.
+    //
+    // LIMITATION, STATED RATHER THAN HIDDEN. This pins the GUARD'S PRESENCE, not
+    // its runtime behaviour: `verifyAll` derives every verdict from `verifyMode`
+    // itself, and the export surface is pinned by the task brief, so there is no
+    // injection point through which an out-of-vocabulary verdict could be fed to
+    // the counter. Widening the public API purely to make this assertion
+    // behavioural was judged a worse trade than a source check plus this note.
+    const code = stripComments(VERIFY_SOURCE)
+    // Scoped to `verifyAll`'s body: `Object.freeze({` also appears in `outcome`,
+    // which returns long before the counter, so an unscoped slice would compare
+    // a start index AFTER its end index and yield an empty string — which fails
+    // the assertion for the wrong reason and would have kept passing after a
+    // correct implementation was written.
+    const body = code.slice(code.indexOf("export function verifyAll"))
+    const countingLoop = body.slice(body.indexOf("const counts"), body.indexOf("return Object.freeze("))
+    expect(countingLoop.length).toBeGreaterThan(0)
+    expect(countingLoop).toMatch(/VERDICTS\.includes\(/)
+  })
+
+  it("bites: the count guard is absent from an unguarded implementation", () => {
+    const unguarded = `const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0]))
+      for (const result of results) counts[result.verdict] += 1
+      return Object.freeze({})`
+    const loop = unguarded.slice(unguarded.indexOf("const counts"), unguarded.indexOf("return Object.freeze("))
+    expect(loop).not.toMatch(/VERDICTS\.includes\(/)
+  })
+
   it("surfaces a vanished subsystem even when that mode's claim would verify", () => {
     // Ruling 3 made concrete: the audit does not SUPPRESS claim evaluation, it
     // reports alongside it and in its own array. A mode whose subsystem has
