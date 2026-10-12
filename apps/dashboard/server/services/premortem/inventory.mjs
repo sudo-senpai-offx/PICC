@@ -58,8 +58,9 @@ export const CLAIM_SEPARATOR = " :: "
  * THIS CONSTANT IS ALSO THE SCOPE DECLARATION, and a later resolver needs it as
  * one. A claim path ending in some other test extension is not merely "not found"
  * — it is outside what this inventory was built to examine, and a caller must be
- * able to say so rather than report a guard as missing. 111 tracked non-`.mjs`
- * tests exist in this repository, so the distinction is not theoretical.
+ * able to say so rather than report a guard as missing. 115 tracked non-`.mjs`
+ * tests exist in this repository (49 `.ts` + 66 `.tsx`), so the distinction is
+ * not theoretical.
  *
  * `.mjs` only, deliberately. This module is Node 22 ESM, it is reached from a
  * server service, and every claim in the catalog is an `.mjs` file; the frontend

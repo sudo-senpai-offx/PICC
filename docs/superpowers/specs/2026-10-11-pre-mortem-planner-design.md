@@ -114,7 +114,7 @@ the right trade for a readout that names missing coverage.
 |---|---|
 | `verified` | Guard exists, is tracked, registered, and carries real assertions, and covers the whole failure mode |
 | `partially-covered` | A claim exists and resolves, but the entry carries a `gap` — the guard does not cover the whole failure mode |
-| `guard-missing` | The claim names a guard that does not exist, or names a file type outside the inventory's declared scope |
+| `guard-missing` | The claim names a guard that does not exist — measured inside the inventory's declared scope. A claim naming a file type **outside** that scope is `stale-catalog-entry`, not this: the inventory never claimed to look there, so "missing" would assert an absence nobody measured |
 | `guard-cannot-fail` | Registered, but its assertion shape is vacuous |
 | `unclaimed` | A catalog mode with no guard claim — the gap-finding half. (Distinct from the `gap` FIELD, which marks a claim that does not cover the whole failure mode) |
 | `unverified-manual` | A capital-risk mode whose guard is a human judgement, not a file |
@@ -148,15 +148,22 @@ this repo governs this one — **absence is never a pass**.
    tracked files. A guard it cannot locate is `guard-missing`, never assumed.
 3. **The planner audits itself first.** A pre-mortem that has silently drifted is
    worse than no pre-mortem, so catalog staleness is reported at the top of its
-   own output, before any claim is evaluated.
+   own output, before any claim is evaluated. The audit covers all three catalog
+   defects: a claim that no longer resolves, a subsystem that no longer exists,
+   and a mode carrying neither a `claim` nor an `acceptedUnclaimed` disposition.
 4. **Structural verification is not biting.** Where mutation has not run, the
    output says so. "Guard present" and "guard bites" are different claims and are
    never collapsed.
-5. **Silence is not coverage.** A mode with neither a claim nor an explicit
-   unclaimed disposition is a defect in the catalog, surfaced as
-   `stale-catalog-entry`.
+5. **Silence is not coverage.** Every catalog mode carries either a `claim` or an
+   `acceptedUnclaimed` disposition (owner + date). Neither present is
+   `stale-catalog-entry` — **for every kind, capital included.** The capital gate's
+   unconditionality (rule 6) protects a mode that is otherwise well-formed; it does
+   not rescue a mode the catalog itself has left malformed. A malformed mode is a
+   catalog defect, and the self-audit reports it independently of the verdict.
 6. **No unverified upgrade, ever.** `unverified-manual` cannot become `verified`
-   because a related test file passes. This is asserted by test, not by review.
+   because a related test file passes. This is asserted by test, not by review. Its
+   unconditionality is scoped to **inventory content**: once the mode is known
+   well-formed, no other kind pre-empts it.
 7. **A guard is not a closed failure mode.** An entry whose claim resolves but
    which declares a `gap` reports `partially-covered`. A passing guard never
    upgrades a partial claim to `verified`.
