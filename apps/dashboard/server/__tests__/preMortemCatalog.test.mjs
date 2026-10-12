@@ -17,8 +17,9 @@
 // PURE BY CONSTRUCTION. No store, no network, no `process.env`, no clock, no
 // import of any other service — the catalog is a code constant and stays one.
 import { execFileSync } from "node:child_process"
-import { existsSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 
@@ -282,6 +283,123 @@ describe("a capital mode is never covered by a file, however related the file is
   })
 })
 
+// A `subsystem` THAT NAMES A DIRECTORY IS A CLAIM THE PLANNER CAN CHECK.
+//
+// The spec defines `stale-catalog-entry` as covering "a subsystem that no longer
+// exists" (section 3). Against free text like `"test-guards"` or `"review-process"`
+// that verdict is unimplementable: there is nothing to resolve, so the check either
+// never fires or fires on a guess. Making `subsystem` a repo-relative directory
+// that must exist on disk is what turns that spec sentence into code.
+//
+// The assertion is DIRECTORY-ness (`statSync(...).isDirectory()`), not mere
+// existence, because the whole point is that a planner can look inside it — a
+// subsystem that resolved to a file would satisfy a weaker test and still be
+// useless.
+describe("every subsystem names a directory that exists", () => {
+  it("resolves each subsystem to a real repo-relative directory", () => {
+    const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
+
+    for (const m of FAILURE_MODES) {
+      // The server TREE ROOT is a legitimate value — SHIP-4 is a process failure
+      // whose blast radius is the whole server tree — so the prefix is inclusive of
+      // the root itself rather than requiring a trailing separator. The next
+      // assertion is what actually proves the value is real.
+      expect(
+        m.subsystem === "apps/dashboard/server" || m.subsystem.startsWith("apps/dashboard/server/"),
+        `${m.id}: subsystem must be repo-relative and inside the server tree, got "${m.subsystem}"`
+      ).toBe(true)
+
+      const absolute = join(REPO_ROOT, m.subsystem)
+      expect(existsSync(absolute), `${m.id}: subsystem "${m.subsystem}" does not exist on disk`).toBe(true)
+      expect(
+        statSync(absolute).isDirectory(),
+        `${m.id}: subsystem "${m.subsystem}" exists but is not a directory, so nothing can be looked up inside it`
+      ).toBe(true)
+    }
+  })
+
+  // ...AND IT IS INSIDE THE REPOSITORY, which `existsSync` alone does not prove. A
+  // path like `C:/Windows/System32` exists on every machine and means nothing to a
+  // planner diffing against this repo, so the containment check is explicit rather
+  // than inferred from the string starting with `apps/`.
+  it("keeps every subsystem inside this repository", () => {
+    const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
+    const prefix = REPO_ROOT.endsWith(sep) ? REPO_ROOT : `${REPO_ROOT}${sep}`
+
+    for (const m of FAILURE_MODES) {
+      const absolute = resolve(join(REPO_ROOT, m.subsystem))
+      expect(
+        absolute.startsWith(prefix),
+        `${m.id}: subsystem "${m.subsystem}" resolves to ${absolute}, which is outside the repository`
+      ).toBe(true)
+    }
+  })
+})
+
+// THE EIGHTH VERDICT: `partially-covered`.
+//
+// A claim on its own means one thing — "this file guards this mode" — and the
+// verdict table turns it into `verified`. That is true of SHIP-5 and SHIP-6 and
+// FALSE of SHIP-1, whose own rationale says the drift class it documents is open
+// and live today. A `claim` string cannot carry that, so the entry would be
+// rendered as a green `verified` row while the thing it describes is unfixed. The
+// prose is honest; the data shape was not able to transmit it.
+//
+// `gap` is the missing half of the shape: a string naming what the claim does NOT
+// cover. An entry with BOTH a claim and a gap is partially covered — not verified,
+// and not unclaimed. This block pins that distinction so it cannot be lost.
+describe("a claim with a gap is PARTIALLY covered, not verified", () => {
+  const isPartiallyCovered = (m) => m.claim != null && m.gap != null
+
+  it("splits every claimed mode into fully covered or partially covered, by the gap", () => {
+    const claimed = FAILURE_MODES.filter((m) => m.claim != null)
+    expect(claimed.length, "no mode names a guard, so this splits nothing").toBeGreaterThan(0)
+
+    const partial = claimed.filter(isPartiallyCovered)
+    const full = claimed.filter((m) => !isPartiallyCovered(m))
+    expect(
+      partial.length,
+      "no claimed mode names a gap, so partially-covered could never fire and this distinction is untested"
+    ).toBeGreaterThan(0)
+    expect(
+      full.length,
+      "no claimed mode is fully covered, so `gap` could be set on everything and nothing would notice"
+    ).toBeGreaterThan(0)
+    expect(partial.length + full.length, "every claimed mode lands in exactly one bucket").toBe(claimed.length)
+  })
+
+  // ...AND A GAP IS NOT DECORATIVE. A gap of `null` on a claimed entry is a claim
+  // of completeness, so a gap that says nothing would silently promote a
+  // partially-covered mode back to `verified` — which is the precise failure this
+  // field exists to prevent.
+  it("requires a gap to name something", () => {
+    const partial = FAILURE_MODES.filter(isPartiallyCovered)
+    expect(partial.length, "nothing is partially covered, so this proves nothing").toBeGreaterThan(0)
+    for (const m of partial) {
+      expect(typeof m.gap, `${m.id}: gap must be a string when it is present`).toBe("string")
+      expect(m.gap.trim(), `${m.id}: gap is blank, which reads as "no gap"`).not.toBe("")
+      expect(
+        m.gap.trim().split(/\s+/).length,
+        `${m.id}: a gap of ${m.gap.trim().split(/\s+/).length} words names no gap — say what is uncovered`
+      ).toBeGreaterThan(10)
+    }
+  })
+
+  // ...AND A MODE WITH NO CLAIM CANNOT BE "PARTIALLY" COVERED. Partial is a claim
+  // about half a guard; without a guard there is nothing to be half of. This is
+  // what keeps `gap` from becoming a second, quieter way to write `unclaimed` and
+  // thereby smuggle the capital modes toward a coverage verdict.
+  it("gives gap only to modes that also carry a claim", () => {
+    for (const m of FAILURE_MODES) {
+      if (m.gap == null) continue
+      expect(
+        m.claim,
+        `${m.id} names a gap but no claim, so it is unclaimed rather than partially covered`
+      ).not.toBeNull()
+    }
+  })
+})
+
 // THE CLAIM MUST RESOLVE, OR THE CATALOG IS LYING.
 //
 // A `claim` is a repository-relative path to a TRACKED test file, and the design
@@ -300,35 +418,58 @@ describe("a capital mode is never covered by a file, however related the file is
 // while measuring nothing — the trap `ws7TestStoreIsolation` is built around — so
 // "the file is on disk" is not evidence a claim resolves. `git ls-files` is.
 describe("every claim resolves to a file the repository TRACKS", () => {
-  // ONE `git ls-files`, NOT ONE PER CLAIM, and the reason is worth stating because
-  // the per-claim version was written first and had to be taken back out.
-  //
-  // `git ls-files --error-unmatch <path>` is the crisper API — it exits non-zero on
-  // a miss — but it costs a synchronous process spawn per claim, and this suite
-  // runs inside a vitest worker alongside 437 other files. Five claims plus two
-  // control probes is seven blocking spawns, and `sync=true` means each one stalls
-  // its worker rather than yielding to the event loop. That is a lot of contention
-  // to spend on a test of a constant, and it was observed to be enough to tip an
-  // unrelated timing-sensitive frontend suite (`ministryRooms.test.tsx`, which
-  // polls with `waitFor`) over its timeout in the full-suite run.
-  //
-  // Enumerating the index ONCE and testing membership proves exactly the same
-  // property — the claim path is in git's index — for one spawn instead of seven.
-  // The control below is what keeps that from being a weaker test, and it is
-  // aimed at the vacuity mechanism directly rather than at git's exit code.
   const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 
-  /** The paths git actually tracks under the test tree, as a Set. */
-  const trackedTestPaths = () =>
-    new Set(
-      execFileSync("git", ["ls-files", "apps/dashboard/server/__tests__"], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024
-      })
-        .split(/\r?\n/)
-        .filter(Boolean)
-    )
+  /**
+   * ONE `git ls-files` FOR THE WHOLE FILE, memoised.
+   *
+   * It was one-per-call before, and the fix round caught that: the report claimed
+   * "one enumeration" while the file made three (the definition plus three call
+   * sites). Three is survivable; the reason to memoise rather than merely reduce is
+   * that `execFileSync` BLOCKS its worker, this suite runs alongside 437 other
+   * files, and an earlier seven-spawn version was observed to be enough contention
+   * to tip the unrelated timing-sensitive `ministryRooms.test.tsx` over its
+   * `waitFor` timeout. Enumerating the index once, lazily, and never again makes
+   * the cost a constant one spawn rather than a multiple that grows with the
+   * catalog.
+   */
+  let TRACKED = null
+  const trackedTestPaths = () => {
+    if (TRACKED === null) {
+      TRACKED = new Set(
+        execFileSync("git", ["ls-files", "apps/dashboard/server/__tests__"], {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024
+        })
+          .split(/\r?\n/)
+          .filter(Boolean)
+      )
+    }
+    return TRACKED
+  }
+
+  /**
+   * Split a claim into its path and its optional `it` name.
+   *
+   * The spec (section 3) allows a claim to be "optionally suffixed with a
+   * `describe`/`it` name". Two catalog entries — SHIP-1 and SHIP-2 — are DIFFERENT
+   * failure modes that happen to point at ONE guard file, and without the suffix
+   * a downstream planner cannot tell them apart by anything but prose. So the
+   * suffix is load-bearing rather than decorative, and it has to be parseable by
+   * the same code that resolves the path.
+   *
+   * `" :: "` is the separator because it cannot occur in a repository-relative
+   * path and does not occur in any `it` name in this suite, so the split is
+   * unambiguous in both halves.
+   */
+  const CLAIM_SEPARATOR = " :: "
+  const splitClaim = (claim) => {
+    const at = claim.indexOf(CLAIM_SEPARATOR)
+    return at === -1
+      ? { path: claim, name: null }
+      : { path: claim.slice(0, at), name: claim.slice(at + CLAIM_SEPARATOR.length) }
+  }
 
   it("resolves each claim against git's index, not the filesystem", () => {
     const claimed = FAILURE_MODES.filter((m) => m.claim != null)
@@ -338,62 +479,127 @@ describe("every claim resolves to a file the repository TRACKS", () => {
     expect(tracked.size, "git enumerated nothing, so every membership check below would pass").toBeGreaterThan(100)
 
     for (const m of claimed) {
+      const { path: claimPath, name } = splitClaim(m.claim)
+
       // A claim is repo-relative and names a test file. The shape is pinned because
       // a bare filename or an absolute path would resolve on the author's machine
       // and nowhere else — the same class of defect as an untracked file.
       expect(
-        m.claim.startsWith("apps/dashboard/server/__tests__/"),
-        `${m.id}: a claim must be repo-relative and name a test file, got "${m.claim}"`
+        claimPath.startsWith("apps/dashboard/server/__tests__/"),
+        `${m.id}: a claim must be repo-relative and name a test file, got "${claimPath}"`
       ).toBe(true)
       expect(
-        tracked.has(m.claim),
-        `${m.id} claims "${m.claim}", which git does not track — the catalog would report ` +
+        tracked.has(claimPath),
+        `${m.id} claims "${claimPath}", which git does not track — the catalog would report ` +
           "guard-missing on a mode it says is covered"
       ).toBe(true)
       // Tracked is necessary but not sufficient: a file can be in the index and
       // still be missing from a working tree, and a claim that cannot be run is
       // not a claim.
       expect(
-        existsSync(join(REPO_ROOT, m.claim)),
+        existsSync(join(REPO_ROOT, claimPath)),
         `${m.id} is tracked by git but absent from disk, so the claim cannot be run`
+      ).toBe(true)
+
+      // ...AND THE SUFFIX, WHEN PRESENT, MUST NAME SOMETHING THAT EXISTS. A claim
+      // suffix is a pointer at one assertion inside a large file; a suffix that
+      // points at a renamed `it` is a dangling pointer that resolves to nothing
+      // while still looking precise. The assertion is that the name appears in the
+      // claimed file, which also catches a suffix accidentally borrowed from a
+      // different file.
+      if (name === null) continue
+      const source = readFileSync(join(REPO_ROOT, claimPath), "utf8")
+      expect(
+        source.includes(name),
+        `${m.id} claims the test "${name}", which does not appear in ${claimPath} — the suffix is a dangling pointer`
       ).toBe(true)
     }
   })
 
-  // THE CONTROL, and it is aimed at the exact vacuity this catalog must not
-  // reproduce. The failure mode is not "git errors on a bad path" — it is "a file
-  // that is sitting right there, in the tracked directory, is invisible to the
-  // check because git never indexed it". That is how `ws7TestStoreIsolation`
-  // passed vacuously on an untracked test file, and it is the same shape as the
-  // GUARD-1 omission. So the control plants a real file in the real directory and
-  // asserts the enumeration does NOT see it: present on disk, absent from the
-  // index. If the enumeration ever started returning untracked paths, this fails.
-  it("CONTROL: a file that exists on disk but is untracked is NOT in git's index", () => {
-    const UNTRACKED = "apps/dashboard/server/__tests__/preMortemCatalog.probe.tmp.mjs"
-    const absolute = join(REPO_ROOT, UNTRACKED)
+  // AT LEAST ONE CLAIM MUST CARRY A SUFFIX, or the parsing above is untested
+  // scaffolding: a catalog where every claim is a bare path would pass it, and the
+  // `describe`/`it` capability the spec grants would go unused and unexercised.
+  it("uses the `it` suffix wherever two modes share one guard file", () => {
+    const suffixed = FAILURE_MODES.filter((m) => m.claim != null && splitClaim(m.claim).name !== null)
+    expect(
+      suffixed.length,
+      "no claim carries an `it` suffix, so the parsing path is never exercised"
+    ).toBeGreaterThan(0)
 
-    writeFileSync(absolute, "// planted by the control; must never be indexed\n", "utf8")
-    try {
-      expect(existsSync(absolute), "the probe file must exist on disk, or this control proves nothing").toBe(true)
-      const tracked = trackedTestPaths()
-      expect(
-        tracked.has(UNTRACKED),
-        "an UNTRACKED file came back from git ls-files, so membership would prove nothing"
-      ).toBe(false)
-      expect(
-        existsSync(join(REPO_ROOT, UNTRACKED)),
-        "sanity: the probe is still on disk for the assertion above to mean anything"
-      ).toBe(true)
-    } finally {
-      rmSync(absolute, { force: true })
+    // IF TWO MODES NAME THE SAME FILE, BOTH MUST NAME A TEST INSIDE IT — and the two
+    // names must differ. This is stricter than "no two claim strings are
+    // identical": a bare path and a suffixed path are different strings while
+    // still being indistinguishable to anyone reading the catalog. A planner asked
+    // "which assertion covers SHIP-5?" has to be able to answer without opening
+    // every guard and guessing.
+    const claimed = FAILURE_MODES.filter((m) => m.claim != null)
+    const byFile = new Map()
+    for (const m of claimed) {
+      const { path: p, name } = splitClaim(m.claim)
+      if (!byFile.has(p)) byFile.set(p, [])
+      byFile.get(p).push({ id: m.id, name })
     }
 
-    // ...and the other direction: a path that was never created, such as a guard
-    // renamed out from under the catalog, is absent too.
+    const shared = [...byFile.entries()].filter(([, modes]) => modes.length > 1)
     expect(
-      trackedTestPaths().has("apps/dashboard/server/__tests__/noSuchGuard.test.mjs"),
-      "a non-existent path resolved as tracked"
-    ).toBe(false)
+      shared.length,
+      "no two modes share a guard file, so the suffix distinction is untested on this catalog"
+    ).toBeGreaterThan(0)
+
+    for (const [file, modes] of shared) {
+      for (const m of modes) {
+        expect(
+          m.name,
+          `${m.id} shares ${file} with ${modes.map((x) => x.id).join(", ")} but names no ` +
+            "`it`, so the two modes are indistinguishable downstream"
+        ).not.toBeNull()
+      }
+      const names = modes.map((m) => m.name)
+      expect(new Set(names).size, `${file}: two modes name the same test`).toBe(names.length)
+    }
+  })
+
+  // THE CONTROL, aimed at the vacuity this catalog must not reproduce: "the file
+  // is on disk" is not evidence, because an untracked file is invisible to every
+  // guard that enumerates by `git ls-files`. That is how `ws7TestStoreIsolation`
+  // passed vacuously on an untracked test file.
+  //
+  // THE FIXTURE LIVES OUTSIDE THE REPOSITORY, in the OS temp dir. The earlier
+  // version planted a real `.mjs` inside `server/__tests__/`, cleaned up in a
+  // `finally` — which is correct but not sufficient: a hard crash, an editor
+  // race, or a `git add -A` between the write and the cleanup leaves an untracked
+  // file sitting in the one directory this repository's guards scan hardest. A
+  // control must not be able to damage the thing it is measuring.
+  //
+  // The control keeps its teeth because the planted file is genuinely untracked and
+  // genuinely on disk, and because it is paired with a positive case: git agrees a
+  // REAL claim is tracked. A set that returned everything would fail the second.
+  it("CONTROL: on disk is not the same as tracked", () => {
+    const OUTSIDE = mkdtempSync(join(tmpdir(), "picc-catalog-control-"))
+    const planted = join(OUTSIDE, "untracked.test.mjs")
+    writeFileSync(planted, "// planted by the control; never indexed\n", "utf8")
+    try {
+      expect(existsSync(planted), "the control fixture must exist on disk, or this proves nothing").toBe(true)
+      expect(
+        trackedTestPaths().has(planted),
+        "a file that exists but was never committed came back as tracked, so membership would prove nothing"
+      ).toBe(false)
+
+      // ...and a path that was never created at all, such as a guard renamed out
+      // from under the catalog.
+      expect(
+        trackedTestPaths().has("apps/dashboard/server/__tests__/noSuchGuard.test.mjs"),
+        "a non-existent path resolved as tracked"
+      ).toBe(false)
+
+      // ...and the positive case, so "absent" above cannot be satisfied by a set
+      // that is simply empty. This is the half that ties the Set to git's index
+      // rather than to a directory walk.
+      const realClaim = FAILURE_MODES.find((m) => m.claim != null)
+      expect(trackedTestPaths().has(splitClaim(realClaim.claim).path)).toBe(true)
+    } finally {
+      rmSync(OUTSIDE, { recursive: true, force: true })
+    }
   })
 })
 
@@ -420,6 +626,40 @@ describe("the catalog is immutable all the way down", () => {
   // is the operation a caller would actually attempt, and in a module running in
   // strict mode (every ES module is) a silent failure would be a lie rather than
   // a guard. So the write is attempted and the old value is read back.
+  // THE MUTATION REFUSAL IS NOT THE SAME CLAIM AS "NOTHING ELSE IS ON THE ENTRY".
+  // Every other test in this file reads named fields, so all of them would stay
+  // green if somebody ADDED a field. That is not hypothetical: this catalog
+  // originally carried nine keys, and the fix round that added `gap` for the
+  // partially-covered verdict made ten. A field that appears without anyone
+  // deciding it appears is exactly how a later task ends up stamping a verdict
+  // onto an entry — `verdict: "verified"` on a mode whose drift is still live —
+  // with every assertion here still passing.
+  //
+  // So the SHAPE is pinned, not just the contents. Nine keys, then ten, then
+  // never a surprise: growing the entry shape is a deliberate act that has to
+  // break this test.
+  it("gives every entry exactly the documented keys, and no others", () => {
+    const EXPECTED = [
+      "acceptedUnclaimed",
+      "claim",
+      "gap",
+      "id",
+      "kind",
+      "mutation",
+      "rationale",
+      "severity",
+      "subsystem",
+      "summary"
+    ]
+
+    for (const m of FAILURE_MODES) {
+      expect(
+        Object.keys(m).sort(),
+        `${m.id} does not have exactly the documented shape — add or remove a key here, deliberately`
+      ).toEqual(EXPECTED)
+    }
+  })
+
   it("refuses a mutation of an entry, and leaves the value intact", () => {
     const first = FAILURE_MODES[0]
     const before = first.summary

@@ -20,6 +20,35 @@
 // `process.env`, no clock read, no import of any other service. Nothing here
 // verifies anything — `inventory.mjs` derives the real guard inventory and
 // `verify.mjs` diffs it against this file. This module only says what it claims.
+//
+// THE ENTRY SHAPE IS TEN KEYS, AND GROWING IT IS A DELIBERATE ACT:
+//
+//   { id, kind, severity, subsystem, summary, claim, acceptedUnclaimed, gap,
+//     mutation, rationale }
+//
+// THREE OF THOSE FIELDS CARRY RULES A STRING ALONE CANNOT.
+//
+// `subsystem` is a REPO-RELATIVE DIRECTORY THAT MUST EXIST, not a label. The spec
+// lists `stale-catalog-entry` as covering "a subsystem that no longer exists",
+// which is unimplementable against free text like `"test-guards"`: there is
+// nothing to resolve, so the check either never fires or fires on a guess.
+//
+// `claim` is a repo-relative path to a TRACKED test file, OPTIONALLY SUFFIXED with
+// the `it` that carries the coverage — separated by `" :: "`. The suffix is
+// load-bearing rather than decorative: four of the eleven modes share two guard
+// files, and without it two different failure modes pointing at one file are
+// indistinguishable to anyone reading the catalog. A bare path and a suffixed path
+// are different strings while meaning the same thing to a reader.
+//
+// `gap` names what the claim does NOT cover, and its presence is what separates
+// `partially-covered` from `verified`. An entry with a claim and no gap claims
+// COMPLETENESS, so a gap that is blank or vague would silently promote a
+// half-guarded mode to a green row — which is the false confidence this program
+// exists to prevent, committed one layer down. Three entries carry a gap today
+// (SHIP-1, SHIP-2, SHIP-3); the other eight either name a guard that covers the
+// whole mode, or name no guard at all.
+//
+// An entry is PARTIALLY COVERED when it has BOTH a claim and a non-null gap.
 
 /**
  * The severity scale, most severe first. Three levels, and the MEANING depends on
@@ -75,35 +104,58 @@ export const FAILURE_MODES = Object.freeze([
     id: "SHIP-1",
     kind: "shipping",
     severity: "high",
-    subsystem: "test-guards",
+    subsystem: "apps/dashboard/server/__tests__",
     summary:
       "A guard that cannot fail: its negative check matches one identifier name, so a second " +
       "lexer under any other name is invisible to it and the suite stays green.",
-    claim: "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs",
+    claim:
+      "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs :: no consumer RETAINS a " +
+      "declaration — the four local lexers are gone",
     acceptedUnclaimed: null,
+    gap:
+      "The claim is PARTIAL, and the partial half is named here rather than left to prose. " +
+      "That `it` pins ONE drift: a consumer that declares `stripComments` itself. Its negative " +
+      "check is the regex at sharedCommentLexer.test.mjs:100, which matches the literal " +
+      "identifier `stripComments` and nothing else — so a lexer under ANY other name is " +
+      "invisible to it. That is not hypothetical: ws7AuthUsersReaderGuard.test.mjs:87 declares " +
+      "`function codeOnly(text)`, its own block-comment lexer, and this guard passes with that " +
+      "file in place. The guard that exists is therefore real but narrow, and this entry must " +
+      "never be rendered as a plain `verified`.",
     mutation: true,
     rationale:
-      "The claimed guard's negative half is the regex at sharedCommentLexer.test.mjs:100 — " +
-      "/(?:function\\s+stripComments|(?:const|let|var)\\s+stripComments\\s*=)/ — which matches the " +
-      "LITERAL identifier `stripComments` and nothing else. That is the historical GUARD-1 shape, " +
-      "and it is still live: ws7AuthUsersReaderGuard.test.mjs:87 declares its own block-comment " +
-      "lexer, `function codeOnly(text)`, which is outside the regex and therefore passes the very " +
-      "guard meant to police it. So this claim is NOT that the drift class is closed — it is that " +
-      "one drift is now pinned, while a differently-named instance of the same class is open and " +
-      "visible only to a reader, which is why `mutation` is true: the experiment is already written " +
-      "down in the guard's own header ('A FIXED GUARD IS NOT A FIXED GUARD UNLESS IT HAS BEEN SEEN " +
-      "TO FAIL'), and `codeOnly` is that experiment's result."
+      "GUARD-1 itself, and the guard named in `claim` was built in response to it. Four guards " +
+      "each used to carry their own hand-rolled comment lexer (sharedCommentLexer.test.mjs:6-9 " +
+      "names them), and two of those shipped a vacuous-pass bug: each blanked a legitimate " +
+      "one-line gate from the `//` of an `https://` string default onward, leaving the scan with " +
+      "ZERO call sites, so every predicate in the file passed while measuring nothing. The fix " +
+      "is one lexer in `server/scripts/guard-primitives.mjs`. What that fix does NOT do is cover " +
+      "every shape of the defect, which is what `gap` records: the guard detects a re-declared " +
+      "`stripComments`, not a re-declared lexer. Severity is `high` on the shipping scale " +
+      "because a removed auth or route gate that the suite cannot see is a wrong thing reaching " +
+      "a user or a venue. `mutation` is true because the experiment is already written down — the " +
+      "guard's own header says 'A FIXED GUARD IS NOT A FIXED GUARD UNLESS IT HAS BEEN SEEN TO " +
+      "FAIL' — and `codeOnly` is that experiment's result."
   }),
   Object.freeze({
     id: "SHIP-2",
     kind: "shipping",
     severity: "high",
-    subsystem: "test-guards",
+    subsystem: "apps/dashboard/server/__tests__",
     summary:
       "A hand-maintained guard inventory that omits a consumer, so the omitted consumer is " +
       "invisible to the guard that is supposed to police it.",
-    claim: "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs",
+    claim:
+      "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs :: each consumer resolves " +
+      "`stripComments` from the SAME absolute module",
     acceptedUnclaimed: null,
+    gap:
+      "This is a PARTIAL claim too, and the reason is the failure mode itself. The `it` named " +
+      "here asserts that every CONSUMER RESOLVES the one shared lexer, but the set of consumers " +
+      "is a hand-written frozen array at sharedCommentLexer.test.mjs:69-76, and a file that is " +
+      "not in that array is never examined by either half of the guard. ws7AuthUsersReaderGuard.test.mjs " +
+      "is not listed today, which is precisely how an unregistered lexer survives. The guard " +
+      "cannot detect its own inventory being incomplete, because the incompleteness IS the " +
+      "absence of a file the guard never opens.",
     mutation: true,
     rationale:
       "GUARD-1's root cause, and it is structural rather than accidental: the consumer list at " +
@@ -116,39 +168,56 @@ export const FAILURE_MODES = Object.freeze([
       "guard this inventory under-reports is an auth-store guard whose stated failure is that a " +
       "corrupt users.json 'is reported as an empty store — a false answer about the server, and at " +
       "a gate a fail-open one' (ws7AuthUsersReaderGuard.test.mjs:200). `mutation` is true because " +
-      "the experiment is a single deleted array element."
+      "the experiment is a single deleted array element — and `gap` is why that experiment is " +
+      "expected to stay GREEN, which is the whole point."
   }),
   Object.freeze({
     id: "SHIP-3",
     kind: "shipping",
     severity: "medium",
-    subsystem: "graduation/windows",
+    subsystem: "apps/dashboard/server/services/graduation",
     summary:
       "A spec asserting record fields the producer does not emit (entryTime / exitTime / pnlPct), " +
       "shipped into a plan before anyone checked the field names against the producer.",
     claim: "apps/dashboard/server/__tests__/graduationWindows.test.mjs",
     acceptedUnclaimed: null,
+    gap:
+      "The claim covers the CONSUMER half only, and saying so is the whole point of this entry. " +
+      "It pins the names windows.mjs READS — :167 `row?.returnPct ?? row?.pnlPct`, :207 " +
+      "`row?.windowStart ?? row?.entryTime`, :208 `row?.windowEnd ?? row?.exitTime` — with fixtures " +
+      "built on those spellings. It does NOT pin the names tradeJournal.mjs EMITS, because " +
+      "graduationWindows.test.mjs never imports tradeJournal.mjs: every fixture in it is a " +
+      "hand-written literal. The producer half is therefore uncovered BY THIS CLAIM, and the " +
+      "measured consequence is that the exact failure mode this entry names passes silently " +
+      "through the guard: renaming `pnlPct` at tradeJournal.mjs:68 leaves graduationWindows " +
+      "entirely green. `entryTime` alone is pinned on the producer side, at " +
+      "tradeJournal.test.mjs:131; `pnlPct` and `exitTime` are not pinned there either. That half " +
+      "is a real gap in the program, not just in the claim, and the planner should keep saying so " +
+      "rather than reporting this mode as verified.",
     mutation: false,
     rationale:
       "The producer is tradeJournal.mjs, which emits `entryTime` (:65), `exitTime` (:66) and " +
-      "`pnlPct` (:68). The consumer reads exactly those names — windows.mjs:167 " +
-      "`finiteOrNull(row?.returnPct ?? row?.pnlPct)`, :207 `row?.windowStart ?? row?.entryTime`, " +
-      ":208 `row?.windowEnd ?? row?.exitTime` — and the guard pins them with fixtures built on the " +
-      "real shape, so a field name that stops existing fails loudly rather than silently measuring " +
-      "nothing. Severity is `medium` on the shipping scale: internal wrongness, caught by a test, " +
-      "with no path to a user or a venue. `mutation` is deliberately false — the assertion shape " +
-      "here is concrete (a row whose statistic is absent must yield null plus a reason, never a " +
-      "fabricated zero), so the guard is worth running and not worth the cost of a mutation pass."
+      "`pnlPct` (:68); the consumer reads those names at windows.mjs:167/:207/:208. The failure " +
+      "being catalogued is that a SPEC asserted those field names and the assertion was shipped " +
+      "into a plan before anyone checked them against the producer. `gap` records precisely how " +
+      "much of that is guarded today: the read side only. Severity is `medium` on the shipping " +
+      "scale — internal wrongness, with no path to a user or a venue — and it is not `low` " +
+      "because a silently unmeasured return makes every affected window read `RETURN_UNMEASURED` " +
+      "and therefore below-floor, which is a wrong decision rather than a cosmetic one. " +
+      "`mutation` is deliberately false: the guard's assertions are concrete (a row whose " +
+      "statistic is absent must yield null plus a reason, never a fabricated zero), and a " +
+      "mutation pass cannot repair the half that has no guard at all."
   }),
   Object.freeze({
     id: "SHIP-4",
     kind: "shipping",
     severity: "high",
-    subsystem: "review-process",
+    subsystem: "apps/dashboard/server",
     summary:
       "A failure called 'pre-existing' and therefore skipped, when it was our own regression — " +
       "five such claims in one session.",
     claim: null,
+    gap: null,
     acceptedUnclaimed: Object.freeze({
       owner: "platform owner",
       date: "2026-10-11",
@@ -175,12 +244,15 @@ export const FAILURE_MODES = Object.freeze([
     id: "SHIP-5",
     kind: "shipping",
     severity: "medium",
-    subsystem: "graduation/gates",
+    subsystem: "apps/dashboard/server/services/graduation",
     summary:
       "Two evidence piles drifting apart because each re-implemented one predicate, so the two " +
       "sides of a readout stopped reconciling with no explanation on the row.",
-    claim: "apps/dashboard/server/__tests__/graduationGates.test.mjs",
+    claim:
+      "apps/dashboard/server/__tests__/graduationGates.test.mjs :: makes windowsUsed plus every " +
+      "skip equal the sum of windowsSeen",
     acceptedUnclaimed: null,
+    gap: null,
     mutation: true,
     rationale:
       "The two piles are `windowsUsed` (the top-level streak evidence count) and the per-source " +
@@ -200,12 +272,15 @@ export const FAILURE_MODES = Object.freeze([
     id: "SHIP-6",
     kind: "shipping",
     severity: "medium",
-    subsystem: "graduation/gates",
+    subsystem: "apps/dashboard/server/services/graduation",
     summary:
       "A source with no bar silently vetoing a gate forever, so a strategy could never be " +
       "promoted on any record however good.",
-    claim: "apps/dashboard/server/__tests__/graduationGates.test.mjs",
+    claim:
+      "apps/dashboard/server/__tests__/graduationGates.test.mjs :: still promotes when an " +
+      "ungateable source is interleaved with a usable one",
     acceptedUnclaimed: null,
+    gap: null,
     mutation: true,
     rationale:
       "The defect is recorded in the module that had it, at gates.mjs:405-410: Task 1 merges " +
@@ -225,9 +300,10 @@ export const FAILURE_MODES = Object.freeze([
     id: "CAP-1",
     kind: "capital",
     severity: "high",
-    subsystem: "venues",
+    subsystem: "apps/dashboard/server/services/venues",
     summary: "A venue outage while a position is open — no venue to exit through, no clock to exit by.",
     claim: null,
+    gap: null,
     acceptedUnclaimed: Object.freeze({
       owner: "platform owner",
       date: "2026-10-11",
@@ -251,9 +327,10 @@ export const FAILURE_MODES = Object.freeze([
     id: "CAP-2",
     kind: "capital",
     severity: "medium",
-    subsystem: "costs",
+    subsystem: "apps/dashboard/server/services/costs",
     summary: "A cost model that understates real drag, so trades are admitted whose edge never existed.",
     claim: null,
+    gap: null,
     acceptedUnclaimed: Object.freeze({
       owner: "platform owner",
       date: "2026-10-11",
@@ -279,9 +356,10 @@ export const FAILURE_MODES = Object.freeze([
     id: "CAP-3",
     kind: "capital",
     severity: "high",
-    subsystem: "paperCircuit",
+    subsystem: "apps/dashboard/server/services",
     summary: "A circuit breaker that fails to halt, so the loss control that should stop the bleeding never fires.",
     claim: null,
+    gap: null,
     acceptedUnclaimed: Object.freeze({
       owner: "platform owner",
       date: "2026-10-11",
@@ -305,18 +383,21 @@ export const FAILURE_MODES = Object.freeze([
     id: "CAP-4",
     kind: "capital",
     severity: "medium",
-    subsystem: "technicalBacktest",
+    subsystem: "apps/dashboard/server/services",
     summary: "A regime change against a model fitted to the old one, so every forward estimate is confidently wrong.",
     claim: null,
+    gap: null,
     acceptedUnclaimed: Object.freeze({
       owner: "platform owner",
       date: "2026-10-11",
       check:
-        "Re-fit services/technicalBacktest.mjs on data from the current regime and compare, before " +
-        "any fitted strategy is promoted: a backtest that was never re-fitted reports its in-sample " +
-        "regime's statistics with total confidence, and nothing in the code distinguishes the two " +
-        "cases. Also confirm the gate is read against cost-ADJUSTED performance rather than gross, " +
-        "so a regime with worse liquidity cannot look better than one with better."
+        "Re-fit services/technicalBacktest.mjs on data from the current regime, and confirm by " +
+        "hand that its reported hit rate moves when the input regime does: run the same " +
+        "walk-forward over two windows drawn from visibly different market conditions and check " +
+        "that the two outputs differ. A backtest that was never re-fitted reports its in-sample " +
+        "regime's statistics with total confidence, and nothing in the code distinguishes that " +
+        "from a model that genuinely generalises. ONE check with one completion predicate: the " +
+        "two windows must produce two different statistics."
     }),
     mutation: false,
     rationale:
@@ -331,9 +412,12 @@ export const FAILURE_MODES = Object.freeze([
     id: "CAP-5",
     kind: "capital",
     severity: "medium",
-    subsystem: "venueCredentials",
-    summary: "A credential that expires between the check and the use, so an order is placed with authority nobody holds.",
+    subsystem: "apps/dashboard/server/services",
+    summary:
+      "A credential that expires between the check and the use, so an authorised order is halted " +
+      "by the venue rather than placed — and an open position is left unmanaged until it is fixed.",
     claim: null,
+    gap: null,
     acceptedUnclaimed: Object.freeze({
       owner: "platform owner",
       date: "2026-10-11",
