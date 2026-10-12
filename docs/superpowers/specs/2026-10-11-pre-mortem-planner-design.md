@@ -69,12 +69,14 @@ New `server/services/premortem/` boundary, mirroring the `graduation/` layout:
   unimplementable.
 
   **`claim`** is a repository-relative path to a tracked test file, optionally
-  suffixed with a `describe`/`it` name after a space:
-  `"server/__tests__/ws7RouteAuthCoverageGuard.test.mjs the shared lexer is one"`.
-  The suffix exists because two different failure modes can legitimately share
-  one file; without it they are indistinguishable downstream. A resolver strips
-  the suffix when matching against the inventory. It must resolve to a file git
-  tracks; anything else is `guard-missing` or `stale-catalog-entry`, never
+  suffixed with a `describe`/`it` name after a `" :: "` separator:
+  `"apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs :: the shared comment lexer is one"`.
+  The separator is explicit rather than a bare space because a repo-relative
+  path may itself contain spaces. The suffix exists because two different
+  failure modes can legitimately share one file; without it they are
+  indistinguishable downstream. A resolver splits at the first `" :: "` and
+  strips it before matching against the inventory. It must resolve to a file
+  git tracks; anything else is `guard-missing` or `stale-catalog-entry`, never
   assumed.
 
   **`gap`** names what the claim does NOT cover. An entry carrying both a
@@ -115,7 +117,7 @@ the right trade for a readout that names missing coverage.
 | `guard-missing` | The claim names a guard that does not exist |
 | `guard-unregistered` | The guard exists but is absent from its own inventory (GUARD-1) |
 | `guard-cannot-fail` | Registered, but its assertion shape is vacuous |
-| `unclaimed` | A catalog mode with no guard claim — the gap half |
+| `unclaimed` | A catalog mode with no guard claim — the gap-finding half. (Distinct from the `gap` FIELD, which marks a claim that does not cover the whole failure mode) |
 | `unverified-manual` | A capital-risk mode whose guard is a human judgement, not a file |
 | `stale-catalog-entry` | The catalog itself is unsound: a claim that no longer resolves, a subsystem that no longer exists, or a mode carrying neither a claim nor an `acceptedUnclaimed` disposition |
 
