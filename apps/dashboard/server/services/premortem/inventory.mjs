@@ -119,8 +119,9 @@ const ASSERTION_CALL = /\bexpect\s*\(/g
  * would make this module
  * STRICTER than the runner that actually collects the tests, and the failure mode
  * of being stricter is the expensive direction — a guard vitest happily collects
- * would be reported missing. Measured, the two rules select the same 327 tracked
- * paths today, so nothing is lost and one unexercised condition is gone.
+ * would be reported missing. Measured, the two rules select the same tracked paths
+ * — 328 `*.test.mjs` in the current tree, every one of them under a `__tests__`
+ * segment — so nothing is lost and one unexercised condition is gone.
  *
  * @param {unknown} path a repository-relative path as `git ls-files` emits it,
  *   with `/` separators
