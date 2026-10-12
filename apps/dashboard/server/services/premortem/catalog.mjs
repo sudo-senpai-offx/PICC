@@ -308,11 +308,17 @@ export const FAILURE_MODES = Object.freeze([
       owner: "platform owner",
       date: "2026-10-11",
       check:
-        "Before arming any live venue, confirm by hand what the system does on a mid-position " +
-        "outage: read services/venues/ccxtVenues.mjs to find whether an open position has a " +
-        "documented unwind path that does not route through the venue (stop-loss, reduce-only " +
-        "fallback, alert to a human), and confirm someone is on the other end of that alert. There " +
-        "is no guard FILE to verify here: an outage is not a property of the tree."
+        "Read hyperliquidPerps.mjs:372-399. The ONLY unwind affordance the perps rail exposes is " +
+        "`submitOrder({ reduceOnly: true })`, and it forwards `reduceOnly: true` to the SAME " +
+        "`inst.createOrder` call at :401 that opens a position — so the exit path shares the " +
+        "outage's fate rather than routing around it. There is no timeout, retry or alert anywhere " +
+        "in services/venues (a scan for setTimeout/retry/AbortController/notify/alert across every " +
+        "file in that directory returns nothing). Confirm by hand what that leaves behind: on a " +
+        "venue outage an open position has no automatic unwind, no retry and no alert raised from " +
+        "the order path. The only alerting module in the server is services/alertEngine.mjs, and " +
+        "that is a USER-CONFIGURED price/convergence alert driven by `updatePrice` and wired to " +
+        "handlers.mjs routes — it is not referenced from hyperliquidPerps.mjs at all, so it does " +
+        "not cover venue failure. Name the human or process that does."
     }),
     mutation: false,
     rationale:
@@ -414,28 +420,38 @@ export const FAILURE_MODES = Object.freeze([
     severity: "medium",
     subsystem: "apps/dashboard/server/services",
     summary:
-      "A credential that expires between the check and the use, so an authorised order is halted " +
-      "by the venue rather than placed — and an open position is left unmanaged until it is fixed.",
+      "A credential that expires after the gate that checks it, so the order is refused by the " +
+      "venue rather than placed — and an open position is left unmanaged until it is fixed.",
     claim: null,
     gap: null,
     acceptedUnclaimed: Object.freeze({
       owner: "platform owner",
       date: "2026-10-11",
       check:
-        "Trace services/venueCredentials.mjs for the window between a credential being validated " +
-        "and the order it authorises being sent, and confirm that an expiry inside that window " +
-        "halts the order rather than falling through to a default or a cached value. Then confirm " +
-        "by hand what a rejection from the venue does to an ALREADY-OPEN position, which is the " +
-        "case a credential check cannot answer."
+        "Read ccxtOrdering.mjs:203 and its `spotModeOf` helper, then hyperliquidPerps.mjs:372-401. " +
+        "The gate `ccxtInstanceFor(EXCHANGE_ID, { requireKeys: true })` checks only that key " +
+        "material is CONFIGURED — `spotModeOf` fails closed when `ccxtKeysForExchange` returns " +
+        "nothing — and nothing on that path tests whether the key is still VALID or unexpired. So " +
+        "an expired key passes the gate, and the failure surfaces only at the venue, in the try " +
+        "around `inst.createOrder` at :401, whose catch returns `submitOrder-unobservable` and " +
+        "places no order. Confirm by hand what that means for an ALREADY-OPEN position: nothing in " +
+        "the order path retries or re-checks, so the position is unmanaged until a human notices. " +
+        "Also confirm services/venueCredentials.mjs:33 is not the credential in question — it is a " +
+        "48-line at-rest reader for which CCXT venue PAIRS are configured, and it returns `[]` on " +
+        "a missing or wrong-shaped file, which silently disables quoting rather than placing a bad " +
+        "order. That `[]` fall-through is a real silent default and belongs in this check, but it " +
+        "is a different concern from the key above."
     }),
     mutation: false,
     rationale:
       "Severity is `medium` on the CAPITAL scale — capital impaired but bounded — and the bound is " +
-      "real: an expired credential produces a REJECTED call, so the venue declines rather than " +
-      "executing badly, and no unauthorised fill follows. It is `medium` rather than `low` because " +
-      "the consequence is a trading halt nobody asked for, which is itself a capital event: a " +
-      "position left unhedged for the length of the outage. `claim: null` and never `verified` — " +
-      "the check is a race between two clocks, and asserting it in a test would mean a `sleep`."
+      "real and specific: the venue REJECTS the call rather than executing it badly, so no " +
+      "unauthorised fill follows and no capital is lost at the moment of expiry. What follows " +
+      "instead is a halt nobody asked for, which is itself a capital event: the reduce-only exit " +
+      "at hyperliquidPerps.mjs:399 rides the same `inst.createOrder`, so it fails in the same " +
+      "outage, and the position is left unhedged until a human intervenes. `claim: null` and never " +
+      "`verified` — there is no TTL or expiry field anywhere on the path, so nothing in the tree can " +
+      "be asserted about one."
   })
 ])
 

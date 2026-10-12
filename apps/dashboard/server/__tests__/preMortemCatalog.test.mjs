@@ -417,6 +417,30 @@ describe("a claim with a gap is PARTIALLY covered, not verified", () => {
 // someone's working tree is exactly the condition that made a guard run green
 // while measuring nothing — the trap `ws7TestStoreIsolation` is built around — so
 // "the file is on disk" is not evidence a claim resolves. `git ls-files` is.
+/**
+ * Does `source` DECLARE a test with exactly this name?
+ *
+ * This is the predicate the production suffix check below actually calls, hoisted
+ * to module scope so the CONTROL at the end of this file can exercise the very same
+ * function rather than a copy of it. A control that tests a copy proves the copy
+ * works, not the thing that runs.
+ *
+ * Substring containment is not enough, and the difference is the whole point of
+ * this tightening. A guard file is mostly prose, and it quotes its own `it` names
+ * in the comments that explain what it guards. So `source.includes(name)` returns
+ * true for a suffix pointing at a test that was RENAMED, as long as the old name
+ * survives in a comment somewhere in the file. That is a dangling pointer that reads
+ * as precise, and it is precisely the false confidence this catalog exists to catch.
+ *
+ * So the matcher requires a real DECLARATION: `it(`, `test(` or `describe(` followed
+ * by the name in a quoted string. Comment prose cannot match it, because a comment
+ * cannot contain a call.
+ */
+const declaresTest = (source, name) => {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`\\b(?:it|test|describe)\\(\\s*["'\`](?:\\s*)${escaped}(?:\\s*)["'\`]`).test(source)
+}
+
 describe("every claim resolves to a file the repository TRACKS", () => {
   const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 
@@ -471,6 +495,10 @@ describe("every claim resolves to a file the repository TRACKS", () => {
       : { path: claim.slice(0, at), name: claim.slice(at + CLAIM_SEPARATOR.length) }
   }
 
+  /**
+   * (The `declaresTest` predicate lives at module scope, above this describe, so
+   * the CONTROL below exercises the same function the production loop calls.)
+   */
   it("resolves each claim against git's index, not the filesystem", () => {
     const claimed = FAILURE_MODES.filter((m) => m.claim != null)
     expect(claimed.length, "no mode names a guard, so this resolves nothing").toBeGreaterThan(0)
@@ -510,10 +538,46 @@ describe("every claim resolves to a file the repository TRACKS", () => {
       if (name === null) continue
       const source = readFileSync(join(REPO_ROOT, claimPath), "utf8")
       expect(
-        source.includes(name),
-        `${m.id} claims the test "${name}", which does not appear in ${claimPath} — the suffix is a dangling pointer`
+        declaresTest(source, name),
+        `${m.id} claims the test "${name}", which is not DECLARED by it() or describe() in ${claimPath} — ` +
+          "the suffix is a dangling pointer (a name quoted in a comment does not count)"
       ).toBe(true)
     }
+  })
+
+  // THE CONTROL for the matcher above, and it is the reason the matcher exists.
+  // `includes` is fooled by prose; `declaresTest` is not. Both halves are asserted
+  // on the REAL shared-lexer file, so the demonstration is about this repository's
+  // actual guards rather than a synthetic string that might be more forgiving.
+  it("CONTROL: a name quoted in a comment does NOT satisfy the suffix check", () => {
+    const SOURCE = readFileSync(
+      join(REPO_ROOT, "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs"),
+      "utf8"
+    )
+
+    // A name that really IS declared. This must be accepted, or the matcher is
+    // simply broken and the rejection below proves nothing.
+    const REAL = "each consumer resolves `stripComments` from the SAME absolute module"
+    expect(declaresTest(SOURCE, REAL), "a genuinely declared test must satisfy the matcher").toBe(true)
+
+    // The same name with one word changed, so it appears NOWHERE — and then a
+    // variant that DOES appear in a comment, to show why `includes` was unsafe.
+    const RENAMED = "each consumer resolves stripComments from the SAME absolute module"
+    expect(SOURCE.includes(RENAMED), "sanity: this control needs a name absent from the file").toBe(false)
+    expect(declaresTest(SOURCE, RENAMED), "a name no file declares must NOT satisfy the matcher").toBe(false)
+
+    // THE DEMONSTRATION: a phrase from the file's own prose that is NOT a test
+    // declaration. If `includes` accepted this, the looser check would have been
+    // satisfiable by a comment.
+    const PROSE = "the four local lexers are gone"
+    expect(
+      SOURCE.includes(PROSE),
+      "sanity: this control needs a phrase that really is in the file"
+    ).toBe(true)
+    expect(
+      declaresTest(SOURCE, PROSE),
+      "the production suffix check accepted a phrase that exists only in prose"
+    ).toBe(false)
   })
 
   // AT LEAST ONE CLAIM MUST CARRY A SUFFIX, or the parsing above is untested
