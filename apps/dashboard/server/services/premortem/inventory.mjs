@@ -112,16 +112,28 @@ const ASSERTION_CALL = /\bexpect\s*\(/g
  * ONE CONDITION, AND THE `__tests__` SEGMENT IS DELIBERATELY GONE. It used to be
  * required as well, on the reasoning that an unexercised exclusion can silently
  * start excluding real guards. The same reasoning applies to it as to any other
- * exclusion, and the rule is now exactly the runner's own: vitest's default include
- * is the `{test,spec}.?(c|m)[jt]s?(x)` glob at every depth
- * (`node_modules/vitest/dist/defaults.D2ip7f-X.js:5` spells it with a leading
- * two-star path prefix), which requires no `__tests__` segment. Requiring one
- * would make this module
- * STRICTER than the runner that actually collects the tests, and the failure mode
- * of being stricter is the expensive direction — a guard vitest happily collects
- * would be reported missing. Measured, the two rules select the same tracked paths
- * — 328 `*.test.mjs` in the current tree, every one of them under a `__tests__`
- * segment — so nothing is lost and one unexercised condition is gone.
+ * exclusion.
+ *
+ * WHAT CHANGED IS THE AXIS OF STRICTNESS, NOT ITS AMOUNT. vitest's default include
+ * is the `{test,spec}.?(c|m)[jt]s?(x)` glob at every depth — repo-relative path
+ * `node_modules/vitest/dist/chunks/defaults.D2ip7f-X.js:5`, which spells it with a
+ * leading two-star path prefix, reachable from the REPOSITORY ROOT (hoisted
+ * install; from `apps/dashboard` there is no local `node_modules/vitest`). That
+ * glob imposes NO `__tests__` requirement, which is the whole reason the segment
+ * was dropped: requiring one would exclude a file vitest happily collects, and a
+ * guard vitest runs but this inventory cannot see is a FALSE MISS — the expensive
+ * direction to be wrong in.
+ *
+ * BUT THIS RULE IS A STRICT SUBSET OF THE RUNNER'S, AND SAYING "IT IS THE RUNNER'S
+ * RULE" WOULD BE FALSE. Measured over the tracked tree, that glob collects 443
+ * files and `isGuardPath` collects 328 of them. The 115-file gap is entirely
+ * extension — 49 `.ts` and 66 `.tsx` — and it includes one SERVER-side test,
+ * `apps/dashboard/server/__tests__/ws6-domain.test.ts`, which vitest runs and this
+ * inventory cannot name. The strictness simply moved: off the `__tests__` axis,
+ * where it was unexercised, onto the extension axis, where it is the declared
+ * scope (see `GUARD_FILE_SUFFIX`) and is honestly measurable. A caller that needs
+ * the gap stated rather than inferred should read `GUARD_FILE_SUFFIX` and call
+ * `isGuardPath` on the claim path before rendering anything about it.
  *
  * @param {unknown} path a repository-relative path as `git ls-files` emits it,
  *   with `/` separators

@@ -322,18 +322,24 @@ describe("guardInventory", () => {
 })
 
 describe("isGuardPath", () => {
-  it("is a SHAPE test, matching the rule vitest itself collects by", () => {
+  it("is a SHAPE test on extension, a SUBSET of what vitest collects", () => {
     expect(isGuardPath(`${TESTS}/g.test.mjs`)).toBe(true)
     // NO `__tests__` SEGMENT IS REQUIRED, and this is the M-2 change rather than an
     // oversight. vitest's default include is the `{test,spec}.?(c|m)[jt]s?(x)` glob at
-    // every depth (`node_modules/vitest/dist/defaults.D2ip7f-X.js:5` spells it with
-    // a leading two-star path prefix), which collects any
-    // `*.test.mjs` under the root. Requiring the segment here would make this
-    // module STRICTER than the runner, and the cost of being stricter runs the
-    // expensive way: a guard vitest collects would be reported missing. Both rules
-    // select the same paths today, so nothing is lost and one unexercised
-    // exclusion is gone — the same principle that forbade a `fixtures` exclusion
-    // now applied to this one.
+    // every depth — repo-relative path
+    // `node_modules/vitest/dist/chunks/defaults.D2ip7f-X.js:5`, reachable from the
+    // REPOSITORY ROOT (hoisted install) — and it imposes no `__tests__`
+    // requirement. Requiring the segment would exclude a file vitest collects, and
+    // a guard vitest runs but this cannot name is a FALSE MISS.
+    //
+    // BUT DO NOT READ "SUBSET" AS "EQUIVALENT". Measured over the tracked tree that
+    // glob collects 443 files and this collects 328; the 115-file gap is all
+    // extension (49 `.ts`, 66 `.tsx`) and includes one SERVER-side test,
+    // `apps/dashboard/server/__tests__/ws6-domain.test.ts`, that vitest runs and
+    // this cannot see. The strictness moved from an unexercised `__tests__` axis
+    // onto the extension axis, where it is the declared scope and is measurable —
+    // not away. `isGuardPath(`${TESTS}/g.test.ts`) === false` below is that gap,
+    // asserted rather than described.
     expect(isGuardPath("apps/dashboard/server/g.test.mjs")).toBe(true)
     expect(isGuardPath(`${TESTS}/fixtures/g.test.mjs`)).toBe(true)
     expect(isGuardPath("scripts/g.test.mjs")).toBe(true)
