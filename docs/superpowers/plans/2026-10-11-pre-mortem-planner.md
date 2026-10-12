@@ -284,7 +284,7 @@ git commit -m "feat(premortem): verify claims and report gaps"
 - Test: `apps/dashboard/server/__tests__/preMortemMutate.test.mjs`
 
 **Interfaces:**
-- Consumes: a catalog entry with `mutation: true` and an inventory entry naming its guard.
+- Consumes: a catalog entry (Task 1 shape) with `mutation: true` and a `claim` naming its guard. It does NOT consume the inventory — the guard reference travels on the entry, and the actual running is delegated to the injected runner.
 - Produces:
   - `mutationCheck({ entry, runGuard })` → `{ id, verdict: "bites" | "does-not-bite" | "not-run", evidence }`
   - `runGuard` is **injected**: given the guard file it is asked to run against a deliberately broken implementation and returns whether it failed.
@@ -392,11 +392,16 @@ it("never emits a verdict outside the vocabulary", async () => {
 
 it("a mutation entry that did not run is reported not-run, never bites", async () => {
   const res = await callAuthenticated(load(), "/api/premortem/overview")
-  for (const m of res.body.mutation ?? []) {
-    if (!m.ran) expect(m.verdict).toBe("not-run")
-  }
+  const notRun = res.body.mutation.filter((m) => m.verdict === "not-run")
+  // "not-run" IS the encoding of "did not run" — there is no separate ran flag to drift.
+  expect(notRun.length).toBeGreaterThan(0)
+  expect(res.body.mutation.every((m) => m.verdict !== "bites" || m.ran === true)).toBe(true)
 })
 ```
+
+For any entry flagged `mutation: true`, the route must actually invoke the mutation
+runner and set `ran`. An entry marked `mutation: true` that reports `not-run`
+without having run is the failure this assertion exists to catch.
 
 Adapt the `callRoute` / `callAuthenticated` / `readFile` helpers to the names that file actually uses — read it first and match it. Do not invent a second harness.
 
