@@ -132,16 +132,21 @@ function outcome({ id, verdict, evidence }) {
  * refused for the same reason: it is an object, and an object is not a
  * measurement.
  *
- * A NON-OBJECT RESULT IS REFUSED RATHER THAN COERCED. `null`, a bare `true`, a
- * bare string and an array all read as no measurement, because reading `.failed`
- * off any of them either says nothing or throws. A throw here would escape
- * `mutationCheck` and take the whole readout down over one bad return value.
+ * A NON-BOOLEAN RESULT IS REFUSED, AND TWO SPELLINGS OF IT NEED DIFFERENT
+ * REASONS. `undefined` and `null` are refused FIRST and alone, because reading
+ * `.failed` off either one throws — and a throw here would escape `mutationCheck`
+ * and take the whole readout down over one bad return value. That is the only
+ * thing this first line has to do, and saying exactly that is what keeps it
+ * honest; an earlier version also refused every non-object here, which was
+ * untestable, since a bare `true`, a string and an array all fall through to the
+ * lines below and return `null` for the ordinary reason: reading `.failed` off a
+ * primitive says nothing, so there was no measurement to read.
  *
  * @param {unknown} result whatever `runGuard` resolved to
  * @returns {true|false|null}
  */
 function observedFailure(result) {
-  if (result === null || typeof result !== "object") return null
+  if (result === null || result === undefined) return null
   if (result.failed === true) return true
   if (result.failed === false) return false
   return null
@@ -195,27 +200,54 @@ function observedFailure(result) {
  *   which is a distinct fact from a runner that was wired and crashed.
  * @returns {Promise<{id: string|null, verdict: string, evidence: object}>}
  */
+/**
+ * What a row carries when nothing was measured and no claim was resolved.
+ *
+ * EVIDENCE HAS ONE SHAPE ON EVERY BRANCH, all eight of them, and that is why the
+ * early branches spread this rather than omitting the keys. `evidence` is
+ * serialised to JSON for Task 5's route, and a renderer binds `evidence.claimPath`
+ * and `evidence.failed` on rows it did not special-case; an absent key reads
+ * `undefined`, which is not the same value as the `null` those rows are asserting.
+ *
+ * `failed` is present on every branch for the same reason `reason` is: a reader
+ * asking "was anything measured here?" gets `null` as an answer, never a missing
+ * key to be told apart from a deliberate absence.
+ */
+const UNMEASURED = Object.freeze({ claimPath: null, claimTitle: null, failed: null })
+
 export async function mutationCheck({ entry, runGuard } = {}) {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-    return outcome({ id: null, verdict: "not-run", evidence: { reason: "entry-is-not-an-object" } })
+    return outcome({
+      id: null,
+      verdict: "not-run",
+      evidence: { reason: "entry-is-not-an-object", ...UNMEASURED }
+    })
   }
 
   if (entry.mutation !== true) {
     return outcome({
       id: entry.id ?? null,
       verdict: "not-run",
-      evidence: { reason: "entry-not-marked-for-mutation" }
+      evidence: { reason: "entry-not-marked-for-mutation", ...UNMEASURED }
     })
   }
 
   // THE ONE PLACE THE SEPARATOR IS USED, and it is USED rather than spelled.
   const { file, title } = splitClaim(entry.claim)
 
-  if (file === null) {
+  // FALSY, NOT `=== null`. `splitClaim` answers `null` when the claim is absent,
+  // but answers the EMPTY STRING when a claim is a bare separator with a title
+  // hanging off it — there is a claim, and no file behind it. A null-only gate
+  // waves that through to `runGuard("")`, and a runner answering `{failed:true}`
+  // then upgrades the row to `bites` on the strength of a title with no file,
+  // which is the exact direction this module exists to keep shut. Falsiness
+  // covers `null` and `""` together, the same way the two branches above and
+  // below each cover a whole class of shape rather than one spelling of it.
+  if (!file) {
     return outcome({
       id: entry.id ?? null,
       verdict: "not-run",
-      evidence: { reason: "entry-claims-no-guard-path", claimPath: null, claimTitle: null }
+      evidence: { reason: "entry-claims-no-guard-path", ...UNMEASURED }
     })
   }
 
@@ -225,7 +257,7 @@ export async function mutationCheck({ entry, runGuard } = {}) {
     return outcome({
       id: entry.id ?? null,
       verdict: "not-run",
-      evidence: { reason: "no-runner-supplied", ...named }
+      evidence: { reason: "no-runner-supplied", ...named, failed: null }
     })
   }
 
@@ -236,7 +268,7 @@ export async function mutationCheck({ entry, runGuard } = {}) {
     return outcome({
       id: entry.id ?? null,
       verdict: "not-run",
-      evidence: { reason: "guard-run-threw", ...named }
+      evidence: { reason: "guard-run-threw", ...named, failed: null }
     })
   }
 

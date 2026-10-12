@@ -66,7 +66,7 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
  * its unmet preconditions, so the scan bans importing or calling them rather than
  * naming them. A guard cannot enforce a rule the module is obliged to break.
  *
- * `services/premortem/inventory.mjs` is here for the sharpest reason of the six
+ * `services/premortem/inventory.mjs` is here for the sharpest reason of the seven
  * (W3-05, Task 2), and the irony is worth stating plainly rather than leaving for
  * a reader to notice. Catalog entry SHIP-2 IS "a hand-maintained guard inventory
  * that omits a consumer, so the omitted consumer is invisible to the guard that is
@@ -78,6 +78,16 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
  * distinct scan: it reads every tracked guard file through this lexer to count its
  * assertions and declared titles, so its correctness depends on the lexer the same
  * way the other five depend on it.
+ *
+ * `__tests__/preMortemMutate.test.mjs` is here because this repo has now hit the
+ * omission THREE times, and this was the third (W3-05, Task 4). Task 2 registered
+ * `inventory.mjs`; `graduationWindows.test.mjs` was adopted unregistered and a
+ * probe proved the silence was real; and this file shipped in the same commit that
+ * registered `preMortemMutate.test.mjs`, one commit too late — its registration
+ * mutation was run and the whole file stayed green with a second lexer pasted in.
+ * That is the mechanism these two assertions police, demonstrated rather than
+ * asserted. Its scan is the widest any consumer has: seven purity predicates and
+ * four separator predicates over `mutate.mjs`, plus a body-slice call-count check.
  */
 const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/importResolutionGuard.test.mjs",
@@ -86,6 +96,7 @@ const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/graduationWindows.test.mjs",
   "apps/dashboard/server/__tests__/graduationWeighting.test.mjs",
   "apps/dashboard/server/__tests__/graduationGates.test.mjs",
+  "apps/dashboard/server/__tests__/preMortemMutate.test.mjs",
   "apps/dashboard/server/services/premortem/inventory.mjs"
 ])
 

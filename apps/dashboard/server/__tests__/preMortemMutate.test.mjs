@@ -123,23 +123,44 @@ describe("mutationCheck", () => {
     }
   })
 
-  // TRAP 3: an entry marked `mutation: true` whose claim is absent. The entry
-  // claims a mutation it does not describe. The runner must not be called at
-  // all here - `called` is the assertion that matters, because handing a runner
-  // a null or invented path is how a "did not run" becomes a green row upstream
-  // of this module.
+  // TRAP 3: an entry marked `mutation: true` whose claim resolves to no FILE.
+  // The entry claims a mutation it does not describe. The runner must not be
+  // called at all here - `called` is the assertion that matters, because handing
+  // a runner a null or invented path is how a "did not run" becomes a green row
+  // upstream of this module.
+  //
+  // TWO SHAPES, NOT ONE, and the second is the one a `=== null` guard misses.
+  // `splitClaim(" :: titleonly")` returns `{ file: "", title: "titleonly" }` -
+  // the separator is present, so there IS a claim, but its PATH is the empty
+  // string. `"" !== null`, so a null-only guard waves it through to `runGuard("")`
+  // and a runner answering `{failed:true}` upgrades the row to `bites` on the
+  // strength of a title with no file behind it. That is precisely the SHIP-1
+  // direction this module exists to prevent, reached through a malformed entry
+  // rather than a missing one. The branch above it (`entry.mutation !== true`)
+  // and the one below (`typeof runGuard !== "function"`) each cover a whole
+  // CLASS of shape for the same reason; the path gate must too.
   it("an entry marked for mutation that names no guard is not-run, and runs nothing", async () => {
-    let called = false
-    const r = await mutationCheck({
-      entry: { ...entry, claim: null },
-      runGuard: async () => {
-        called = true
-        return { failed: true }
-      }
-    })
-    expect(called).toBe(false)
-    expect(r.verdict).toBe("not-run")
-    expect(r.evidence.reason).toBe("entry-claims-no-guard-path")
+    // FALSEST RUNNER POSSIBLE. `{failed:true}` is the most flattering answer
+    // there is, so a row reaching it has nothing left to excuse the call.
+    const claims = [
+      ["an absent claim", null],
+      ["a claim that is a bare separator", " :: titleonly"]
+    ]
+    expect(claims).toHaveLength(2)
+    for (const [label, claim] of claims) {
+      let called = false
+      const r = await mutationCheck({
+        entry: { ...entry, claim },
+        runGuard: async () => {
+          called = true
+          return { failed: true }
+        }
+      })
+      expect(called, `${label}: the runner was handed a path that names no file`).toBe(false)
+      expect(r.verdict, label).toBe("not-run")
+      expect(r.verdict, label).not.toBe("bites")
+      expect(r.evidence.reason, label).toBe("entry-claims-no-guard-path")
+    }
   })
 
   // TRAP 4. The REASON is what this test is really about: with no runner at all,
@@ -307,6 +328,98 @@ describe("every outcome is a row a renderer can line up", () => {
       "no-runner-supplied"
     ])
   })
+
+  // M-2: THREE EVIDENCE FIELDS THAT WERE POPULATED BUT UNPINNED. Each of these
+  // shipped in round 0 carrying information a renderer depends on, and deleting
+  // any one of them left this file green. They are facts, not decoration: a
+  // reader of a `not-run` row is told WHICH claim was not run and WHY.
+  it("carries the resolved claim on every branch that resolved one", async () => {
+    // `no-runner-supplied` and `guard-run-threw` sit AFTER the split, so they
+    // know the file and the title. Round 0 wrote them via a `named` spread and
+    // nothing checked the spread reached the output.
+    const resolved = [
+      ["no-runner-supplied", await mutationCheck({ entry })],
+      ["guard-run-threw", await mutationCheck({ entry, runGuard: async () => { throw new Error("x") } })]
+    ]
+    expect(resolved).toHaveLength(2)
+    for (const [reason, r] of resolved) {
+      expect(r.evidence.reason, reason).toBe(reason)
+      expect(r.evidence.claimPath, `${reason} lost the resolved path`).toBe("server/__tests__/g.test.mjs")
+      expect(r.evidence.claimTitle, `${reason} must name the title too`).toBeNull()
+    }
+  })
+
+  it("carries an explicit null for a measurement that never happened", async () => {
+    // `failed: null` and not an absent key. The absence is the whole signal -
+    // "nothing usable came back" is a DIFFERENT fact from "no field was
+    // populated", and only the first of those is true here. A renderer testing
+    // `"failed" in evidence` must be able to tell them apart.
+    const r = await mutationCheck({ entry, runGuard: async () => null })
+    expect(r.evidence.reason).toBe("guard-result-not-a-boolean")
+    expect(Object.keys(r.evidence)).toContain("failed")
+    expect(r.evidence.failed).toBeNull()
+  })
+
+  // M-3: ONE KEY SET ON EVERY BRANCH, so a consumer never reads `undefined`.
+  //
+  // Round 0 shipped five different evidence shapes across eight branches. That
+  // is harmless in JSON and NOT harmless for Task 5, which serialises this object
+  // over HTTP and whose renderer reads `evidence.claimPath` on a `not-run` row -
+  // where an omitted key reads `undefined`, not `null`, and renders as the
+  // string "undefined" or an empty cell inconsistently with every other row.
+  // Absent-vs-null is a distinction that only matters to code, and the only
+  // consumer of this module is code.
+  it("gives every branch the same evidence keys, so a renderer reads one shape", async () => {
+    const branches = [
+      ["entry-is-not-an-object", { entry: null, runGuard: async () => ({ failed: true }) }],
+      ["entry-not-marked-for-mutation", { entry: { ...entry, mutation: false }, runGuard: async () => ({ failed: true }) }],
+      ["entry-claims-no-guard-path", { entry: { ...entry, claim: null }, runGuard: async () => ({ failed: true }) }],
+      ["no-runner-supplied", { entry }],
+      ["guard-run-threw", { entry, runGuard: async () => { throw new Error("x") } }],
+      ["guard-result-not-a-boolean", { entry, runGuard: async () => null }],
+      ["guard-failed-on-broken-implementation", { entry, runGuard: async () => ({ failed: true }) }],
+      ["guard-passed-on-broken-implementation", { entry, runGuard: async () => ({ failed: false }) }]
+    ]
+    expect(branches).toHaveLength(8)
+    const shapes = new Set()
+    for (const [reason, args] of branches) {
+      const r = await mutationCheck(args)
+      expect(r.evidence.reason, reason).toBe(reason)
+      shapes.add(Object.keys(r.evidence).sort().join(","))
+      // `claimPath` and `claimTitle` are present on EVERY row, whatever the
+      // verdict, so a renderer can bind them without a guard per verdict.
+      expect(Object.keys(r.evidence), `${reason} is missing a claim key`).toContain("claimPath")
+      expect(Object.keys(r.evidence), `${reason} is missing a claim key`).toContain("claimTitle")
+      // And `failed` answers "was anything measured?" on every row too.
+      expect(Object.keys(r.evidence), `${reason} is missing the measurement key`).toContain("failed")
+    }
+    // ONE shape, not two. An earlier draft of this assertion expected two and
+    // the implementation beat it; the four early branches could have kept a
+    // shorter key set and the renderer would still have had to special-case them.
+    expect([...shapes], "evidence key set differs between branches").toHaveLength(1)
+    expect([...shapes]).toEqual(["claimPath,claimTitle,failed,reason"])
+  })
+})
+
+// THE BLANKED SOURCE IS NOT EMPTY. `MUTATE_CODE` feeds seven purity predicates
+// and three separator predicates below, and every one of them is a NEGATIVE
+// assertion - "this string does not contain X". A negative assertion against an
+// empty string succeeds. So if `stripComments` ever regressed to returning `""`,
+// the whole source-scan tier would go green while measuring nothing, and
+// `MUTATE_SOURCE` - read raw, without the lexer - would be unaffected, so the
+// import-set pin would not catch it either.
+//
+// This matters more than usual here rather than less: the dependency whose
+// failure would cause it is `stripComments`, and `stripComments` is exactly the
+// shared predicate whose consumer inventory has now been the subject of three
+// separate registration defects in this repo. One line, and it converts a silent
+// vacuity into a red suite.
+describe("the comments-blanked source this file scans is not empty", () => {
+  it("carries real code, so the negative source scans cannot pass vacuously", () => {
+    expect(MUTATE_CODE.length).toBeGreaterThan(0)
+    // And it is the SAME module the raw-source assertions read, not a fixture.
+    expect(MUTATE_CODE.length).toBeLessThanOrEqual(MUTATE_SOURCE.length)
+  })
 })
 
 // THE BOUNDARY THAT MAKES THIS MODULE A READOUT AND NOT A DANGEROUS ONE.
@@ -371,6 +484,27 @@ describe("mutate.mjs reuses the shared splitter", () => {
     ]
   }
 
+  // ONE TABLE, TWO READERS, and that is the whole point.
+  //
+  // Round 0 declared the real check's patterns and the bite test's patterns
+  // SEPARATELY, so the bite test was certifying literals of its own: deleting
+  // the real check left it green, because a bite test for a detector that no
+  // longer exists says nothing about anything. Here the sample, the pattern and
+  // the real scan are one declaration, and the length pin stops the table
+  // quietly losing a row.
+  const SEPARATOR_FORBIDDEN = [
+    { pattern: /::/, why: "never spells the separator out", planted: 'const gap = " :: "' },
+    { pattern: /\.split\(/, why: "never re-implements the split", planted: 'const [f, t] = c.split(" :: ")' },
+    { pattern: /indexOf\(/, why: "never finds the separator by hand", planted: 'const at = c.indexOf(" :: ")' }
+  ]
+
+  /** THE SCAN. Both the real assertion and the bite test call THIS, not a copy. */
+  const assertNoReimplementedSplit = (code) => {
+    for (const { pattern, why } of SEPARATOR_FORBIDDEN) {
+      expect(code, why).not.toMatch(pattern)
+    }
+  }
+
   it("declares exactly one import, and it is the shared splitter", () => {
     // Not "imports splitClaim" - the WHOLE SET. One assertion then covers every
     // way this module could reach outside itself: `fs`, `child_process`, a
@@ -388,23 +522,29 @@ export const x = splitClaim(readFile)`
   })
 
   it("never spells the separator out, in code or in a comment", () => {
-    // `MUTATE_CODE` for the first three, so this file may NAME the separator in
+    // `MUTATE_CODE` for the table, so this file may NAME the separator in
     // its own prose without failing on its own documentation - and the code
     // check is the one that matters, because a comment carrying the literal
     // invites the next reader to copy it. The last line scans the RAW source,
     // comments included, which is the stricter half: it forbids the literal in
     // `mutate.mjs`'s prose too. That is deliberate, and it is why this file
     // refers to the separator as "the separator" rather than writing it out.
-    expect(MUTATE_CODE).not.toContain("::")
-    expect(MUTATE_CODE).not.toMatch(/\.split\(/)
-    expect(MUTATE_CODE).not.toMatch(/indexOf\(/)
+    assertNoReimplementedSplit(MUTATE_CODE)
     expect(MUTATE_SOURCE).not.toContain('" :: "')
   })
 
-  it("bites: the separator check fails on a reimplemented split", () => {
-    const reimplements = 'const [file, title] = entry.claim.split(" :: ")'
-    expect(reimplements).toMatch(/\.split\(/)
-    expect(reimplements).toContain("::")
+  it("bites: the separator scan fires on a reimplemented split", () => {
+    // THE FIRST HALF IS THE ONE THAT MATTERS, and it is the half round 0 was
+    // missing. The bite test calls the very function the real scan calls, so
+    // deleting or neutering that scan turns THIS red rather than leaving it
+    // green on a re-declared literal of its own.
+    expect(() => assertNoReimplementedSplit('const [f, t] = c.split(" :: ")')).toThrow()
+    // The second half keeps the diagnostic legible: each planted sample is
+    // shown tripping the detector the real scan uses for it.
+    expect(SEPARATOR_FORBIDDEN).toHaveLength(3)
+    for (const { pattern, why, planted } of SEPARATOR_FORBIDDEN) {
+      expect(planted, why).toMatch(pattern)
+    }
   })
 
   it("calls the runner with the file and nothing else", async () => {
@@ -442,20 +582,32 @@ describe("mutate.mjs derives the runner's observation once", () => {
     return code.slice(start, code.indexOf("\n}\n", start))
   }
 
-  it("reads the runner result through a single helper call", () => {
-    const body = checkBody(MUTATE_SOURCE)
+  /** THE SCAN. The real assertion below and the bite test call THIS. */
+  const assertDerivedOnce = (source) => {
+    const body = checkBody(source)
     // Scoped and non-empty, so this cannot pass by matching nothing - the same
     // vacuity the empty-slice failure in Task 3's own ordering check records.
     expect(body.length).toBeGreaterThan(0)
     expect((body.match(/observedFailure\(/g) ?? []).length).toBe(1)
+  }
+
+  it("reads the runner result through a single helper call", () => {
+    assertDerivedOnce(MUTATE_SOURCE)
   })
 
-  it("bites: the derivation check fails on a body that re-reads the result", () => {
-    const rederived = `export async function mutationCheck({ entry }) {
+  it("bites: the derivation scan fails on a body that re-reads the result", () => {
+    // Coupled, not re-declared: deleting or neutering `assertDerivedOnce` turns
+    // this red. Under round 0's shape it was certifying a regex literal of its
+    // own and would have stayed green.
+    expect(() =>
+      assertDerivedOnce(`export async function mutationCheck({ entry }) {
   const bites = observedFailure(result) === true
   const passed = observedFailure(result) === false
-}`
-    expect((rederived.match(/observedFailure\(/g) ?? []).length).toBe(2)
+}`)
+    ).toThrow()
+    // And the empty-body case, which is what a length guard is FOR: a scan that
+    // finds nothing must fail, not quietly pass on a count of zero.
+    expect(() => assertDerivedOnce("export async function mutationCheck() {}")).toThrow()
   })
 })
 
