@@ -50,8 +50,9 @@ New `server/services/premortem/` boundary, mirroring the `graduation/` layout:
 
 - `catalog.mjs` — the curated failure modes. Each entry: `id`, `kind`
   (`capital` | `shipping`), `severity`, `subsystem`, `summary`, `claim`
-  (guard reference or `null`), `acceptedUnclaimed` (owner + date, or `null`),
-  `mutation` (boolean), `rationale`. Static, no I/O.
+  (guard reference or `null`), `gap` (what the claim does NOT cover, or `null`),
+  `acceptedUnclaimed` (owner + date, or `null`), `mutation` (boolean),
+  `rationale`. Static, no I/O.
 
   **`severity`** is a three-level scale, and `kind` carries the meaning:
   `capital` severity is blast radius on money (`high` — capital at risk;
@@ -62,10 +63,25 @@ New `server/services/premortem/` boundary, mirroring the `graduation/` layout:
   and a shipping mode are never compared on one numeric scale, because they do
   not measure the same thing.
 
+  **`subsystem`** is a repo-relative directory path that must exist on disk
+  (e.g. `apps/dashboard/server/services/costs`). Free text would make the
+  `stale-catalog-entry` verdict — "a subsystem that no longer exists" —
+  unimplementable.
+
   **`claim`** is a repository-relative path to a tracked test file, optionally
-  suffixed with a `describe`/`it` name: `"server/__tests__/ws7RouteAuthCoverageGuard.test.mjs"`.
-  It must resolve to a file git tracks; anything else is `guard-missing` or
-  `stale-catalog-entry`, never assumed.
+  suffixed with a `describe`/`it` name after a space:
+  `"server/__tests__/ws7RouteAuthCoverageGuard.test.mjs the shared lexer is one"`.
+  The suffix exists because two different failure modes can legitimately share
+  one file; without it they are indistinguishable downstream. A resolver strips
+  the suffix when matching against the inventory. It must resolve to a file git
+  tracks; anything else is `guard-missing` or `stale-catalog-entry`, never
+  assumed.
+
+  **`gap`** names what the claim does NOT cover. An entry carrying both a
+  `claim` and a non-null `gap` is *partially* covered, and must never be
+  reported as `verified`. A guard that exists is not the same as a failure mode
+  that is closed — the first entry ever to need this was one whose guard
+  half-covered a drift that was live at the time it was written.
 
   **`mutation`** is declared per entry, never inferred. The owner marks which
   claims earn mutation cost in review; the planner does not guess.
@@ -94,7 +110,8 @@ the right trade for a readout that names missing coverage.
 
 | Verdict | Meaning |
 |---|---|
-| `verified` | Guard exists, is tracked, registered, and carries real assertions |
+| `verified` | Guard exists, is tracked, registered, and carries real assertions, and covers the whole failure mode |
+| `partially-covered` | A claim exists and resolves, but the entry carries a `gap` — the guard does not cover the whole failure mode |
 | `guard-missing` | The claim names a guard that does not exist |
 | `guard-unregistered` | The guard exists but is absent from its own inventory (GUARD-1) |
 | `guard-cannot-fail` | Registered, but its assertion shape is vacuous |
@@ -131,6 +148,9 @@ this repo governs this one — **absence is never a pass**.
    `stale-catalog-entry`.
 6. **No unverified upgrade, ever.** `unverified-manual` cannot become `verified`
    because a related test file passes. This is asserted by test, not by review.
+7. **A guard is not a closed failure mode.** An entry whose claim resolves but
+   which declares a `gap` reports `partially-covered`. A passing guard never
+   upgrades a partial claim to `verified`.
 
 ## 5. Testing
 
