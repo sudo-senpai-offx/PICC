@@ -185,10 +185,21 @@ Pure-function tests per module, hermetic, injected data.
   reader, is `unreadable` — never a guard asserting nothing.
 - `verify.mjs` — a matrix test pinning all seven verdicts, including that
   `unverified-manual` survives any inventory contents.
-- `mutate.mjs` — one guard built to pass vacuously (the tier must catch it) and
-  one that genuinely bites (the tier must not false-positive).
-- Route — the `graduationApi.test.mjs` pattern: `requireAuthStrict` first, no
-  state mutation, additive only, dynamic imports only.
+- `mutate.mjs` — every verdict reachable and nothing outside the trio; `bites` unreachable by
+  default, from a malformed runner result, and from a throwing runner. One guard built to pass
+  vacuously (the tier must catch it) and one that genuinely bites (the tier must not
+  false-positive) — but `mutate.mjs` is forbidden from running anything, so both are exercised
+  through an **injected** runner whose result the module treats as a measurement. A genuine
+  vacuous guard cannot be reached at that altitude; proving the tier catches one against a real
+  guard is the **route task's** obligation, and without a real `runGuard` the tier can only ever
+  return its two pessimisms.
+- Route — the `graduationApi.test.mjs` pattern: `requireAuthStrict` first, no state
+  mutation, additive only, dynamic imports only. It supplies the real `runGuard`, and must
+  demonstrate at least one entry reporting `bites` and one reporting `does-not-bite`.
+- Every file importing `stripComments` from `guard-primitives.mjs` registers itself in
+  `VITEST_CONSUMERS`. This has been missed three times in this repo; the omission is silent
+  because the guard's `describe` title interpolates the array's length, so a green board keeps
+  reporting the old count.
 
 Every new hand-rolled test file is staged before the isolation guard runs;
 `ws7TestStoreIsolation` enumerates tracked files via `git ls-files` and passes
