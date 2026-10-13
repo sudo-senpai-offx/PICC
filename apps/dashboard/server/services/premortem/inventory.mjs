@@ -126,8 +126,8 @@ const ASSERTION_CALL = /\bexpect\s*\(/g
  * direction to be wrong in.
  *
  * BUT THIS RULE IS A STRICT SUBSET OF THE RUNNER'S, AND SAYING "IT IS THE RUNNER'S
- * RULE" WOULD BE FALSE. Measured over the tracked tree, that glob collects 443
- * files and `isGuardPath` collects 328 of them. The 115-file gap is entirely
+ * RULE" WOULD BE FALSE. Measured over the tracked tree, that glob collects 447
+ * files and `isGuardPath` collects 332 of them. The 115-file gap is entirely
  * extension — 49 `.ts` and 66 `.tsx` — and it includes one SERVER-side test,
  * `apps/dashboard/server/__tests__/ws6-domain.test.ts`, which vitest runs and this
  * inventory cannot name. The strictness simply moved: off the `__tests__` axis,
@@ -214,8 +214,8 @@ export function splitClaim(claim) {
   * it must carry what the file DECLARES, not what it would evaluate to. A template
   * literal with an interpolation is therefore reported with the `${...}` text
   * intact: resolving it would mean running the file, and a title that only exists
-  * after evaluation is not a title anyone can grep for. Measured, 19 call sites
- * across 12 of the tracked guards declare one, so this is a shape a reader meets
+  * after evaluation is not a title anyone can grep for. Measured, 21 call sites
+ * across 14 of the tracked guards declare one, so this is a shape a reader meets
   * rather than a theoretical one.
   *
   * COMMENTS ARE BLANKED FIRST, through the one shared lexer, because a guard's
@@ -228,7 +228,7 @@ export function splitClaim(claim) {
  * one must be able to report "this extractor did not look" rather than "nothing
  * covers this".
  *
- * MEASURED over the 328 tracked guards this inventory sees: `it.each` 19,
+ * MEASURED over the 332 tracked guards this inventory sees: `it.each` 19,
  * `describe.each` 1, `test.each` 1 — 21 modifier-chained CALL sites, which is the
  * tree-wide `unresolvedTitles` sum. Two of those 21 are `it.each(…)` and
  * `describe.each(…)` written inside string literals in THIS TASK'S OWN test
@@ -238,13 +238,22 @@ export function splitClaim(claim) {
  * never as a call, so it declares no title and is not counted — an earlier
  * revision of this comment claimed a `describe.skip` call site that does not exist.
  *
-  * ONE RESIDUAL LIMIT, STATED RATHER THAN IMPLIED. One call site in the whole tree
-  * sits inside a string literal and contributes a single phantom title;
-  * `stripComments` preserves string CONTENT by design (the dispatch predicates
-  * depend on it), so it cannot blank that, and closing the gap here would mean a
-  * second string lexer in a second home — the exact duplication
-  * `guard-primitives.mjs` exists to prevent.
-  */
+* ONE RESIDUAL LIMIT, STATED RATHER THAN IMPLIED. A `describe`/`it`/`test` call
+ * written INSIDE A STRING LITERAL still reads as a declared title, because
+ * `stripComments` preserves string CONTENT by design — the dispatch predicates
+ * depend on it. The fixtures that show it are `preMortemInventory.test.mjs:45`
+ * and `:163`, whose `readFile` values are sample guard source held as strings;
+ * the titles they contribute (`a guard`, `x`, `nothing here`, `passes`) belong to
+ * no real test.
+ *
+ * NO TREE-WIDE COUNT IS QUOTED, AND THAT IS THE POINT. An earlier revision of
+ * this paragraph claimed "one call site in the whole tree" contributing "a single
+ * phantom title"; this task's own fixtures made that false, and re-deriving a
+ * replacement number needs a second string lexer in a second home — the exact
+ * duplication `guard-primitives.mjs` exists to prevent. So the limit is named at
+ * the sites that demonstrate it and left uncounted, rather than counted by a
+ * scanner this module would not be allowed to ship.
+ */
 function declaredTitles(view) {
   const titles = []
   for (const match of view.matchAll(CALL_SITE)) {

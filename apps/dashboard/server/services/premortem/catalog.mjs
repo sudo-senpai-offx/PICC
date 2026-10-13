@@ -35,7 +35,7 @@
 //
 // `claim` is a repo-relative path to a TRACKED test file, OPTIONALLY SUFFIXED with
 // the `it` that carries the coverage — separated by `" :: "`. The suffix is
-// load-bearing rather than decorative: four of the eleven modes share two guard
+// load-bearing rather than decorative: four of the twelve modes share two guard
 // files, and without it two different failure modes pointing at one file are
 // indistinguishable to anyone reading the catalog. A bare path and a suffixed path
 // are different strings while meaning the same thing to a reader.
@@ -45,7 +45,7 @@
 // COMPLETENESS, so a gap that is blank or vague would silently promote a
 // half-guarded mode to a green row — which is the false confidence this program
 // exists to prevent, committed one layer down. Three entries carry a gap today
-// (SHIP-1, SHIP-2, SHIP-3); the other eight either name a guard that covers the
+// (SHIP-1, SHIP-2, SHIP-3); the other nine either name a guard that covers the
 // whole mode, or name no guard at all.
 //
 // An entry is PARTIALLY COVERED when it has BOTH a claim and a non-null gap.
@@ -82,7 +82,7 @@ export const SEVERITIES = Object.freeze(["high", "medium", "low"])
 export const KINDS = Object.freeze(["capital", "shipping"])
 
 /**
- * The catalog itself: eleven modes, eleven dispositions, no thirds.
+ * The catalog itself: twelve modes, twelve dispositions, no thirds.
  *
  * Every mode below is seeded from something this program actually did, not from a
  * hypothetical. Where a mode names a guard, the path is the repository-relative
@@ -115,7 +115,7 @@ export const FAILURE_MODES = Object.freeze([
     gap:
       "The claim is PARTIAL, and the partial half is named here rather than left to prose. " +
       "That `it` pins ONE drift: a consumer that declares `stripComments` itself. Its negative " +
-      "check is the regex at sharedCommentLexer.test.mjs:100, which matches the literal " +
+      "check is the regex at sharedCommentLexer.test.mjs:150-151, which matches the literal " +
       "identifier `stripComments` and nothing else — so a lexer under ANY other name is " +
       "invisible to it. That is not hypothetical: ws7AuthUsersReaderGuard.test.mjs:87 declares " +
       "`function codeOnly(text)`, its own block-comment lexer, and this guard passes with that " +
@@ -151,7 +151,7 @@ export const FAILURE_MODES = Object.freeze([
     gap:
       "This is a PARTIAL claim too, and the reason is the failure mode itself. The `it` named " +
       "here asserts that every CONSUMER RESOLVES the one shared lexer, but the set of consumers " +
-      "is a hand-written frozen array at sharedCommentLexer.test.mjs:69-76, and a file that is " +
+      "is a hand-written frozen array at sharedCommentLexer.test.mjs:117-127, and a file that is " +
       "not in that array is never examined by either half of the guard. ws7AuthUsersReaderGuard.test.mjs " +
       "is not listed today, which is precisely how an unregistered lexer survives. The guard " +
       "cannot detect its own inventory being incomplete, because the incompleteness IS the " +
@@ -159,7 +159,7 @@ export const FAILURE_MODES = Object.freeze([
     mutation: true,
     rationale:
       "GUARD-1's root cause, and it is structural rather than accidental: the consumer list at " +
-      "sharedCommentLexer.test.mjs:69-76 is a hand-written frozen array of six paths, and " +
+      "sharedCommentLexer.test.mjs:117-127 is a hand-written frozen array of nine paths, and " +
       "ws7AuthUsersReaderGuard.test.mjs is not among them. Both halves of the proof that file " +
       "offers — the 'no consumer RETAINS a declaration' check and the 'resolves to the SAME " +
       "absolute module' check — iterate that array, so a consumer missing from it is invisible to " +

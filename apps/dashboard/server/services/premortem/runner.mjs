@@ -31,7 +31,7 @@
 // index and every such guard would fail for the wrong reason and be misreported
 // as a bite.
 //
-// ── NO JUNCTION, NO SYMLINK, EVER. MEASURED, NOT ASSUMED. ───────────────────
+// ── ONE LINK, UNLINKED BEFORE ANYTHING DELETES ──────────────────────────────
 //
 // The obvious way to give a sandbox its dependencies is to drop a directory
 // link at `<sandbox>/node_modules` pointing at the repository's own. That was
@@ -46,13 +46,22 @@
 // repository's installed dependencies. (PowerShell's own `Remove-Item -Recurse`
 // follows the same kind of link, with the same result.) Neither is used here.
 //
-// INSTEAD THE SANDBOX HAS NO `node_modules` AT ALL, and vitest is invoked BY
-// ABSOLUTE PATH from the repository's own install, with the working directory
-// set to the sandbox's `apps/dashboard`. Verified end to end: a sandbox with no
-// `node_modules` runs `sharedCommentLexer.test.mjs` green (19 passed) that way.
-// The consequence is stated rather than left for a reader to infer — the sandbox
-// has no dependencies of its own, so `git worktree remove --force` can only ever
-// delete files the sandbox itself checked out.
+// SO THE SANDBOX CARRIES EXACTLY ONE LINK — the `node_modules` junction
+// `createSandbox` makes after the checkout — AND IT IS UNLINKED BEFORE ANY
+// DELETION OF ANY KIND. `apps/dashboard/vite.config.ts` imports `vite`, so
+// without it vitest cannot load its own config and every guard exits before
+// collecting a test (measured: `ERR_MODULE_NOT_FOUND: Cannot find package
+// 'vite'`). An earlier revision of this paragraph said the sandbox had no
+// `node_modules` at all; that stopped being true when the junction was added, and
+// leaving it said was this module's own defect class.
+//
+// THE INVARIANT THAT MATTERS IS NOT "NO LINK" BUT "NO LINK SURVIVING A DELETE",
+// and it is enforced by `unlinkQuietly` rather than described here. Verified end
+// to end: a sandbox carries the junction, and `dispose()` removes the link before
+// `git worktree remove` or any recursive delete runs, so with no link left those
+// paths can only ever delete files the sandbox itself checked out. Measured: a
+// sandbox runs `sharedCommentLexer.test.mjs` green — 19 tests, 19 passed — that
+// way.
 //
 // ── ONE MEASUREMENT PER GUARD FILE, PER SANDBOX ─────────────────────────────
 //
@@ -62,6 +71,53 @@
 // fact. Running it twice would produce two rows that agree for an uninteresting
 // reason — the second run would be reading a sandbox the first run already
 // mutated, which is a second-order trap rather than a second measurement.
+//
+// ── ONE MEASUREMENT PER (GUARD FILES, REPO HEAD), ACROSS CALLERS ─────────────
+//
+// The rule above bounds the work WITHIN one sandbox. It says nothing about two
+// callers, and that gap was an availability defect rather than a safety one: the
+// containment envelope held under concurrency (measured — coexisting sandboxes,
+// `.git/worktrees` back to its starting count, identical payloads, no leaked
+// registration), but every concurrent identical request did its OWN work.
+//
+// MEASURED THROUGH THE ASSEMBLED ROUTE, authenticated non-loopback caller, on a
+// 12-core host: 1 request 10,738 ms; 3 concurrent 10,824 ms; 6 concurrent
+// 13,943 ms, with six worktrees registered at once. So the wall-clock cost on
+// THIS host is mild, and a reviewer-measured 586 s at concurrency three did not
+// reproduce here — that number is not repeated anywhere below because it was not
+// measured here. What reproduces exactly, and is machine-independent, is the WORK:
+// one measurement is a full repository checkout plus one vitest run per claimed
+// guard, measured at 1,150 tracked files and 13.6 MB per sandbox. Six concurrent
+// callers meant six of those and twelve vitest processes to answer one question.
+// One double-click, one refresh or one browser prefetch is enough to ask it.
+//
+// SO IDENTICAL CONCURRENT CALLERS SHARE ONE MEASUREMENT, keyed by the guard files
+// they measure AND the repository HEAD. Both halves are load-bearing:
+//
+// - the guard files, because two callers measuring different guards are different
+//   measurements and sharing one would hand a caller a verdict about a guard it
+//   never ran;
+// - the HEAD, because a measurement is only valid for the tree it ran against, so
+//   a stale key must NOT be reused. Keying on the guard files alone would let a
+//   measurement taken against an old commit answer a request about the current
+//   one, while looking identical.
+//
+// IT IS IN-FLIGHT AND NOT A CACHE, and the entry is deleted the moment the run
+// settles. A retained entry would turn this into a cache, which is a different
+// decision with a different answer: it would make the route report a measurement
+// taken minutes ago as though it were taken now. Bounding duplicate work is this
+// module's business; deciding what a stale answer is worth is not.
+//
+// WHAT REMAINS UNBOUND, STATED RATHER THAN IMPLIED. Distinct KEYS still run
+// concurrently — and the HEAD half of a key is not caller-controllable, so a
+// caller cannot manufacture one: distinct keys require distinct commits landing
+// while a measurement is in flight, so the residual is bounded by how fast this
+// repository moves rather than by how fast a client can click. Measured cost per
+// distinct key is the 10.7 s single-request figure. NO SEPARATE CEILING IS ADDED
+// for that here, and the reason is a decision rather than an omission: a ceiling
+// needs a rejection policy, and a rejection policy is an owner ruling about what
+// this route does when it is already busy. Inventing one would either turn the
+// tier silent under load or answer 502 to a caller who did nothing wrong.
 //
 // ── A MUTATION THAT DOES NOT APPLY IS NOT A VERDICT ─────────────────────────
 //
@@ -293,7 +349,40 @@ export function isInsideRepoRoot(dir) {
  *
  * @returns {Promise<{dir: string, dispose: () => Promise<void>}>}
  */
-export async function createSandbox() {
+export function createSandbox() {
+  // ONE AT A TIME, AND THE REASON IS A MUTATION-CHECKED SAFETY PROPERTY. Every
+  // removal path here ends in `git worktree prune`, which operates on the WHOLE
+  // repository: it removes the administrative entries of any worktree whose
+  // directory is gone. While the guards are still running in their sandboxes those
+  // directories exist and the registrations are wanted, so prune is a no-op for
+  // them — but a dispose racing a CONCURRENTLY created sibling's
+  // `git worktree add` is a window in which the registration is not yet visible
+  // and prune would collect it. The directory would survive and the measurement
+  // would still be correct, while `.git/worktrees` would carry an entry with no
+  // directory behind it, which is precisely the half-abandoned sandbox this
+  // feature refuses to create. Serialising create and dispose removes the window
+  // rather than narrowing it, and the measured cost is nil: after the in-flight
+  // bound, distinct concurrent measurements are already rare.
+  return sandboxMutex(buildSandbox)
+}
+
+/**
+ * Concurrency is bounded here, so a caller waits its turn rather than racing.
+ *
+ * `previous.then(task, task)` runs the task whether the previous one resolved or
+ * rejected: a failed sandbox must not wedge every later one behind a rejection it
+ * can do nothing about.
+ */
+function sandboxMutex(task) {
+  const previous = sandboxTail
+  sandboxTail = previous.then(task, task)
+  return sandboxTail
+}
+
+/** Every sandbox in this process is created and torn down one at a time. */
+let sandboxTail = Promise.resolve()
+
+async function buildSandbox() {
   const dir = mkdtempSync(join(tmpdir(), "premortem-sandbox-"))
   const link = join(dir, "node_modules")
   let disposed = false
@@ -318,29 +407,30 @@ export async function createSandbox() {
     throw new Error(`sandbox-unavailable: ${err.message}`)
   }
 
-  return {
-    dir,
-    async dispose() {
-      if (disposed) return
-      disposed = true
-      // FIRST, and before any deletion of any kind. See `unlinkQuietly`.
-      unlinkQuietly(link)
-      try {
-        await execFile("git", ["worktree", "remove", "--force", dir], {
-          cwd: REPO_ROOT,
-          timeout: GUARD_TIMEOUT_MS,
-          maxBuffer: 1 << 26
-        })
-      } catch {
-        // The worktree is already gone, or git cannot remove it. The link is
-        // gone by this point, so a recursive delete can only reach files this
-        // sandbox checked out.
-        rmSync(dir, { recursive: true, force: true })
-      }
-      // Prune so a half-removed worktree does not linger in `.git/worktrees`.
-      await execFile("git", ["worktree", "prune"], { cwd: REPO_ROOT }).catch(() => {})
+  const dispose = async () => {
+    if (disposed) return
+    disposed = true
+    // FIRST, and before any deletion of any kind. See `unlinkQuietly`.
+    unlinkQuietly(link)
+    try {
+      await execFile("git", ["worktree", "remove", "--force", dir], {
+        cwd: REPO_ROOT,
+        timeout: GUARD_TIMEOUT_MS,
+        maxBuffer: 1 << 26
+      })
+    } catch {
+      // The worktree is already gone, or git cannot remove it. The link is
+      // gone by this point, so a recursive delete can only reach files this
+      // sandbox checked out.
+      rmSync(dir, { recursive: true, force: true })
     }
+    // Prune so a half-removed worktree does not linger in `.git/worktrees`.
+    await execFile("git", ["worktree", "prune"], { cwd: REPO_ROOT }).catch(() => {})
   }
+
+  // Disposal takes the same lock as creation, so a prune can never race a
+  // `worktree add` that has not registered yet. See `createSandbox`.
+  return { dir, dispose: () => sandboxMutex(dispose) }
 }
 
 /**
@@ -488,21 +578,160 @@ function basenameOf(rel) {
 /**
  * Run `run` with a live `runGuard`, and always dispose of the sandbox.
  *
- * The disposal is in a `finally`, so a throw from the readout still tears the
- * worktree down rather than leaving one registered in `.git/worktrees`.
+ * THE WHOLE MEASUREMENT IS AN IN-FLIGHT MEMO ENTRY, keyed by guard file + repo
+ * HEAD — see the header for what that is for and what it does not cover.
+ *
+ * The entry is created BEFORE the sandbox, so a caller that arrives while the
+ * measurement is running joins it rather than starting a second one. It is
+ * removed in a `finally`, which is what makes this a bound rather than a cache:
+ * a later caller measures again rather than being handed the last answer.
+ *
+ * The disposal stays in a `finally` INSIDE the memoised task, so a throw from
+ * the readout still tears the worktree down rather than leaving one registered
+ * in `.git/worktrees`.
+ *
+ * `createSandbox` is a parameter so the sharing is TESTABLE BY COUNT rather than
+ * inferred from a timing coincidence — the same injection seam
+ * `guardInventory({ listTrackedFiles, readFile })` already uses. The route passes
+ * nothing and gets the real worktree.
  *
  * @template T
- * @param {{run: (runGuard: (file: string) => Promise<unknown>) => Promise<T>}} input
+ * @param {object} input
+ * @param {(runGuard: (file: string) => Promise<unknown>) => Promise<T>} input.run
+ * @param {ReadonlyArray<string>} input.keys the guard files this measurement will
+ *   cover. REQUIRED rather than optional: a caller that omitted it would be
+ *   handed a key with no guard-file component and would silently share across
+ *   different measurements.
+ * @param {() => Promise<{dir: string, dispose: () => Promise<void>}>} [input.createSandbox]
  * @returns {Promise<T>}
  */
-export async function withSandbox({ run }) {
-  const sandbox = await createSandbox()
-  try {
-    return await run(createGuardRunner({ sandbox }))
-  } finally {
-    await sandbox.dispose()
+export async function withSandbox({ run, keys, createSandbox: build = createSandbox }) {
+  const key = measurementKey({ head: await repoHead(), keys })
+  const { value } = await inFlightMeasurements.run(key, async () => {
+    const sandbox = await build()
+    try {
+      return await run(createGuardRunner({ sandbox }))
+    } finally {
+      await sandbox.dispose()
+    }
+  })
+  return value
+}
+
+/**
+ * The commit this repository is at, read from git.
+ *
+ * A MEASUREMENT IS ONLY VALID FOR THE TREE IT RAN AGAINST, which is why this is
+ * part of the memo key rather than decoration: without it, a measurement taken
+ * against one commit would keep answering requests about another. `git worktree
+ * add` in `createSandbox` checks out the same HEAD this reads, so the two cannot
+ * disagree — and if git cannot answer, `createSandbox` was going to fail anyway,
+ * so this fails LOUD rather than substituting a guess.
+ *
+ * THE READ ITSELF IS SHARED IN FLIGHT, and that is load-bearing rather than
+ * tidy. Every caller needs the key BEFORE it can reach the measurement memo, so
+ * three callers each spawning their own `git rev-parse` would arrive at the memo
+ * at three different moments — and the first to arrive deletes its entry when its
+ * measurement settles, which is long before a slow HEAD read returns. A caller
+ * that missed the window would then build its own sandbox, and the bound would be
+ * best-effort exactly when the machine is busiest. Sharing the read makes the
+ * three continuations resume in one microtask drain, so the first to run creates
+ * the entry before the other two look.
+ *
+ * MEASURED, because this was found by the full suite rather than by reading: the
+ * sharing test passed in isolation and failed under load for this reason.
+ *
+ * @returns {Promise<string>}
+ */
+export async function repoHead() {
+  const { value } = await headReads.run(HEAD_KEY, async () => {
+    const { stdout } = await execFile("git", ["rev-parse", "HEAD"], {
+      cwd: REPO_ROOT,
+      maxBuffer: 1 << 20
+    })
+    return stdout.trim()
+  })
+  return value
+}
+
+/** One namespace, so this memo cannot collide with a measurement key. */
+const HEAD_KEY = "repo-head"
+const headReads = createInFlightMemo()
+
+/**
+ * The memo key: the repository HEAD plus the guard files being measured.
+ *
+ * SORTED, so two callers naming the same guards in a different order still share
+ * — order is a detail of how a caller collected them, not part of what it is
+ * measuring.
+ *
+ * IT REFUSES RATHER THAN DEFAULTS. Every argument is checked because the failure
+ * this guards is silent in the worst direction: a key built without the HEAD, or
+ * with an empty guard set, still identifies SOMETHING, and would let a
+ * measurement taken against one tree answer a request about another. A throw here
+ * is a 502 naming the cause, which is the direction this repository fails in.
+ *
+ * @param {object} input
+ * @param {string} input.head
+ * @param {ReadonlyArray<string>} input.keys
+ * @returns {string}
+ */
+export function measurementKey({ head, keys }) {
+  const refuse = (why) => {
+    throw new Error(`measurement-key-unusable: ${why}`)
+  }
+  if (typeof head !== "string" || head === "") refuse("head is not a non-empty string")
+  if (!Array.isArray(keys) || keys.length === 0) refuse("keys is not a non-empty array")
+  if (!keys.every((k) => typeof k === "string" && k !== "")) {
+    refuse("every key must be a non-empty string")
+  }
+  return `${head}\u0000${[...keys].sort().join("\u0001")}`
+}
+
+/**
+ * A memo that runs a task at most once per key AT A TIME.
+ *
+ * EXTRACTED AND EXPORTED SO IT CAN BE TESTED WITHOUT A WORKTREE, which is the
+ * same reason `readMeasurement` is a separate exported function: reaching the
+ * sharing branch through the real runner needs a sandbox, and a branch no test
+ * can cheaply reach is a branch nobody pinned. Five silent-branch defects were
+ * found this way across this branch's tasks.
+ *
+ * IT REPORTS WHO RAN IT. `shared` is the whole observable difference between the
+ * owner and a joiner, and a caller that wants to log or count the distinction has
+ * to be able to see it rather than infer it.
+ *
+ * DELETED IN A `finally` OWNED BY THE OWNER, and the identity check on delete is
+ * deliberate: only the caller that put the entry there removes it, so a caller
+ * that arrived after the run settled and already replaced the entry cannot have
+ * its successor deleted out from under it.
+ *
+ * @returns {{run: (key: string, task: () => Promise<unknown>) => Promise<{shared: boolean, value: unknown}>}}
+ */
+export function createInFlightMemo() {
+  const inFlight = new Map()
+  return {
+    async run(key, task) {
+      const existing = inFlight.get(key)
+      if (existing !== undefined) return { shared: true, value: await existing }
+      const started = (async () => task())()
+      inFlight.set(key, started)
+      try {
+        return { shared: false, value: await started }
+      } finally {
+        if (inFlight.get(key) === started) inFlight.delete(key)
+      }
+    }
   }
 }
+
+/**
+ * This process's memo. Module-scoped because the thing being bounded is the
+ * ROUTE, not one call to it: two callers reach `withSandbox` through two
+ * different module instances of `handlers.mjs` in some callers and the same one
+ * in others, and the redundancy to remove is between them.
+ */
+const inFlightMeasurements = createInFlightMemo()
 
 /** Exported for the route's own diagnostics; the sandbox root a run started from. */
 export function sandboxDashboardOf(dir) {

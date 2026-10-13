@@ -3699,15 +3699,26 @@ async function _handleApiInner(req, res, url, reqId) {
   // envelope and the measurements that shaped it.
   //
   // IT IS SLOW, AND THAT IS THE PRICE OF IT BEING REAL. One worktree checkout
-  // plus one vitest run per distinct claimed guard. The alternative is a tier
-  // that reports `not-run` forever, which is not a weaker reading of the truth —
-  // it is no reading of it at all.
+// plus one vitest run per distinct claimed guard, measured at 10.7 s for a
+  // single authenticated request and 1,150 tracked files / 13.6 MB per sandbox.
+  // The alternative is a tier that reports `not-run` forever, which is not a
+  // weaker reading of the truth - it is no reading of it at all.
+  //
+  // CONCURRENT IDENTICAL CALLERS SHARE ONE MEASUREMENT, via an in-flight memo in
+  // `runner.mjs` keyed by guard file + repository HEAD. That is a BOUND, not a
+  // cache: the entry is deleted when the run settles, so the answer is always one
+  // this tree produced rather than one replayed from minutes ago. What remains
+  // unbounded is DISTINCT keys, and a caller cannot manufacture one - a distinct
+  // HEAD requires a distinct commit to land while a measurement is in flight, so
+  // the residual is bounded by how fast the repository moves, not by how fast a
+  // client can click. No separate ceiling is imposed on it; see the header in
+  // `runner.mjs` for why that needs an owner ruling rather than a guess.
   // -------------------------------------------------------------------
   if (path === "/api/premortem/overview" && req.method === "GET") {
     if (!(await requireAuthStrict(req, res))) return true
     try {
       const { catalogEntries } = await import("./services/premortem/catalog.mjs")
-      const { guardInventory } = await import("./services/premortem/inventory.mjs")
+      const { guardInventory, splitClaim } = await import("./services/premortem/inventory.mjs")
       const { verifyAll } = await import("./services/premortem/verify.mjs")
       const { mutationCheck } = await import("./services/premortem/mutate.mjs")
       const { withSandbox } = await import("./services/premortem/runner.mjs")
@@ -3770,7 +3781,34 @@ async function _handleApiInner(req, res, url, reqId) {
       // EVERY entry is offered to the tier, not only the marked ones: the
       // unmarked answer is `entry-not-marked-for-mutation`, which is a fact a
       // reader is entitled to and which a filtered list would simply hide.
+      //
+      // `keys` NAMES THE GUARD FILES THIS MEASUREMENT COVERS, and it is what the
+      // runner keys its in-flight bound on together with the repository HEAD. One
+      // measurement is a full repository checkout plus a vitest run per claimed
+      // guard, so without it every concurrent identical caller - one double-click,
+      // one refresh, one browser prefetch - ran its own. Measured per sandbox:
+      // 1,150 tracked files and 13.6 MB, so six concurrent callers meant six of
+      // those and twelve vitest processes to answer one question.
+      //
+      // IT IS A SUPERSET ON PURPOSE. Every mode's claim path is named rather than
+      // only the ones the catalog marks `mutation: true`, because the set is
+      // derived from the same frozen catalog on every call and a narrower filter
+      // would be one more thing that can silently stop matching. Over-naming only
+      // makes the key stricter; under-naming would let two different measurements
+      // share one result.
+      //
+      // CLAIMS WITH NO PATH ARE FILTERED, not passed through: `splitClaim`
+      // answers `null` for a missing claim, and `measurementKey` refuses a key it
+      // cannot build honestly rather than defaulting. A catalog entry that stops
+      // naming a guard is a catalog defect the payload already reports, so it must
+      // not also be able to stop this route from answering.
+      const mutationKeys = [
+        ...new Set(
+          modes.map((entry) => splitClaim(entry.claim).file).filter((file) => typeof file === "string" && file !== "")
+        )
+      ].sort()
       const mutation = await withSandbox({
+        keys: mutationKeys,
         run: async (runGuard) => {
           const rows = []
           for (const entry of modes) rows.push(await mutationCheck({ entry, runGuard }))

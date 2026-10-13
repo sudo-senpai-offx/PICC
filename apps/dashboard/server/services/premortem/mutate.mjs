@@ -76,7 +76,7 @@
 // the next reader to copy it.
 //
 // WHY THE SPLIT IS LOAD-BEARING HERE RATHER THAN THEORETICAL: measured over the
-// catalog, all 4 of the 11 entries marked for mutation — SHIP-1, SHIP-2, SHIP-5
+// catalog, all 4 of the 4 entries marked for mutation — SHIP-1, SHIP-2, SHIP-5
 // and SHIP-6 — carry a SUFFIXED claim. Every entry the catalog currently marks
 // for this tier names a specific title, so handing the runner the raw claim
 // string would be wrong every time rather than almost always.

@@ -418,4 +418,64 @@ describe("pre-mortem API (W3-05 Task 5) — overview route", () => {
     const head = code.slice(0, code.indexOf("export async function handleApi"))
     expect(head).not.toContain("premortem/")
   })
+
+  it(
+    "concurrent IDENTICAL requests are BOUNDED to one measurement (final fix round)",
+    async () => {
+      // ── THE AVAILABILITY DEFECT, PINNED END TO END ─────────────────────────
+      //
+      // The runner already memoised per guard file WITHIN one sandbox, so the
+      // tier did no redundant work per request. Nothing bounded ACROSS callers,
+      // and that was the expensive half: one measurement is a full repository
+      // checkout plus a vitest run per claimed guard, measured at 1,150 tracked
+      // files and 13.6 MB per sandbox and 10.7 s per single request.
+      //
+      // Before the fix, three simultaneous authenticated callers each built their
+      // own worktree. After it, they share one in-flight memo entry keyed by guard
+      // file + repo HEAD — so the wave registers at most ONE extra worktree.
+      //
+      // WHY THE WORKTREE COUNT AND NOT A DURATION. A wall-clock assertion would
+      // pass on a fast host and fail on a slow one for a reason that has nothing
+      // to do with what is asserted; the registered-worktree count is the thing
+      // that is actually being bounded, and it is machine-independent. The
+      // sampler polls `git worktree list` while the wave runs and the assertion is
+      // that it never rose by more than one above the pre-wave count.
+      const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url))
+      const countWorktrees = () =>
+        execFileSync("git", ["worktree", "list"], { cwd: repoRoot, encoding: "utf8" })
+          .split(/\r?\n/)
+          .filter(Boolean).length
+
+      const before = countWorktrees()
+      let peak = before
+      const sampler = setInterval(() => {
+        try {
+          peak = Math.max(peak, countWorktrees())
+        } catch {
+          /* a failed poll must not fail the test; the final read still applies */
+        }
+      }, 300)
+      try {
+        const [a, b, c] = await Promise.all([overview(), overview(), overview()])
+        for (const res of [a, b, c]) expect(res.status).toBe(200)
+        // ALL THREE ANSWERED. A bound that served one caller and left the others
+        // hanging would be a denial of service wearing a fix's name.
+        expect(a.body.results.length).toBeGreaterThan(0)
+        // AND they agree: sharing a measurement must not mean the callers disagree
+        // about it.
+        expect(JSON.stringify(b.body.mutation)).toBe(JSON.stringify(a.body.mutation))
+        expect(JSON.stringify(c.body.counts)).toBe(JSON.stringify(a.body.counts))
+      } finally {
+        clearInterval(sampler)
+      }
+      expect(
+        peak,
+        `three concurrent callers registered ${peak - before} worktrees; the route builds one per caller`
+      ).toBeLessThanOrEqual(before + 1)
+      // AND NOTHING WAS LEAKED. A shared sandbox that outlives its wave is the
+      // failure the containment envelope exists to prevent.
+      expect(countWorktrees()).toBe(before)
+    },
+    ROUTE_TIMEOUT
+  )
 })

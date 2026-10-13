@@ -333,7 +333,7 @@ describe("isGuardPath", () => {
     // a guard vitest runs but this cannot name is a FALSE MISS.
     //
     // BUT DO NOT READ "SUBSET" AS "EQUIVALENT". Measured over the tracked tree that
-    // glob collects 443 files and this collects 328; the 115-file gap is all
+    // glob collects 447 files and this collects 332; the 115-file gap is all
     // extension (49 `.ts`, 66 `.tsx`) and includes one SERVER-side test,
     // `apps/dashboard/server/__tests__/ws6-domain.test.ts`, that vitest runs and
     // this cannot see. The strictness moved from an unexercised `__tests__` axis

@@ -159,18 +159,33 @@ describe("verify", () => {
   })
 
   it("runs the self-audit before any claim and returns counts for every verdict", () => {
+    // THE FIXTURE CHANGED, AND THE REASON IS THE OVERRIDE, NOT COSMETICS. This
+    // test's two modes used to be: SHIP-A with `subsystem: "vanished"` and a
+    // claim naming a guard the inventory does not hold, and SHIP-B clean. It then
+    // asserted `guard-missing: 1` and `verified: 1`.
+    //
+    // SHIP-A's vanished subsystem is a catalog FINDING, so the override counts
+    // that entry once under `stale-catalog-entry` and `guard-missing` became 0 —
+    // which is the override working, but it silently cost this test its
+    // `guard-missing` coverage. So the vanished subsystem moved to a THIRD mode
+    // and SHIP-A kept the claim that makes it `guard-missing`. Both properties are
+    // now asserted here rather than one being traded for the other.
     const out = verifyAll({
       modes: [
-        shipping({ id: "SHIP-A", claim: "apps/dashboard/server/__tests__/gone.test.mjs", subsystem: "vanished" }),
-        shipping({ id: "SHIP-B" })
+        shipping({ id: "SHIP-A", claim: "apps/dashboard/server/__tests__/gone.test.mjs", subsystem: "apps/dashboard/server" }),
+        shipping({ id: "SHIP-B" }),
+        shipping({ id: "SHIP-C", subsystem: "apps/dashboard/server/vanished" })
       ],
       inventory: withGuard(),
       knownSubsystems: ["apps/dashboard/server"]
     })
-    expect(out.catalogFindings.length).toBeGreaterThan(0)
+    expect(out.catalogFindings.map((f) => f.id)).toEqual(["SHIP-C"])
     expect(Object.keys(out.counts).sort()).toEqual([...VERDICTS].sort())
     expect(out.counts["guard-missing"]).toBe(1)
     expect(out.counts.verified).toBe(1)
+    // And the entry the audit names is counted under the pessimistic verdict, once.
+    expect(out.counts["stale-catalog-entry"]).toBe(1)
+    expect(Object.values(out.counts).reduce((a, b) => a + b, 0)).toBe(3)
   })
 
   it("a claim outside the inventory's declared scope is stale, never guard-missing", () => {
@@ -705,6 +720,71 @@ describe("the self-audit is reported separately from the verdicts", () => {
     const out = verifyAll({ modes: [mode], inventory: withGuard(), knownSubsystems: ["apps/dashboard/server"] })
     expect(out.catalogFindings.map((f) => f.id)).toEqual(["SHIP-Z"])
     expect(out.results[0].verdict).toBe("verified")
+  })
+
+  it("COUNTS the audit channel, so `counts` cannot report zero defects the audit found", () => {
+    // ── THE FALSE ZERO THIS PINS, AND WHY COUNTING THE FINDINGS IS NOT THE FIX ──
+    //
+    // The mode above is the shape: a subsystem that no longer exists, and a claim
+    // that still resolves. `catalogFindings` reports the vanished subsystem and
+    // `results` reports `verified`, and `counts` was built by counting `results`
+    // ALONE — so it answered `stale-catalog-entry: 0`. A renderer reading only
+    // `counts` would tell a reader the catalog holds zero stale entries while the
+    // audit had just found one.
+    //
+    // Adding the findings to the tally does NOT fix that, and the reason is worth
+    // stating because it is the tempting repair: such a mode would then count as
+    // BOTH `verified: 1` AND `stale-catalog-entry: 1`, so the false zero is
+    // replaced by a false GREEN in the same object, and the per-entry invariant
+    // "counts every entry exactly once" is gone.
+    //
+    // So the audit OVERRIDES the counted verdict for the entry it names. The
+    // per-ROW verdict is untouched — `results` still says `verified`, and the
+    // coexistence pinned by the test above is unchanged — because each channel's
+    // row records what that channel decided. Only the aggregate stops under-
+    // reporting, and it does so by counting the entry once, under the pessimistic
+    // verdict any channel asked for.
+    const mode = shipping({ id: "SHIP-Z", subsystem: "apps/dashboard/server/vanished" })
+    const out = verifyAll({ modes: [mode], inventory: withGuard(), knownSubsystems: ["apps/dashboard/server"] })
+    expect(out.counts["stale-catalog-entry"]).toBe(1)
+    // AND it is counted ONCE — not once per channel. Two rows for one entry would
+    // break the sum pinned by "counts every entry exactly once".
+    expect(Object.values(out.counts).reduce((a, b) => a + b, 0)).toBe(1)
+    // AND the coexistence is intact: the verdict row still reports what the
+    // claim channel decided, which is what makes the aggregate a SUMMARY rather
+    // than a rewrite of the rows.
+    expect(out.results[0].verdict).toBe("verified")
+    expect(out.catalogFindings.map((f) => f.id)).toEqual(["SHIP-Z"])
+  })
+
+  it("a malformed entry the audit also names is counted stale once, not twice", () => {
+    // TWO findings, ONE entry. `auditCatalog` reports one finding per defect, so
+    // an entry carrying both a vanished subsystem and no disposition contributes
+    // two rows to `catalogFindings` and must still contribute exactly one to
+    // `counts` — otherwise the count would read as two defective entries where
+    // there is one. This one was GREEN before the fix: it is a guard against the
+    // tempting wrong repair above rather than a catcher of the right one, and it
+    // is recorded as such rather than counted as evidence.
+    const mode = shipping({ id: "SHIP-W", subsystem: "apps/dashboard/server/vanished", claim: null, acceptedUnclaimed: null })
+    const out = verifyAll({ modes: [mode], inventory: withGuard(), knownSubsystems: ["apps/dashboard/server"] })
+    expect(out.catalogFindings.length).toBe(2)
+    expect(out.counts["stale-catalog-entry"]).toBe(1)
+    expect(Object.values(out.counts).reduce((a, b) => a + b, 0)).toBe(1)
+  })
+
+  it("an entry the audit says nothing about is counted from its verdict alone", () => {
+    // The override is NARROW on purpose. If it were not narrow — if an audit
+    // finding anywhere in the readout moved every count — a single stale entry
+    // would make the readout report zero verified modes, which is the same defect
+    // in the opposite direction: over-claiming instead of under-claiming.
+    const out = verifyAll({
+      modes: [shipping({ id: "SHIP-OK" }), shipping({ id: "SHIP-BAD", subsystem: "apps/dashboard/server/vanished" })],
+      inventory: withGuard(),
+      knownSubsystems: ["apps/dashboard/server"]
+    })
+    expect(out.counts.verified).toBe(1)
+    expect(out.counts["stale-catalog-entry"]).toBe(1)
+    expect(Object.values(out.counts).reduce((a, b) => a + b, 0)).toBe(2)
   })
 
   it("reports nothing from the audit when every subsystem is known", () => {

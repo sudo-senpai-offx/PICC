@@ -533,6 +533,30 @@ export function auditCatalog({ modes, knownSubsystems }) {
  * the same thing — a missing key reads as "not measured", which is a different
  * claim from "measured, and there were none".
  *
+ * AND IT COUNTS THE AUDIT CHANNEL, because not doing so produced a false zero.
+ * A mode whose `subsystem` has vanished but whose claim still resolves is
+ * reported by the audit in `catalogFindings` and by the claim channel in
+ * `results` as `verified`; counting `results` alone gave
+ * `stale-catalog-entry: 0`, so a renderer reading only `counts` told a reader the
+ * catalog held zero stale entries while the audit had just found one.
+ *
+ * THE OVERRIDE, AND WHY IT IS AN OVERRIDE RATHER THAN AN ADDITION. Tallying the
+ * findings on top would replace that false zero with a false GREEN in the same
+ * object — such a mode would count as `verified: 1` AND `stale-catalog-entry: 1`
+ * — and would break the per-entry invariant that the totals sum to the number of
+ * modes. So an entry the audit names is counted ONCE, under
+ * `stale-catalog-entry`: the pessimistic verdict any channel asked for. The
+ * per-ROW verdict is not rewritten — `results` still records what the claim
+ * channel decided, because each row records what that channel decided — so the
+ * coexistence between the two channels is unchanged and `counts` is a summary of
+ * them rather than a rewrite.
+ *
+ * THE OVERRIDE IS NARROW, and the narrowing is load-bearing. It applies per
+ * entry, by id, and only for entries the audit actually names: a finding
+ * anywhere in the readout must not be allowed to move an unrelated entry's count,
+ * or one stale mode would make the readout report zero verified modes — the same
+ * defect in the opposite direction.
+ *
  * @param {object} input
  * @param {ReadonlyArray<object>} input.modes
  * @param {{guards: ReadonlyArray<object>, unreadable: ReadonlyArray<string>}} input.inventory
@@ -546,6 +570,7 @@ export function verifyAll({ modes, inventory, knownSubsystems }) {
   // rather than by any behavioural observation, because there is none to make.
   const catalogFindings = auditCatalog({ modes, knownSubsystems })
   const results = modes.map((mode) => verifyMode({ mode, inventory }))
+  const audited = new Set(catalogFindings.map((finding) => finding.id))
   const counts = Object.fromEntries(VERDICTS.map((verdict) => [verdict, 0]))
   for (const result of results) {
     // RULE 1, ENFORCED RATHER THAN ASSUMED. `counts` is seeded from `VERDICTS`
@@ -567,10 +592,17 @@ export function verifyAll({ modes, inventory, knownSubsystems }) {
     // count, which is not pessimistic at all. Failing loudly is the honest
     // option, and `String()` is used because a Symbol verdict would make a
     // template literal throw on its way to being reported.
+    //
+    // THE GUARD CHECKS `result.verdict`, THE ROW'S OWN VALUE, so the override
+    // below cannot smuggle an eighth key past it — the string it substitutes is a
+    // literal that is in the vocabulary, and it is only ever used for a row the
+    // audit named.
     if (!VERDICTS.includes(result.verdict)) {
       throw new Error(`verifyMode emitted a verdict outside the vocabulary: ${String(result.verdict)}`)
     }
-    counts[result.verdict] += 1
+    // THE OVERRIDE. One entry, one count, under the pessimistic verdict when the
+    // audit named this entry. See the header for why this is not an addition.
+    counts[audited.has(result.id) ? "stale-catalog-entry" : result.verdict] += 1
   }
 
   return Object.freeze({

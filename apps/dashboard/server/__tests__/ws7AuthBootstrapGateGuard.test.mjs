@@ -1633,7 +1633,27 @@ function connectorsSiteIsGated(lines, index) {
     // 17 + 0 + 0 = 17 exactly. Statics stay at 72 and dynamics stay at 118: the
     // fix touched one string literal inside an expression that was already
     // there, and reached no module.
-    expect(lines, "lines in handlers.mjs").toBe(7609)
+    //
+    // 7,609 -> 7,647 in W3-05 FINAL FIX ROUND, +38 lines, and this one is NOT a
+    // comment-only change — the decomposition is recorded rather than dressed up:
+    //
+    //   * 35 COMMENT lines. The in-flight bound: what it is keyed on and why both
+    //     halves are load-bearing, why it is in-flight and not a cache, and what
+    //     remains unbounded.
+    //   * 7 CODE lines. Two real edits:
+    //       - `splitClaim` joins the existing dynamic import of `inventory.mjs`
+    //         (one specifier added to a line that already existed), and
+    //       - the `mutationKeys` computation plus `keys: mutationKeys` in the
+    //         `withSandbox` call, which is what the runner bounds on. A dynamic
+    //         import is what let this reach no STATIC import: the count is
+    //         unchanged at 72, and that is the evidence.
+    //   * 0 blank lines.
+    //
+    // 35 + 7 + 0 = 42 added, minus 4 removed (three comment lines of the old
+    // cost paragraph, replaced by a longer one, and the import line that gained a
+    // specifier) = +38. The code delta is therefore exactly SEVEN lines and every
+    // one of them is inside the one route block this branch owns.
+    expect(lines, "lines in handlers.mjs").toBe(7647)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
