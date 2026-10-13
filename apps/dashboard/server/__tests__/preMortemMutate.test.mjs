@@ -129,24 +129,45 @@ describe("mutationCheck", () => {
   // a runner a null or invented path is how a "did not run" becomes a green row
   // upstream of this module.
   //
-  // TWO SHAPES, NOT ONE, and the second is the one a `=== null` guard misses.
-  // `splitClaim(" :: titleonly")` returns `{ file: "", title: "titleonly" }` -
-  // the separator is present, so there IS a claim, but its PATH is the empty
-  // string. `"" !== null`, so a null-only guard waves it through to `runGuard("")`
-  // and a runner answering `{failed:true}` upgrades the row to `bites` on the
-  // strength of a title with no file behind it. That is precisely the SHIP-1
-  // direction this module exists to prevent, reached through a malformed entry
-  // rather than a missing one. The branch above it (`entry.mutation !== true`)
-  // and the one below (`typeof runGuard !== "function"`) each cover a whole
-  // CLASS of shape for the same reason; the path gate must too.
+  // THREE SHAPES, NOT ONE, and the second and third are the two a `=== null`
+  // guard misses. `splitClaim(" :: titleonly")` returns
+  // `{ file: "", title: "titleonly" }` - the separator is present, so there IS a
+  // claim, but its PATH is the empty string. And `splitClaim("  ::  ")` returns
+  // `{ file: " ", title: " " }` - the SAME shape one space of whitespace in,
+  // which `!file` alone also waves through, because `" "` is truthy.
+  //
+  // Either shape hands `runGuard` a path that names no file, and a runner
+  // answering `{failed:true}` then upgrades the row to `bites` on the strength of
+  // a title with no file behind it. That is precisely the SHIP-1 direction this
+  // module exists to prevent, reached through a malformed entry rather than a
+  // missing one. The branch above it (`entry.mutation !== true`) and the one
+  // below (`typeof runGuard !== "function"`) each cover a whole CLASS of shape
+  // for the same reason; the path gate must too.
+  //
+  // WHITESPACE IS A MEMBER OF THE CLASS, NOT A FOURTH SPELLING TO NEGOTIATE.
+  // `splitClaim` does not trim, and that is Task 2's contract to decide rather
+  // than this tier's - so the defence in `mutate.mjs` is `!file?.trim()`, which
+  // covers `null`, `""` and any string of nothing-but-whitespace at once. A tab
+  // or a newline on its own behaves identically, because they all trim away;
+  // measured over `" "`, `"  "`, `"\t"`, `"\n"` and `" \t\n "`, all five are
+  // caught and none reaches the runner.
+  //
+  // THE BOUNDARY IS STATED HERE BECAUSE A TEST THAT ONLY SHOWS THE CASES IT
+  // CATCHES IS NOT A SCOPE. What the gate does NOT catch is a claim the splitter
+  // never recognised as carrying a separator at all - `" ::"`, `" \t:: \t"`,
+  // `"::"` - which arrives as the WHOLE claim in `file`, trims to `"::"`, and
+  // does reach the runner. That is `splitClaim`'s separator to recognise or not,
+  // not this tier's to fix, and no row is added for it here because adding one
+  // would pin behaviour this task does not own. Named instead of omitted.
   it("an entry marked for mutation that names no guard is not-run, and runs nothing", async () => {
     // FALSEST RUNNER POSSIBLE. `{failed:true}` is the most flattering answer
     // there is, so a row reaching it has nothing left to excuse the call.
     const claims = [
       ["an absent claim", null],
-      ["a claim that is a bare separator", " :: titleonly"]
+      ["a claim that is a bare separator", " :: titleonly"],
+      ["a claim whose separator is padded with spaces", "  ::  "]
     ]
-    expect(claims).toHaveLength(2)
+    expect(claims).toHaveLength(3)
     for (const [label, claim] of claims) {
       let called = false
       const r = await mutationCheck({
@@ -608,6 +629,63 @@ describe("mutate.mjs derives the runner's observation once", () => {
     // And the empty-body case, which is what a length guard is FOR: a scan that
     // finds nothing must fail, not quietly pass on a count of zero.
     expect(() => assertDerivedOnce("export async function mutationCheck() {}")).toThrow()
+  })
+})
+
+// THE PRIMARY EXPORT'S CONTRACT IS ATTACHED TO THE PRIMARY EXPORT. A doc block
+// sitting above the wrong declaration is documentation of the wrong thing:
+// editors and doc tooling resolve it to whatever is next, so a reader hovering
+// `mutationCheck` would have been shown `UNMEASURED`'s paragraph in place of the
+// decision path, the argument contract and the return type. It happened once
+// here, in the very commit that introduced `UNMEASURED`.
+//
+// TOLERANT OF BLANK LINES ON PURPOSE. A formatter inserting one is not a defect,
+// and a suite that goes red for it teaches the suite to be ignored. What it
+// refuses is another DOC BLOCK in between, which is the regression it exists to
+// catch.
+//
+// This check arrived GREEN, because the fix it pins was already in place. Its RED
+// is demonstrated by mutation R7 in the report, which re-parks the block and
+// turns exactly this test red.
+describe("the primary export's contract is attached to the primary export", () => {
+  const CONTRACT = "@returns {Promise<{id: string|null, verdict: string, evidence: object}>}"
+
+  /**
+   * THE SCAN. The real check and the bite test below both call THIS.
+   *
+   * ANCHORED ON THE CONTRACT'S OWN TEXT, not on the nearest block closer - an
+   * earlier draft searched backwards for the closest closer, which a parked doc
+   * block satisfies perfectly well by supplying one of its own. The marker is
+   * what says which block is the contract; everything after that block's closer
+   * must be blank. (That draft passed a planted violation, which is how the
+   * bite test below found it.)
+   */
+  const assertContractAttached = (source) => {
+    const at = source.indexOf("export async function mutationCheck")
+    const marked = source.indexOf(CONTRACT)
+    expect(marked, "mutationCheck's @returns line is missing").toBeGreaterThan(-1)
+    expect(marked, "the @returns line sits after the declaration").toBeLessThan(at)
+    const blockEnd = source.indexOf("*/", marked)
+    expect(source.slice(blockEnd + 2, at)).toMatch(/^\s*$/)
+  }
+
+  it("leaves no doc block between mutationCheck's @returns and its declaration", () => {
+    assertContractAttached(MUTATE_SOURCE)
+    // Raw source, not the blanked one: where a comment SITS is the whole subject
+    // here, and `stripComments` would have removed the very thing being measured.
+  })
+
+  it("bites: a doc block parked between the contract and the declaration is caught", () => {
+    // Coupled, not re-declared: neutering `assertContractAttached` turns this red
+    // rather than leaving it green on a pattern of its own.
+    const head = "  * " + CONTRACT + "\n  */\n"
+    const decl = "export async function mutationCheck() {}"
+    expect(() => assertContractAttached(head + "/** parked here */\n" + decl)).toThrow()
+    expect(() => assertContractAttached(head + "const NOTE = 1\n" + decl)).toThrow()
+    // And the cases that are NOT defects stay green, which is what makes the
+    // check above safe to leave in the suite permanently.
+    expect(() => assertContractAttached(head + decl)).not.toThrow()
+    expect(() => assertContractAttached(head + "\n" + decl)).not.toThrow()
   })
 })
 

@@ -132,15 +132,35 @@ function outcome({ id, verdict, evidence }) {
  * refused for the same reason: it is an object, and an object is not a
  * measurement.
  *
- * A NON-BOOLEAN RESULT IS REFUSED, AND TWO SPELLINGS OF IT NEED DIFFERENT
- * REASONS. `undefined` and `null` are refused FIRST and alone, because reading
- * `.failed` off either one throws — and a throw here would escape `mutationCheck`
- * and take the whole readout down over one bad return value. That is the only
- * thing this first line has to do, and saying exactly that is what keeps it
- * honest; an earlier version also refused every non-object here, which was
- * untestable, since a bare `true`, a string and an array all fall through to the
- * lines below and return `null` for the ordinary reason: reading `.failed` off a
- * primitive says nothing, so there was no measurement to read.
+ * A NON-BOOLEAN RESULT IS REFUSED, AND THE FIRST LINE REFUSES ONLY TWO VALUES.
+ * `undefined` and `null` are refused before anything else, because reading
+ * `.failed` off either one throws — and a throw here would escape
+ * `mutationCheck` and take the whole readout down over one bad return value.
+ * That is the only thing this first line has to do.
+ *
+ * NARROWING IT CHANGED ONE SHAPE, AND THE SHAPE IS A FUNCTION. The guard this
+ * replaced also refused every non-object, which reads as a redundant half: a bare
+ * `true`, a string, a number and an array DO fall through to the lines below and
+ * return `null` for the ordinary reason, because reading `.failed` off a
+ * primitive says nothing. But `typeof` answers `"function"` for a callable, so
+ * that version answered `null` for every function — including one carrying
+ * `.failed`, which this version reads as a measurement like any other object.
+ * Measured across 18 result shapes: `null`, `undefined`, a bare boolean, a
+ * string, a number, an empty array, an empty object, `{failed: 1}`,
+ * `{failed: null}`, `{failed: undefined}` and a boxed `new Boolean(true)` all
+ * answer `not-run` — 14 shapes. The 4 that do not are every one of them a
+ * callable: a plain function answering `bites` and again `does-not-bite`, an
+ * arrow function, and a class carrying a static `failed`.
+ *
+ * SO A CALLABLE CARRYING `failed` IS TREATED AS A MEASUREMENT, and that is a
+ * deliberate change from the previous guard rather than an identity claim. The
+ * value read is still a real boolean off a real object, so no row is upgraded on
+ * the strength of a truthy one, and `runGuard` is typed as
+ * `(file) => Promise<unknown>`, so a caller answering with a callable has broken
+ * its own contract. It is also NOT pinned by a test: no behaviour here pins it,
+ * and this paragraph is the record of what the code does rather than a claim that
+ * a decision was consulted. If a future task decides a callable is never a
+ * measurement, this is the line to change and the row to add.
  *
  * @param {unknown} result whatever `runGuard` resolved to
  * @returns {true|false|null}
@@ -151,6 +171,30 @@ function observedFailure(result) {
   if (result.failed === false) return false
   return null
 }
+
+/**
+ * What a row carries when nothing was measured and no claim was resolved.
+ *
+ * EVIDENCE HAS ONE SHAPE ON EVERY BRANCH, all eight of them, and that is why the
+ * early branches spread this rather than omitting the keys. `evidence` is
+ * serialised to JSON for Task 5's route, and a renderer binds `evidence.claimPath`
+ * and `evidence.failed` on rows it did not special-case; an absent key reads
+ * `undefined`, which is not the same value as the `null` those rows are asserting.
+ *
+ * `failed` is present on every branch for the same reason `reason` is: a reader
+ * asking "was anything measured here?" gets `null` as an answer, never a missing
+ * key to be told apart from a deliberate absence.
+ *
+ * DECLARED ABOVE THE FUNCTION IT SERVES, NOT INSIDE ITS DOC BLOCK. An earlier
+ * revision parked it between `mutationCheck`'s `@returns` and the declaration
+ * itself, so the constant took ownership of the module's primary contract: hover
+ * tooltips and doc tooling resolved that whole `@param`/`@returns` block to
+ * `UNMEASURED`. A comment attached to the wrong declaration documents the wrong
+ * thing, which in this module's subject matter is the defect rather than a
+ * cosmetic slip - and it was introduced by the same commit that fixed the
+ * evidence shape this constant exists to stabilise.
+ */
+const UNMEASURED = Object.freeze({ claimPath: null, claimTitle: null, failed: null })
 
 /**
  * Run one catalog entry's guard against a broken implementation and report
@@ -198,23 +242,8 @@ function observedFailure(result) {
  * @param {(file: string) => Promise<unknown>} [input.runGuard] the ONLY way this
  *   module runs anything. A missing or non-function value is read as NO RUNNER,
  *   which is a distinct fact from a runner that was wired and crashed.
- * @returns {Promise<{id: string|null, verdict: string, evidence: object}>}
- */
-/**
- * What a row carries when nothing was measured and no claim was resolved.
- *
- * EVIDENCE HAS ONE SHAPE ON EVERY BRANCH, all eight of them, and that is why the
- * early branches spread this rather than omitting the keys. `evidence` is
- * serialised to JSON for Task 5's route, and a renderer binds `evidence.claimPath`
- * and `evidence.failed` on rows it did not special-case; an absent key reads
- * `undefined`, which is not the same value as the `null` those rows are asserting.
- *
- * `failed` is present on every branch for the same reason `reason` is: a reader
- * asking "was anything measured here?" gets `null` as an answer, never a missing
- * key to be told apart from a deliberate absence.
- */
-const UNMEASURED = Object.freeze({ claimPath: null, claimTitle: null, failed: null })
-
+  * @returns {Promise<{id: string|null, verdict: string, evidence: object}>}
+  */
 export async function mutationCheck({ entry, runGuard } = {}) {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
     return outcome({
@@ -235,15 +264,43 @@ export async function mutationCheck({ entry, runGuard } = {}) {
   // THE ONE PLACE THE SEPARATOR IS USED, and it is USED rather than spelled.
   const { file, title } = splitClaim(entry.claim)
 
-  // FALSY, NOT `=== null`. `splitClaim` answers `null` when the claim is absent,
-  // but answers the EMPTY STRING when a claim is a bare separator with a title
-  // hanging off it — there is a claim, and no file behind it. A null-only gate
-  // waves that through to `runGuard("")`, and a runner answering `{failed:true}`
-  // then upgrades the row to `bites` on the strength of a title with no file,
-  // which is the exact direction this module exists to keep shut. Falsiness
-  // covers `null` and `""` together, the same way the two branches above and
-  // below each cover a whole class of shape rather than one spelling of it.
-  if (!file) {
+  // FALSY AFTER TRIMMING, AND THE TRIM IS THE POINT.
+  //
+  // `splitClaim` returns `string | null` and does NOT trim, so this gate has
+  // three members of one class in front of it:
+  //
+  //   claim absent, or not a string       → null          — nothing was claimed
+  //   claim is a bare separator            → ""            — a title, no file
+  //   claim is a whitespace-padded one     → " ", "  "     — the same, in other words
+  //
+  // A null-only gate misses the second. A falsy-but-untrimmed gate misses the
+  // third, because `" "` is truthy: the path reaches `runGuard(" ")`, the runner
+  // answers `{failed:true}`, and the row is upgraded to `bites` on the strength
+  // of a title with no file behind it — the exact direction this module exists to
+  // keep shut. Trimming therefore covers all three at once, which is what the
+  // branches above and below also do: each guards a property rather than a list
+  // of the values that fail to have it.
+  //
+  // `?.` IS LOAD-BEARING. It is what lets the trim run on `""` without throwing
+  // on `null`, so the gate stays a gate on every shape instead of becoming the
+  // new throw this module exists to avoid.
+  //
+  // TRIMMING IS A DEFENCE IN THIS FILE, NOT A CLAIM ABOUT `splitClaim`. Whether
+  // a claim's path is trimmed is the splitter's contract to decide; this tier
+  // cannot wait for it, and a path made of whitespace is not a path whoever owns
+  // the contract.
+  //
+  // WHAT THE GATE DOES NOT COVER, MEASURED, BECAUSE A COMMENT THAT STOPS ONE
+  // STEP SHORT OF ITS OWN LIMIT IS THE DEFECT THIS MODULE CATCHES. A claim the
+  // splitter does not recognise as carrying a separator at all is handed back
+  // WHOLE as the file: `" ::"` carries no trailing space, `" \t:: \t"` spells
+  // the separator with tabs, and `"::"` carries neither. Each trims to `"::"`,
+  // which is not empty, so the runner is called with the separator glued to the
+  // end of its path. Whether a separator may be spelled that way is
+  // `splitClaim`'s question and another task's decision; the gate here defends
+  // exactly one property — a file that is empty or made only of whitespace — and
+  // says so rather than implying it defends more.
+  if (!file?.trim()) {
     return outcome({
       id: entry.id ?? null,
       verdict: "not-run",
