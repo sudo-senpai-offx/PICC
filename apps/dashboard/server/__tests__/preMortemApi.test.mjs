@@ -185,9 +185,14 @@ describe("pre-mortem API (W3-05 Task 5) — overview route", () => {
     async () => {
       // ── WHY EACH LINE IS HERE, AND WHICH ONE WOULD HAVE CAUGHT IT ─────────
       //
-      // Every assertion below was satisfiable by the broken payload, which is
-      // why nine green tests shipped a readout that reported twelve false
-      // catalog defects and five false `guard-missing` verdicts. Concretely:
+      // Every assertion the SHIPPED tests made was satisfiable by the broken
+      // payload, which is why nine green tests shipped a readout that reported
+      // twelve false catalog defects and five false `guard-missing` verdicts.
+      // The assertions below are new; of the five, four go red under the broken
+      // payload. The fifth — a non-empty `results` — cannot, and is labelled as
+      // a vacuity guard rather than a catch, because under the wrong root the
+      // route still evaluated all twelve claims; only the VERDICTS were wrong.
+      // Concretely, of the old tests:
       //
       //   - the old vocabulary test looped `for (const r of res.body.results)`
       //     with no non-emptiness guard, so an EMPTY array satisfied it;
