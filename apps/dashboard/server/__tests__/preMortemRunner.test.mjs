@@ -17,11 +17,17 @@
 // so the suite stays hermetic and fast; the real execution is covered by
 // `preMortemApi.test.mjs`.
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { mkdirSync, readdirSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   MUTATIONS,
+  REPO_ROOT,
   applyLineMutation,
   createGuardRunner,
+  createSandbox,
+  isInsideRepoRoot,
   mutationFor,
   readMeasurement
 } from "../services/premortem/runner.mjs"
@@ -30,6 +36,95 @@ const GUARD_A = "apps/dashboard/server/__tests__/graduationGates.test.mjs"
 const GUARD_B = "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs"
 
 describe("the pre-mortem mutation runner (W3-05 Task 5)", () => {
+  it("REFUSES to build a sandbox inside the repository", async () => {
+    // ── THE PROPERTY NO TEST PINNED, LEARNED THE HARD WAY ──────────────────
+    //
+    // `createSandbox` derives its directory from `mkdtempSync(join(tmpdir(), …))`,
+    // and its own comment calls OUTSIDE the repository "load-bearing rather than
+    // tidiness". Nothing asserted it. `tmpdir()` honours `TEMP`, so on Windows —
+    // where `TEMP` is consulted FIRST, ahead of `TMPDIR` (measured: setting
+    // `TEMP` and then `TMPDIR` still returns the `TEMP` value) — anyone whose
+    // `TEMP` points into the repo, or anyone "tidying up" `tmpdir()` to a
+    // repo-local directory, silently moves every removal path in this feature
+    // onto a blast radius shared with the working tree.
+    //
+    // All three variables are stubbed, so the test does not depend on which one
+    // this platform consults first.
+    //
+    // WHY IT MATTERS ENOUGH TO REFUSE RATHER THAN WARN. The junction footgun
+    // documented in `unlinkQuietly` follows an ABANDONED directory: a sandbox
+    // left inside the repo, holding a link to the repository's own
+    // `node_modules`, is exactly the object a human sweeping build leftovers
+    // with `Remove-Item -Recurse` would destroy the install through.
+    //
+    // The refusal happens BEFORE `git worktree add`, so a rejected call
+    // registers no worktree and leaves nothing behind — which this test also
+    // asserts, rather than trusting it.
+    const inside = join(REPO_ROOT, "apps", "dashboard", "testSupport", ".tmp-in-repo")
+    mkdirSync(inside, { recursive: true })
+    let created = null
+    try {
+      for (const key of ["TEMP", "TMP", "TMPDIR"]) vi.stubEnv(key, inside)
+      const attempt = createSandbox()
+      // Captured before the assertion so the RED path — where the call SUCCEEDS —
+      // can still tear the worktree it just made down instead of leaking it.
+      attempt.then((s) => {
+        created = s
+      }, () => {})
+      await expect(attempt, `createSandbox accepted ${inside} as a sandbox location`).rejects.toThrow(
+        /sandbox-inside-repository/
+      )
+      expect(created, "a rejected call must not hand back a sandbox").toBeNull()
+      // NOTHING LEFT BEHIND: no worktree directory, so the refusal is not merely
+      // an error after the fact.
+      expect(readdirSync(inside), "the refused call left a directory in the repository").toEqual([])
+    } finally {
+      if (created) await created.dispose()
+      vi.unstubAllEnvs()
+      rmSync(inside, { recursive: true, force: true })
+    }
+  })
+
+  it("the temp area it builds sandboxes in is outside the repository", () => {
+    // THE OTHER HALF, and it is the half that goes red on a CHANGED ENVIRONMENT
+    // rather than on a changed runner. The refusal test above proves the runner
+    // reacts; this proves the premise still holds today. `tmpdir()` is read at
+    // the moment of the call, so a machine or CI image whose `TEMP` points into
+    // the checkout turns this red — which is the only moment anyone can act.
+    expect(isInsideRepoRoot(tmpdir())).toBe(false)
+    expect(
+      isInsideRepoRoot(REPO_ROOT),
+      "the repository must contain itself, or the check above is meaningless"
+    ).toBe(true)
+  })
+
+  it("the containment predicate is right in BOTH directions", () => {
+    // WHY THIS IS A PURE-FUNCTION TEST AND NOT A SANDBOX TEST. Dropping the
+    // `..`-escape clause from `isInsideRepoRoot` makes it fail CLOSED — every
+    // sandbox location reads as inside the repository, so `createSandbox` throws
+    // for every caller and the mutation tier goes quiet. Measured: that deletion
+    // left all 14 tests in this file GREEN. The API suite does catch it, but only
+    // as a 502 ninety seconds later and for a reason that does not name the
+    // cause, so the branch was effectively unpinned. `readMeasurement` was
+    // extracted and exported for the same reason; this is the same move.
+    expect(isInsideRepoRoot(REPO_ROOT), "the repository contains itself").toBe(true)
+    expect(isInsideRepoRoot(join(REPO_ROOT, "apps", "dashboard")), "a child is inside").toBe(true)
+    expect(isInsideRepoRoot(tmpdir()), "the temp area is outside").toBe(false)
+    // THE PREFIX SIBLING, which is the whole reason this is not a `startsWith`.
+    // `…/PICC-archive` shares a string prefix with `…/PICC` and is outside it.
+    // A path-prefix implementation would refuse a legitimate temp location, and
+    // again the only symptom would be a silent, total refusal.
+    //
+    // `REPO_ROOT` arrives from `fileURLToPath` with a TRAILING SEPARATOR, so the
+    // `-archive` suffix is appended after stripping it — otherwise the fixture
+    // is `…/PICC/-archive`, which is genuinely inside the repository and would be
+    // testing nothing.
+    const sibling = `${REPO_ROOT.replace(/[\\/]+$/, "")}-archive`
+    expect(isInsideRepoRoot(sibling), "a sibling sharing a string prefix is NOT inside the repository").toBe(
+      false
+    )
+  })
+
   it("every registered mutation names a guard-shaped file and a real target", () => {
     // A table that drifts is catalog entry SHIP-2 in miniature, and the mutation
     // anchors below are checked against the REAL files in a later test rather

@@ -78,7 +78,7 @@
 import { execFile as execFileCb } from "node:child_process"
 import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 
@@ -246,13 +246,42 @@ function unlinkQuietly(link) {
 }
 
 /**
+ * True when `dir` is the repository itself or anything beneath it.
+ *
+ * `relative` rather than a `startsWith` on the path string, because
+ * `C:\…\PICC-archive` shares a prefix with `C:\…\PICC` and would otherwise read
+ * as inside it — and a predicate that fails CLOSED refuses every sandbox, so the
+ * mutation tier goes quiet rather than loud. Both directions are asserted in
+ * `preMortemRunner.test.mjs`; deleting the `..`-escape clause below leaves the
+ * rest of this file's suite green, which is how that was found.
+ */
+export function isInsideRepoRoot(dir) {
+  const rel = relative(REPO_ROOT, dir)
+  return rel === "" || (!isAbsolute(rel) && !rel.startsWith(".."))
+}
+
+/**
  * Create a disposable sandbox: a real git worktree, outside the repository.
  *
- * OUTSIDE is load-bearing rather than tidiness. Every removal path here —
- * `git worktree remove --force`, a stray recursive delete, a crash-and-clean-up
- * — is bounded to a directory this function created in the OS temp area. A
- * sandbox placed inside the repository shares that blast radius with the
- * working tree.
+ * OUTSIDE IS LOAD-BEARING, AND IT IS NOW ENFORCED RATHER THAN ASSUMED. Every
+ * removal path here — `git worktree remove --force`, a stray recursive delete, a
+ * crash-and-clean-up — is bounded to a directory this function created in the OS
+ * temp area. A sandbox placed inside the repository shares that blast radius
+ * with the working tree, and the damage is not recoverable by cleanup: the
+ * junction footgun documented in `unlinkQuietly` follows an ABANDONED directory,
+ * so a sandbox left behind inside the repo holding a link to the repository's
+ * own `node_modules` is exactly the object a human sweeping build leftovers with
+ * `Remove-Item -Recurse` would destroy the install through.
+ *
+ * IT IS A SMALL CHECK BECAUSE THE PREMISE IS AN ENVIRONMENT VARIABLE. `dir`
+ * comes from `tmpdir()`, and `tmpdir()` honours `TEMP`/`TMP`/`TMPDIR` — on this
+ * platform `TEMP` is consulted first (measured: setting `TEMP` and then
+ * `TMPDIR` still returns the `TEMP` value). So anyone whose `TEMP` points inside
+ * the repo, and anyone who later "tidies up" `tmpdir()` to a repo-local
+ * directory, would otherwise get that catastrophe with nothing red until it was
+ * already done. The check runs BEFORE `git worktree add`, so a refused call
+ * registers no worktree and leaves nothing behind — both asserted in
+ * `preMortemRunner.test.mjs` rather than trusted.
  *
  * IT CARRIES ONE LINK, TO `node_modules`, because the sandbox has no install of
  * its own and `apps/dashboard/vite.config.ts` imports `vite`: without it vitest
@@ -268,6 +297,12 @@ export async function createSandbox() {
   const dir = mkdtempSync(join(tmpdir(), "premortem-sandbox-"))
   const link = join(dir, "node_modules")
   let disposed = false
+  if (isInsideRepoRoot(dir)) {
+    // Only the empty directory `mkdtempSync` just made — nothing has been checked
+    // out into it and no link exists yet, so this cannot reach anything else.
+    rmSync(dir, { recursive: true, force: true })
+    throw new Error(`sandbox-inside-repository: ${dir} is inside the repository (${REPO_ROOT})`)
+  }
   try {
     await execFile("git", ["worktree", "add", "--detach", dir], {
       cwd: REPO_ROOT,

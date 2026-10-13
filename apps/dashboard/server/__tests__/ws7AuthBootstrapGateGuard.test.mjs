@@ -1609,7 +1609,31 @@ function connectorsSiteIsGated(lines, index) {
     //
     // 55 + 61 + 7 = 123 exactly. Statics stay at 72 and dynamics move 109 -> 118;
     // see the accounting at the `dynamics` assertion above.
-    expect(lines, "lines in handlers.mjs").toBe(7592)
+    //
+    // 7,592 -> 7,609 in W3-05 Task 5 FIX ROUND 1, the same protocol: +17 lines, and
+    // every one of them a COMMENT. The code delta is exactly ZERO — the line
+    //     const repoRoot = fileURLToPath(new URL("../../", import.meta.url))
+    // was replaced, one for one, by
+    //     const repoRoot = fileURLToPath(new URL("../../../", import.meta.url))
+    // which is the Critical: `import.meta.url` is this file, the BASE is
+    // `…/apps/dashboard/server/`, and TWO levels up is `…/apps/`, not the
+    // repository. `…/apps/` is not a git top level, so `git ls-files` there
+    // returned a SUBSET rather than an error — 923 tracked files against 1150,
+    // measured, 227 invisible. The route then answered 200 with twelve
+    // `subsystem-not-found` findings naming directories that exist and five
+    // `guard-missing` verdicts naming guards that exist.
+    //
+    //   * 17 COMMENT lines. The level arithmetic, the measurement, the
+    //     consequence for the payload, and the fact that nine tests were green
+    //     throughout — a defect that reads only as wrong output is worth a
+    //     standing note at the site that caused it.
+    //   * 0 CODE lines.
+    //   * 0 blank lines.
+    //
+    // 17 + 0 + 0 = 17 exactly. Statics stay at 72 and dynamics stay at 118: the
+    // fix touched one string literal inside an expression that was already
+    // there, and reached no module.
+    expect(lines, "lines in handlers.mjs").toBe(7609)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

@@ -88,6 +88,31 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
  * That is the mechanism these two assertions police, demonstrated rather than
  * asserted. Its scan is the widest any consumer has: seven purity predicates and
  * four separator predicates over `mutate.mjs`, plus a body-slice call-count check.
+ *
+ * `__tests__/preMortemApi.test.mjs` is here because it is the FOURTH occurrence
+ * of the same omission in this repository (W3-05, Task 5). This file's own
+ * membership settles the criterion that was in dispute: no entry's stated reason
+ * is "it is a guard" — index 7 is `services/premortem/inventory.mjs`, a SOURCE
+ * module rather than a guard, registered precisely because it reads every
+ * tracked guard file through this lexer and so DEPENDS on it. The array
+ * registers anything whose correctness rides on this lexer, whether or not it
+ * guards anything. `preMortemApi.test.mjs` reads `handlers.mjs` through the
+ * lexer to locate the pre-mortem route and to confirm `requireAuthStrict` is
+ * its first statement — and if the lexer were wrong, both scans would measure
+ * the wrong span of a security-critical route while this file stayed green.
+ *
+ * ITS LEXER ARRIVES BY A STATIC `import`, NOT `await import(...)`, and that is
+ * forced by the resolution half below rather than chosen. That half matches a
+ * static `from` specifier ending in the shared module's filename, and requires
+ * exactly one match, so a dynamically-spelled consumer reads as ZERO references
+ * and cannot be registered at all. The regex is a scanner limitation and the
+ * constraint is "every file importing" — where the two disagree about what an
+ * import is, the scanner is the half that gives. Widening the regex was
+ * considered and rejected: it would admit a second spelling class into the one
+ * guard in this repository that has already been the subject of three
+ * vacuous-pass incidents, and a scanner simple enough to read at a glance is the
+ * reason it can be trusted at all. So the consumer took the shape the scanner
+ * recognises.
  */
 const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/importResolutionGuard.test.mjs",
@@ -97,6 +122,7 @@ const VITEST_CONSUMERS = Object.freeze([
   "apps/dashboard/server/__tests__/graduationWeighting.test.mjs",
   "apps/dashboard/server/__tests__/graduationGates.test.mjs",
   "apps/dashboard/server/__tests__/preMortemMutate.test.mjs",
+  "apps/dashboard/server/__tests__/preMortemApi.test.mjs",
   "apps/dashboard/server/services/premortem/inventory.mjs"
 ])
 

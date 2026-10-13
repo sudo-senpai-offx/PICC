@@ -15,8 +15,11 @@
 // fixture inside a test could not satisfy them without anything ever executing.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { rmSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { stripComments } from "../scripts/guard-primitives.mjs"
 import { useIsolatedStoreDir } from "../../testSupport/storeIsolation.mjs"
 
 const OVERVIEW = "/api/premortem/overview"
@@ -126,11 +129,134 @@ describe("pre-mortem API (W3-05 Task 5) — overview route", () => {
     ROUTE_TIMEOUT
   )
 
+  it("resolves the REPOSITORY root, not a directory inside it", () => {
+    // ── THE BUG THIS FILE WAS MISSING ──────────────────────────────────────
+    //
+    // The route read the tree through `new URL("../../", import.meta.url)`.
+    // `import.meta.url` is `…/PICC/apps/dashboard/server/handlers.mjs`, so the
+    // BASE is `…/PICC/apps/dashboard/server/` and TWO levels up is `…/PICC/apps/`
+    // — not the repository. Measured on this tree, with the exact arguments the
+    // route builds:
+    //
+    //   git ls-files at apps/    ->   923 files
+    //   git ls-files at PICC/    ->  1150 files   (227 invisible)
+    //
+    // and the payload that produced, with nothing invented:
+    //
+    //   catalogFindings: 12 findings, every one `subsystem-not-found`
+    //   counts: guard-missing 5, verified 0, partially-covered 0
+    //
+    // where the correct root gives catalogFindings `[]` and verified 2,
+    // partially-covered 3, guard-missing 0. Every one of those twelve findings
+    // named a subsystem that exists, and all five `guard-missing` verdicts named
+    // guards that exist — the spec defines `guard-missing` as "the claim names a
+    // guard that does not exist". So the readout fabricated its own verdict
+    // about whether the guard inventory could be trusted.
+    //
+    // ASSERTED AS A PROPERTY, NOT AS A LITERAL. The route's specifier is read
+    // out of its own source and resolved exactly as the route resolves it; the
+    // result must be a git top level. Spelling `"../../../"` here would be
+    // SHIP-2 in miniature — a hand-written list that silently stops matching —
+    // so this compares against what git itself reports, and moving the file
+    // would not break it.
+    const handlersUrl = pathToFileURL(fileURLToPath(new URL("../handlers.mjs", import.meta.url)))
+    const code = stripComments(readFileSync(handlersUrl, "utf8"))
+    const route = code.slice(code.indexOf('path === "/api/premortem/overview"'))
+    const found = route.match(/fileURLToPath\(new URL\("([^"]+)", import\.meta\.url\)\)/)
+    expect(found, "the premortem route must resolve a root through its own import.meta.url").not.toBeNull()
+    const resolved = fileURLToPath(new URL(found[1], handlersUrl))
+
+    expect(
+      existsSync(join(resolved, ".git")),
+      `the route resolves ${resolved}, which is not a git top level, so it reads a subtree as the repository`
+    ).toBe(true)
+    const toplevel = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: resolved,
+      encoding: "utf8"
+    }).trim()
+    // `fileURLToPath` of a directory URL keeps a trailing separator and git's
+    // `--show-toplevel` does not, so both sides are normalised before comparing.
+    const norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "")
+    expect(norm(resolved)).toBe(norm(toplevel))
+  })
+
+  it(
+    "reads the WHOLE tree: the audit is empty and the covered verdicts are the ones reported",
+    async () => {
+      // ── WHY EACH LINE IS HERE, AND WHICH ONE WOULD HAVE CAUGHT IT ─────────
+      //
+      // Every assertion below was satisfiable by the broken payload, which is
+      // why nine green tests shipped a readout that reported twelve false
+      // catalog defects and five false `guard-missing` verdicts. Concretely:
+      //
+      //   - the old vocabulary test looped `for (const r of res.body.results)`
+      //     with no non-emptiness guard, so an EMPTY array satisfied it;
+      //   - the old audit test asserted every `catalogFindings` entry IS
+      //     `stale-catalog-entry`, which twelve false `subsystem-not-found`
+      //     findings satisfy perfectly — the assertion ratified the defect;
+      //   - the old shape test checked presence, array-ness and ORDER, and
+      //     nothing about content.
+      //
+      // 1. `results` NON-EMPTY. A readout that evaluated no claim at all is not
+      //    a readout, and an empty array makes every other loop in this file
+      //    vacuous without failing anything.
+      const res = await overview()
+      expect(res.status).toBe(200)
+      expect(res.body.results.length, "the route evaluated no catalog claim").toBeGreaterThan(0)
+
+      // 2. `catalogFindings` EMPTY, and the emptiness is the finding. The shipped
+      //    catalog is unsound-free: every `subsystem` it names is a directory a
+      //    tracked file really lives in, and every entry carries a disposition.
+      //    So an empty self-audit is the EXPECTED state against the real tree.
+      //    A non-empty one here means the root resolution has gone wrong again —
+      //    every finding that channel can emit is a claim about the repository
+      //    having moved underneath it, and none of them is true.
+      expect(res.body.catalogFindings).toEqual([])
+
+      // 3. NO `subsystem-not-found`, named separately rather than left to the
+      //    emptiness above, because it is the single reason that produced all
+      //    twelve false findings and a reader debugging this needs it by name.
+      const stale = res.body.catalogFindings.filter(
+        (f) => f.evidence?.reason === "subsystem-not-found"
+      )
+      expect(
+        stale.map((f) => `${f.id}:${f.evidence.subsystem}`),
+        "the route could not find subsystems that exist, so its repoRoot is not the repository"
+      ).toEqual([])
+
+      // 4. THE COVERED VERDICTS ARE PRESENT. These are the two verdicts only a
+      //    correctly-resolved root can produce, because a root one level too
+      //    high hides the guard files and turns them into `guard-missing`. So
+      //    their ABSENCE is the detector: no need to assert `guard-missing` is 0,
+      //    which would only go red if a claim is genuinely lost.
+      expect(
+        res.body.results.some((r) => r.verdict === "verified"),
+        "no claim reached `verified`, which is what a root that cannot see the guard files produces"
+      ).toBe(true)
+      expect(
+        res.body.results.some((r) => r.verdict === "partially-covered"),
+        "no claim reached `partially-covered`, which is what a root that cannot see the guard files produces"
+      ).toBe(true)
+    },
+    ROUTE_TIMEOUT
+  )
+
   it(
     "never emits a verdict outside the vocabulary, on either channel",
     async () => {
       const { VERDICTS } = await import("../services/premortem/verify.mjs")
       const res = await overview()
+      // NON-VACUITY IS PINNED ELSEWHERE, AND SAYING SO IS THE POINT. The loop
+      // below is over `results`, whose non-emptiness the "reads the WHOLE tree"
+      // test asserts outright — so it cannot silently pass over an empty array
+      // any more. The `catalogFindings` loop is a DIFFERENT case: against a
+      // correct root that array is empty, so this loop executes zero times and
+      // is vacuous HERE BY CONSTRUCTION. It is kept because the property still
+      // has to hold the day the catalog does go stale, and its non-vacuous pin
+      // is `preMortemVerify.test.mjs` ("the audit reports a malformed mode even
+      // when its subsystem is perfectly well known"), which drives `auditCatalog`
+      // with a deliberately-defective mode and asserts the verdict directly.
+      // Nothing about the audit channel is asserted only here.
       for (const r of res.body.results) expect(VERDICTS).toContain(r.verdict)
       // The audit channel reports exactly one verdict of its own.
       for (const f of res.body.catalogFindings) expect(f.verdict).toBe("stale-catalog-entry")
@@ -211,11 +337,37 @@ describe("pre-mortem API (W3-05 Task 5) — overview route", () => {
   )
 
   it(
-    "cannot mark or close anything: the payload carries no write surface",
+    "the payload's shape is closed, and it names no permit, unlock or credential",
     async () => {
+      // THE NAME SAYS WHAT THE ASSERTION DOES, which the previous one did not.
+      // It was called "the payload carries no write surface" while asserting
+      // that five KEY NAMES were absent — and a route that wrote to a store
+      // without exposing a key called `permit` would have passed it. So:
+      //
+      // WHAT IS ASSERTED, and is now a closed contract rather than five
+      // absences: the payload's key set is EXACTLY the documented six. A write
+      // surface has to appear as a key to reach a caller at all, so a closed key
+      // set is what makes "there is nowhere for one to hide" true rather than
+      // merely unenumerated. Adding a field to this payload now requires a
+      // decision here, which is the point.
+      //
+      // WHAT IS NOT ASSERTED, stated plainly so no reader infers it: this does
+      // NOT establish that the route performs no state mutation. It constrains
+      // the SHAPE of what comes back. Establishing the stronger claim needs a
+      // scan of the route's own body for write primitives, which needs a
+      // hand-rolled brace counter to bound the block — and a counter that
+      // truncates silently would make the scan vacuous, which is the defect
+      // class this whole feature exists to catch. The weaker, honest claim is
+      // the one made.
       const res = await overview()
       expect(res.body.advisory).toBe(true)
-      // A readout that names a permit, an unlock or a credential is not a readout.
+      expect(Object.keys(res.body).sort()).toEqual(
+        ["advisory", "catalogFindings", "counts", "mutation", "ok", "results"].sort()
+      )
+      // A readout that names a permit, an unlock or a credential is not a
+      // readout. Kept alongside the closed set: it names the intent the set
+      // cannot express, and it would catch a banned key even if the set above
+      // were widened without thought.
       for (const banned of ["permit", "unlock", "credential", "secret", "token"]) {
         expect(banned in res.body, `the payload must not carry a "${banned}" field`).toBe(false)
       }
@@ -223,9 +375,14 @@ describe("pre-mortem API (W3-05 Task 5) — overview route", () => {
     ROUTE_TIMEOUT
   )
 
-  it("requireAuthStrict is the FIRST statement in the route block", async () => {
-    const { readFile } = await import("node:fs/promises")
-    const src = await readFile(new URL("../handlers.mjs", import.meta.url), "utf8")
+  it("requireAuthStrict is the FIRST statement in the route block", () => {
+    // ANCHORED ON THE COMMENT-STRIPPED VIEW. It used to run `indexOf` on the raw
+    // source, so the moment `path === "/api/premortem/overview"` appeared in an
+    // EARLIER COMMENT — and this file's own header banner above the route quotes
+    // it — the test would have anchored on the comment and measured whatever
+    // followed it. This file already imports the one shared lexer for its other
+    // source scan; applying it here too is what makes the anchor the route.
+    const src = stripComments(readFileSync(new URL("../handlers.mjs", import.meta.url), "utf8"))
     const start = src.indexOf('path === "/api/premortem/overview"')
     expect(start, "the premortem route must exist").toBeGreaterThan(-1)
     const block = src.slice(start)
@@ -238,9 +395,21 @@ describe("pre-mortem API (W3-05 Task 5) — overview route", () => {
     // a static import here would MOVE that pin rather than fail it. Asserted on
     // the comment-stripped view via the ONE shared lexer, so a `premortem/`
     // written inside a comment cannot pass this.
-    const { readFile } = await import("node:fs/promises")
-    const { stripComments } = await import("../scripts/guard-primitives.mjs")
-    const code = stripComments(await readFile(new URL("../handlers.mjs", import.meta.url), "utf8"))
+    // The lexer arrives by a STATIC import, at the top of this file, and that is
+    // a requirement rather than a style preference: this file is registered in
+    // `sharedCommentLexer.test.mjs`'s `VITEST_CONSUMERS`, and that guard's
+    // resolution half matches a static `from` specifier and requires exactly one
+    // match. A consumer reached through `await import(...)` reads as ZERO
+    // references to it, so registering this file while spelling the import
+    // dynamically would fail the very guard it was registered to satisfy.
+    //
+    // AND THE SPECIFIER IS DELIBERATELY NOT REPEATED IN THIS COMMENT. That
+    // guard's regex runs over raw source without stripping comments, so
+    // paraphrasing the pattern here — quoting it, even as prose — adds a second
+    // match and the registration fails on its own explanation. That is the same
+    // comment-blindness this repo's lexers were written to defeat, caught by
+    // writing it the fourth time.
+    const code = stripComments(readFileSync(new URL("../handlers.mjs", import.meta.url), "utf8"))
     const head = code.slice(0, code.indexOf("export async function handleApi"))
     expect(head).not.toContain("premortem/")
   })

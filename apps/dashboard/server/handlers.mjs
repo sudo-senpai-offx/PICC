@@ -3716,7 +3716,24 @@ async function _handleApiInner(req, res, url, reqId) {
       const { dirname, join: joinPath } = await import("node:path")
       const { fileURLToPath } = await import("node:url")
 
-      const repoRoot = fileURLToPath(new URL("../../", import.meta.url))
+      // THREE levels up, and the count is the whole point of this comment.
+      // `import.meta.url` is this file, so the BASE is `…/apps/dashboard/server/`
+      // and the repository root — three levels up — is `…/PICC/`. This line
+      // shipped `"../../"`, which is `…/PICC/apps/`: one level short, and
+      // therefore not a git top level, so `git ls-files` run there returned a
+      // SUBSET of the repository rather than an error.
+      //
+      // Measured on this tree, with these exact arguments: 923 tracked files at
+      // `apps/` against 1150 at the root — 227 files invisible. Every file
+      // outside `apps/` was among them, so every catalog `subsystem` failed to
+      // resolve and every claim naming a guard under `apps/` lost its guard.
+      // The payload the route then returned was twelve `subsystem-not-found`
+      // findings naming directories that exist, and five `guard-missing`
+      // verdicts naming guards that exist — a readout fabricating its own
+      // answer to "is my guard inventory trustworthy?" Nine tests were green
+      // throughout. `preMortemApi.test.mjs` now resolves this specifier out of
+      // this file's source and requires the result to be a git top level.
+      const repoRoot = fileURLToPath(new URL("../../../", import.meta.url))
 
       // The inventory's ONLY view of the repository, which is why these two are
       // built here rather than imported: `guardInventory` is handed readers and
