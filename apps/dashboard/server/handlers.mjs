@@ -3657,6 +3657,129 @@ async function _handleApiInner(req, res, url, reqId) {
   }
 
   // -------------------------------------------------------------------
+  // Pre-mortem planner (W3-05 Task 5) — GET /api/premortem/overview.
+  //
+  // ADVISORY READOUT, ONE ADDITIVE ROUTE. It reads the catalog, reads the guard
+  // inventory, evaluates every claim, and runs the mutation tier. It flips no
+  // permit, writes no store, and grants no ceremony path.
+  //
+  // THE RESPONSE CARRIES catalogFindings FIRST, then results, then mutation, and
+  // the order is the self-audit rule rather than a formatting preference:
+  // `verifyAll` runs the audit before it evaluates a single claim, and a
+  // consumer that renders them interleaved has thrown that ordering away.
+  //
+  // BOTH CHANNELS, AND NEITHER IS THE OTHER. `auditCatalog` deliberately takes no
+  // inventory, so it structurally CANNOT see a claim that resolves to nothing —
+  // that is the `stale-catalog-entry` VERDICT's job, in `results`. A renderer
+  // reading only `catalogFindings` misses every unresolvable claim; one reading
+  // only `results` misses the fact that the catalog is unsound. A defect may
+  // legitimately appear in both, and the payload says so rather than
+  // deduplicating, because deduplicating would break one of the two rules.
+  //
+  // GATED WITH requireAuthStrict, NOT requireAuth. The readout names which
+  // guards are trusted, and behind the supported reverse-proxy setup the proxy
+  // itself is loopback — so the lenient gate's localhost bypass would hand
+  // operational guard metadata to an unauthenticated remote caller. The strict
+  // helper admits only a real session or bearer token, with no localhost bypass
+  // and no first-user bypass. It is the FIRST statement, as the route-coverage
+  // guard requires.
+  //
+  // EVERY SERVICE IS DYNAMICALLY IMPORTED, including `node:child_process` and
+  // `node:fs/promises`, so the static-import count `ws7AuthBootstrapGateGuard`
+  // pins does not move. The pre-mortem boundary and the mutation sandbox stay off
+  // the boot path entirely.
+  //
+  // THE MUTATION TIER REALLY RUNS. Spec section 5 makes this route the task that
+  // supplies a real `runGuard`, because `mutate.mjs` is forbidden from running
+  // anything: without one, every `mutation: true` entry honestly reports
+  // `not-run` and the tier can only ever return its two pessimisms. The runner
+  // breaks an implementation inside a disposable git worktree OUTSIDE this
+  // repository and runs the real guard there. This repository's own files are
+  // never mutated — see `services/premortem/runner.mjs` for the isolation
+  // envelope and the measurements that shaped it.
+  //
+  // IT IS SLOW, AND THAT IS THE PRICE OF IT BEING REAL. One worktree checkout
+  // plus one vitest run per distinct claimed guard. The alternative is a tier
+  // that reports `not-run` forever, which is not a weaker reading of the truth —
+  // it is no reading of it at all.
+  // -------------------------------------------------------------------
+  if (path === "/api/premortem/overview" && req.method === "GET") {
+    if (!(await requireAuthStrict(req, res))) return true
+    try {
+      const { catalogEntries } = await import("./services/premortem/catalog.mjs")
+      const { guardInventory } = await import("./services/premortem/inventory.mjs")
+      const { verifyAll } = await import("./services/premortem/verify.mjs")
+      const { mutationCheck } = await import("./services/premortem/mutate.mjs")
+      const { withSandbox } = await import("./services/premortem/runner.mjs")
+      const { execFile } = await import("node:child_process")
+      const { readFile } = await import("node:fs/promises")
+      const { dirname, join: joinPath } = await import("node:path")
+      const { fileURLToPath } = await import("node:url")
+
+      const repoRoot = fileURLToPath(new URL("../../", import.meta.url))
+
+      // The inventory's ONLY view of the repository, which is why these two are
+      // built here rather than imported: `guardInventory` is handed readers and
+      // never learns to read for itself.
+      const listed = await new Promise((resolve) => {
+        execFile("git", ["ls-files"], { cwd: repoRoot, maxBuffer: 1 << 26 }, (err, stdout) => {
+          resolve(err ? [] : String(stdout).split(/\r?\n/).filter(Boolean))
+        })
+      })
+
+      // `knownSubsystems` is every directory a tracked file lives in, so the
+      // audit's question "does this subsystem still exist?" is answered against
+      // the tree rather than against a hand-written list. A hand-maintained list
+      // here would be catalog entry SHIP-2 wearing a different hat: the same
+      // defect, moved.
+      const knownSubsystems = [
+        ...new Set(
+          listed
+            .map((f) => {
+              const cut = f.lastIndexOf("/")
+              return cut === -1 ? "" : dirname(f)
+            })
+            .filter(Boolean)
+        )
+      ].sort()
+
+      const modes = catalogEntries()
+      const inventory = await guardInventory({
+        listTrackedFiles: async () => listed,
+        readFile: async (path) => readFile(joinPath(repoRoot, path), "utf8")
+      })
+      const verified = verifyAll({ modes, inventory, knownSubsystems })
+
+      // EVERY entry is offered to the tier, not only the marked ones: the
+      // unmarked answer is `entry-not-marked-for-mutation`, which is a fact a
+      // reader is entitled to and which a filtered list would simply hide.
+      const mutation = await withSandbox({
+        run: async (runGuard) => {
+          const rows = []
+          for (const entry of modes) rows.push(await mutationCheck({ entry, runGuard }))
+          return rows
+        }
+      })
+
+      writeJson(res, 200, {
+        ok: true,
+        advisory: true,
+        // ORDER IS THE RULE. The audit, then the claims, then the mutation tier.
+        catalogFindings: verified.catalogFindings,
+        results: verified.results,
+        mutation,
+        counts: verified.counts
+      })
+    } catch (err) {
+      // A readout that cannot read says so rather than answering 200 with an
+      // empty pile, which would read as "the catalog is clean".
+      console.warn("[picc] premortem overview failed:", err.message)
+      writeJson(res, 502, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  // -------------------------------------------------------------------
   // Graduation analytics (W3-04 Task 4) — GET /api/graduation/overview.
   //
   // ADVISORY READOUT, ONE ADDITIVE ROUTE. It reads evidence and labels it; it

@@ -57,11 +57,20 @@ describe("the catalog's two vocabularies are frozen, and mean what they say", ()
   it("carries every mode the design names, and not one fewer", () => {
     const byKind = (kind) => FAILURE_MODES.filter((m) => m.kind === kind)
 
-    expect(FAILURE_MODES.length, "the catalog is empty, so every loop below proves nothing").toBe(11)
+    // 11 -> 12 in W3-05 Task 5. The added entry is SHIP-7, the tab-spelled claim
+    // separator: `splitClaim` recognises one spelling of the separator, and a
+    // claim spelled with a tab where the spaces go is handed back whole as the
+    // file, so the mutation runner is asked to run a path that does not exist.
+    // It is unreachable today — no claim contains a literal tab, and claims are a
+    // hand-maintained constant rather than input — so it is recorded here rather
+    // than fixed, and it is recorded HERE because the catalog is the artifact
+    // whose job is to hold exactly this kind of thing. The shipping count moves
+    // with it, 6 -> 7; the capital count does not move.
+    expect(FAILURE_MODES.length, "the catalog is empty, so every loop below proves nothing").toBe(12)
     expect(
       byKind("shipping").length,
-      "spec section 6 names six shipping-risk modes"
-    ).toBe(6)
+      "spec section 6 names six shipping-risk modes, and SHIP-7 is the seventh"
+    ).toBe(7)
     expect(
       byKind("capital").length,
       "spec section 6 names five capital-risk modes"
@@ -270,7 +279,8 @@ describe("a capital mode is never covered by a file, however related the file is
   // unclaimed" is a RULE; on `shipping` it is one mode among several.
   it("gives shipping risk both shapes, so neither reads as the default", () => {
     const shipping = FAILURE_MODES.filter((m) => m.kind === "shipping")
-    expect(shipping.length, "no shipping mode is catalogued, so this proves nothing").toBe(6)
+    // 6 -> 7 with SHIP-7, the tab-spelled claim separator (W3-05 Task 5).
+    expect(shipping.length, "no shipping mode is catalogued, so this proves nothing").toBe(7)
 
     const claimed = shipping.filter((m) => m.claim != null)
     const dispositioned = shipping.filter((m) => m.acceptedUnclaimed != null)

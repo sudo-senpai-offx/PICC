@@ -706,7 +706,11 @@ describe("mutate.mjs against the real catalog", () => {
     expect(results.filter((r) => r.verdict === "bites").map((r) => r.id)).toEqual(marked)
     // Measured, and re-measured rather than asserted from prose: 11 entries, 4
     // marked, and every `mutation` value in the catalog is a boolean.
-    expect(FAILURE_MODES).toHaveLength(11)
+    // 11 -> 12 with SHIP-7, the tab-spelled claim separator (W3-05 Task 5). It is
+    // `mutation: false`, so the marked set below is unchanged - which is the point
+    // of recording it as an entry rather than marking it: an unreachable defect
+    // must not put the tier in a position to accuse a guard.
+    expect(FAILURE_MODES).toHaveLength(12)
     expect(marked).toEqual(["SHIP-1", "SHIP-2", "SHIP-5", "SHIP-6"])
     expect([...new Set(FAILURE_MODES.map((e) => typeof e.mutation))]).toEqual(["boolean"])
     // Backing the module header's claim that the split is load-bearing here

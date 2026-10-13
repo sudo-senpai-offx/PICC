@@ -452,6 +452,45 @@ export const FAILURE_MODES = Object.freeze([
       "outage, and the position is left unhedged until a human intervenes. `claim: null` and never " +
       "`verified` — there is no TTL or expiry field anywhere on the path, so nothing in the tree can " +
       "be asserted about one."
+  }),
+  Object.freeze({
+    id: "SHIP-7",
+    kind: "shipping",
+    severity: "medium",
+    subsystem: "apps/dashboard/server/services/premortem",
+    summary:
+      "A catalog claim spelled with a TAB around the separator resolves to a file path with the " +
+      "separator glued on, so a guard is run against a file that does not exist.",
+    claim: null,
+    gap: null,
+    acceptedUnclaimed: Object.freeze({
+      owner: "platform owner",
+      date: "2026-10-13",
+      check:
+        "`CLAIM_SEPARATOR` and `splitClaim` live in inventory.mjs, and `splitClaim` recognises " +
+        "exactly one spelling of the separator. A claim written `" + " \\t:: \\t" + "` — a tab " +
+        "where the spaces go — is handed back WHOLE as the file: it does not contain the " +
+        "separator, so there is nothing to split at, and `mutate.mjs`'s whitespace gate trims " +
+        "`\" \\t:: \\t\"` to `\"::\"`, which is not empty. The runner is then called with a path " +
+        "that does not exist. UNREACHABLE TODAY: no catalog claim contains a literal tab, and " +
+        "claims are a hand-maintained code constant rather than input, so reaching it takes a " +
+        "hand-edit of this file. Read this entry as the reminder that the separator has one " +
+        "spelling and that the mutation runner's answer to a missing file depends on which " +
+        "spelling was used. The fix is `splitClaim`'s to make and is deliberately NOT made " +
+        "here: pinning the behaviour from a test row would freeze another task's contract, " +
+        "which is the SHIP-5 anti-pattern this planner exists to catalogue."
+    }),
+    mutation: false,
+    rationale:
+      "Severity is `medium` on the shipping scale: the blast radius is one mis-attributed " +
+      "mutation verdict, not a broken guard. The direction matters more than the severity, " +
+      "because it is the DAMNING direction — a runner handed a nonexistent path either throws " +
+      "(which `mutate.mjs` reports as `not-run`, which is safe) or answers that the guard " +
+      "passed, which the tier would report as `does-not-bite` and which is a FALSE DAMNING " +
+      "finding: it would accuse a guard of blindness that was never run. `claim: null` because " +
+      "there is no guard for it — the defect is in a splitter's contract, and no assertion " +
+      "about the current tree can detect a spelling nobody has typed yet. Recorded rather than " +
+      "fixed, and the fix is deliberately left to `inventory.mjs`."
   })
 ])
 

@@ -1155,7 +1155,19 @@ function connectorsSiteIsGated(lines, index) {
     // the figure that matters here: it is what proves this is a new GATED READ
     // ROUTE and its reasoning rather than a new module-level dependency, and it
     // is the tripwire that would have caught a static `import` of any of the six.
-    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(109)
+    // 109 -> 118 in W3-05 Task 5 (pre-mortem overview route), the same protocol:
+    // +9 dynamic, +0 static. The route reaches its own boundary the same way the
+    // graduation and wealth legs did — five `await import(...)` for the four
+    // pre-mortem services plus the mutation runner (`catalog`, `inventory`,
+    // `verify`, `mutate`, `runner`) and four for the node builtins it needs to
+    // read the tree and the sandbox (`node:child_process`, `node:fs/promises`,
+    // `node:path`, `node:url`). All nine are dynamic, so the pre-mortem boundary
+    // AND the mutation sandbox machinery stay off the boot path: a route that
+    // checks out a git worktree must not do it at server start.
+    // Statics UNCHANGED at 72 is the figure that matters here, and it is the one
+    // that was checked first — a static import of any of those nine would have
+    // moved it.
+    expect(dynamics, "dynamic import() calls in handlers.mjs, comment-stripped").toBe(118)
     // 102 -> 103 in the bookmarklet click-to-capture leg (Wave 3+ backlog),
     // the same protocol: exactly ONE new `await import(...)` — the route's own
     // branch-local load of ./services/bookmarkletCapture.mjs — with statics
@@ -1583,7 +1595,21 @@ function connectorsSiteIsGated(lines, index) {
     //     why the two piles differ, plus the 1 payload line shipping
     //     `capitalBaseRows`.
     // 10 + 9 = 19 exactly.
-    expect(lines, "lines in handlers.mjs").toBe(7469)
+    // 7,469 -> 7,592 in W3-05 Task 5 (pre-mortem overview route), the same
+    // protocol: +123 lines, all of them in ONE new route branch, and not one of
+    // them a new module-level binding. The delta decomposes as:
+    //
+    //   * 55 CODE lines. The dispatch line and the gate, the nine dynamic imports,
+    //     the `git ls-files` reader and the `knownSubsystems` derivation, the
+    //     inventory call, the sequential `mutationCheck` loop, and the payload.
+    //   * 61 COMMENT lines. Why the payload carries BOTH channels rather than one,
+    //     why the order is the audit rule, why the gate is the STRICT helper and
+    //     not the lenient one, and why the route is allowed to be slow.
+    //   * 7 blank lines.
+    //
+    // 55 + 61 + 7 = 123 exactly. Statics stay at 72 and dynamics move 109 -> 118;
+    // see the accounting at the `dynamics` assertion above.
+    expect(lines, "lines in handlers.mjs").toBe(7592)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {
