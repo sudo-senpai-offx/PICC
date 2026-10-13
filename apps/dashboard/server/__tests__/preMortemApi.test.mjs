@@ -400,11 +400,19 @@ describe("pre-mortem API (W3-05 Task 5) — overview route", () => {
     // a static import here would MOVE that pin rather than fail it. Asserted on
     // the comment-stripped view via the ONE shared lexer, so a `premortem/`
     // written inside a comment cannot pass this.
-    // The lexer arrives by a STATIC import, at the top of this file, and that is
-    // a requirement rather than a style preference: this file is registered in
-    // `sharedCommentLexer.test.mjs`'s `VITEST_CONSUMERS`, and that guard's
-    // resolution half matches a static `from` specifier and requires exactly one
-    // match. A consumer reached through `await import(...)` reads as ZERO
+    // The lexer arrives by a STATIC import here, but that is no longer forced.
+    // It used to be: `sharedCommentLexer.test.mjs` carried a hand-maintained
+    // consumer list whose resolution half matched only a static `from` specifier,
+    // so a dynamically-spelled consumer read as ZERO references and could not be
+    // registered at all. W3-06 dropped that list — the consumer set is now derived
+    // from the tracked tree and accepts both spellings — so this file's shape is
+    // a free choice. Kept static because a top-of-file import is the ordinary way
+    // to write it, not because the scanner needs it.
+    //
+    // `graduationApi.test.mjs` still uses `await import(...)` and is now DERIVED
+    // rather than registered. That file was the omission that motivated dropping
+    // the list: four times a consumer went unregistered, and the fourth was
+    // invisible precisely because it spelled its import the other way.
     // references to it, so registering this file while spelling the import
     // dynamically would fail the very guard it was registered to satisfy.
     //

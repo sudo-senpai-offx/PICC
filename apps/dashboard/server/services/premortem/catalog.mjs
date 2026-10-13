@@ -109,8 +109,8 @@ export const FAILURE_MODES = Object.freeze([
       "A guard that cannot fail: its negative check matches one identifier name, so a second " +
       "lexer under any other name is invisible to it and the suite stays green.",
     claim:
-      "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs :: no consumer RETAINS a " +
-      "declaration — the four local lexers are gone",
+      "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs :: no UNLISTED tracked " +
+      "file retains a declaration — and the known list cannot rot",
     acceptedUnclaimed: null,
     gap:
       "The claim is PARTIAL, and the partial half is named here rather than left to prose. " +

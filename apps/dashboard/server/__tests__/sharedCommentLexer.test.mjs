@@ -20,7 +20,7 @@
 // lexers, and why the count-neutrality claim is measured rather than asserted.
 
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
@@ -39,10 +39,23 @@ const SHARED = join(REPO_ROOT, "apps/dashboard/server/scripts/guard-primitives.m
 const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
 
 /**
- * The vitest consumers, which cannot be imported without re-running their suites.
+ * THE HISTORY OF A LIST THAT NO LONGER EXISTS, kept because every paragraph below
+ * names a consumer that still exists and whose correctness rides on this lexer.
+ * Only the obligation to REMEMBER them is gone; the derived scan computes the
+ * same set from the tracked tree instead.
  *
- * REGISTERING A NEW CONSUMER IS PART OF ADOPTING THE SHARED LEXER, not an
- * optional extra. A consumer missing from this list is invisible to BOTH halves
+ * `VITEST_CONSUMERS` was a hand-maintained array of exactly that set, and its
+ * failure mode was catalog entry SHIP-2 verbatim — "a hand-maintained guard
+ * inventory that omits a consumer, so the omitted consumer is invisible to the
+ * guard that is supposed to police it." It was missed four times in this
+ * repository, and the fourth was still live when the pre-mortem planner shipped
+ * its first readout. The weakness was never carelessness: it was that coverage
+ * was bounded by a human's memory, and no amount of care fixes that.
+ *
+ * The consumers themselves cannot be imported without re-running their suites,
+ * which is why they are scanned as source rather than exercised directly.
+ *
+ * REGISTERING A NEW CONSUMER WAS PART OF ADOPTING THE SHARED LEXER, not an
  * of the proof below: the negative half ("no consumer RETAINS a declaration")
  * and the resolution half ("resolves to the SAME absolute module"). That is
  * exactly the drift this file exists to close — a hand-rolled lexer pasted into
@@ -101,35 +114,129 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8")
  * its first statement — and if the lexer were wrong, both scans would measure
  * the wrong span of a security-critical route while this file stayed green.
  *
- * ITS LEXER ARRIVES BY A STATIC `import`, NOT `await import(...)`, and that is
- * forced by the resolution half below rather than chosen. That half matches a
- * static `from` specifier ending in the shared module's filename, and requires
- * exactly one match, so a dynamically-spelled consumer reads as ZERO references
- * and cannot be registered at all. The regex is a scanner limitation and the
- * constraint is "every file importing" — where the two disagree about what an
- * import is, the scanner is the half that gives. Widening the regex was
- * considered and rejected: it would admit a second spelling class into the one
- * guard in this repository that has already been the subject of three
- * vacuous-pass incidents, and a scanner simple enough to read at a glance is the
- * reason it can be trusted at all. So the consumer took the shape the scanner
- * recognises.
+ * `graduationApi.test.mjs` was the FOURTH omission and is why this array is
+ * gone. It reaches the primitive through `await import(...)`, which the old
+ * resolution half could not match, so it read as ZERO references and could not
+ * have been registered even if someone had remembered to try. Its consumer took
+ * the shape the scanner recognised — that was the right call WHILE THE LIST
+ * EXISTED, and it is precisely why the list could not be made safe.
  */
-const VITEST_CONSUMERS = Object.freeze([
-  "apps/dashboard/server/__tests__/importResolutionGuard.test.mjs",
-  "apps/dashboard/server/__tests__/ws7AuthBootstrapGateGuard.test.mjs",
-  "apps/dashboard/server/__tests__/ws7RouteAuthCoverageGuard.test.mjs",
-  "apps/dashboard/server/__tests__/graduationWindows.test.mjs",
-  "apps/dashboard/server/__tests__/graduationWeighting.test.mjs",
-  "apps/dashboard/server/__tests__/graduationGates.test.mjs",
-  "apps/dashboard/server/__tests__/preMortemMutate.test.mjs",
-  "apps/dashboard/server/__tests__/preMortemApi.test.mjs",
-  "apps/dashboard/server/services/premortem/inventory.mjs"
+
+/**
+ * THE CONSUMER SET, DERIVED.
+ *
+ * With no registry left to be a member of, both spellings are simply what a
+ * reference looks like. `from "…"` is a static import; `import("…")` is the
+ * dynamic one. The old objection — that admitting a second spelling class into
+ * the one guard in this repository with three vacuous-pass incidents is risky —
+ * was sound then and is not now, because the risk it protected against was a
+ * hand-maintained list, and that is exactly what no longer exists.
+ */
+const EXCLUDED_PREFIXES = [".freebuff/worktrees/"]
+
+// `git ls-files` rather than a filesystem walk, matching `ws7TestStoreIsolation`:
+// it omits the untracked, gitignored `server/data/` and any nested worktree of
+// another branch. The prefix exclusion is kept AND asserted further down, so a
+// future rewrite as a naive walk fails loudly instead of quietly reading another
+// branch's working state.
+const lsFiles = (patterns) =>
+  execFileSync("git", ["ls-files", ...patterns], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024
+  })
+    .split("\n")
+    .filter(Boolean)
+    .filter((f) => !EXCLUDED_PREFIXES.some((p) => f.startsWith(p)))
+
+const SHARED_REL = "apps/dashboard/server/scripts/guard-primitives.mjs"
+
+// A reference to the primitive, EITHER spelling. `matchAll` rather than `.test`
+// on a /g regex, which is stateful across calls and would make this set depend
+// on evaluation order — the kind of bug that passes until the day it does not.
+const REFERENCE = /(?:from\s+|import\(\s*)"([^"]*guard-primitives\.mjs)"/g
+const referencesIn = (code) => [...code.matchAll(REFERENCE)].map((m) => m[1])
+
+// A file that RETAINS its own lexer. Definitions ONLY, and the exclusion is the
+// whole subtlety: `const { stripComments } = await import(…)` is how every
+// legitimate consumer binds the name, so matching a bare binding would report
+// all of them as offenders — the exact inverse of what this file is for.
+const DECLARATION =
+  /(?:function\s+stripComments|(?:const|let|var)\s+stripComments\s*=|static\s+stripComments\s*[=(])/
+
+// Scanned through `stripComments` itself, so prose that merely NAMES the
+// primitive — this file's own header included — is not mistaken for code that
+// references it. The circularity is real and is why the scan carries a planted
+// bite test below rather than being trusted on its own reasoning.
+const codeOf = (rel) => stripComments(read(rel))
+
+const TRACKED_SOURCE = lsFiles(["*.mjs", "*.js", "*.mts", "*.cts", "*.ts", "*.tsx"])
+
+/**
+ * KNOWN DUPLICATE LEXERS — a list of VIOLATIONS, not of members, and it must shrink.
+ *
+ * Deriving the consumer set surfaced four files that declare their own
+ * `stripComments`, all carrying the same naive form: two chained `replace`
+ * calls, one blanking a C-style block comment and one blanking a `//` to end of
+ * line via a `[^:]` guard. (The literal is deliberately not reproduced here —
+ * its closing sequence would terminate this block comment.)
+ *
+ * That is precisely the form this file's header blames for the original
+ * vacuous-pass incidents — the one that blanked a legitimate one-line gate from
+ * the `//` of a `https://` string default onward. The shared primitive is a
+ * character-level lexer BECAUSE the naive form is wrong, so these four guards are
+ * scanning with the known-inferior instrument. They currently pass, which is not
+ * evidence: a zero-call-site vacuous scan also passes.
+ *
+ * The previous hand-maintained `VITEST_CONSUMERS` list never saw them, because
+ * they were never registered — they were written AFTER the list was considered
+ * settled. So the claim "the four local lexers are gone" was false while sitting
+ * in a green test.
+ *
+ * THIS LIST IS DELIBERATELY OPPOSITE IN KIND TO THE LIST IT REPLACES. The old one
+ * had to grow every time somebody adopted the lexer. This one can only shrink,
+ * and it is pinned from both sides: an unlisted declarer fails the scan, and a
+ * listed entry that has STOPPED declaring fails too, so migrating a file without
+ * removing it here turns the suite red rather than letting the entry rot. Owner:
+ * W3-07.
+ */
+const KNOWN_DUPLICATE_LEXERS = Object.freeze([
+  "apps/dashboard/server/__tests__/orderFlowHonestySeamGuard.test.mjs",
+  "apps/dashboard/server/__tests__/ws4LeaderSourcingSeamGuard.test.mjs",
+  "apps/dashboard/server/__tests__/ws5SeamGuard.test.mjs",
+  "apps/dashboard/server/__tests__/ws6SafetySeamGuard.test.mjs"
 ])
+
+// Every tracked source file must exist on disk to be read. Asserted below rather
+// than assumed: a silently-skipped file is an unread file, and an unread file is
+// indistinguishable from a clean one.
+const MISSING_FROM_DISK = TRACKED_SOURCE.filter((rel) => !existsSync(join(REPO_ROOT, rel)))
+
+// THIS FILE IS EXCLUDED FROM BOTH DERIVED SETS, and the exclusion is asserted
+// rather than assumed. It carries the declaration and reference patterns as
+// PLANTED STRING FIXTURES — `const stripComments = (src) => src` and friends — so
+// a scan over it finds its own bite-test samples and reports it as a duplicate
+// lexer and a four-times consumer. That is the scan working correctly on text
+// that is not code.
+//
+// Excluding it is only honest if the exclusion is NARROW and PROVABLE, so the
+// test below asserts that this file really is in the unfiltered declarer set.
+// If a future edit removes the fixtures, that assertion fails and the exclusion
+// has to be revisited rather than silently keeping a hole open.
+const THE_GUARD = "apps/dashboard/server/__tests__/sharedCommentLexer.test.mjs"
+const isTheGuard = (rel) => rel === THE_GUARD
+
+const ALL_DECLARERS = TRACKED_SOURCE.filter((rel) => DECLARATION.test(codeOf(rel)))
+const DECLARERS = ALL_DECLARERS.filter((rel) => !isTheGuard(rel))
+const CONSUMERS = TRACKED_SOURCE.filter(
+  (rel) => !isTheGuard(rel) && referencesIn(codeOf(rel)).length > 0
+)
 
 // COUNT DERIVED, NOT WRITTEN. A literal "four" here went stale the moment Task 2
 // registered a fifth consumer, and a consumer-count claim in a title is exactly
-// the kind of comment nobody re-reads before adding the next entry.
-describe(`the shared comment lexer — ONE implementation, ${VITEST_CONSUMERS.length} consumers`, () => {
+// the kind of comment nobody re-reads before adding the next entry. It now
+// reports what the scan actually found rather than what a list held.
+describe(`the shared comment lexer — ONE implementation, ${CONSUMERS.length} consumers derived from the tracked tree`, () => {
   it("the two plain-script consumers expose the very same function object", () => {
     // Real `Object.is` identity, not a source-text resemblance. A copy would fail
     // here even if it were character-for-character identical today, which is the
@@ -140,28 +247,103 @@ describe(`the shared comment lexer — ONE implementation, ${VITEST_CONSUMERS.le
     expect(typeof stripComments).toBe("function")
   })
 
-  it("no consumer RETAINS a declaration — the four local lexers are gone", () => {
-    // The negative half, and the one that actually fails if someone pastes the
-    // lexer back. `ws7-seam-probe.mjs` is included even though the identity check
-    // above already covers it: a declaration shadowing the import would satisfy
-    // nothing here and everything in production.
-    for (const rel of [...VITEST_CONSUMERS, "scripts/ws7-seam-probe.mjs"]) {
-      const src = read(rel)
-      expect(src, `${rel} still declares its own stripComments`).not.toMatch(
-        /(?:function\s+stripComments|(?:const|let|var)\s+stripComments\s*=)/
-      )
+  it("no UNLISTED tracked file retains a declaration — and the known list cannot rot", () => {
+    // The negative half, and the one that fails if someone pastes the lexer back.
+    //
+    // SCOPE CHANGED DELIBERATELY. This used to iterate a hand-maintained list, so
+    // its coverage was bounded by whoever remembered to add an entry — and the
+    // omission happened four times. It now ranges over EVERY tracked source file,
+    // so a hand-rolled lexer in a file nobody registered is still found. That is
+    // the entire point of the change: the guard no longer depends on the memory of
+    // the person editing it.
+    //
+    // It also no longer appends the two plain-script consumers by hand.
+    // `scripts/ws7-seam-probe.mjs` and `ws7-seam-guard.mjs` are tracked source
+    // files that reference the primitive, so the derived set already contains them.
+    //
+    // Pinned from BOTH sides on purpose. An unlisted declarer fails the first
+    // assertion. A listed entry that has stopped declaring fails the second, so a
+    // migration cannot leave a stale exception behind — the list is forced to
+    // shrink rather than being allowed to become the next inventory that rots.
+    const unlisted = DECLARERS.filter((rel) => !KNOWN_DUPLICATE_LEXERS.includes(rel))
+    expect(
+      unlisted,
+      `tracked files declaring their own stripComments with no recorded reason: ${unlisted.join(", ")}`
+    ).toEqual([SHARED_REL])
+
+    expect(
+      DECLARERS.filter((rel) => KNOWN_DUPLICATE_LEXERS.includes(rel)),
+      "these are listed as KNOWN duplicates but no longer declare one — remove them from the list"
+    ).toEqual([...KNOWN_DUPLICATE_LEXERS])
+  })
+
+  it("the derived scan really read the tree, so the single declarer means something", () => {
+    // NON-VACUITY. Deriving a set replaces curated input with a scan, and a scan
+    // that reads nothing returns an empty answer indistinguishable from a clean
+    // one. That is the exact failure mode this repository has already paid for
+    // twice — `MUTATE_CODE` in W3-05, and three vacuous-pass incidents recorded in
+    // this file's own header — so it is pinned rather than assumed.
+    expect(TRACKED_SOURCE.length, "git ls-files returned almost nothing").toBeGreaterThan(100)
+    expect(
+      MISSING_FROM_DISK,
+      `tracked source files absent from disk, so unread: ${MISSING_FROM_DISK.join(", ")}`
+    ).toEqual([])
+    expect(CONSUMERS.length, "no consumer was derived, so nothing is being proved").toBeGreaterThan(5)
+
+    // THE EXCLUSION IS PROVABLE. This file is skipped by both derived sets
+    // because it carries the patterns as planted fixtures. That is only an honest
+    // skip if the skip is actually being used — so assert it really does match,
+    // which also means a future edit that deletes the fixtures turns THIS
+    // assertion red instead of quietly leaving an unexplained hole.
+    expect(
+      ALL_DECLARERS,
+      "this file is excluded from the declarer scan, but no longer matches it — revisit the exclusion"
+    ).toContain(THE_GUARD)
+
+    // The file that motivated dropping the list. If derivation ever stops finding
+    // it, the change has silently reverted to "consumers I remembered".
+    expect(CONSUMERS).toContain("apps/dashboard/server/__tests__/graduationApi.test.mjs")
+    expect(CONSUMERS).toContain("apps/dashboard/server/services/premortem/inventory.mjs")
+  })
+
+  it("the declaration scan BITES a planted lexer and spares a legitimate binding", () => {
+    // The scan is run through `stripComments` and reaches a `/g`-free literal, so
+    // both failure shapes are worth planting rather than reasoning about: a real
+    // declaration must be caught, and the destructuring binding every consumer
+    // uses must NOT be. Catching the second one would report all consumers as
+    // offenders and make the guard useless.
+    for (const planted of [
+      "function stripComments(src) { return src }",
+      "const stripComments = (src) => src",
+      "let stripComments = function (src) { return src }",
+      "export function stripComments(src) { return src }",
+      "class L { static stripComments(src) { return src } }"
+    ]) {
+      expect(DECLARATION.test(planted), `missed a planted declaration: ${planted}`).toBe(true)
+    }
+    for (const legitimate of [
+      `const { stripComments } = await import("../scripts/guard-primitives.mjs")`,
+      `import { stripComments } from "../scripts/guard-primitives.mjs"`,
+      `const result = stripComments(source)`,
+      `export { stripComments } from "../scripts/guard-primitives.mjs"`
+    ]) {
+      expect(DECLARATION.test(legitimate), `flagged a legitimate binding: ${legitimate}`).toBe(false)
     }
   })
 
   it("each consumer resolves `stripComments` from the SAME absolute module", () => {
-    // Identity by RESOLUTION rather than by name. Two files can both `import
-    // { stripComments }` and still get different functions if they reach different
+    // Identity by RESOLUTION rather than by name. Two files can both reference
+    // `stripComments` and still get different functions if they reach different
     // files — a duplicated module, a symlink, a second checkout. The specifier is
     // resolved against the consumer's own directory and compared to the shared
     // module's absolute path.
-    for (const rel of [...VITEST_CONSUMERS, "scripts/ws7-seam-probe.mjs", "scripts/ws7-seam-guard.mjs"]) {
-      const src = read(rel)
-      const specifiers = [...src.matchAll(/from\s+"([^"]*guard-primitives\.mjs)"/g)].map((m) => m[1])
+    //
+    // BOTH SPELLINGS ARE IN SCOPE, which the previous version of this test could
+    // not manage: it matched only a static `from` specifier, so `graduationApi`'s
+    // `await import(…)` read as zero references and the file was excluded rather
+    // than failing.
+    for (const rel of CONSUMERS) {
+      const specifiers = referencesIn(codeOf(rel))
       expect(specifiers.length, `${rel} must reference guard-primitives.mjs exactly once`).toBe(1)
       const dir = rel.slice(0, rel.lastIndexOf("/"))
       const resolved = join(REPO_ROOT, dir, specifiers[0])
