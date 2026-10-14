@@ -482,7 +482,7 @@ export function stopsAreMeasured(data: AdaptiveStopsResponse): data is AdaptiveS
 /**
  * `timeframe` IS AN ATR PERIOD HERE, NOT A BAR SIZE.
  *
- * `handlers.mjs:5749` passes `{ atrPeriod: timeframe }`, and
+ * `handlers.mjs:5748` passes `{ atrPeriod: timeframe }`, and
  * `computeAdaptiveStops` uses it as `computeAtr(highs, lows, closes, atrPeriod)`.
  * Two consequences the panel has to surface rather than hide:
  *

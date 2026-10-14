@@ -416,7 +416,7 @@ export function CandleCalculatorSection() {
  *
  * The other two panels keep the full list, and need it: `computeAdaptiveStops`
  * receives these seconds as an ATR smoothing window, where `5s` is a perfectly
- * meaningful number of bars (`handlers.mjs:5749`), and `optimizeExpiry` never
+ * meaningful number of bars (`handlers.mjs:5748`), and `optimizeExpiry` never
  * reads the timeframe at all — it infers the bar interval from the candle times.
  * Filtering is therefore a REGIME-only restriction.
  *
@@ -464,10 +464,12 @@ function RegimePanel() {
           silently; `REGIME_TIMEFRAMES` above carries the reason for a maintainer. */}
       <p className="muted small">
         Only timeframes the regime route can resolve are offered: it reads the
-        choice as a label, not a bar count, so a second-resolution label resolves
-        to no plane at all and the monthly label resolves to one minute. The
-        expiry and stops panels below take the same list in full, because they
-        read it as a number.
+        choice as a label rather than a bar count. A second-resolution label is not
+        a key in its lookup, so it falls back to a 60-second plane and carries no
+        bias weight; the monthly label collides with one minute outright. Either
+        way the panel would show two contradictory numbers at once. The expiry and
+        stops panels below take the same list in full, because they read it as a
+        number.
       </p>
       <CandleInputs
         refs={refs}
@@ -833,7 +835,7 @@ function AdaptiveStopsPanel() {
   const refs = useRef<Refs>({})
   const { state, busy, error, run, refuse } = useCalculator<StopsDirection, StopsResult>(
     async (candles, origin, direction) => ({
-      // `timeframe` IS THE SMOOTHING WINDOW HERE. `handlers.mjs:5749` passes it as
+      // `timeframe` IS THE SMOOTHING WINDOW HERE. `handlers.mjs:5748` passes it as
       // `{ atrPeriod: timeframe }`, so the number below is not a bar size and not
       // a label — it is how many bars the ATR is averaged over.
       data: await fetchAdaptiveStops(candles, direction, origin.timeframeSeconds),

@@ -759,7 +759,7 @@ describe("CandleCalculatorSection — regime", () => {
   })
 
   it("the stops panel keeps the FULL timeframe list, because it reads the choice as a NUMBER", () => {
-    // The restriction is regime-only and must stay that way: `handlers.mjs:5749`
+    // The restriction is regime-only and must stay that way: `handlers.mjs:5748`
     // passes these seconds as `{ atrPeriod }`, where a 5-bar window and a monthly
     // window are both perfectly meaningful. A shared filter would have removed
     // capability the route actually has.
@@ -1234,7 +1234,7 @@ const stopsAtrUnobservable: AdaptiveStopsResponse = {
 
 describe("CandleCalculatorSection — adaptive stops", () => {
   it("sends the series, the direction and the timeframe NUMBER", async () => {
-    // `handlers.mjs:5749` passes `{ atrPeriod: timeframe }`, so this route's
+    // `handlers.mjs:5748` passes `{ atrPeriod: timeframe }`, so this route's
     // `timeframe` is a SMOOTHING WINDOW, not a label and not a bar size. The
     // regime route's `timeframe` is a string; the two share a name and nothing
     // else.
