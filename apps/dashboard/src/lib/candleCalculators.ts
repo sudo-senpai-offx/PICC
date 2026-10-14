@@ -283,7 +283,15 @@ export interface RegimeUnknown {
   regimeEngine: RegimeEngineReading
 }
 
-/** The computed branch. Every key present, `confidence` rounded from 0.5..0.95. */
+/**
+ * The computed branch. Every key present.
+ *
+ * `confidence` is `Math.round(confidence * 100)` (`regimeDetection.mjs:83`) over a
+ * score that starts at `0.5` and is capped at `0.95` (`:71-74`), so the field is
+ * an INTEGER percentage in **50..95**, not the 0.5..0.95 fraction it is computed
+ * from. Transcribed here because a reader comparing the wire value against the
+ * source would otherwise conclude the scaling was wrong.
+ */
 export interface RegimeMeasured {
   ok: true
   regime: LegacyRegime

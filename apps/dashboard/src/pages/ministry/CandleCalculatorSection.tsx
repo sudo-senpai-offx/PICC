@@ -262,14 +262,19 @@ function readInputs(refs: RefObject<Refs>, prefix: string): PanelInputs | { erro
 function CandleInputs({
   refs,
   testIdBase,
-  label
+  label,
+  timeframes
 }: {
   refs: RefObject<Refs>
   testIdBase: string
   label: string
+  /** Omitted means every label `TIMEFRAME_LABELS` carries. */
+  timeframes?: readonly Timeframe[]
 }) {
+  const allowed = timeframes ? new Set<number>(timeframes) : null
   const options = Object.entries(TIMEFRAME_LABELS)
     .map(([seconds, name]) => ({ seconds: Number(seconds), name: name as string }))
+    .filter((o) => allowed === null || allowed.has(o.seconds))
     .sort((a, b) => a.seconds - b.seconds)
 
   return (
@@ -325,14 +330,33 @@ function OriginLine({ origin, testId }: { origin: SeriesOrigin; testId: string }
       {origin.servedTimeframe === null ? "an unnamed resolution" : `${origin.servedTimeframe}s`}
       {origin.resolved ? " (NOT the resolution asked for)" : ""} ·{" "}
       {origin.stale ? "STALE — the source flagged this series" : "not flagged stale"} ·{" "}
-      {origin.verifiedCount}/{origin.sentBars} bar(s) cross-verified across{" "}
-      {origin.verifySources} source(s)
+      {origin.sourceMode ? `source selection ${origin.sourceMode}` : "source selection unnamed"}
+      {origin.sourceMode === "fallback"
+        ? " — the source preference did not serve this, so a different one did"
+        : ""}{" "}
+      {/* THE TWO CROSS-VERIFICATION FIGURES ARE NOT THE SAME SENTENCE. These
+          panels call `fetchCandles` with `verify` left at its default `false`, so
+          the server takes the plain fan-in and can only ever report zero. Printed
+          unconditionally that zero reads as a verdict on the source ("nothing
+          agreed") when it is a verdict on us ("nobody was asked"). The two are
+          separated so the panel never claims a cross-check it did not perform. */}
+      {origin.verifySources > 0
+        ? `${origin.verifiedCount}/${origin.sentBars} bar(s) cross-verified across ${origin.verifySources} source(s)`
+        : "not cross-verified — this run did not ask a second source"}
     </p>
   )
 }
 
-function MeasuredAt({ at, testId }: { at: number; testId: string }) {
-  const stale = Date.now() - at > STALE_AFTER_MS
+/**
+ * `now` IS A PROP SO THE STALENESS CLAUSE IS REACHABLE.
+ *
+ * `STALE_AFTER_MS` is fifteen minutes, so inside a test run `Date.now() - at` is
+ * always a few hundred milliseconds and the "may be out of date" branch can never
+ * commit. A branch no test can reach is a branch nothing holds, so the clock is
+ * injectable and the test drives the real render path rather than a copy of it.
+ */
+export function MeasuredAt({ at, now, testId }: { at: number; now?: number; testId: string }) {
+  const stale = (now ?? Date.now()) - at > STALE_AFTER_MS
   return (
     <p className="muted small" data-testid={testId}>
       fetched {clockOf(at)}
@@ -367,13 +391,50 @@ export function CandleCalculatorSection() {
 // Regime
 // ---------------------------------------------------------------------
 
+/**
+ * THE EIGHT LABELS `detectRegime` CAN ACTUALLY ROUND-TRIP, AND WHY THE LIST IS
+ * SHORTER THAN `TIMEFRAME_LABELS`.
+ *
+ * THE ROUTE READS A LABEL, NOT A NUMBER, AND ITS LOOKUP IS A STRING ROUND-TRIP.
+ * `tfSecondsOf` (`regimeDetection.mjs:31-35`) lowercases the label, strips every
+ * non-alphanumeric character and then looks the result up in a fixed map. The
+ * dashboard's labels do not all survive that:
+ *
+ *  - `5s`, `15s`, `30s` normalise to `5s`/`15s`/`30s`, and none of those is a key,
+ *    so `tfSecondsOf` returns `null`. `regimeDetection.mjs:80` then writes
+ *    `planes: { [tf ?? 60]: candles }` — the bias plane silently becomes 60s.
+ *  - `1M` (2592000) normalises to `1m`, which IS a key: 60. A request for MONTHLY
+ *    bars is answered with a 1-MINUTE bias plane.
+ *
+ * So three of those four cannot be honoured at all and the fourth collides with
+ * `1m`. Offering them would put two contradictory numbers on one panel, because
+ * the response echoes the label back as `metrics.timeframe` ("read at timeframe
+ * 1M") while `regimeEngine.latency.planes` reports the plane it actually used
+ * ("plane(s) at 60s"). The panel cannot print both and stay attributable, so the
+ * options the route cannot round-trip are NOT OFFERED here rather than offered
+ * and flagged.
+ *
+ * The other two panels keep the full list, and need it: `computeAdaptiveStops`
+ * receives these seconds as an ATR smoothing window, where `5s` is a perfectly
+ * meaningful number of bars (`handlers.mjs:5749`), and `optimizeExpiry` never
+ * reads the timeframe at all — it infers the bar interval from the candle times.
+ * Filtering is therefore a REGIME-only restriction.
+ *
+ * `CandleCalculatorSection.test.tsx` proves the round-trip against the service's
+ * own `tfSecondsOf`, so a future label change cannot quietly re-open the hole.
+ */
+export const REGIME_TIMEFRAMES: readonly Timeframe[] = [
+  60, 300, 900, 1800, 3600, 14400, 86400, 604800
+]
+
 function RegimePanel() {
   const refs = useRef<Refs>({})
   const { state, busy, error, run, refuse } = useCalculator<undefined, RegimeResponse>(
     (candles, origin) =>
-      // THE TIMEFRAME IS A LABEL HERE. `tfSecondsOf` (`regimeDetection.mjs:31`)
-      // only understands strings like "1m"/"5m", and an unrecognised one resolves
-      // to null — which silently drops the bias plane to 60s rather than failing.
+      // THE TIMEFRAME IS A LABEL HERE, AND ONLY THE EIGHT LABELS ABOVE REACH THIS
+      // LINE. `tfSecondsOf` (`regimeDetection.mjs:31`) only understands strings like
+      // "1m"/"5m"; an unrecognised one resolves to null, which silently drops the
+      // bias plane to 60s rather than failing, and "1M" collides with "1m".
       fetchRegime(candles, origin.timeframeLabel)
   )
 
@@ -399,7 +460,21 @@ function RegimePanel() {
         convergence read. The two can disagree — they are different classifiers and
         the panel shows both rather than picking one.
       </p>
-      <CandleInputs refs={refs} testIdBase="cc-regime" label="regime" />
+      {/* The label limit is disclosed here to the reader rather than imposed
+          silently; `REGIME_TIMEFRAMES` above carries the reason for a maintainer. */}
+      <p className="muted small">
+        Only timeframes the regime route can resolve are offered: it reads the
+        choice as a label, not a bar count, so a second-resolution label resolves
+        to no plane at all and the monthly label resolves to one minute. The
+        expiry and stops panels below take the same list in full, because they
+        read it as a number.
+      </p>
+      <CandleInputs
+        refs={refs}
+        testIdBase="cc-regime"
+        label="regime"
+        timeframes={REGIME_TIMEFRAMES}
+      />
 
       {error ? (
         <div className="panel muted" data-testid="cc-regime-error">
@@ -735,14 +810,35 @@ function ExpiryUnscoredResult({
 // Adaptive stops
 // ---------------------------------------------------------------------
 
+/**
+ * THE ANSWER CARRIES THE DIRECTION IT WAS COMPUTED FOR.
+ *
+ * `StopsReadout` used to be handed `refs.current.direction.value` at RENDER time,
+ * which is not the direction that was sent: the select is uncontrolled, so
+ * flipping it while a run is in flight left the panel printing "direction down"
+ * beside take-profit and stop-loss levels computed for an UP trade — and for a
+ * short, a take profit above the stop loss is an internally contradictory order.
+ * Reading the ref therefore breaks this file's own invariant at the header ("the
+ * value read at click time is the value sent"), so the direction is captured into
+ * the RESULT beside the levels it produced, exactly as `ExpiryResult` already does
+ * with `sent`.
+ */
+interface StopsResult {
+  data: AdaptiveStopsResponse
+  /** The direction these levels were computed FOR, not the one now selected. */
+  direction: StopsDirection
+}
+
 function AdaptiveStopsPanel() {
   const refs = useRef<Refs>({})
-  const { state, busy, error, run, refuse } = useCalculator<StopsDirection, AdaptiveStopsResponse>(
-    (candles, origin, direction) =>
+  const { state, busy, error, run, refuse } = useCalculator<StopsDirection, StopsResult>(
+    async (candles, origin, direction) => ({
       // `timeframe` IS THE SMOOTHING WINDOW HERE. `handlers.mjs:5749` passes it as
       // `{ atrPeriod: timeframe }`, so the number below is not a bar size and not
       // a label — it is how many bars the ATR is averaged over.
-      fetchAdaptiveStops(candles, direction, origin.timeframeSeconds)
+      data: await fetchAdaptiveStops(candles, direction, origin.timeframeSeconds),
+      direction
+    })
   )
 
   function onRun() {
@@ -800,12 +896,7 @@ function AdaptiveStopsPanel() {
       {state ? <MeasuredAt at={state.measuredAt} testId="cc-stops-measured-at" /> : null}
       {state ? <OriginLine origin={state.origin} testId="cc-stops-origin" /> : null}
       {state ? <AtrPeriodLine origin={state.origin} /> : null}
-      {state ? (
-        <StopsReadout
-          data={state.data}
-          direction={(refs.current.direction?.value ?? "up") as StopsDirection}
-        />
-      ) : null}
+      {state ? <StopsReadout result={state.data} /> : null}
     </div>
   )
 }
@@ -841,13 +932,11 @@ function AtrPeriodLine({ origin }: { origin: SeriesOrigin }) {
  * is shown beside a statement that no stop was produced, so neither can be read
  * as the other.
  */
-function StopsReadout({
-  data,
-  direction
-}: {
-  data: AdaptiveStopsResponse
-  direction: StopsDirection
-}) {
+function StopsReadout({ result }: { result: StopsResult }) {
+  // `direction` is read off the RESULT rather than off the live select, so the
+  // levels on screen are always labelled with the direction they were computed
+  // for — including while a later run is in flight against a different one.
+  const { data, direction } = result
   if (!stopsAreMeasured(data)) {
     return (
       <div data-testid="cc-stops-result">
