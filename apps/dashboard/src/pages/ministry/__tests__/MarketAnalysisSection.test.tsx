@@ -21,13 +21,15 @@
 // it — react-dom reports "the current testing environment is not configured to
 // support act(...)" — so wrapping in it is a no-op that lets these assertions
 // run before React commits, and a test that cannot fail on a broken component is
-// worse than no test. This is the `waitFor` polling helper from
-// `PreMortemSection.test.tsx`: press, then poll the DOM until the state has
-// actually landed.
+// worse than no test. Asynchronous loads settle on the repo's shared
+// `waitForText` (`src/test-utils/waitForText.ts`): press, then poll the DOM's TEXT
+// until the state has actually landed, reporting the last rendered string if it
+// never does.
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
+import { waitForText } from "@/test-utils/waitForText"
 import { MarketAnalysisSection } from "../MarketAnalysisSection"
 import * as marketAnalysis from "@/lib/marketAnalysis"
 import type {
@@ -202,6 +204,59 @@ const rpRouteRefused: RiskParityResponse = {
   weights: null
 }
 
+/**
+ * `riskParity.mjs:154` — ONE survivor, so the allocator returns a literal.
+ *
+ * ```js
+ * if (symbols.length === 1) {
+ *   return { ok: true, weights: { [symbols[0]]: 1 }, method: "single-asset", portfolioVol: 0 }
+ * }
+ * ```
+ *
+ * `portfolioVol: 0` HERE IS NOT A MEASUREMENT. It is a constant in the source, sits
+ * above the covariance build at `:157`, and is returned before any volatility is
+ * computed — the branch also omits `vols` entirely, which is why `vols === null` and
+ * `symbolCount === null` on this payload. Presenting it as `portfolio vol: 0` beside
+ * `weight 1` tells an operator the position carries no risk, which is the exact
+ * failure this file's governing rule exists to prevent.
+ */
+const rpSingleAsset: RiskParityResponse = {
+  ok: true,
+  weights: { EURUSD: 1 },
+  method: "single-asset",
+  symbolCount: null,
+  vols: null,
+  portfolioVol: 0,
+  portfolioVolPct: null,
+  riskContributions: null,
+  iterations: null
+}
+
+/**
+ * `riskParity.mjs:210` — the ERC branch, where `portfolioVol` IS computed.
+ *
+ * THE CONTROL FOR THE FIX ABOVE. `equalRiskContribution` computes
+ * `Math.sqrt(Math.max(portVar, 1e-12))` (`:100`) and rounds to 4dp, so an ERC
+ * response really can serve `portfolioVol: 0` — and that 0 is measured. It must
+ * still print as `0`. The gate is therefore on `method`, never on the value: a gate
+ * written as `portfolioVol === 0 → absent` would be exactly the defect this
+ * fixture exists to rule out.
+ */
+const rpErcMeasuredZero: RiskParityResponse = {
+  ok: true,
+  weights: { EURUSD: 0.5, BTCUSD: 0.5 },
+  method: "equal-risk-contribution",
+  symbolCount: 2,
+  vols: { EURUSD: 0.0651, BTCUSD: 0.9112 },
+  portfolioVol: 0,
+  portfolioVolPct: "0%",
+  riskContributions: [
+    { symbol: "EURUSD", weight: 0.5, riskContribution: "50%" },
+    { symbol: "BTCUSD", weight: 0.5, riskContribution: "50%" }
+  ],
+  iterations: 500
+}
+
 const ofUnavailable: OrderFlowResponse = {
   ok: true,
   available: false,
@@ -260,19 +315,82 @@ afterEach(() => {
 })
 
 /**
- * Polling rather than `act`, for the reason in this file's header. The
- * `flushSync(() => {})` on every tick is what forces React to commit pending
- * work, so the loop exits only once the DOM has actually changed.
+ * The repo's shared async-settle helper (`src/test-utils/waitForText.ts`), already
+ * imported by six sibling suites.
+ *
+ * THIS FILE HAD ITS OWN COPY and round 1 removed it. The local version polled
+ * element PRESENCE, carried no text, and threw a bare `waitFor timed out waiting for
+ * <testid>` — so when a wait expired the report named a test id rather than the state
+ * the DOM was actually in, and the reader had to re-run to find out why. It also ran
+ * `pollMs 25 / timeoutMs 2000` against the repo's `5 / 5000`: the coarser poll is
+ * slower and the shorter timeout is flake on a loaded CI box, in a suite whose slowest
+ * test already takes seconds.
+ *
+ * THE HANDSHAKE IS THE SAME EITHER WAY: an ASCII marker that only appears once the
+ * load has committed. `act()` is still not used, for the reason in this file's header —
+ * it is a no-op in this harness. What changes is only WHEN the test reads the DOM,
+ * never WHAT it asserts.
  */
-async function waitFor(check: () => boolean, what: string, timeoutMs = 2000) {
-  const until = Date.now() + timeoutMs
-  while (!check()) {
-    if (Date.now() > until) throw new Error(`waitFor timed out waiting for ${what}`)
-    await new Promise((r) => setTimeout(r, 25))
-    flushSync(() => {})
-  }
-  flushSync(() => {})
-}
+const settle = (marker: string) => waitForText({ host: container }, marker)
+
+/**
+ * Every wait site, and the ASCII marker each one settles on.
+ *
+ * A MARKER MUST BE FALSE AT MOUNT. `waitForText` searches the whole container, and
+ * this container holds all four panels at once, so a marker borrowed from the
+ * always-rendered copy — the section note ("Four server-fetched readouts"), the
+ * order-flow contract paragraph ("…CVD and absorption…") — is true before anything
+ * commits and the wait returns immediately. The previous helper waited on element
+ * PRESENCE, which made that class of mistake impossible; migrating to text markers
+ * reintroduced it, and two of my first markers hit it. Every entry below was checked
+ * against the static copy for that reason.
+ */
+const MARKERS = {
+  // Volatility — measured path.
+  "market-vol-result": "ATR regime",
+  "market-vol-atr": "ATR regime",
+  "market-vol-est-realized": "close-close",
+  "market-vol-est-garmanKlass": "garman-klass",
+  "market-vol-garch": "GARCH(1,1)",
+  // NOT "fetched": the section note above the panels already reads "Four
+  // server-fetched readouts", so that marker is true at mount and the wait would
+  // return before anything committed. MeasuredAt renders in the same commit as
+  // VolatilityResult, so any marker from that commit is equally sound.
+  "market-vol-measured-at": "usable candles",
+  // Volatility — refusals. `volatility unavailable` is the transport refusal;
+  // `volatility refused` is the route's own 200-with-`ok:false`.
+  "market-vol-error": "volatility unavailable",
+  "market-vol-refused": "volatility refused",
+  // Sentiment.
+  "market-sent-head": "server answered",
+  "market-sent-composite": "declared leg weight",
+  "market-sent-composite-absent": "no composite",
+  "market-sent-news": "licence checked:",
+  "market-sent-observed": "engine last ran at",
+  "market-sent-social": "social-derived leg",
+  "market-sent-unprovenanced": "digest item(s) arrived without provenance",
+  "market-sent-error": "sentiment unavailable",
+  // Risk parity.
+  "market-rp-result": "coverage: ",
+  "market-rp-coverage": "in the allocation",
+  "market-rp-coverage-absent-none": "every requested symbol carries a weight",
+  "market-rp-weight-EURUSD": "weight ",
+  "market-rp-count-mismatch": "the allocation also reports symbolCount",
+  "market-rp-refused": "risk parity refused",
+  "market-rp-error": "risk parity unavailable",
+  "market-rp-portfolio": "portfolio vol:",
+  "market-rp-portfolio-vol": "portfolio vol:",
+  "market-rp-rc-EURUSD": "risk contribution",
+  // Order flow.
+  "market-of-result": "lookback ",
+  "market-of-unavailable": "NOT MEASURED",
+  "market-of-measured": "cumulative ",
+  "market-of-fidelity": "data fidelity",
+  "market-of-signal": "sell-side absorbed",
+  "market-of-error": "order flow unavailable"
+} as const
+
+const settleOn = (testId: keyof typeof MARKERS) => settle(MARKERS[testId])
 
 const render = () => {
   flushSync(() => root.render(<MarketAnalysisSection />))
@@ -294,9 +412,6 @@ function type(testId: string, value: string) {
   if (!input) throw new Error(`${testId} not found`)
   ;(input as HTMLInputElement).value = value
 }
-
-const waitForId = (testId: string, what = testId) =>
-  waitFor(() => id(testId) !== null, what)
 
 // ---------------------------------------------------------------------
 // Opt-in: nothing reads on mount
@@ -324,8 +439,15 @@ describe("MarketAnalysisSection — opt-in", () => {
     expect(vol).not.toHaveBeenCalled()
     expect(sent).not.toHaveBeenCalled()
     expect(rp).not.toHaveBeenCalled()
-    // Order flow is the exception: its only input is optional by design.
-    expect(of).not.toHaveBeenCalled()
+    // NO ORDER-FLOW ASSERTION HERE, AND THAT IS THE POINT. A blank click on the
+    // order-flow panel DOES call its client — its only input is optional by design —
+    // but this test never clicks that button, so `expect(of).not.toHaveBeenCalled()`
+    // here was a second mount-fetch check wearing the costume of a blank-input
+    // assertion, next to a comment claiming a behaviour it never exercised. The
+    // behaviour is now asserted where it happens, in the test below.
+    expect(id("market-vol-idle")).not.toBeNull()
+    expect(id("market-sent-idle")).not.toBeNull()
+    expect(id("market-rp-idle")).not.toBeNull()
   })
 })
 
@@ -338,7 +460,7 @@ describe("MarketAnalysisSection — volatility", () => {
     render()
     type("market-vol-symbol", "EURUSD")
     click("market-vol-run")
-    await waitForId("market-vol-result")
+    await settleOn("market-vol-result")
     expect(vol).toHaveBeenCalledTimes(1)
     expect(vol).toHaveBeenCalledWith("EURUSD")
     expect(text("market-vol-result")).toContain("Euro/US Dollar")
@@ -350,7 +472,7 @@ describe("MarketAnalysisSection — volatility", () => {
     render()
     type("market-vol-symbol", "EURUSD")
     click("market-vol-run")
-    await waitForId("market-vol-measured-at")
+    await settleOn("market-vol-measured-at")
     expect(text("market-vol-measured-at")).toContain("fetched")
     // BOTH sides of the identity: what this panel asked, and what the server said
     // it resolved. A panel that silently re-reads under the same label is lying
@@ -361,12 +483,40 @@ describe("MarketAnalysisSection — volatility", () => {
     expect(text("market-vol-stamp")).toContain("2026-10-11T09:15:00.000Z")
   })
 
+  it("shows a DIVERGENT asked/answered pair, so echoing the server twice cannot pass", async () => {
+    // EVERY OTHER FIXTURE IN THIS FILE HAS `asked === data.symbol`. With that
+    // pairing a panel rewritten to print `data.symbol` in both positions — throwing
+    // away what the operator typed — still satisfies every assertion above, which
+    // is exactly the failure this test exists to exclude. So the pair diverges here.
+    vol.mockResolvedValue(volMeasured({ symbol: "GBPUSD", name: "Pound/US Dollar" }))
+    render()
+    type("market-vol-symbol", "EURUSD")
+    click("market-vol-run")
+    await settleOn("market-vol-result")
+    // The client was asked about EURUSD...
+    expect(vol).toHaveBeenCalledWith("EURUSD")
+    // ...the server answered about GBPUSD, and the panel is the only place that
+    // disagreement is visible.
+    expect(text("market-vol-result")).toContain("Pound/US Dollar")
+
+    const sample = text("market-vol-sample")
+    expect(sample).toContain("asked for EURUSD")
+    expect(sample).toContain("server answered GBPUSD")
+    // EACH SIDE EXACTLY ONCE. The two negations catch a swapped pair; the two
+    // length assertions catch an echo-the-server rewrite, which would print GBPUSD
+    // twice and EURUSD not at all.
+    expect(sample).not.toContain("server answered EURUSD")
+    expect(sample).not.toContain("asked for GBPUSD")
+    expect(sample.match(/EURUSD/g)).toHaveLength(1)
+    expect(sample.match(/GBPUSD/g)).toHaveLength(1)
+  })
+
   it("renders the route's 200-with-ok:false as a REFUSAL carrying its reason", async () => {
     vol.mockResolvedValue(volRefused)
     render()
     type("market-vol-symbol", "NOPE")
     click("market-vol-run")
-    await waitForId("market-vol-refused")
+    await settleOn("market-vol-refused")
     expect(text("market-vol-refused")).toContain("need at least 30 candles")
     // NO readout region at all. An empty panel here would read as "the read
     // happened and there was nothing to say", which is the exact impression the
@@ -382,7 +532,7 @@ describe("MarketAnalysisSection — volatility", () => {
     render()
     type("market-vol-symbol", "EURUSD")
     click("market-vol-run")
-    await waitForId("market-vol-est-garmanKlass")
+    await settleOn("market-vol-est-garmanKlass")
     const line = text("market-vol-est-garmanKlass")
     expect(line).toContain("absent")
     expect(line).toContain("20-bar window")
@@ -402,7 +552,7 @@ describe("MarketAnalysisSection — volatility", () => {
     render()
     type("market-vol-symbol", "EURUSD")
     click("market-vol-run")
-    await waitForId("market-vol-est-realized")
+    await settleOn("market-vol-est-realized")
     const line = text("market-vol-est-realized")
     expect(line).toContain("0 (0%)")
     expect(line).not.toContain("absent")
@@ -417,7 +567,7 @@ describe("MarketAnalysisSection — volatility", () => {
     render()
     type("market-vol-symbol", "EURUSD")
     click("market-vol-run")
-    await waitForId("market-vol-garch")
+    await settleOn("market-vol-garch")
     const line = text("market-vol-garch")
     expect(line).toContain("did not fit")
     // `omega 0` would assert a coefficient nobody estimated.
@@ -432,7 +582,7 @@ describe("MarketAnalysisSection — volatility", () => {
     render()
     type("market-vol-symbol", "EURUSD")
     click("market-vol-run")
-    await waitForId("market-vol-atr")
+    await settleOn("market-vol-atr")
     const line = text("market-vol-atr")
     expect(line).toContain("unknown")
     expect(line).toContain("absent")
@@ -444,20 +594,49 @@ describe("MarketAnalysisSection — volatility", () => {
     render()
     type("market-vol-symbol", "NOPE")
     click("market-vol-run")
-    await waitForId("market-vol-error")
+    await settleOn("market-vol-error")
     expect(text("market-vol-error")).toContain("Yahoo Finance 404 for NOPE")
     expect(id("market-vol-result")).toBeNull()
+  })
+
+  it("renders the GARCH forecast steps, which no assertion reached", async () => {
+    // `market-vol-garch-forecast` renders one row per step. The fixture has carried
+    // a one-step forecast since round 0, but nothing asserted the row existed — so
+    // deleting the forecast block, or rendering the steps but not their horizon,
+    // would have passed.
+    render()
+    type("market-vol-symbol", "EURUSD")
+    click("market-vol-run")
+    await settleOn("market-vol-garch")
+    const rows = ids("market-vol-garch-forecast")
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain("+1 step(s)")
+    expect(rows[0].textContent).toContain("0.064")
+    expect(rows[0].textContent).toContain("6.4%")
+  })
+
+  it("renders NO forecast rows for a model that did not fit", async () => {
+    vol.mockResolvedValue(
+      volMeasured({
+        garch: { ok: false, omega: null, alpha: null, beta: null, currentVol: null, forecast: [] }
+      })
+    )
+    render()
+    type("market-vol-symbol", "EURUSD")
+    click("market-vol-run")
+    await settleOn("market-vol-garch")
+    expect(ids("market-vol-garch-forecast")).toHaveLength(0)
   })
 
   it("a refusal CLEARS the previous readout rather than sitting beside it", async () => {
     render()
     type("market-vol-symbol", "EURUSD")
     click("market-vol-run")
-    await waitForId("market-vol-result")
+    await settleOn("market-vol-result")
 
     vol.mockRejectedValue(new Error("volatility failed: 401"))
     click("market-vol-run")
-    await waitForId("market-vol-error")
+    await settleOn("market-vol-error")
     // The stale success must not remain readable as the answer to the second,
     // failed question. PreMortemSection leaves it on screen; here it does not.
     expect(id("market-vol-result")).toBeNull()
@@ -475,7 +654,7 @@ describe("MarketAnalysisSection — sentiment", () => {
     render()
     type("market-sent-symbol", "BTCUSD")
     click("market-sent-run")
-    await waitForId("market-sent-composite-absent")
+    await settleOn("market-sent-composite-absent")
     expect(text("market-sent-composite-absent")).toContain("no composite")
     expect(text("market-sent-composite-absent")).toContain("NONE mentions BTCUSD")
     // NO composite block, and no neutral standing in for it. This engine has no
@@ -489,7 +668,7 @@ describe("MarketAnalysisSection — sentiment", () => {
     render()
     type("market-sent-symbol", "EURUSD")
     click("market-sent-run")
-    await waitForId("market-sent-composite")
+    await settleOn("market-sent-composite")
     expect(text("market-sent-composite")).toContain("0.6")
     expect(text("market-sent-composite")).toContain("Bullish")
     // 0.6 of the declared band, not 1: the social leg is absent and the engine
@@ -505,7 +684,7 @@ describe("MarketAnalysisSection — sentiment", () => {
     render()
     type("market-sent-symbol", "EURUSD")
     click("market-sent-run")
-    await waitForId("market-sent-news")
+    await settleOn("market-sent-news")
     expect(text("market-sent-news")).toContain("3 item(s)")
     expect(text("market-sent-news")).toContain("Reuters")
     expect(text("market-sent-news")).toContain("licence checked: no")
@@ -515,7 +694,7 @@ describe("MarketAnalysisSection — sentiment", () => {
     render()
     type("market-sent-symbol", "EURUSD")
     click("market-sent-run")
-    await waitForId("market-sent-observed")
+    await settleOn("market-sent-observed")
     const line = text("market-sent-observed")
     // Both facts, and they are different facts: `observedAt` null would make an
     // unused engine look live if only `timestamp` were read.
@@ -528,12 +707,41 @@ describe("MarketAnalysisSection — sentiment", () => {
     render()
     type("market-sent-symbol", "12345")
     click("market-sent-run")
-    await waitForId("market-sent-head")
+    await settleOn("market-sent-head")
     expect(text("market-sent-head")).toContain("not searchable")
     expect(text("market-sent-composite-absent")).toContain("not searchable")
     expect(id("market-sent-news")).toBeNull()
     expect(text("market-sent-news-absent")).toContain("no D17 news source is configured")
     expect(id("market-sent-social")).toBeNull()
+  })
+
+  it("shows a DIVERGENT asked/answered pair on the head line, which the unsearchable path cannot prove", async () => {
+    // `market-sent-head` was previously only exercised on the unsearchable path,
+    // where `asked` and `symbol` are IDENTICAL BY CONSTRUCTION (`asked` is the raw
+    // input and `symbol` echoes it back at `sentimentEngine.mjs:434`). So that test
+    // proved the line renders; it could not prove the line distinguishes the two
+    // sides. Here the engine resolved a different canonical ticker than the one
+    // typed, which is the only situation the line exists to make visible.
+    sent.mockResolvedValue({ ...sentMeasured, symbol: "GBPUSD" })
+    render()
+    type("market-sent-symbol", "EURUSD")
+    click("market-sent-run")
+    await settleOn("market-sent-head")
+    expect(sent).toHaveBeenCalledWith("EURUSD")
+
+    const head = text("market-sent-head")
+    expect(head).toContain("asked for EURUSD")
+    expect(head).toContain("server answered GBPUSD")
+    // Each side exactly once: a swapped pair and an echo-the-server rewrite both
+    // fail here.
+    expect(head).not.toContain("server answered EURUSD")
+    expect(head).not.toContain("asked for GBPUSD")
+    expect(head.match(/EURUSD/g)).toHaveLength(1)
+    expect(head.match(/GBPUSD/g)).toHaveLength(1)
+    // AND the head line is not the only place the divergence shows. The readout
+    // below it is still the GBPUSD reading, so a reader sees the label and the data
+    // agree with each other even as the head line names the mismatch.
+    expect(id("market-sent-composite")).not.toBeNull()
   })
 
   it("surfaces a 400 as a refusal carrying 'symbol required', and renders no reading", async () => {
@@ -548,9 +756,72 @@ describe("MarketAnalysisSection — sentiment", () => {
 
     type("market-sent-symbol", "EURUSD")
     click("market-sent-run")
-    await waitForId("market-sent-error")
+    await settleOn("market-sent-error")
     expect(text("market-sent-error")).toContain("symbol required")
     expect(id("market-sent-result")).toBeNull()
+  })
+
+  it("renders a MEASURED social leg, which no fixture reached", async () => {
+    // All three sentiment fixtures set `social: null`, so `market-sent-social` was
+    // rendered by nothing and its sibling `market-sent-social-absent` by everything.
+    sent.mockResolvedValue({
+      ...sentMeasured,
+      socialUnavailableReason: null,
+      composite: {
+        ...sentMeasured.composite!,
+        score: 0.72,
+        label: "Bullish",
+        extreme: false,
+        weighted: { news: 0.6, social: 0.12 },
+        legsPresent: ["news", "social"],
+        declaredLegWeightReached: 1
+      },
+      social: { score: 0.12, velocity: 0.4, historySize: 9, source: "social-derived" }
+    })
+    render()
+    type("market-sent-symbol", "EURUSD")
+    click("market-sent-run")
+    await settleOn("market-sent-social")
+    const line = text("market-sent-social")
+    expect(line).toContain("social-derived leg 0.12")
+    expect(line).toContain("velocity 0.4")
+    expect(line).toContain("9 measured composite(s)")
+    // The absent branch must be GONE, not merely accompanied by the present one:
+    // printing both would tell the reader the leg was measured and not measured in
+    // the same breath.
+    expect(id("market-sent-social-absent")).toBeNull()
+    // And with both legs present the weight line reaches the full band, which is the
+    // contrast the single-leg fixture establishes.
+    expect(text("market-sent-weight")).toContain("reached 1 of the declared leg weight")
+    expect(text("market-sent-weight")).toContain("legs present: news, social")
+    expect(text("market-sent-weight")).toContain("social contribution 0.12")
+    expect(text("market-sent-weight")).not.toContain("social contribution absent")
+  })
+
+  it("names the digest items that arrived without provenance and were not scored", async () => {
+    // `market-sent-unprovenanced` had no fixture: every sentiment fixture set
+    // `unprovenanced: []`, so the block rendered only when empty-but-present.
+    sent.mockResolvedValue({
+      ...sentMeasured,
+      unprovenanced: ["headline with no publisher", "a second unattributed item"]
+    })
+    render()
+    type("market-sent-symbol", "EURUSD")
+    click("market-sent-run")
+    await settleOn("market-sent-unprovenanced")
+    const line = text("market-sent-unprovenanced")
+    expect(line).toContain("2 digest item(s) arrived without provenance")
+    expect(line).toContain("headline with no publisher")
+    expect(line).toContain("a second unattributed item")
+    expect(line).toContain("were not scored")
+  })
+
+  it("renders no unprovenanced block when every item was scored", async () => {
+    render()
+    type("market-sent-symbol", "EURUSD")
+    click("market-sent-run")
+    await settleOn("market-sent-composite")
+    expect(id("market-sent-unprovenanced")).toBeNull()
   })
 })
 
@@ -563,7 +834,7 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD, SOLUSD, XRPUSD")
     click("market-rp-run")
-    await waitForId("market-rp-result")
+    await settleOn("market-rp-result")
     expect(rp).toHaveBeenCalledWith(["EURUSD", "BTCUSD", "SOLUSD", "XRPUSD"])
 
     // THE HAZARD. The route drops a symbol whose history failed or held under 30
@@ -586,7 +857,7 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD, SOLUSD, XRPUSD")
     click("market-rp-run")
-    await waitForId("market-rp-coverage")
+    await settleOn("market-rp-coverage")
     expect(id("market-rp-coverage-absent-none")).toBeNull()
     expect(text("market-rp-coverage-count")).not.toContain("4 of 4")
   })
@@ -595,7 +866,7 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD")
     click("market-rp-run")
-    await waitForId("market-rp-coverage-absent-none")
+    await settleOn("market-rp-coverage-absent-none")
     expect(text("market-rp-coverage-count")).toContain("coverage: 2 of 2")
     expect(text("market-rp-coverage-absent-none")).toContain("every requested symbol carries a weight")
   })
@@ -604,7 +875,7 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD")
     click("market-rp-run")
-    await waitForId("market-rp-weight-EURUSD")
+    await settleOn("market-rp-weight-EURUSD")
     expect(text("market-rp-weight-EURUSD")).toContain("weight 0.62")
     expect(text("market-rp-weight-EURUSD")).toContain("0.0651")
     expect(text("market-rp-weight-BTCUSD")).toContain("weight 0.38")
@@ -619,7 +890,7 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD")
     click("market-rp-run")
-    await waitForId("market-rp-count-mismatch")
+    await settleOn("market-rp-count-mismatch")
     expect(text("market-rp-count-mismatch")).toContain("symbolCount 3 against 2 weight(s)")
   })
 
@@ -628,7 +899,7 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD")
     click("market-rp-run")
-    await waitForId("market-rp-refused")
+    await settleOn("market-rp-refused")
     expect(text("market-rp-refused")).toContain("no symbols")
     // `weights: null` means the route refused BEFORE allocating, which is a
     // different fact from the allocator refusing after fetching.
@@ -646,7 +917,7 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD")
     click("market-rp-run")
-    await waitForId("market-rp-refused")
+    await settleOn("market-rp-refused")
     expect(text("market-rp-refused")).toContain("no symbols with sufficient data")
     expect(text("market-rp-refused")).toContain("refused after fetching")
     expect(id("market-rp-result")).toBeNull()
@@ -657,9 +928,80 @@ describe("MarketAnalysisSection — risk parity", () => {
     render()
     type("market-rp-symbols", "EURUSD")
     click("market-rp-run")
-    await waitForId("market-rp-error")
+    await settleOn("market-rp-error")
     expect(text("market-rp-error")).toContain("watchlist unavailable")
     expect(id("market-rp-result")).toBeNull()
+  })
+
+  // -------------------------------------------------------------------
+  // The single-asset constant — a server 0 that is not a measurement
+  // -------------------------------------------------------------------
+
+  it("does NOT render the single-asset branch's literal 0 as a portfolio volatility", async () => {
+    rp.mockResolvedValue(rpSingleAsset)
+    render()
+    type("market-rp-symbols", "EURUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-portfolio")
+
+    const line = text("market-rp-portfolio")
+    // THE HAZARD. `riskParity.mjs:154` returns `portfolioVol: 0` as a literal
+    // constant, before any covariance is built. Printed as a measurement beside
+    // `weight 1`, it reads as "this position carries no risk".
+    expect(line).not.toMatch(/portfolio vol:\s*0\b/)
+    expect(id("market-rp-portfolio-absent")).not.toBeNull()
+    expect(id("market-rp-portfolio-vol")).toBeNull()
+    // The reason is named rather than left as a bare dash, and it names the
+    // constant on the wire so a reader comparing against the payload is not
+    // left wondering where the panel's disagreement came from.
+    expect(line).toContain("absent")
+    expect(line).toContain("literal 0")
+    expect(line).toContain("without computing a volatility")
+  })
+
+  it("treats the single-asset vols omission and the portfolioVol constant CONSISTENTLY", async () => {
+    // Two lines apart the panel must not call one unmeasured thing an absence and
+    // the other a measurement. `vols` is already absent here; `portfolioVol` has to
+    // reach the same verdict, because the branch omitted it for the same reason.
+    rp.mockResolvedValue(rpSingleAsset)
+    render()
+    type("market-rp-symbols", "EURUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-weight-EURUSD")
+    const weightLine = text("market-rp-weight-EURUSD")
+    expect(weightLine).toContain("weight 1")
+    expect(weightLine).toContain("annual vol absent")
+    expect(text("market-rp-portfolio")).toContain("absent")
+    // And the branch is named, so the reader can see which allocator path this is.
+    expect(text("market-rp-method")).toContain("single-asset")
+  })
+
+  it("still prints an ERC portfolioVol of 0 as 0 — the gate is on method, not value", async () => {
+    rp.mockResolvedValue(rpErcMeasuredZero)
+    render()
+    type("market-rp-symbols", "EURUSD, BTCUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-portfolio-vol")
+    const line = text("market-rp-portfolio")
+    // `equalRiskContribution` DOES compute this one (`:100`), so a measured zero
+    // must still print as `0`. A gate written on the VALUE rather than on the
+    // method would collapse this genuine measurement into an absence.
+    expect(line).toContain("portfolio vol: 0")
+    expect(line).toContain("(0%)")
+    expect(line).not.toContain("absent")
+    expect(id("market-rp-portfolio-absent")).toBeNull()
+  })
+
+  it("renders the ERC risk contributions, which no fixture exercised before", async () => {
+    rp.mockResolvedValue(rpErcMeasuredZero)
+    render()
+    type("market-rp-symbols", "EURUSD, BTCUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-rc-EURUSD")
+    expect(text("market-rp-method")).toContain("equal-risk-contribution")
+    expect(text("market-rp-method")).toContain("500 solver iterations")
+    expect(text("market-rp-rc-EURUSD")).toContain("risk contribution 50%")
+    expect(text("market-rp-rc-BTCUSD")).toContain("risk contribution 50%")
   })
 })
 
@@ -671,7 +1013,7 @@ describe("MarketAnalysisSection — order flow", () => {
   it("renders available:false as NOT MEASURED, with the contract's own reason", async () => {
     render()
     click("market-of-run")
-    await waitForId("market-of-unavailable")
+    await settleOn("market-of-unavailable")
     expect(text("market-of-unavailable")).toContain("NOT MEASURED")
     expect(text("market-of-reason")).toContain("no signed-trades feed")
     expect(id("market-of-measured")).toBeNull()
@@ -680,7 +1022,7 @@ describe("MarketAnalysisSection — order flow", () => {
   it("prints the imbalance the server sent, which is 'unavailable' and never 'neutral'", async () => {
     render()
     click("market-of-run")
-    await waitForId("market-of-fidelity")
+    await settleOn("market-of-fidelity")
     const line = text("market-of-fidelity")
     expect(line).toContain("data fidelity: no-feed")
     // THE FORBIDDEN READING, precisely: a neutral tape is a measurement nobody
@@ -693,7 +1035,7 @@ describe("MarketAnalysisSection — order flow", () => {
   it("prints absent rather than 0 for the two numeric fields nobody measured", async () => {
     render()
     click("market-of-run")
-    await waitForId("market-of-fidelity")
+    await settleOn("market-of-fidelity")
     const line = text("market-of-fidelity")
     expect(line).toContain("cumulative absent")
     expect(line).toContain("average delta absent")
@@ -705,7 +1047,7 @@ describe("MarketAnalysisSection — order flow", () => {
     of.mockResolvedValue(ofMeasuredZero)
     render()
     click("market-of-run")
-    await waitForId("market-of-measured")
+    await settleOn("market-of-measured")
     const line = text("market-of-measured")
     expect(line).toContain("cumulative 0")
     expect(line).toContain("average delta 0")
@@ -718,9 +1060,89 @@ describe("MarketAnalysisSection — order flow", () => {
     render()
     type("market-of-lookback", "50")
     click("market-of-run")
-    await waitForId("market-of-result")
+    await settleOn("market-of-result")
     expect(of).toHaveBeenCalledWith(50)
     expect(text("market-of-lookback-echo")).toContain("lookback 20")
+  })
+
+  it("a BLANK lookback sends `undefined`, which the client omits — not a guess", async () => {
+    // The behaviour the removed assertion above claimed to cover. Blank means "the
+    // server's own default", and `fetchOrderFlow(undefined)` sends `{}` — no
+    // `lookback` key at all. `toHaveBeenCalledWith(undefined)` requires exactly one
+    // argument that is undefined, so a panel that called `of()` with no arguments,
+    // or that reached for `20` itself, fails here.
+    render()
+    click("market-of-run")
+    await settleOn("market-of-result")
+    expect(of).toHaveBeenCalledTimes(1)
+    expect(of).toHaveBeenCalledWith(undefined)
+    expect(text("market-of-lookback-echo")).toContain("lookback 20")
+  })
+
+  it("refuses an unparseable lookback BY NAME rather than sending NaN", async () => {
+    // `JSON.stringify({lookback: NaN})` is `{"lookback":null}`. So the unvalidated
+    // path turned an operator's typo into a server-side null, the server echoed it
+    // back unchanged (`orderFlow.mjs` never validates it), and the panel printed
+    // "lookback absent" — indistinguishable from the server having no lookback at
+    // all. A named refusal beats a silently-absent echo, so nothing is sent.
+    render()
+    type("market-of-lookback", "abc")
+    click("market-of-run")
+    await settleOn("market-of-error")
+    expect(of).not.toHaveBeenCalled()
+    const err = text("market-of-error")
+    expect(err).toContain("abc")
+    expect(err).toContain("not a finite number")
+    // The refusal REPLACES the idle line rather than sitting beside it: "not yet
+    // read" and a named refusal together would claim two different things about the
+    // same panel state. And no readout is invented to fill the space.
+    expect(id("market-of-idle")).toBeNull()
+    expect(id("market-of-result")).toBeNull()
+  })
+
+  it("a refused lookback CLEARS a previous readout, on the panel's own rule", async () => {
+    render()
+    click("market-of-run")
+    await settleOn("market-of-unavailable")
+
+    type("market-of-lookback", "not-a-number")
+    click("market-of-run")
+    await settleOn("market-of-error")
+    // The second question was refused, so the first question's answer must not
+    // stand under the new label.
+    expect(id("market-of-unavailable")).toBeNull()
+    expect(id("market-of-result")).toBeNull()
+    expect(id("market-of-measured-at")).toBeNull()
+  })
+
+  it("renders the signals a signed-trades feed would report", async () => {
+    // `market-of-signal` had no fixture at all: `ofMeasuredZero` carries
+    // `signals: []`, so the branch was rendered by nothing.
+    of.mockResolvedValue({
+      ...ofMeasuredZero,
+      signals: [
+        { type: "absorption", desc: "sell-side absorbed 3.1x average size at 1.0842" },
+        { type: "cvd-divergence", desc: "CVD rose while price fell over the last 5 prints" }
+      ]
+    })
+    render()
+    click("market-of-run")
+    await settleOn("market-of-signal")
+    const rows = ids("market-of-signal")
+    expect(rows).toHaveLength(2)
+    expect(rows[0].textContent).toContain("absorption")
+    expect(rows[0].textContent).toContain("3.1x average size")
+    expect(rows[1].textContent).toContain("cvd-divergence")
+  })
+
+  it("surfaces a 502 as a refusal carrying the upstream reason, and renders no result", async () => {
+    of.mockRejectedValue(new Error("orderflow unavailable: 401"))
+    render()
+    click("market-of-run")
+    await settleOn("market-of-error")
+    expect(text("market-of-error")).toContain("401")
+    expect(id("market-of-result")).toBeNull()
+    expect(id("market-of-unavailable")).toBeNull()
   })
 
   it("states on the panel that it sends neither a symbol nor trades, and why", async () => {

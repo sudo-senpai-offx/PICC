@@ -57,6 +57,19 @@ export function PreMortemSection() {
       setData(await fetchPremortemOverview())
       setMeasuredAt(Date.now())
     } catch (e) {
+      // THIS CATCH DOES NOT CLEAR `data`, AND THIS SECTION IS NOW THE ODD ONE OUT.
+      // `MarketAnalysisSection` calls `setData(null)` on failure; this one leaves the
+      // previous readout on screen beside the new error, so the two can be read as one
+      // answer. That divergence is deliberate and settled: there, the readout is
+      // per-symbol and per-moment, and the button label changes between runs, so a
+      // stale EURUSD snapshot sitting under a fresh "re-read volatility" label invites
+      // the misreading those panels exist to prevent. Here, the readout describes one
+      // tree at one commit and the label is always "re-run pre-mortem", so leaving the
+      // last successful run visible is informative rather than misleading.
+      //
+      // Recorded here so the next reader does not read this as an oversight and
+      // "fix" it to match. Changing it is a behaviour change and needs its own
+      // decision, not a consistency edit.
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)

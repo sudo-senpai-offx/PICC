@@ -84,6 +84,7 @@ interface OptIn<A, T> {
   busy: boolean
   error: string | null
   run: (arg: A) => Promise<void>
+  refuse: (reason: string) => void
 }
 
 /**
@@ -115,7 +116,20 @@ function useOptIn<A, T>(load: (arg: A) => Promise<T>): OptIn<A, T> {
     }
   }
 
-  return { state, busy, error, run }
+  /**
+   * A REFUSAL RAISED BEFORE ANYTHING IS SENT, for an input this panel can tell is
+   * unusable without asking. It clears the readout for the same reason `run`'s catch
+   * does — the operator asked a second question and it was refused — and it goes
+   * through the same `error` channel so there is one refusal surface per panel rather
+   * than two that can disagree.
+   */
+  function refuse(reason: string) {
+    setError(reason)
+    setState(null)
+    setBusy(false)
+  }
+
+  return { state, busy, error, run, refuse }
 }
 
 /**
@@ -628,8 +642,33 @@ function RiskParityResult({
         ))}
       </ul>
 
+      {/* THE 0 ON THE WIRE IS NOT ALWAYS A MEASUREMENT.
+          `riskParity.mjs:154` returns `{ok:true, weights:{X:1}, method:"single-asset",
+          portfolioVol: 0}` — that `0` is a LITERAL CONSTANT sitting above the
+          covariance build at `:157`, returned before any volatility is computed,
+          and the same branch omits `vols` entirely. So `measured(0, ...)` passes its
+          own `Number.isFinite` test and prints `portfolio vol: 0` two lines below
+          `X: weight 1 · annual vol absent`. Two lines apart, one unmeasured thing is
+          called an absence and the other a measurement. An operator allocating a
+          single asset would read that as "this position carries no risk".
+
+          THE GATE IS ON `method`, NEVER ON THE VALUE. The ERC branch really does
+          compute a portfolio vol (`riskParity.mjs:100`, floored at `1e-12` and
+          rounded to 4dp), so an ERC response can legitimately serve `portfolioVol: 0`
+          — and a measured zero must still print as `0`. Collapsing zeros by value
+          would trade this defect for the opposite one. */}
       <div className="muted small" data-testid="market-rp-portfolio">
-        portfolio vol: {measured(data.portfolioVol, "this branch reports no portfolio vol")}
+        portfolio vol:{" "}
+        {data.method === "single-asset" ? (
+          <span data-testid="market-rp-portfolio-absent">
+            absent — the single-asset branch sends the literal 0 without computing a
+            volatility
+          </span>
+        ) : (
+          <span data-testid="market-rp-portfolio-vol">
+            {measured(data.portfolioVol, "this branch reports no portfolio vol")}
+          </span>
+        )}
         {data.portfolioVolPct === null ? "" : ` (${data.portfolioVolPct})`}
       </div>
 
@@ -652,11 +691,38 @@ function RiskParityResult({
 
 function OrderFlowPanel() {
   const input = useRef<HTMLInputElement>(null)
-  const { state, busy, error, run } = useOptIn<number | undefined, OrderFlowResponse>(fetchOrderFlow)
+  const { state, busy, error, run, refuse } = useOptIn<number | undefined, OrderFlowResponse>(
+    fetchOrderFlow
+  )
 
+  /**
+   * THE LOOKBACK IS VALIDATED, BUT ONLY AGAINST WHAT JSON CANNOT CARRY.
+   *
+   * `JSON.stringify({lookback: NaN})` is `{"lookback":null}`, and this route never
+   * validates what it is given — `orderFlow.mjs` reads `lookback` only to echo it
+   * back on both branches. So an unvalidated panel turned an operator's typo into a
+   * server-side null that came home as a silently-absent echo, indistinguishable
+   * from the server having no lookback at all. Refusing by name beats that.
+   *
+   * NO RANGE RULE IS INVENTED HERE. The server has none — a negative or fractional
+   * lookback is echoed straight back — so this checks only that the value is a
+   * finite number. Anything stricter would be a client-side policy the server does
+   * not share, and a panel that refuses inputs the server accepts is its own kind
+   * of dishonesty.
+   */
   function onRun() {
     const raw = (input.current?.value ?? "").trim()
-    void run(raw === "" ? undefined : Number(raw))
+    // Blank is the documented "server default" and stays a real request.
+    if (raw === "") {
+      void run(undefined)
+      return
+    }
+    const lookback = Number(raw)
+    if (!Number.isFinite(lookback)) {
+      refuse(`lookback "${raw}" is not a finite number — nothing was sent`)
+      return
+    }
+    void run(lookback)
   }
 
   return (
