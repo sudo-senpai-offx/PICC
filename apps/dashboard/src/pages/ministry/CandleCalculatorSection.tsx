@@ -3,13 +3,15 @@ import type { RefObject } from "react"
 import { fetchCandles } from "@/hooks/useCandleData"
 import { TIMEFRAME_LABELS } from "@/hooks/useCandleData"
 import type { Timeframe } from "@/hooks/useCandleData"
-import { fetchRegime, regimeIsMeasured, toWireCandles, expiryIsScored, fetchExpiry } from "@/lib/candleCalculators"
+import { fetchRegime, regimeIsMeasured, toWireCandles, expiryIsScored, fetchExpiry, fetchAdaptiveStops, stopsAreMeasured } from "@/lib/candleCalculators"
 import type {
+  AdaptiveStopsResponse,
   CandleOrigin,
   ExpiryResponse,
   LegacyRegime,
   RegimeResponse,
   RegimeUnknown,
+  StopsDirection,
   WireCandle
 } from "@/lib/candleCalculators"
 
@@ -541,7 +543,7 @@ interface ExpiryResult {
 function ExpiryPanel() {
   const refs = useRef<Refs>({})
   const { state, busy, error, run, refuse } = useCalculator<ExpirySent, ExpiryResult>(
-    async (candles, origin, sent) => ({
+    async (candles, _origin, sent) => ({
       data: await fetchExpiry(candles, sent.regime, sent.signalStrength),
       sent
     })
@@ -734,5 +736,179 @@ function ExpiryUnscoredResult({
 // ---------------------------------------------------------------------
 
 function AdaptiveStopsPanel() {
-  return <div className="panel" data-testid="cc-stops-stub" />
+  const refs = useRef<Refs>({})
+  const { state, busy, error, run, refuse } = useCalculator<StopsDirection, AdaptiveStopsResponse>(
+    (candles, origin, direction) =>
+      // `timeframe` IS THE SMOOTHING WINDOW HERE. `handlers.mjs:5749` passes it as
+      // `{ atrPeriod: timeframe }`, so the number below is not a bar size and not
+      // a label — it is how many bars the ATR is averaged over.
+      fetchAdaptiveStops(candles, direction, origin.timeframeSeconds)
+  )
+
+  function onRun() {
+    const inputs = readInputs(refs, "adaptive stops")
+    if ("error" in inputs) {
+      refuse(inputs.error)
+      return
+    }
+    const direction = (refs.current.direction?.value ?? "up") as StopsDirection
+    void run(inputs, direction)
+  }
+
+  return (
+    <div className="panel" data-testid="cc-stops">
+      <div className="panel-head">
+        <strong>Adaptive stops</strong>
+        <button type="button" onClick={onRun} disabled={busy} data-testid="cc-stops-run">
+          {busy ? "computing…" : state ? "recompute stops" : "compute stops"}
+        </button>
+      </div>
+      {/* THE NAME COLLISION, STATED WHERE AN OPERATOR WILL MEET IT. The route
+          reads `body.timeframe` and hands it to `computeAdaptiveStops` as
+          `atrPeriod`, so the bar size chosen here is also how many bars the ATR
+          is averaged over — and the regime route above reads a `timeframe` in the
+          same request family as a string label. The window needs that many bars
+          before it produces anything, which is why the readout below names it. */}
+      <p className="muted small">
+        Take profit and stop loss at regime-adaptive multiples of the ATR. The bar
+        size below doubles as the ATR smoothing window, so a wide window over a
+        short series can produce no stops at all.
+      </p>
+      <CandleInputs refs={refs} testIdBase="cc-stops" label="stops" />
+      <select
+        ref={(el) => { refs.current.direction = el }}
+        defaultValue="up"
+        aria-label="trade direction"
+        data-testid="cc-stops-direction"
+      >
+        <option value="up">direction up (long)</option>
+        <option value="down">direction down (short)</option>
+      </select>
+
+      {error ? (
+        <div className="panel muted" data-testid="cc-stops-error">
+          <p>adaptive stops unavailable — {error}</p>
+        </div>
+      ) : null}
+
+      {!state && !error ? (
+        <p className="muted small" data-testid="cc-stops-idle">
+          not yet computed.
+        </p>
+      ) : null}
+
+      {state ? <MeasuredAt at={state.measuredAt} testId="cc-stops-measured-at" /> : null}
+      {state ? <OriginLine origin={state.origin} testId="cc-stops-origin" /> : null}
+      {state ? <AtrPeriodLine origin={state.origin} /> : null}
+      {state ? (
+        <StopsReadout
+          data={state.data}
+          direction={(refs.current.direction?.value ?? "up") as StopsDirection}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * THE WINDOW THE SERVER WILL ACTUALLY USE, AND WHETHER THE SERIES CAN FEED IT.
+ *
+ * `smma` returns null for its first `period - 1` bars, so an ATR over a window
+ * wider than the series is null throughout and the service answers
+ * `atr-unobservable`. Saying that here turns a confusing refusal into a legible
+ * one, and the warning is derived from the bars actually sent rather than the
+ * bars requested.
+ */
+function AtrPeriodLine({ origin }: { origin: SeriesOrigin }) {
+  const tooShort = origin.sentBars < origin.timeframeSeconds
+  return (
+    <p className="muted small" data-testid="cc-stops-atrperiod">
+      ATR period {origin.timeframeSeconds} — the route passes the timeframe as the
+      smoothing window, so the ATR needs {origin.timeframeSeconds} bars before it
+      yields anything, and {origin.sentBars} bar(s) were sent.
+      {tooShort ? " That window is too short for this series, so no ATR can exist." : ""}
+    </p>
+  )
+}
+
+/**
+ * GATED ON `reason`, WHICH IS THE SERVICE'S OWN DISCRIMINATOR.
+ *
+ * NOT on whether an ATR arrived, and not on whether the stops are zero: the
+ * `adx-unobservable` branch returns a real, non-null `atr` beside two null stops,
+ * so an ATR-first gate would print a measured number where the operator needed a
+ * stop. The ATR is still SHOWN on that branch — it was really measured — but it
+ * is shown beside a statement that no stop was produced, so neither can be read
+ * as the other.
+ */
+function StopsReadout({
+  data,
+  direction
+}: {
+  data: AdaptiveStopsResponse
+  direction: StopsDirection
+}) {
+  if (!stopsAreMeasured(data)) {
+    return (
+      <div data-testid="cc-stops-result">
+        <div className="panel muted" data-testid="cc-stops-refused">
+          <p data-testid="cc-stops-refused-reason">
+            NO STOPS — {data.reason}
+          </p>
+          <p className="muted small">
+            The service measured what it could and refused the rest: an unobserved
+            read never counts as a neutral vote, so it declines to pick multipliers
+            for a trend it cannot see. No level is shown above because none was
+            produced.
+          </p>
+        </div>
+        <AtrAttribution data={data} />
+      </div>
+    )
+  }
+
+  return (
+    <div data-testid="cc-stops-result">
+      <p data-testid="cc-stops-measured">
+        take profit {data.takeProfit} · stop loss {data.stopLoss} · direction{" "}
+        {direction} · regime {data.regime}
+      </p>
+      <p className="muted small" data-testid="cc-stops-multipliers">
+        drawn at take profit {data.multipliers.tp}x ATR and stop loss{" "}
+        {data.multipliers.sl}x ATR — the {data.regime} row of the service&apos;s
+        multiplier table
+      </p>
+      <AtrAttribution data={data} />
+    </div>
+  )
+}
+
+/**
+ * THE TWO MEASUREMENTS BESIDE THE VERDICT, WITH THEIR ABSENCES KEPT APART.
+ *
+ * `atr` is measured on the `adx-unobservable` branch and absent on the other two;
+ * `adx` is the reverse. Both use `Number.isFinite` rather than truthiness, so a
+ * measured `0` — a real ranging read — prints as `0` and never as `absent`.
+ */
+function AtrAttribution({ data }: { data: AdaptiveStopsResponse }) {
+  const hasAtr = Number.isFinite(data.atr)
+  return (
+    <>
+      <p className="muted small" data-testid="cc-stops-atr">
+        atr{" "}
+        {hasAtr
+          ? `${data.atr} — measured, and the levels above are multiples of it`
+          : "absent — no measurable ATR on these candles, so no level could be drawn"}{" "}
+        · {hasAtr && !stopsAreMeasured(data) ? "measured while no stop was produced" : ""}
+      </p>
+      <p className="muted small" data-testid="cc-stops-adx">
+        adx{" "}
+        {Number.isFinite(data.adx)
+          ? String(data.adx)
+          : "absent — ADX has not warmed up, so no trend regime is claimed"}{" "}
+        · atr ratio{" "}
+        {Number.isFinite(data.atrRatio) ? `${data.atrRatio}x` : "absent — this branch reports none"}
+      </p>
+    </>
+  )
 }
