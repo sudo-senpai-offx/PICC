@@ -6,6 +6,7 @@ import { LeaderIdeasPanel } from "@/components/LeaderIdeasPanel"
 import { PerpsCommandCentre } from "@/components/PerpsCommandCentre"
 import { PatternPanel } from "@/components/PatternPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
+import { PreMortemSection } from "@/pages/ministry/PreMortemSection"
 import { getTradingSignals } from "@/lib/trading"
 import type { TradingSignal } from "@/lib/trading"
 import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
@@ -48,6 +49,16 @@ export function CommandCentreRoom() {
       <PatternPanel />
       <AdvancedIndicatorsPanel assetId="EURUSD" timeframe="daily" />
       <SignalsCard signals={signals} refresh={refresh} />
+
+      {/* W3-05. Mounted LAST on purpose: the readout costs about eleven seconds per
+          run and is opt-in, so it must not sit above the panels a user opens this
+          room to actually read. Its one button is also the first in this room's own
+          markup — the header comment above already records that the room is an
+          order-execution surface despite D1 calling it read-only, so this adds no
+          new interaction class to it. It is deliberately NOT in the paper room,
+          whose affordance audit enumerates every interactive element and would
+          (correctly) reject it. */}
+      <PreMortemSection />
     </div>
   )
 }
