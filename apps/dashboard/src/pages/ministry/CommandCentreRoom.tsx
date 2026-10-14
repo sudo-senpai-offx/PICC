@@ -7,6 +7,7 @@ import { PerpsCommandCentre } from "@/components/PerpsCommandCentre"
 import { PatternPanel } from "@/components/PatternPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { PreMortemSection } from "@/pages/ministry/PreMortemSection"
+import { MarketAnalysisSection } from "@/pages/ministry/MarketAnalysisSection"
 import { getTradingSignals } from "@/lib/trading"
 import type { TradingSignal } from "@/lib/trading"
 import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
@@ -50,7 +51,7 @@ export function CommandCentreRoom() {
       <AdvancedIndicatorsPanel assetId="EURUSD" timeframe="daily" />
       <SignalsCard signals={signals} refresh={refresh} />
 
-      {/* W3-05. Mounted LAST on purpose: the readout costs about eleven seconds per
+      {/* W3-05. Mounted near the bottom on purpose: the readout costs about eleven seconds per
           run and is opt-in, so it must not sit above the panels a user opens this
           room to actually read. Its one button is also the first in this room's own
           markup — the header comment above already records that the room is an
@@ -59,6 +60,24 @@ export function CommandCentreRoom() {
           whose affordance audit enumerates every interactive element and would
           (correctly) reject it. */}
       <PreMortemSection />
+
+      {/* UI-2. After the pre-mortem readout and below every execution panel, for
+          the same reason plus one of its own: these four readouts are opt-in and
+          three of them make the SERVER fetch data — `volatility` runs
+          `getHistory(symbol, "3mo")` per symbol and `risk-parity` runs it once
+          per symbol in a list. Mounting them where a reader lands first would
+          either bury the execution panels or fire four multi-second fetches
+          nobody asked for.
+
+          The inputs and buttons here are ordinary form controls, which is a new
+          interaction class in this room's markup and is why the room's own header
+          comment matters: D1 calls this room read-only and the code already posts
+          real orders from `PerpsCommandCentre`. This section places no order and
+          holds no permit; it asks four analysis routes for a readout. It is still
+          forbidden from the paper room, whose `PaperLiveRoom.test.tsx` enumerates
+          every interactive element against an allowlist and would correctly reject
+          four inputs and four buttons. */}
+      <MarketAnalysisSection />
     </div>
   )
 }
