@@ -230,6 +230,33 @@ describe("UI-4: the ledger is a NAMED source, not an invisible fallback", () => 
     expect(r.provenance.winRate.substitute.source).toBe("server-constant")
     expect(r.inputs.winRate).toBe(50)
   })
+
+  it("an UNLABELLED default is refused, and the labelled constant is used instead", async () => {
+    // The record's completeness rests on every substitute naming its origin, so
+    // an offer this function cannot attribute must not reach `provenance` as a
+    // substitute with `source: undefined`. It is refused rather than passed
+    // through, because the alternative is the same defect this task exists to
+    // close, one level down: a number that arrived from nowhere and is reported
+    // as though it did not.
+    const unlabelled = riskOfRuin({ defaults: { winRate: { value: 47.5 } } })
+    expect(unlabelled.provenance.winRate.substitute.source).toBe("server-constant")
+    expect(unlabelled.provenance.winRate.substitute.value).toBe(50)
+    expect(unlabelled.inputs.winRate).toBe(50)
+
+    const emptySource = riskOfRuin({ defaults: { winRate: { value: 47.5, source: "" } } })
+    expect(emptySource.provenance.winRate.substitute.source).toBe("server-constant")
+
+    const nonStringSource = riskOfRuin({ defaults: { winRate: { value: 47.5, source: 7 } } })
+    expect(nonStringSource.provenance.winRate.substitute.source).toBe("server-constant")
+  })
+
+  it("a well-formed labelled default IS honoured, so the guard above is not just a refusal", async () => {
+    // The mirror of the test above, because a rule that refuses everything would
+    // satisfy the one before it.
+    const ok = riskOfRuin({ defaults: { winRate: { value: 47.5, source: "signal-accuracy-ledger" } } })
+    expect(ok.provenance.winRate.substitute.source).toBe("signal-accuracy-ledger")
+    expect(ok.provenance.winRate.used).toBe(47.5)
+  })
 })
 
 describe("UI-4: `0` is not absent — it is either honoured or reported as out of range", () => {

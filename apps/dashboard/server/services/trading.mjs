@@ -1252,10 +1252,13 @@ const ROE_SPEC = {
                 from: n,
                 to: used,
                 bound: "win rate outside 1%-99%",
+                // The note does not name the endpoints as the trigger, because the
+                // endpoints are not where the clamp starts: 99.5 is out of range
+                // too. It says what the bound IS FOR, which is the part a reader
+                // cannot get from the numbers.
                 note:
-                  "a win rate at or below 0% or at or above 100% is not a market fact, and the " +
-                  "edge stops being interpretable there, so the readout is computed at the nearest " +
-                  "value this calculator supports"
+                  "a win rate below 1% or above 99% makes the formula's edge degenerate, " +
+                  "so the readout is computed at the nearest value this calculator supports"
               }
       }
     }
@@ -1366,15 +1369,24 @@ export function riskOfRuin(input = {}) {
     const spec = ROE_SPEC[field]
     const read = readRoeNumber(args[field])
 
-    // A DEFAULT OFFER IS ONLY HONOURED WHEN IT IS A USABLE NUMBER AND SAYS WHERE
-    // IT CAME FROM. `defaults` exists so the route can pass this instance's own
-    // accuracy ledger; a null in it falls back to the server constant, so the
-    // `Number(null) === 0` defect cannot reappear one layer down.
+    // A DEFAULT OFFER IS ONLY HONOURED WHEN IT IS A USABLE NUMBER **AND SAYS
+    // WHERE IT CAME FROM**. Both halves are load-bearing: the value guard keeps
+    // `Number(null) === 0` from reappearing one layer down as an "offer" of zero
+    // from a ledger that had nothing, and the LABEL guard is what makes the
+    // record true by construction — an offer this function cannot attribute is
+    // worse than no offer, because it would reach `provenance` as a substitute
+    // with an undefined origin. An unlabelled offer is refused, and the server
+    // constant — which is labelled — is used instead.
     const offer = read.ok ? null : defaults[field]
-    const chosen =
-      offer && typeof offer === "object" && Number.isFinite(offer.value)
-        ? { value: offer.value, source: offer.source }
-        : { value: spec.serverDefault.value, source: spec.serverDefault.source }
+    const labelled =
+      offer !== null &&
+      typeof offer === "object" &&
+      Number.isFinite(offer.value) &&
+      typeof offer.source === "string" &&
+      offer.source !== ""
+    const chosen = labelled
+      ? { value: offer.value, source: offer.source }
+      : { value: spec.serverDefault.value, source: spec.serverDefault.source }
 
     const prepared = spec.prepare(read.ok ? read.value : chosen.value)
 

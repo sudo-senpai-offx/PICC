@@ -182,15 +182,16 @@ const MEASURED_ZERO_PAYOUT = served(
   []
 )
 
-/** The route's own refusal, served with HTTP 200 after `ok: true` is replaced. */
+/**
+ * The route's own refusal shape, exactly as the route writes it: `{ok: false, error}`
+ * and nothing else. Deliberately NOT padded with nulls the server never sends —
+ * a fixture that invented fields would let a renderer read a key that does not
+ * exist and pass a test that proves nothing.
+ */
 const REFUSED: RiskOfRuinResponse = {
   ok: false,
-  error: "the accuracy ledger is unreadable",
-  riskOfRuin: null,
-  edge: null,
-  unitsToRuin: null,
-  provenance: null
-} as unknown as RiskOfRuinResponse
+  error: "the accuracy ledger is unreadable"
+}
 
 // ---------------------------------------------------------------------
 // Harness
