@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// W3-05, extended by UI-2 — the pre-mortem and symbol-analysis sections are
-// MOUNTED in Command Centre.
+// W3-05, extended by UI-2 and UI-3 — the pre-mortem, symbol-analysis and
+// candle-calculator sections are MOUNTED in Command Centre.
 //
 // The components' own behaviour is proven in their own files. What is proven
 // HERE is only that the room actually renders them: a section nobody mounted
@@ -26,6 +26,15 @@ import { describe, expect, it, vi } from "vitest"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { CommandCentreRoom } from "../CommandCentreRoom"
+import { fetchCandles } from "@/hooks/useCandleData"
+
+// The candle source is mocked so "the room adds no traffic on mount" is an
+// assertion rather than an assumption. The timeframe vocabulary is kept real,
+// since the calculator panels genuinely read it.
+vi.mock("@/hooks/useCandleData", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useCandleData")>()),
+  fetchCandles: vi.fn()
+}))
 
 // Every child is stubbed to render nothing. The room's own children each fetch,
 // poll and hold state; stubbing them keeps this test about the MOUNT and nothing
@@ -45,7 +54,7 @@ vi.mock("@/lib/trading", () => ({ getTradingSignals: vi.fn().mockResolvedValue([
 vi.mock("@/terminal/routes/ReadOnlyRoom", () => ({ ReadOnlyRoom: () => null }))
 
 describe("CommandCentreRoom", () => {
-  it("renders both readouts at the bottom, in order, so neither is orphaned", () => {
+  it("renders all three readouts at the bottom, in order, so none is orphaned", () => {
     const container = document.createElement("div")
     document.body.appendChild(container)
     const root = createRoot(container)
@@ -55,21 +64,46 @@ describe("CommandCentreRoom", () => {
 
     const premortem = container.querySelector('[data-testid="premortem-section"]')
     const analysis = container.querySelector('[data-testid="market-analysis-section"]')
+    const calculators = container.querySelector('[data-testid="candle-calc-section"]')
     expect(premortem).not.toBeNull()
     expect(analysis).not.toBeNull()
+    expect(calculators).not.toBeNull()
 
-    const siblings = Array.from(analysis!.parentElement?.children ?? [])
-    // Both readouts are opt-in and three of the four analysis routes make the
-    // SERVER fetch per symbol, so neither may sit above the panels the room
-    // exists to serve.
+    const siblings = Array.from(calculators!.parentElement?.children ?? [])
+    // All three readouts are opt-in and three of the four analysis routes make the
+    // SERVER fetch per symbol, so none may sit above the panels the room exists to
+    // serve.
     const headerIndex = siblings.findIndex((el) => el.hasAttribute("data-room"))
     const premortemIndex = siblings.indexOf(premortem!)
     const analysisIndex = siblings.indexOf(analysis!)
+    const calculatorsIndex = siblings.indexOf(calculators!)
     expect(headerIndex, "the room's header is the first rendered child").toBe(0)
     expect(premortemIndex).toBeGreaterThan(headerIndex)
     expect(analysisIndex).toBeGreaterThan(premortemIndex)
-    // And the analysis section is the very last thing in the room.
-    expect(siblings[siblings.length - 1]).toBe(analysis)
+    expect(calculatorsIndex).toBeGreaterThan(analysisIndex)
+    // And the candle calculators are the very last thing in the room.
+    expect(siblings[siblings.length - 1]).toBe(calculators)
+
+    flushSync(() => root.unmount())
+    container.remove()
+  })
+
+  it("renders the candle calculators WITHOUT fetching, so the room gains no traffic", () => {
+    // The three calculator routes fetch nothing server-side, so these panels read
+    // the dashboard's own candle source — and they must do it only on the run
+    // button. A section that read on mount would add three candle requests and
+    // three calculator requests to every visit of this room.
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+
+    flushSync(() => root.render(<CommandCentreRoom />))
+    flushSync(() => {})
+
+    expect(fetchCandles).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="cc-regime-idle"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="cc-expiry-idle"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="cc-stops-idle"]')).not.toBeNull()
 
     flushSync(() => root.unmount())
     container.remove()
