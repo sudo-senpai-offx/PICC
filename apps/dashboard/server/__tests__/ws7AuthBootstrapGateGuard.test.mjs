@@ -1653,9 +1653,23 @@ function connectorsSiteIsGated(lines, index) {
     // cost paragraph, replaced by a longer one, and the import line that gained a
     // specifier) = +38. The code delta is therefore exactly SEVEN lines and every
     // one of them is inside the one route block this branch owns.
-    // 42 lines added, 9 removed, +36 after subtraction — every one of them
+    // 45 lines added, 9 removed, +36 after subtraction — every one of them
     // inside the /api/trading/risk-of-ruin block, measured by classifying
-    // `git diff -U0` rather than by eye:
+    // `git diff -U0` rather than by eye.
+    //
+    // THIS SUMMARY READ 42 FOR ONE ROUND AND WAS WRONG BY 3. It had been carried
+    // over from the entry above, whose own `35 + 7 + 0` really is 42. The
+    // decomposition immediately below is the measurement, and
+    // 19 CODE + 26 COMMENT + 0 BLANK = 45 is what `git diff -U0` reports. The old
+    // line also did not subtract: 42 - 9 is 33, not the 36 it claimed, so two
+    // independent halves of one sentence were wrong in the same direction.
+    //
+    // WHICH IS THE WHOLE ARGUMENT FOR WRITING THE DECOMPOSITION DOWN. A pin that
+    // moves on every route edit is a pin that eventually gets loosened instead, so
+    // the decomposition is the mitigation that makes the move auditable — and a
+    // decomposition that is itself wrong manufactures false confidence, because
+    // the next reader has no way to tell a measured 42 from a copied one. When
+    // these two disagree, the breakdown wins and the summary is the bug.
     //
     //   * 19 CODE lines added. The `const sent = body && typeof body === "object"
     //     ? body : {}` reader, the four `field: sent.field` forwards, the `defaults`
@@ -1684,7 +1698,38 @@ function connectorsSiteIsGated(lines, index) {
     // accepts for user-owned routes), and `routeAuthRuling24Gates.test.mjs`
     // re-proves the route still answers 401 to an anonymous caller and still
     // admits a real session after the rewrite.
-    expect(lines, "lines in handlers.mjs").toBe(7683)
+    //
+    // 7,683 -> 7,693 in UI-4 FIX ROUND 1, the same protocol: +10 lines, and this
+    // round is REMOVALS-ONLY in code. Measured by classifying `git diff -U0` over
+    // the one `risk-of-ruin` block:
+    //
+    //   * 0 CODE lines added. The route's LOGIC is untouched; nothing here
+    //     changed what any request answers.
+    //   * 16 COMMENT lines added.
+    //   * 0 blank lines.
+    //   * 3 CODE lines REMOVED: the whole `balance:` ledger offer, guarded by
+    //     `Number.isFinite(acc?.balance)`.
+    //   * 3 COMMENT lines removed: the note that said no ledger source existed for
+    //     avgPayout or riskPct, which is what made the dead balance branch read
+    //     as live.
+    //
+    // 16 + 0 + 0 = 16 added, minus 6 removed = +10, and 7,683 + 10 = 7,693.
+    //
+    // WHY THREE CODE LINES CAME OUT. `signalAccuracy()` returns `{ok,total,wins,
+    // losses,draws,winRate,byDirection,bySymbol,byHorizon,recent}` and has no
+    // `balance` key, so `acc.balance` is always `undefined` and
+    // `Number.isFinite(acc?.balance)` could never be true. A dead branch is bad
+    // enough; a dead branch that IMPLIES a live ledger source, sitting in the one
+    // block whose entire purpose is to say where every number came from, is the
+    // defect this effort exists to kill reproducing itself one layer down. The
+    // replacement comment says so in words rather than leaving the absence to be
+    // inferred, because a reader who cannot tell an omitted offer from a
+    // forgotten one has been given no way to check.
+    //
+    // STATICS AND DYNAMICS ARE BOTH UNCHANGED at 72 and 118, and neither pin moved
+    // — no import was added, removed or altered, which is the point: this round
+    // deleted a lie, it did not change the module graph.
+    expect(lines, "lines in handlers.mjs").toBe(7693)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

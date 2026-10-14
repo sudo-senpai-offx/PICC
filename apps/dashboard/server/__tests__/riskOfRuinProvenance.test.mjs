@@ -334,13 +334,25 @@ describe("UI-4: `0` is not absent — it is either honoured or reported as out o
     expect(r.inputs.balance).toBe(1)
   })
 
-  it("a NEGATIVE payout is clamped to 0 and says so — it is not a market fact", async () => {
+  it("a NEGATIVE payout is clamped to the 0.01 floor and says so — it is not a market fact", async () => {
+    // THE FLOOR IS 0.01 AGAIN, and this test was the reason it went back. The
+    // lower-to-0 change was in the brief's gift but was never asked for, and it
+    // moved a band it had no business moving: a caller who sent -0.5 used to get
+    // 0.01, and a caller who sent 0.005 used to get 0.01. Only the EXPLICIT zero
+    // is honoured (`avgPayout: 0` above), because a zero the caller typed is a
+    // statement about a real trade rather than an absent number.
     const r = riskOfRuin({ winRate: 55, avgPayout: -0.5, riskPct: 5, balance: 1000 })
     const ap = r.provenance.avgPayout
     expect(ap.supplied).toBe(true)
     expect(ap.state).toBe("clamped")
-    expect(ap.clamp).toMatchObject({ from: -0.5, to: 0 })
+    expect(ap.clamp).toMatchObject({ from: -0.5, to: 0.01 })
     expect(ap.clamp.bound).toMatch(/negative/i)
+    // The label names the negative case AND the sub-0.01 case, because the bound
+    // now fires for both. A label reading only "negative payout" would be untrue
+    // for the 0.005 below, which is not negative.
+    expect(riskOfRuin({ avgPayout: 0.005 }).provenance.avgPayout.clamp.bound).not.toMatch(
+      /^negative payout$/
+    )
   })
 
   it("out-of-range values in BOTH directions are clamped, never substituted", async () => {
@@ -353,6 +365,114 @@ describe("UI-4: `0` is not absent — it is either honoured or reported as out o
     expect(high.provenance.riskPct.clamp).toMatchObject({ from: 250, to: 100 })
     expect(high.provenance.assumedInputs, "clamping is not assuming").toEqual([])
     expect(high.provenance.clampedInputs.sort()).toEqual(["riskPct", "winRate"])
+  })
+})
+
+describe("UI-4: a value inside the range is never reported as clamped", () => {
+  let riskOfRuin
+  beforeEach(async () => {
+    riskOfRuin = await load()
+  })
+
+  /**
+   * EVERY in-range integer on ONE field, collected rather than asserted inside the
+   * loop, so a failure names the values instead of stopping at the first one.
+   *
+   * `want` is HAND-DERIVED and literal, and deliberately so: `state: "supplied"`,
+   * `clamp: null`, and `used` equal to the integer the caller sent. Nothing here is
+   * recomputed from the code under test — an expectation that re-ran the same
+   * round-trip would pass on exactly the inputs that are broken.
+   */
+  function falseClamps(field, highestInRange) {
+    const wrong = []
+    for (let n = 1; n <= highestInRange; n++) {
+      // ONE field sent, so the other three are substituted and cannot be confused
+      // with what is being asserted about this one.
+      const p = riskOfRuin({ [field]: n }).provenance[field]
+      if (p.state !== "supplied" || p.clamp !== null || p.used !== n) {
+        wrong.push({ sent: n, state: p.state, used: p.used, clamp: p.clamp })
+      }
+    }
+    return wrong
+  }
+
+  it("riskPct: every integer 1..100 is supplied, unclamped, and used as sent", async () => {
+    // THE DEFECT, SWEPT. `prepare` used to decide the clamp with `used === n`
+    // where `used = clamp(n / 100, 0.001, 1) * 100`. That round-trip is not
+    // identity in IEEE-754: `7 / 100 * 100` is 7.000000000000001, so a caller who
+    // typed a perfectly ordinary 7% was told the bound had fired and was shown
+    // `used: 7.000000000000001` beside a note claiming the risk fraction exceeded
+    // 100%. The bound was never reached and the note was untrue.
+    //
+    // Nine integers in 0..100 disagree with their own round-trip (0, 7, 14, 28, 29,
+    // 55, 56, 57, 58), which is why every earlier test here used 5 and missed it:
+    // 5 is one of the 92 that happen to survive.
+    expect(falseClamps("riskPct", 100), "riskPct false-clamped in-range integers").toEqual([])
+  })
+
+  it("winRate: every integer 1..99 is supplied, unclamped, and used as sent", async () => {
+    // THE SAME PROPERTY, THE OTHER THREE FIELDS. A float round-trip that
+    // disagrees with the caller's unit is a property of the whole table, not of
+    // `riskPct` alone, so each field is swept over its OWN in-range integers:
+    // `winRate` is the only one with a ceiling inside 1..100 (99), which is why
+    // this stops at 99 and `100` is covered as a genuine clamp in the block above.
+    expect(falseClamps("winRate", 99), "winRate false-clamped in-range integers").toEqual([])
+  })
+
+  it("avgPayout: every integer 1..100 is supplied, unclamped, and used as sent", async () => {
+    expect(falseClamps("avgPayout", 100), "avgPayout false-clamped in-range integers").toEqual([])
+  })
+
+  it("balance: every integer 1..100 is supplied, unclamped, and used as sent", async () => {
+    expect(falseClamps("balance", 100), "balance false-clamped in-range integers").toEqual([])
+  })
+
+  it("the out-of-range ends are still clamped — the sweep is not satisfied by never clamping", async () => {
+    // THE MIRROR. A rule that reported `supplied` unconditionally would satisfy
+    // every sweep above, so the bounds are re-proved here on the far side.
+    expect(riskOfRuin({ riskPct: 100.1 }).provenance.riskPct.clamp).toMatchObject({
+      from: 100.1,
+      to: 100
+    })
+    expect(riskOfRuin({ winRate: 100 }).provenance.winRate.clamp).toMatchObject({ from: 100, to: 99 })
+    expect(riskOfRuin({ balance: 0.5 }).provenance.balance.clamp).toMatchObject({ from: 0.5, to: 1 })
+    expect(riskOfRuin({ avgPayout: 0.005 }).provenance.avgPayout.clamp).toMatchObject({
+      from: 0.005,
+      to: 0.01
+    })
+  })
+})
+
+describe("UI-4: a clamp note names the bound that actually fired", () => {
+  let riskOfRuin
+  beforeEach(async () => {
+    riskOfRuin = await load()
+  })
+
+  it("a riskPct just under the floor is clamped UP, and is not told it exceeded 100%", async () => {
+    // THE THIRD CASE THE NOTE NEVER HAD. The note branched on `n <= 0` and
+    // nothing else, so 0 < n < 0.1 — clamped UP to the 0.1% floor, for neither
+    // of the two reasons the note knew about — was told "a risk fraction above
+    // 100% risks more than the account holds". That is untrue, and it is worse
+    // than a missing note: it names a bound the value never approached.
+    const r = riskOfRuin({ winRate: 55, avgPayout: 1, riskPct: 0.05, balance: 1000 })
+    const rp = r.provenance.riskPct
+    expect(rp.state, "0.05% is below the 0.1% floor, so a bound did fire").toBe("clamped")
+    expect(rp.clamp).toMatchObject({ from: 0.05, to: 0.1 })
+    expect(rp.clamp.note, "the note must not blame a ceiling this value never reached").not.toMatch(
+      /above 100%|more than the account holds/i
+    )
+    expect(rp.clamp.note, "the note must say it is the floor").toMatch(/floor/i)
+    // And the zero branch keeps its own, different, reason.
+    expect(riskOfRuin({ riskPct: 0 }).provenance.riskPct.clamp.note).toMatch(/unbounded/i)
+  })
+
+  it("a riskPct above the ceiling is told the ceiling, not the floor", async () => {
+    // THE OTHER SIDE, so the middle branch above cannot be satisfied by making
+    // every clamp note vague.
+    expect(riskOfRuin({ riskPct: 250 }).provenance.riskPct.clamp.note).toMatch(
+      /more than the account holds/i
+    )
   })
 })
 

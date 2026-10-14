@@ -1231,11 +1231,19 @@ function readRoeNumber(raw) {
 /**
  * Per input: the value to use, and the CLAMP record when a bound moved it.
  *
- * EVERY BOUND HERE IS ONE THIS FUNCTION HAS ALWAYS ENFORCED, with exactly one
- * change — the `avgPayout` floor — argued per field in `riskOfRuin` below. What
- * changed is not the RANGE, it is that a caller-supplied value in the range is
- * no longer discarded by `||` first, so reaching a bound now means what it says
- * on the tin: the caller sent something out of range.
+ * EVERY BOUND HERE IS ONE THIS FUNCTION HAS ALWAYS ENFORCED. NO RANGE IS MOVED
+ * by UI-4: the `avgPayout` floor was lowered to 0 for one round and that is
+ * reverted, so an out-of-range value today produced the same number it produced
+ * before this task. What changed is not the RANGE, it is that a caller-supplied
+ * value in the range is no longer discarded by `||` first, so reaching a bound
+ * now means what it says on the tin: the caller sent something out of range.
+ *
+ * AND A BOUND IS DECIDED WITHOUT ARITHMETIC THAT CAN DISAGREE WITH THE CALLER'S
+ * OWN UNIT. `clamp` returns its argument unchanged when it is already in range,
+ * so `used !== n` is a sound test for the three fields whose bound is a single
+ * comparison against `n`. `riskPct` is the exception and the reason this note
+ * exists: it converts to a fraction and back, and that round-trip is lossy, so
+ * it compares in the fraction domain and reports the caller's own `n`.
  */
 const ROE_SPEC = {
   // ── winRate (percent). Clamped to 1-99, as always.
@@ -1264,23 +1272,28 @@ const ROE_SPEC = {
     }
   },
 
-  // ── avgPayout (x). THE ONE BOUND THAT MOVED: the floor was 0.01, now 0.
+  // ── avgPayout (x). Floor 0.01 for anything non-zero, EXCEPT an explicit 0.
   //
   // The 0.01 floor was there to stop a nonsense payout dividing something by
   // zero, and `kellyFraction`'s `ap > 0 ? … : 0` guard already does that job
-  // explicitly. What 0.01 ALSO did was make a zero payout inexpressible: a
-  // trade that returns nothing per win is a real thing that happens, and a
-  // caller asking "what does this look like if the payout is zero?" was
-  // answered with 0.01 — the same fabrication as the 0.8 it used to answer
-  // with, one layer down. Nothing below is NaN at ap = 0: `log(1 + 0)` is 0,
-  // `edge` is `wr - 1`, and the Kelly guard is already there.
+  // explicitly. What the floor ALSO did was make an explicit zero inexpressible:
+  // a trade that returns nothing per win is a real thing that happens, and a
+  // caller asking "what does this look like if the payout is zero?" was answered
+  // with 0.01 — the same fabrication as the 0.8 it used to be answered with, one
+  // layer down. Nothing here is NaN at ap = 0: `log(1 + 0)` is 0, `edge` is
+  // `wr - 1`, and the Kelly guard is already there. So a caller who SENDS a zero
+  // is obeyed.
   //
-  // ONLY NEGATIVES ARE STILL CLAMPED, and only because a negative payout is
-  // PAYING TO TAKE THE TRADE rather than a market fact.
+  // THE BAND ITSELF IS NOT MOVED, and this is the whole point of the `=== 0`
+  // guard. Lowering the floor to 0 was in the brief's gift and is reverted: it
+  // was never asked for, and it moved `(0, 0.01)` — values that were never absent
+  // and never an explicit zero — so `avgPayout: 0.005` silently took
+  // `kellyFraction` from -4950% to -9950%. A caller who sent 0.005 still gets
+  // 0.01, exactly as they always have, and the clamp record names the move.
   avgPayout: {
     serverDefault: { value: 0.8, source: "server-constant" },
     prepare(n) {
-      const used = Math.max(0, n)
+      const used = n === 0 ? 0 : Math.max(0.01, n)
       return {
         used,
         clamp:
@@ -1289,8 +1302,15 @@ const ROE_SPEC = {
             : {
                 from: n,
                 to: used,
-                bound: "negative payout",
-                note: "a negative payout means paying to take the trade, not being paid for it"
+                // NAMES BOTH REASONS, because the bound now fires for either: a
+                // negative payout AND anything between zero and 0.01. The old
+                // label said "negative payout", which would be untrue for the
+                // 0.005 case this floor has always handled.
+                bound: "payout below 0.01 — negative, or between zero and 0.01",
+                note:
+                  n < 0
+                    ? "a negative payout means paying to take the trade, not being paid for it"
+                    : "this is the smallest payout this calculator supports, so 0.01 is the floor rather than the number you sent"
               }
       }
     }
@@ -1312,25 +1332,49 @@ const ROE_SPEC = {
     prepare(n) {
       const fraction = n / 100
       const floored = clamp(fraction, 0.001, 1)
+      // THE CLAMP IS DECIDED IN THE FRACTION DOMAIN, and never as
+      // `floored * 100 === n`. That comparison was a FLOAT ROUND-TRIP: `7 / 100`
+      // is not exactly 0.07, and `0.07 * 100` is 7.000000000000001, so nine of
+      // the integers in 0..100 (0, 7, 14, 28, 29, 55, 56, 57, 58) disagreed with
+      // their own round-trip and were reported as having hit the bound. The bound
+      // was never reached and the note was untrue — `clamp` returns its argument
+      // UNCHANGED when the argument is already in range, so `floored !== fraction`
+      // is exactly "a bound moved this" with no arithmetic to disagree about.
+      const moved = floored !== fraction
       // REPORTED IN PERCENT, like the value the caller sent. Every `used` in
       // this table is in its caller's own unit, so the UI can print "assumed
       // 2%" without knowing which fields happen to be fractions internally.
-      const used = floored * 100
+      //
+      // AND WHEN NO BOUND FIRED, `used` IS `n` — NOT `floored * 100`. The
+      // round-trip is lossy, so `floored * 100` would put 7.000000000000001 on
+      // the screen beside the words "used as you typed it", and `used` exists to
+      // answer exactly one question: is this the number the caller sent. When a
+      // bound DID fire the two are equal in every case that matters, so the
+      // clamped branch still reports the bound as a value in the caller's unit.
+      const used = moved ? floored * 100 : n
       return {
         used,
-        clamp:
-          used === n
-            ? null
-            : {
-                from: n,
-                to: used,
-                bound: "risk per trade outside 0.1%-100%",
-                note:
-                  n <= 0
-                    ? "a risk fraction of zero or less has no finite number of units to ruin — " +
-                      "1/0 is unbounded — so this is the 0.1% FLOOR, not the number you sent"
+        clamp: moved
+          ? {
+              from: n,
+              to: used,
+              bound: "risk per trade outside 0.1%-100%",
+              // THREE CASES, NOT TWO. The note used to branch on `n <= 0` alone,
+              // so a value between zero and the 0.1% floor — clamped UP, for
+              // neither reason the note knew — was told it risked more than the
+              // account holds. A note that names the wrong bound is worse than no
+              // note, so each side of the range gets the reason that actually
+              // applies to it.
+              note:
+                n <= 0
+                  ? "a risk fraction of zero or less has no finite number of units to ruin — " +
+                    "1/0 is unbounded — so this is the 0.1% FLOOR, not the number you sent"
+                  : n < 0.1
+                    ? "anything below 0.1% rounds up to the floor, so this is the smallest risk " +
+                      "per trade this calculator supports — not the number you sent"
                     : "a risk fraction above 100% risks more than the account holds"
-              }
+            }
+          : null
       }
     }
   },

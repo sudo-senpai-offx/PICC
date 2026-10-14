@@ -5865,14 +5865,24 @@ const creds = await getVenueCredentials()
           riskPct: sent.riskPct,
           balance: sent.balance,
           defaults: {
-            // No ledger source exists for avgPayout or riskPct at all, so those
-            // two are omitted rather than offered as null — an absent key is the
-            // honest "there is nothing here to offer".
+            // `signalAccuracy()` EXPOSES NO BALANCE, AND THERE IS NO LEDGER
+            // SOURCE FOR avgPayout OR riskPct EITHER — so all THREE are omitted
+            // rather than offered as null, because an absent key is the honest
+            // "there is nothing here to offer".
+            //
+            // THERE WAS A `balance:` ENTRY HERE AND IT WAS DEAD. It was guarded by
+            // `Number.isFinite(acc?.balance)`, but the function returns
+            // `{ok,total,wins,losses,draws,winRate,byDirection,bySymbol,
+            // byHorizon,recent}` and no `balance` key at all, so `acc.balance` is
+            // always `undefined` and the branch could never fire. Dead was not
+            // bad enough on its own: it was MISLEADING, because the comment
+            // beside it said no ledger source existed for avgPayout and riskPct —
+            // implying balance had one — inside the one block whose entire
+            // purpose is to say where every number came from. A branch that
+            // implies a live source is this defect's own shape, sitting in the
+            // code that fixes it.
             winRate: Number.isFinite(acc?.winRate)
               ? { value: acc.winRate, source: "signal-accuracy-ledger" }
-              : undefined,
-            balance: Number.isFinite(acc?.balance)
-              ? { value: acc.balance, source: "signal-accuracy-ledger" }
               : undefined
           }
         })
