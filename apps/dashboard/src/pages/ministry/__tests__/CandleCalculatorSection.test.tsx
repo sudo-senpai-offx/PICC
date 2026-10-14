@@ -242,7 +242,18 @@ const MARKERS = {
   "cc-regime-refused-count": "needs 30 before",
   "cc-regime-origin": "requested bar(s) sent",
   "cc-regime-measured-at": "fetched",
-  "cc-regime-error": "regime unavailable"
+  "cc-regime-error": "regime unavailable",
+  // Expiry. "sent regime" and "recommended expiry" are false at mount; the
+  // section note mentions "candle series" and nothing else here collides.
+  "cc-expiry-origin": "requested bar(s) sent",
+  "cc-expiry-measured-at": "fetched",
+  "cc-expiry-inputs": "sent regime",
+  "cc-expiry-recommended": "recommended expiry",
+  "cc-expiry-vol": "average move",
+  "cc-expiry-score-5m": "score ",
+  "cc-expiry-score-15m": "score ",
+  "cc-expiry-unscored": "NOT SCORED",
+  "cc-expiry-error": "expiry unavailable"
 } as const
 
 const settleOn = (testId: keyof typeof MARKERS) => settle(MARKERS[testId])
@@ -555,5 +566,208 @@ describe("CandleCalculatorSection — regime", () => {
   })
 })
 
-// Expiry and adaptive stops land in the next slice of this file.
-export type { ExpiryResponse, AdaptiveStopsResponse }
+// ---------------------------------------------------------------------
+// Expiry — the constant recommendation, and the inputs it is meaningless without
+// ---------------------------------------------------------------------
+
+/**
+ * `expiryOptimizer.mjs:20`, verbatim: under 20 bars.
+ *
+ * `recommended` is `EXPIRY_OPTIONS[3]` — the `"1m"` entry of the service's OWN
+ * table, returned as a constant with no `score` of its own — and every option
+ * carries a literal `score: 50`. `volatility` and `avgMove` are ABSENT keys.
+ *
+ * Rendering that `"1m"` as a RECOMMENDATION is the `riskParity.mjs:154` defect in
+ * a second service: a constant wearing a measurement's label, telling an operator
+ * to trade a 1-minute expiry when nothing was computed at all.
+ */
+const expiryUnscored: ExpiryResponse = {
+  ok: true,
+  recommended: { label: "1m", seconds: 60 },
+  all: [
+    { label: "5s", seconds: 5, score: 50 },
+    { label: "1m", seconds: 60, score: 50 }
+  ]
+}
+
+/** The computed branch, sorted by score descending (`expiryOptimizer.mjs:61`). */
+const expiryScored: ExpiryResponse = {
+  ok: true,
+  recommended: { label: "5m", seconds: 300, score: 80, expectedMove: 0.012 },
+  all: [
+    { label: "5m", seconds: 300, score: 80, expectedMove: 0.012 },
+    { label: "15m", seconds: 900, score: 40, expectedMove: 0.0233 }
+  ],
+  volatility: 0.0021,
+  avgMove: 0.0019
+}
+
+/**
+ * A FLAT series: every return is 0, so `volatility = sqrt(Σr²/n)` is exactly 0
+ * (`expiryOptimizer.mjs:25`). That 0 is REAL and must print as `0`.
+ */
+const expiryMeasuredZero: ExpiryResponse = {
+  ok: true,
+  recommended: { label: "1m", seconds: 60, score: 45, expectedMove: 0 },
+  all: [{ label: "1m", seconds: 60, score: 45, expectedMove: 0 }],
+  volatility: 0,
+  avgMove: 0
+}
+
+describe("CandleCalculatorSection — expiry", () => {
+  it("sends an EXPLICIT regime and signal strength, and shows both beside the score", async () => {
+    // `optimizeExpiry(candles, regime = "ranging", signalStrength = 0.5)` invents
+    // BOTH when absent and the response does not record which it used, so a score
+    // whose inputs are invisible is unattributable. The panel therefore always
+    // sends both and always displays what it sent.
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    setSelect("cc-expiry-regime", "trending")
+    type("cc-expiry-strength", "0.9")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-recommended")
+
+    expect(expiryMock).toHaveBeenCalledTimes(1)
+    const [sent, regime, strength] = expiryMock.mock.calls[0]
+    expect(sent).toHaveLength(120)
+    expect(regime).toBe("trending")
+    expect(strength).toBe(0.9)
+
+    const inputs = text("cc-expiry-inputs")
+    expect(inputs).toContain("regime trending")
+    expect(inputs).toContain("signal strength 0.9")
+    // And the score those inputs produced is attributed to them.
+    expect(text("cc-expiry-recommended")).toContain("5m")
+    expect(text("cc-expiry-recommended")).toContain("score 80")
+  })
+
+  it("DOES NOT take its regime from the regime panel — the chain is declined", async () => {
+    // THE CHAIN-DECISION TEST. `detectRegime` says `trending` above; this panel's
+    // own regime input is at its default. If expiry were wired to the other
+    // panel, its number on screen would be derived from a regime the reader
+    // cannot see from it — which is exactly what the brief forbids.
+    render()
+    type("cc-regime-asset", "EURUSD")
+    click("cc-regime-run")
+    await settleOn("cc-regime-result")
+    expect(text("cc-regime-reading")).toContain("trending")
+
+    type("cc-expiry-asset", "EURUSD")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-recommended")
+    // Its OWN input, not the detected one.
+    expect(expiryMock).toHaveBeenCalledWith(expect.any(Array), "ranging", 0.5)
+    expect(text("cc-expiry-inputs")).toContain("regime ranging")
+  })
+
+  it("does NOT present the unscored branch's CONSTANT as a recommendation", async () => {
+    // THE HAZARD. Under 20 bars `optimizeExpiry` returns its own table entry as
+    // `recommended` and scores every option at a literal 50. Printed as a
+    // recommendation it tells an operator to take a 1-minute expiry, which is
+    // advice derived from a constant.
+    expiryMock.mockResolvedValue(expiryUnscored)
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    type("cc-expiry-bars", "12")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-unscored")
+
+    const line = text("cc-expiry-unscored")
+    expect(line).toContain("NOT SCORED")
+    expect(line).toContain("constant")
+    // The label is named, so a reader comparing against the payload can see where
+    // the 1m came from — but it is never called a recommendation.
+    expect(line).toContain("1m")
+    expect(text("cc-expiry-recommended")).toBe("")
+    expect(id("cc-expiry-recommended")).toBeNull()
+    // And no volatility/avgMove as measurements: those keys do not exist here.
+    expect(text("cc-expiry-vol")).toBe("")
+    // The per-option scores are constants too, so no score table is offered.
+    expect(ids("cc-expiry-scores")).toHaveLength(0)
+  })
+
+  it("renders the computed recommendation with its scores and volatility", async () => {
+    expiryMock.mockResolvedValue(expiryScored)
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-recommended")
+    expect(text("cc-expiry-recommended")).toContain("recommended expiry 5m")
+    expect(text("cc-expiry-recommended")).toContain("score 80")
+    expect(text("cc-expiry-vol")).toContain("volatility 0.0021")
+    expect(text("cc-expiry-vol")).toContain("average move 0.0019")
+    // The option table is scored and carries its expected move.
+    expect(ids("cc-expiry-score-5m")).toHaveLength(1)
+    expect(text("cc-expiry-score-15m")).toContain("score 40")
+    expect(text("cc-expiry-score-15m")).toContain("expected move 0.0233")
+    expect(id("cc-expiry-unscored")).toBeNull()
+  })
+
+  it("prints a MEASURED volatility of 0 as 0 — the control for the assertion above", async () => {
+    expiryMock.mockResolvedValue(expiryMeasuredZero)
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-vol")
+    const vol = text("cc-expiry-vol")
+    expect(vol).toContain("volatility 0")
+    expect(vol).toContain("average move 0")
+    expect(vol).not.toContain("absent")
+    // And it is still treated as the SCORED branch.
+    expect(id("cc-expiry-recommended")).not.toBeNull()
+    expect(id("cc-expiry-unscored")).toBeNull()
+  })
+
+  it("sends a signal strength of 0 rather than omitting it, because 0 is a strength", async () => {
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    type("cc-expiry-strength", "0")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-recommended")
+    expect(expiryMock).toHaveBeenCalledWith(expect.any(Array), "ranging", 0)
+    expect(text("cc-expiry-inputs")).toContain("signal strength 0")
+  })
+
+  it("refuses an unparseable signal strength BY NAME rather than sending NaN", () => {
+    // `JSON.stringify({signalStrength: NaN})` is `{"signalStrength":null}`, and
+    // `optimizeExpiry` would then run its `signalStrength > 0.7` and `> 0.8`
+    // branches against null — silently scoring as though no strength applied.
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    type("cc-expiry-strength", "strong")
+    click("cc-expiry-run")
+    flushSync(() => {})
+    expect(candlesMock).not.toHaveBeenCalled()
+    expect(expiryMock).not.toHaveBeenCalled()
+    const err = text("cc-expiry-error")
+    expect(err).toContain("strong")
+    expect(err).toContain("not a finite number")
+    expect(id("cc-expiry-idle")).toBeNull()
+  })
+
+  it("states the series origin and the time, like every other panel", async () => {
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-origin")
+    expect(text("cc-expiry-origin")).toContain("EURUSD")
+    expect(text("cc-expiry-origin")).toContain("120 of 120 requested bar(s) sent")
+    expect(text("cc-expiry-measured-at")).toContain("fetched")
+  })
+
+  it("a refusal CLEARS the previous readout", async () => {
+    render()
+    type("cc-expiry-asset", "EURUSD")
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-recommended")
+
+    expiryMock.mockRejectedValue(new Error("expiry failed: 401"))
+    click("cc-expiry-run")
+    await settleOn("cc-expiry-error")
+    expect(id("cc-expiry-recommended")).toBeNull()
+    expect(id("cc-expiry-origin")).toBeNull()
+    expect(text("cc-expiry-error")).toContain("401")
+  })
+})
+
+export type { AdaptiveStopsResponse }
