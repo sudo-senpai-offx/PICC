@@ -3,9 +3,11 @@ import type { RefObject } from "react"
 import { fetchCandles } from "@/hooks/useCandleData"
 import { TIMEFRAME_LABELS } from "@/hooks/useCandleData"
 import type { Timeframe } from "@/hooks/useCandleData"
-import { fetchRegime, regimeIsMeasured, toWireCandles } from "@/lib/candleCalculators"
+import { fetchRegime, regimeIsMeasured, toWireCandles, expiryIsScored, fetchExpiry } from "@/lib/candleCalculators"
 import type {
   CandleOrigin,
+  ExpiryResponse,
+  LegacyRegime,
   RegimeResponse,
   RegimeUnknown,
   WireCandle
@@ -145,11 +147,11 @@ interface RunState<T> {
   measuredAt: number
 }
 
-interface Calculator<A, T> {
+interface Calculator<E, T> {
   state: RunState<T> | null
   busy: boolean
   error: string | null
-  run: (inputs: PanelInputs) => Promise<void>
+  run: (inputs: PanelInputs, extra: E) => Promise<void>
   refuse: (reason: string) => void
 }
 
@@ -163,15 +165,20 @@ interface Calculator<A, T> {
  * The candle fetch is INSIDE the try, which is what makes "the candle source
  * failed" and "the calculator refused" one refusal surface rather than two that
  * can disagree.
+ *
+ * `extra` carries whatever a route needs BEYOND the series — the expiry panel's
+ * regime and signal strength. It is threaded through rather than closed over,
+ * because the value kept beside the result must be the value sent, and a closure
+ * captured at render could be the previous question's.
  */
-function useCalculator<T>(
-  compute: (candles: WireCandle[], origin: SeriesOrigin) => Promise<T>
-): Calculator<PanelInputs, T> {
+function useCalculator<E, T>(
+  compute: (candles: WireCandle[], origin: SeriesOrigin, extra: E) => Promise<T>
+): Calculator<E, T> {
   const [state, setState] = useState<RunState<T> | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function run(inputs: PanelInputs) {
+  async function run(inputs: PanelInputs, extra: E) {
     setBusy(true)
     setError(null)
     try {
@@ -181,8 +188,8 @@ function useCalculator<T>(
       // well-formed answer about an empty market. `fetchCandles` filters
       // non-positive and non-numeric OHLC (`:169`), so a symbol that resolved but
       // held nothing usable arrives here as an empty array. Refusing names the
-      // symbol and the range; sending it would let `detectRegime` answer
-      // `regime: "unknown"` and be indistinguishable from a short series.
+      // symbol and the range; sending it would let `optimizeExpiry` answer with
+      // its constant `"1m"` and be indistinguishable from a short series.
       if (candles.length === 0) {
         throw new Error(
           `the candle source returned 0 usable bars for ${inputs.assetId} at ${inputs.timeframeLabel} — nothing was sent`
@@ -204,7 +211,7 @@ function useCalculator<T>(
         verifiedCount: fetched.verifiedCount,
         sourceMode: fetched.sourceMode
       }
-      const data = await compute(candles, origin)
+      const data = await compute(candles, origin, extra)
       setState({ data, origin, measuredAt: Date.now() })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -360,11 +367,12 @@ export function CandleCalculatorSection() {
 
 function RegimePanel() {
   const refs = useRef<Refs>({})
-  const { state, busy, error, run, refuse } = useCalculator<RegimeResponse>((candles, origin) =>
-    // THE TIMEFRAME IS A LABEL HERE. `tfSecondsOf` (`regimeDetection.mjs:31`)
-    // only understands strings like "1m"/"5m", and an unrecognised one resolves to
-    // null — which silently drops the bias plane to 60s rather than failing.
-    fetchRegime(candles, origin.timeframeLabel)
+  const { state, busy, error, run, refuse } = useCalculator<undefined, RegimeResponse>(
+    (candles, origin) =>
+      // THE TIMEFRAME IS A LABEL HERE. `tfSecondsOf` (`regimeDetection.mjs:31`)
+      // only understands strings like "1m"/"5m", and an unrecognised one resolves
+      // to null — which silently drops the bias plane to 60s rather than failing.
+      fetchRegime(candles, origin.timeframeLabel)
   )
 
   function onRun() {
@@ -373,7 +381,7 @@ function RegimePanel() {
       refuse(inputs.error)
       return
     }
-    void run(inputs)
+    void run(inputs, undefined)
   }
 
   return (
@@ -511,8 +519,214 @@ function EngineLine({ data }: { data: RegimeResponse }) {
 // Expiry
 // ---------------------------------------------------------------------
 
+/**
+ * THE FOUR LABELS `optimizeExpiry`'s OWN SCORER BRANCHES ON
+ * (`expiryOptimizer.mjs:47-56`): `trending`, `volatile` and `breakout` each get
+ * their own curve and everything else falls to the ranging branch. `ranging` is
+ * listed rather than left implicit so the choice is always a visible one.
+ */
+const EXPIRY_REGIMES: readonly LegacyRegime[] = ["ranging", "trending", "volatile", "breakout"]
+
+interface ExpirySent {
+  regime: LegacyRegime
+  signalStrength: number
+}
+
+interface ExpiryResult {
+  data: ExpiryResponse
+  /** What was actually sent, kept so the readout can attribute the score to it. */
+  sent: ExpirySent
+}
+
 function ExpiryPanel() {
-  return <div className="panel" data-testid="cc-expiry-stub" />
+  const refs = useRef<Refs>({})
+  const { state, busy, error, run, refuse } = useCalculator<ExpirySent, ExpiryResult>(
+    async (candles, origin, sent) => ({
+      data: await fetchExpiry(candles, sent.regime, sent.signalStrength),
+      sent
+    })
+  )
+
+  /**
+   * THE TWO UPSTREAM INPUTS ARE READ AND VALIDATED HERE, NOT DELEGATED.
+   *
+   * `optimizeExpiry(candles, regime = "ranging", signalStrength = 0.5)` supplies
+   * both itself when they are absent, and the response does not record which it
+   * used — so a panel that sent neither would render a scored recommendation
+   * whose regime the operator never chose. Both are therefore always sent, and
+   * both are displayed beside the score they produced.
+   *
+   * A non-finite strength is refused BY NAME. `JSON.stringify({signalStrength:
+   * NaN})` is `{"signalStrength":null}`, and every strength branch in the service
+   * is a comparison (`> 0.7`, `> 0.8`), so a null would score as though no
+   * strength applied at all — silently, and differently from any real value.
+   */
+  function onRun() {
+    const inputs = readInputs(refs, "expiry")
+    if ("error" in inputs) {
+      refuse(inputs.error)
+      return
+    }
+    const regime = (refs.current.regime?.value ?? "ranging") as LegacyRegime
+    const raw = (refs.current.strength?.value ?? "").trim()
+    const signalStrength = raw === "" ? 0.5 : Number(raw)
+    if (!Number.isFinite(signalStrength)) {
+      refuse(`signal strength "${raw}" is not a finite number — nothing was sent`)
+      return
+    }
+    void run(inputs, { regime, signalStrength })
+  }
+
+  return (
+    <div className="panel" data-testid="cc-expiry">
+      <div className="panel-head">
+        <strong>Expiry</strong>
+        <button type="button" onClick={onRun} disabled={busy} data-testid="cc-expiry-run">
+          {busy ? "scoring…" : state ? "re-score expiry" : "score expiry"}
+        </button>
+      </div>
+      {/* WHY THE REGIME IS AN INPUT AND NOT A RESULT. `regime` above can DETECT a
+          regime; this panel will not silently take it. The two routes disagree
+          about the vocabulary — `detectRegime`'s legacy read is the four labels
+          below, while its own `regimeEngine` block is uppercased and includes
+          `UNCERTAIN`, which `optimizeExpiry` would score down its ranging branch
+          without saying so — so a chain would have to pick one and picking wrong
+          is silent. The regime a score was computed under is named on the
+          score, which is what makes it attributable. */}
+      <p className="muted small">
+        The regime and signal strength below are inputs to this calculation, not
+        outputs of it, and they are what the scores below were drawn under.
+      </p>
+      <CandleInputs refs={refs} testIdBase="cc-expiry" label="expiry" />
+      <select
+        ref={(el) => { refs.current.regime = el }}
+        defaultValue="ranging"
+        aria-label="expiry regime"
+        data-testid="cc-expiry-regime"
+      >
+        {EXPIRY_REGIMES.map((r) => (
+          <option key={r} value={r}>
+            regime {r}
+          </option>
+        ))}
+      </select>
+      <input
+        ref={(el) => { refs.current.strength = el }}
+        type="text"
+        defaultValue="0.5"
+        aria-label="signal strength"
+        data-testid="cc-expiry-strength"
+      />
+
+      {error ? (
+        <div className="panel muted" data-testid="cc-expiry-error">
+          <p>expiry unavailable — {error}</p>
+        </div>
+      ) : null}
+
+      {!state && !error ? (
+        <p className="muted small" data-testid="cc-expiry-idle">
+          not yet scored.
+        </p>
+      ) : null}
+
+      {state ? <MeasuredAt at={state.measuredAt} testId="cc-expiry-measured-at" /> : null}
+      {state ? <OriginLine origin={state.origin} testId="cc-expiry-origin" /> : null}
+      {state ? <ExpiryReadout result={state.data} sentBars={state.origin.sentBars} /> : null}
+    </div>
+  )
+}
+
+function ExpiryReadout({
+  result,
+  sentBars
+}: {
+  result: ExpiryResult
+  sentBars: number
+}) {
+  // `sent` is read off the RESULT, not off anything captured at click time, so
+  // the regime and strength printed here are the ones that travelled with THIS
+  // response rather than the ones a re-render happened to leave lying around.
+  const { data, sent } = result
+  return (
+    <div data-testid="cc-expiry-result">
+      {/* THE INPUTS, BESIDE EVERY SCORE BELOW THEM. `optimizeExpiry` invents a
+          regime and a strength when they are absent and never reports which it
+          used, so a score without these two lines is unattributable advice. */}
+      <p className="muted small" data-testid="cc-expiry-inputs">
+        sent regime {sent.regime} · sent signal strength {sent.signalStrength}
+      </p>
+
+      {expiryIsScored(data) ? (
+        <>
+          <p data-testid="cc-expiry-recommended">
+            recommended expiry {data.recommended.label} · score{" "}
+            {measured(data.recommended.score, "the service scored nothing")} · expected move{" "}
+            {measured(data.recommended.expectedMove ?? null, "this option carries no expected move")}
+          </p>
+          {/* `formatNum`, NOT a truthiness test: a flat series makes both of these
+              exactly 0 (`expiryOptimizer.mjs:25-26`) and that 0 is a real
+              measurement. Collapsing it to "absent" would be the opposite defect
+              from the one the unscored branch below guards against. */}
+          <p className="muted small" data-testid="cc-expiry-vol">
+            volatility {formatNum(data.volatility)} · average move {formatNum(data.avgMove)}
+          </p>
+          <div data-testid="cc-expiry-scores">
+            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {data.all.map((o) => (
+                <li key={o.label} className="muted small" data-testid={`cc-expiry-score-${o.label}`}>
+                  {o.label} ({o.seconds}s): score {o.score} · expected move{" "}
+                  {formatNum(o.expectedMove ?? null)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      ) : (
+        <ExpiryUnscoredResult data={data} sent={sent} sentBars={sentBars} />
+      )}
+    </div>
+  )
+}
+
+/**
+ * UNDER 20 BARS (`expiryOptimizer.mjs:20`), AND IT IS THE SAME DEFECT AS
+ * `riskParity.mjs:154` IN A SECOND SERVICE.
+ *
+ * `recommended` here is `EXPIRY_OPTIONS[3]` — the service's own table entry for
+ * `"1m"` — returned as a CONSTANT with no `score` of its own, and every option
+ * carries a literal `score: 50`. Nothing was computed over these bars.
+ *
+ * So the constant is NAMED, because a reader comparing against the payload should
+ * be able to see where the 1m came from, and it is never called a recommendation:
+ * "recommended expiry 1m" would tell an operator to take a 1-minute expiry on the
+ * strength of a literal. No score table is offered either, since every score in
+ * it is the same literal 50.
+ */
+function ExpiryUnscoredResult({
+  data,
+  sent,
+  sentBars
+}: {
+  data: ExpiryResponse
+  sent: ExpirySent
+  sentBars: number
+}) {
+  return (
+    <div className="panel muted" data-testid="cc-expiry-unscored">
+      <p data-testid="cc-expiry-unscored-reason">
+        NOT SCORED — `optimizeExpiry` returned its own table entry{" "}
+        {data.recommended.label} as a constant, not a recommendation
+      </p>
+      <p className="muted small">
+        {sentBars} bar(s) were sent; `optimizeExpiry` needs 20 before it scores
+        anything. On this branch every option carries the literal score 50 and the
+        response carries no volatility or average move at all, so no score, no
+        volatility and no table are shown. It was asked for regime {sent.regime} at
+        signal strength {sent.signalStrength}, and neither could be applied.
+      </p>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------
