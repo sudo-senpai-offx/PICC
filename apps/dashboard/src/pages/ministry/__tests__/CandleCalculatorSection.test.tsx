@@ -43,6 +43,7 @@ import type {
   ExpiryResponse,
   RegimeResponse
 } from "@/lib/candleCalculators"
+import type { CandleDatum } from "@/components/CandlestickChart"
 
 // The candle source is mocked; the TIMEFRAME VOCABULARY is not, because the
 // panel genuinely reads it and a fake would prove nothing about the real labels.
@@ -70,10 +71,18 @@ const stopsMock = vi.mocked(calculators.fetchAdaptiveStops)
 // Fixtures — each one is a shape the SERVER actually serves.
 // ---------------------------------------------------------------------
 
-/** A well-formed served series, as `fetchCandles` hands it over. */
-function servedRows(count = 120) {
+/**
+ * A well-formed served series, as `fetchCandles` hands it over.
+ *
+ * `time` is cast to `CandleDatum["time"]` because that type is
+ * `lightweight-charts.Time` — a UNION that admits a string, not a plain number.
+ * The cast here is exactly why the panel needs `toWireCandles`: the compiler
+ * itself says a chart bar's `time` is not necessarily a number, and
+ * `expiryOptimizer.mjs:33` subtracts it.
+ */
+function servedRows(count = 120): CandleDatum[] {
   return Array.from({ length: count }, (_, i) => ({
-    time: 1_700_000_000 + i * 60,
+    time: (1_700_000_000 + i * 60) as CandleDatum["time"],
     open: 1 + i * 0.001,
     high: 1.05 + i * 0.001,
     low: 0.95 + i * 0.001,
@@ -253,7 +262,19 @@ const MARKERS = {
   "cc-expiry-score-5m": "score ",
   "cc-expiry-score-15m": "score ",
   "cc-expiry-unscored": "NOT SCORED",
-  "cc-expiry-error": "expiry unavailable"
+  "cc-expiry-error": "expiry unavailable",
+  // Adaptive stops. "ATR period" is FALSE at mount on purpose: the panel's static
+  // copy says "smoothing window", so the exact phrase belongs only to the
+  // post-run readout and the wait cannot settle before a run commits.
+  "cc-stops-origin": "requested bar(s) sent",
+  "cc-stops-measured-at": "fetched",
+  "cc-stops-atrperiod": "ATR period",
+  "cc-stops-measured": "take profit",
+  "cc-stops-atr": "atr ",
+  "cc-stops-adx": "adx ",
+  "cc-stops-multipliers": "x ATR",
+  "cc-stops-refused": "NO STOPS",
+  "cc-stops-error": "adaptive stops unavailable"
 } as const
 
 const settleOn = (testId: keyof typeof MARKERS) => settle(MARKERS[testId])
@@ -404,7 +425,10 @@ describe("CandleCalculatorSection — regime", () => {
     // and `toWireCandles` drops anything non-finite on top of that. A panel that
     // printed only the request would describe a series the server never saw.
     candlesMock.mockResolvedValue({
-      rows: [...servedRows(118), { time: "bad-time" as never, open: 1, high: 1, low: 1, close: 1 }],
+      rows: [
+        ...servedRows(118),
+        { time: "bad-time" as unknown as CandleDatum["time"], open: 1, high: 1, low: 1, close: 1 }
+      ],
       source: "yahoo-finance",
       feed: null,
       resolvedTimeframe: 60,
@@ -770,4 +794,240 @@ describe("CandleCalculatorSection — expiry", () => {
   })
 })
 
-export type { AdaptiveStopsResponse }
+// ---------------------------------------------------------------------
+// Adaptive stops — the ATR-period collision, and the branch that measures ATR
+// but cannot produce a stop
+// ---------------------------------------------------------------------
+
+/** `computeAdaptiveStops` on a trending read (`trading.mjs`). */
+const stopsTrending: AdaptiveStopsResponse = {
+  ok: true,
+  takeProfit: 1.09,
+  stopLoss: 1.04,
+  atr: 0.02,
+  adx: 31.4,
+  atrRatio: 1.21,
+  regime: "trending",
+  reason: null,
+  multipliers: { tp: 2.5, sl: 1.2 }
+}
+
+/**
+ * THE BRANCH THAT BREAKS A NAIVE GATE.
+ *
+ * `computeAdaptiveStops` returns
+ *   `{ takeProfit: null, stopLoss: null, atr: currentAtr, adx: null,
+ *      regime: "unknown", atrRatio, reason: "adx-unobservable: ..." }`
+ *
+ * — a REAL, non-null ATR beside two null stops. A panel asking "did we get an
+ * ATR?" or "is the stop distance zero?" would print that ATR beside stops nobody
+ * could produce and read the two as one answer.
+ */
+const stopsAdxUnobservable: AdaptiveStopsResponse = {
+  ok: true,
+  takeProfit: null,
+  stopLoss: null,
+  atr: 0.42,
+  adx: null,
+  atrRatio: 1.1,
+  regime: "unknown",
+  reason:
+    "adx-unobservable: ADX has not warmed up on these candles, so no trend regime is claimed (unobserved never counts as neutral)"
+}
+
+/** A MEASURED `adx` of 0 — a real ranging read, which must survive the gate. */
+const stopsMeasuredZeroAdx: AdaptiveStopsResponse = {
+  ...stopsTrending,
+  takeProfit: 1.02,
+  stopLoss: 1.01,
+  adx: 0,
+  atrRatio: 1,
+  regime: "ranging",
+  multipliers: { tp: 1.8, sl: 1.5 }
+}
+
+describe("CandleCalculatorSection — adaptive stops", () => {
+  it("sends the series, the direction and the timeframe NUMBER", async () => {
+    // `handlers.mjs:5749` passes `{ atrPeriod: timeframe }`, so this route's
+    // `timeframe` is a SMOOTHING WINDOW, not a label and not a bar size. The
+    // regime route's `timeframe` is a string; the two share a name and nothing
+    // else.
+    render()
+    type("cc-stops-asset", "EURUSD")
+    setSelect("cc-stops-direction", "down")
+    setSelect("cc-stops-tf", "900")
+    click("cc-stops-run")
+    await settleOn("cc-stops-measured")
+    expect(stopsMock).toHaveBeenCalledTimes(1)
+    const [sent, direction, seconds] = stopsMock.mock.calls[0]
+    expect(sent).toHaveLength(120)
+    expect(direction).toBe("down")
+    expect(seconds).toBe(900)
+  })
+
+  it("STATES the smoothing window the server will use, and flags one too long for the series", async () => {
+    // THE COLLISION, SURFACED RATHER THAN HIDDEN. The ATR needs `atrPeriod` bars
+    // before it produces anything, so a 900-second window over a 120-bar series
+    // can only ever answer `atr-unobservable` — no matter how healthy the series
+    // looks. The panel says so before it is discovered the expensive way.
+    render()
+    type("cc-stops-asset", "EURUSD")
+    setSelect("cc-stops-tf", "900")
+    type("cc-stops-bars", "120")
+    click("cc-stops-run")
+    await settleOn("cc-stops-atrperiod")
+    const line = text("cc-stops-atrperiod")
+    expect(line).toContain("900")
+    expect(line).toContain("120 bar(s)")
+    expect(line).toContain("too short")
+  })
+
+  it("does not warn about a window the series can satisfy", async () => {
+    render()
+    type("cc-stops-asset", "EURUSD")
+    setSelect("cc-stops-tf", "60")
+    click("cc-stops-run")
+    await settleOn("cc-stops-atrperiod")
+    expect(text("cc-stops-atrperiod")).not.toContain("too short")
+  })
+
+  it("renders the stops with the regime and multipliers that produced them", async () => {
+    stopsMock.mockResolvedValue(stopsTrending)
+    render()
+    type("cc-stops-asset", "EURUSD")
+    setSelect("cc-stops-direction", "up")
+    click("cc-stops-run")
+    await settleOn("cc-stops-measured")
+    const line = text("cc-stops-measured")
+    expect(line).toContain("take profit 1.09")
+    expect(line).toContain("stop loss 1.04")
+    expect(line).toContain("trending")
+    expect(text("cc-stops-atr")).toContain("atr 0.02")
+    expect(text("cc-stops-multipliers")).toContain("take profit 2.5x ATR")
+    expect(text("cc-stops-multipliers")).toContain("stop loss 1.2x ATR")
+    expect(id("cc-stops-refused")).toBeNull()
+  })
+
+  it("renders a DOWN direction as its own levels, not the up ones", async () => {
+    stopsMock.mockResolvedValue({
+      ...stopsTrending,
+      takeProfit: 0.96,
+      stopLoss: 1.01
+    })
+    render()
+    type("cc-stops-asset", "EURUSD")
+    setSelect("cc-stops-direction", "down")
+    click("cc-stops-run")
+    await settleOn("cc-stops-measured")
+    // For a short, the take profit sits BELOW the stop loss. A panel that ignored
+    // the direction would print the up levels and be wrong by construction.
+    const line = text("cc-stops-measured")
+    expect(line).toContain("take profit 0.96")
+    expect(line).toContain("stop loss 1.01")
+    expect(line).toContain("direction down")
+    expect(stopsMock).toHaveBeenCalledWith(expect.any(Array), "down", 60)
+  })
+
+  it("does NOT present stops on the adx-unobservable branch, though it DID measure an ATR", async () => {
+    // THE HAZARD. `atr: 0.42` here is real and computed; `takeProfit` and
+    // `stopLoss` are null because the service refused to pick multipliers for a
+    // trend it could not observe. Rendering the ATR without saying the stops are
+    // absent would show a real number where the operator needed a stop.
+    stopsMock.mockResolvedValue(stopsAdxUnobservable)
+    render()
+    type("cc-stops-asset", "EURUSD")
+    click("cc-stops-run")
+    await settleOn("cc-stops-refused")
+    expect(text("cc-stops-refused")).toContain("NO STOPS")
+    expect(text("cc-stops-refused")).toContain("adx-unobservable")
+    expect(text("cc-stops-refused")).toContain("unobserved never counts as neutral")
+    // No take profit, no stop loss, no multipliers block.
+    expect(id("cc-stops-measured")).toBeNull()
+    expect(id("cc-stops-multipliers")).toBeNull()
+    // And the reading contains no number where a stop would be.
+    expect(text("cc-stops-refused")).not.toMatch(/take profit/i)
+    expect(text("cc-stops-refused")).not.toMatch(/stop loss/i)
+  })
+
+  it("still shows the ATR it really measured, labelled as measured beside the absent stops", async () => {
+    stopsMock.mockResolvedValue(stopsAdxUnobservable)
+    render()
+    type("cc-stops-asset", "EURUSD")
+    click("cc-stops-run")
+    await settleOn("cc-stops-refused")
+    // THE ATTRIBUTION. `atr 0.42` IS measured on this branch and hiding it would
+    // be its own dishonesty — but it must sit beside a statement that no stop was
+    // produced, so neither can be read as the other.
+    const atr = text("cc-stops-atr")
+    expect(atr).toContain("atr 0.42")
+    expect(atr).toContain("measured")
+    expect(atr).toContain("no stop")
+    expect(text("cc-stops-refused")).toContain("NO STOPS")
+    // And the ADX, which is the thing that was unobservable, reads as absent.
+    expect(text("cc-stops-adx")).toContain("adx absent")
+  })
+
+  it("renders a MEASURED adx of 0 as 0 — the control for the gate above", async () => {
+    stopsMock.mockResolvedValue(stopsMeasuredZeroAdx)
+    render()
+    type("cc-stops-asset", "EURUSD")
+    click("cc-stops-run")
+    await settleOn("cc-stops-adx")
+    expect(text("cc-stops-adx")).toContain("adx 0")
+    expect(text("cc-stops-adx")).not.toContain("absent")
+    // The stops ARE shown, because `reason` is null on this branch.
+    expect(id("cc-stops-measured")).not.toBeNull()
+    expect(id("cc-stops-refused")).toBeNull()
+  })
+
+  it("surfaces the ROUTE-level candle refusal with its own words, and renders no stops", async () => {
+    // `handlers.mjs:5742` — the only one of these three routes with a
+    // route-level refusal, and it arrives as a thrown 400.
+    stopsMock.mockRejectedValue(new Error("at least 20 candles required"))
+    render()
+    type("cc-stops-asset", "EURUSD")
+    click("cc-stops-run")
+    await settleOn("cc-stops-error")
+    expect(text("cc-stops-error")).toContain("at least 20 candles required")
+    expect(id("cc-stops-measured")).toBeNull()
+    expect(id("cc-stops-refused")).toBeNull()
+  })
+
+  it("surfaces the ROUTE-level direction refusal, which is a DIFFERENT refusal", async () => {
+    // `handlers.mjs:5746`. Two refusals from one route, and a panel that
+    // rendered them identically would hide which constraint was hit.
+    stopsMock.mockRejectedValue(new Error("direction must be 'up' or 'down'"))
+    render()
+    type("cc-stops-asset", "EURUSD")
+    click("cc-stops-run")
+    await settleOn("cc-stops-error")
+    expect(text("cc-stops-error")).toContain("direction must be 'up' or 'down'")
+    expect(id("cc-stops-measured")).toBeNull()
+  })
+
+  it("states the series origin and the time, like every other panel", async () => {
+    render()
+    type("cc-stops-asset", "EURUSD")
+    click("cc-stops-run")
+    await settleOn("cc-stops-origin")
+    expect(text("cc-stops-origin")).toContain("EURUSD")
+    expect(text("cc-stops-origin")).toContain("120 of 120 requested bar(s) sent")
+    expect(text("cc-stops-measured-at")).toContain("fetched")
+  })
+
+  it("a refusal CLEARS the previous readout", async () => {
+    render()
+    type("cc-stops-asset", "EURUSD")
+    click("cc-stops-run")
+    await settleOn("cc-stops-measured")
+
+    stopsMock.mockRejectedValue(new Error("adaptive-stops failed: 401"))
+    click("cc-stops-run")
+    await settleOn("cc-stops-error")
+    expect(id("cc-stops-measured")).toBeNull()
+    expect(id("cc-stops-atrperiod")).toBeNull()
+    expect(text("cc-stops-error")).toContain("401")
+  })
+})
+
+export type { ExpiryResponse, AdaptiveStopsResponse }
