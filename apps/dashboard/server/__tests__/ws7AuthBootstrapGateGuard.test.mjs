@@ -1653,7 +1653,38 @@ function connectorsSiteIsGated(lines, index) {
     // cost paragraph, replaced by a longer one, and the import line that gained a
     // specifier) = +38. The code delta is therefore exactly SEVEN lines and every
     // one of them is inside the one route block this branch owns.
-    expect(lines, "lines in handlers.mjs").toBe(7647)
+    // 42 lines added, 9 removed, +36 after subtraction — every one of them
+    // inside the /api/trading/risk-of-ruin block, measured by classifying
+    // `git diff -U0` rather than by eye:
+    //
+    //   * 19 CODE lines added. The `const sent = body && typeof body === "object"
+    //     ? body : {}` reader, the four `field: sent.field` forwards, the `defaults`
+    //     map with its two labelled ledger offers and their `Number.isFinite`
+    //     guards, and the re-wrapped `writeJson(res, 200, riskOfRuin({…}))` call
+    //     (one line became seven, which is why the forward list reads one-per-line
+    //     rather than four to a line).
+    //   * 26 COMMENT lines added, all inside that block: why the route no longer
+    //     substitutes, why `Number(sent.winRate)` must not become
+    //     `Number(body?.winRate)` (`Number(null)` is `0`), why the ledger offer is
+    //     guarded here rather than downstream, and why avgPayout and riskPct have
+    //     no ledger source at all.
+    //   * 0 BLANK lines.
+    //   * 9 CODE lines REMOVED: the four `Number(body?.x)` reads and the four
+    //     `Number.isFinite(x) ? x : y` substitutions, plus the single-line
+    //     `writeJson` they fed. Those four substitutions were the second of the
+    //     two silent layers UI-4 removed; riskOfRuin is now the only place a
+    //     value can be replaced.
+    //
+    // THE IMPORT PAIR IS UNCHANGED — statics 72 and dynamics 118, both still
+    // asserted above and neither moved — which is the load-bearing half of this
+    // entry. The route already reached `./services/trading.mjs` through the
+    // `await import` that was there, so not one of the 36 lines is a new
+    // module binding: this round changed a ROUTE'S LOGIC, not the module graph.
+    // The `requireAuth` gate is untouched (the WS-7 spelling this file's sibling
+    // accepts for user-owned routes), and `routeAuthRuling24Gates.test.mjs`
+    // re-proves the route still answers 401 to an anonymous caller and still
+    // admits a real session after the rewrite.
+    expect(lines, "lines in handlers.mjs").toBe(7683)
   })
 
   it("the seed list is not empty, so the test above cannot pass vacuously", () => {

@@ -5829,18 +5829,54 @@ const creds = await getVenueCredentials()
 
   if (path === "/api/trading/risk-of-ruin" && req.method === "POST") {
     if (!(await requireAuth(req, res))) return true
-    const winRate = Number(body?.winRate)
-    const avgPayout = Number(body?.avgPayout)
-    const riskPct = Number(body?.riskPct)
-    const balance = Number(body?.balance)
     try {
       const { signalAccuracy } = await import("./services/trading.mjs")
       const acc = await signalAccuracy()
-      const wr = Number.isFinite(winRate) ? winRate : (acc.winRate ?? 50)
-      const ap = Number.isFinite(avgPayout) ? avgPayout : 0.8
-      const rp = Number.isFinite(riskPct) ? riskPct : 2
-      const bal = Number.isFinite(balance) ? balance : (acc.balance ?? 1000)
-      writeJson(res, 200, riskOfRuin({ winRate: wr, avgPayout: ap, riskPct: rp, balance: bal }))
+      // UI-4. THE ROUTE NO LONGER SUBSTITUTES ANYTHING, and that is the whole
+      // design decision rather than a tidy-up. It used to read four numbers off
+      // the body and replace every one the caller omitted (`?? 50`, `?? 1000`),
+      // and then riskOfRuin replaced four MORE with `||` at a different layer —
+      // two silent authors of the same numbers, neither recording it, and `||`
+      // unable to tell a caller's `0` from an absent field.
+      //
+      // What the route does instead is the only thing that is genuinely its to
+      // do: offer this instance's OWN accuracy ledger as a labelled default. It
+      // hands riskOfRuin the caller's values UNTOUCHED — `sent.winRate` and not
+      // `Number(sent.winRate)`, because `Number(null)` is `0` and an explicit
+      // JSON null is not a measured 0% win rate — plus a `defaults` map whose
+      // every entry names its `source`. riskOfRuin is then the single
+      // substitution point, and the response it builds is complete by
+      // construction: a number in `inputs` that the caller did not send is named
+      // in `provenance` with its substitute and that substitute's origin.
+      //
+      // WHY THE LEDGER OFFER IS GUARDED HERE AND NOT DOWNSTREAM: an absent
+      // ledger entry and a null one mean different things to the caller — "this
+      // instance has no recorded win rate yet" against "the ledger says 0%" —
+      // and `acc.winRate ?? 50` conflated them. `Number.isFinite` keeps a real
+      // 0 (a genuine no-wins-yet ledger) and refuses a null, which then falls
+      // through to the server constant inside riskOfRuin, labelled as such.
+      const sent = body && typeof body === "object" ? body : {}
+      writeJson(
+        res,
+        200,
+        riskOfRuin({
+          winRate: sent.winRate,
+          avgPayout: sent.avgPayout,
+          riskPct: sent.riskPct,
+          balance: sent.balance,
+          defaults: {
+            // No ledger source exists for avgPayout or riskPct at all, so those
+            // two are omitted rather than offered as null — an absent key is the
+            // honest "there is nothing here to offer".
+            winRate: Number.isFinite(acc?.winRate)
+              ? { value: acc.winRate, source: "signal-accuracy-ledger" }
+              : undefined,
+            balance: Number.isFinite(acc?.balance)
+              ? { value: acc.balance, source: "signal-accuracy-ledger" }
+              : undefined
+          }
+        })
+      )
     } catch (err) {
       writeJson(res, 500, { ok: false, error: err.message })
     }

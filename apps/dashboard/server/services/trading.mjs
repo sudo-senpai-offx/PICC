@@ -1152,12 +1152,253 @@ export async function tradingAssist(question = "", context = {}) {
  *
  * For binary options the payout is fixed (typically 0.70-0.90x), so we use
  * the actual avgPayout from the paper ledger when available.
+ *
+ * ── UI-4: THE FOUR INPUTS ARE NOT ALL THE CALLER'S ───────────────────────────
+ *
+ * A caller that posts NOTHING used to receive a full, confident, precisely
+ * formatted readout — riskOfRuin, edge, unitsToRuin, kellyFraction, a rounded
+ * `inputs` block — computed entirely from values this function invented, and not
+ * one field of the response said so. The client could not be honest about it,
+ * because it had nothing to be honest WITH.
+ *
+ * TWO LAYERS, BOTH SILENT. The route substituted four numbers for whatever the
+ * body omitted, and then this function substituted four MORE with `||`, at a
+ * different layer, for different reasons, recording neither. `||` is also why an
+ * explicit `0` was destroyed: `0 || 50` is 50, so a caller who genuinely posted
+ * `riskPct: 0` was silently overridden, and the answer it got back was to a
+ * question it had not asked.
+ *
+ * ONE SUBSTITUTION POINT, WHICH IS THE DESIGN DECISION. The route no longer
+ * substitutes. It passes the caller's values through UNTOUCHED and passes the
+ * ledger-derived fallbacks in a `defaults` map whose every entry NAMES its
+ * `source`; this function is the only place a value can be replaced. Two
+ * reasons, and the second is the one that decided it:
+ *
+ *  - It makes the record COMPLETE BY CONSTRUCTION. "Every number in `inputs`
+ *    that is not the caller's is named in `provenance`" is checkable in one
+ *    function. With two substitution points it was a claim about two files.
+ *  - It gives ONE author the whole question. "Where did this number come from,
+ *    and was it changed on the way in?" is answerable by reading one function.
+ *    Layering it would have left the reader holding two records that can
+ *    disagree, and the disagreement is invisible — which is the defect.
+ *
+ * The cost is that this function's signature grows a fifth key. It is additive:
+ * `riskOfRuin()` and `riskOfRuin({winRate, avgPayout, riskPct, balance})` behave
+ * as before for every in-range value, which `auditRegressions.test.mjs:48-59`
+ * pins, and `provenance` is a NEW key — no existing field is removed or renamed.
  */
-export function riskOfRuin({ winRate, avgPayout, riskPct, balance } = {}) {
-  const wr = clamp(Number(winRate) || 50, 1, 99) / 100
-  const ap = Math.max(0.01, Number(avgPayout) || 0.8)
-  const risk = Math.max(0.001, Math.min(1, (Number(riskPct) || 2) / 100))
-  const bal = Math.max(1, Number(balance) || 1000)
+
+/** The three states a value can be in once this function is done with it. */
+export const ROE_SUPPLIED = "supplied"
+export const ROE_SUBSTITUTED = "substituted"
+export const ROE_CLAMPED = "clamped"
+
+/** The four inputs, in the order the UI renders them. */
+const ROE_FIELDS = ["winRate", "avgPayout", "riskPct", "balance"]
+
+/**
+ * Read a caller-supplied value as a number, or say in words why it is not one.
+ *
+ * `Number(x)` IS NOT THIS FUNCTION, and the difference is the whole point of the
+ * third state. `Number(null)` is `0` and `Number("")` is `0`, so the old route
+ * read an explicit JSON `null` and a blank form field as a MEASURED ZERO and
+ * reported it as supplied. A null is the absence of a number, not the number
+ * zero, and a caller who sent null has said nothing about their win rate.
+ *
+ * Numeric strings ARE accepted, because the old route ran everything through
+ * `Number()` and `{"riskPct": "5"}` has always worked. Narrowing that would
+ * break a caller for a reason that has nothing to do with this defect.
+ */
+function readRoeNumber(raw) {
+  if (raw === undefined) return { ok: false, reason: "caller sent no value" }
+  if (raw === null) return { ok: false, reason: "caller sent null, which is not a number" }
+  if (typeof raw === "number") {
+    return Number.isFinite(raw)
+      ? { ok: true, value: raw }
+      : { ok: false, reason: "caller sent a non-finite number" }
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (trimmed === "") return { ok: false, reason: "caller sent an empty string, which is not a number" }
+    const n = Number(trimmed)
+    return Number.isFinite(n)
+      ? { ok: true, value: n }
+      : { ok: false, reason: `caller sent "${trimmed}", which is not a number` }
+  }
+  return { ok: false, reason: `caller sent a ${Array.isArray(raw) ? "list" : typeof raw}, which is not a number` }
+}
+
+/**
+ * Per input: the value to use, and the CLAMP record when a bound moved it.
+ *
+ * EVERY BOUND HERE IS ONE THIS FUNCTION HAS ALWAYS ENFORCED, with exactly one
+ * change — the `avgPayout` floor — argued per field in `riskOfRuin` below. What
+ * changed is not the RANGE, it is that a caller-supplied value in the range is
+ * no longer discarded by `||` first, so reaching a bound now means what it says
+ * on the tin: the caller sent something out of range.
+ */
+const ROE_SPEC = {
+  // ── winRate (percent). Clamped to 1-99, as always.
+  winRate: {
+    serverDefault: { value: 50, source: "server-constant" },
+    prepare(n) {
+      const used = clamp(n, 1, 99)
+      return {
+        used,
+        clamp:
+          used === n
+            ? null
+            : {
+                from: n,
+                to: used,
+                bound: "win rate outside 1%-99%",
+                note:
+                  "a win rate at or below 0% or at or above 100% is not a market fact, and the " +
+                  "edge stops being interpretable there, so the readout is computed at the nearest " +
+                  "value this calculator supports"
+              }
+      }
+    }
+  },
+
+  // ── avgPayout (x). THE ONE BOUND THAT MOVED: the floor was 0.01, now 0.
+  //
+  // The 0.01 floor was there to stop a nonsense payout dividing something by
+  // zero, and `kellyFraction`'s `ap > 0 ? … : 0` guard already does that job
+  // explicitly. What 0.01 ALSO did was make a zero payout inexpressible: a
+  // trade that returns nothing per win is a real thing that happens, and a
+  // caller asking "what does this look like if the payout is zero?" was
+  // answered with 0.01 — the same fabrication as the 0.8 it used to answer
+  // with, one layer down. Nothing below is NaN at ap = 0: `log(1 + 0)` is 0,
+  // `edge` is `wr - 1`, and the Kelly guard is already there.
+  //
+  // ONLY NEGATIVES ARE STILL CLAMPED, and only because a negative payout is
+  // PAYING TO TAKE THE TRADE rather than a market fact.
+  avgPayout: {
+    serverDefault: { value: 0.8, source: "server-constant" },
+    prepare(n) {
+      const used = Math.max(0, n)
+      return {
+        used,
+        clamp:
+          used === n
+            ? null
+            : {
+                from: n,
+                to: used,
+                bound: "negative payout",
+                note: "a negative payout means paying to take the trade, not being paid for it"
+              }
+      }
+    }
+  },
+
+  // ── riskPct (percent). Clamped to a 0.1%-100% fraction, as always.
+  //
+  // THIS IS THE CASE WHERE A ZERO GENUINELY CANNOT BE HONOURED, and the brief's
+  // own example. `units = 1 / risk`, so a risk fraction of zero has NO FINITE
+  // NUMBER OF UNITS TO RUIN — 1/0 is unbounded. The old `|| 2` answered a
+  // different question entirely, and silently. So the response computes at the
+  // documented 0.1% floor AND says so in words, because a caller who typed 0
+  // needs to learn that the number on the screen is a floor and not their
+  // number. This is also why the `units` line below can no longer reach its
+  // `: 1000` fallback: `risk >= 0.001` and `balance >= 1` are both enforced
+  // above, so `balance * risk > 0` is now always true.
+  riskPct: {
+    serverDefault: { value: 2, source: "server-constant" },
+    prepare(n) {
+      const fraction = n / 100
+      const floored = clamp(fraction, 0.001, 1)
+      // REPORTED IN PERCENT, like the value the caller sent. Every `used` in
+      // this table is in its caller's own unit, so the UI can print "assumed
+      // 2%" without knowing which fields happen to be fractions internally.
+      const used = floored * 100
+      return {
+        used,
+        clamp:
+          used === n
+            ? null
+            : {
+                from: n,
+                to: used,
+                bound: "risk per trade outside 0.1%-100%",
+                note:
+                  n <= 0
+                    ? "a risk fraction of zero or less has no finite number of units to ruin — " +
+                      "1/0 is unbounded — so this is the 0.1% FLOOR, not the number you sent"
+                    : "a risk fraction above 100% risks more than the account holds"
+              }
+      }
+    }
+  },
+
+  // ── balance. Floored at 1, as always.
+  balance: {
+    serverDefault: { value: 1000, source: "server-constant" },
+    prepare(n) {
+      const used = Math.max(1, n)
+      return {
+        used,
+        clamp:
+          used === n
+            ? null
+            : {
+                from: n,
+                to: used,
+                bound: "balance below 1",
+                note: "a balance under 1 has no fractional unit to size a wager against"
+              }
+      }
+    }
+  }
+}
+
+export function riskOfRuin(input = {}) {
+  const args = input && typeof input === "object" ? input : {}
+  const defaults = args.defaults && typeof args.defaults === "object" ? args.defaults : {}
+
+  const provenance = {}
+  const used = {}
+  const assumedInputs = []
+  const clampedInputs = []
+
+  for (const field of ROE_FIELDS) {
+    const spec = ROE_SPEC[field]
+    const read = readRoeNumber(args[field])
+
+    // A DEFAULT OFFER IS ONLY HONOURED WHEN IT IS A USABLE NUMBER AND SAYS WHERE
+    // IT CAME FROM. `defaults` exists so the route can pass this instance's own
+    // accuracy ledger; a null in it falls back to the server constant, so the
+    // `Number(null) === 0` defect cannot reappear one layer down.
+    const offer = read.ok ? null : defaults[field]
+    const chosen =
+      offer && typeof offer === "object" && Number.isFinite(offer.value)
+        ? { value: offer.value, source: offer.source }
+        : { value: spec.serverDefault.value, source: spec.serverDefault.source }
+
+    const prepared = spec.prepare(read.ok ? read.value : chosen.value)
+
+    if (!read.ok) assumedInputs.push(field)
+    if (prepared.clamp) clampedInputs.push(field)
+
+    provenance[field] = {
+      // The state names what CHANGED THE NUMBER. An input that was both assumed
+      // and clamped is reported as clamped, because that is the transformation a
+      // reader would be misled by — and `substitute` below still carries the fact
+      // that the caller did not choose it, so neither lie survives.
+      state: prepared.clamp ? ROE_CLAMPED : read.ok ? ROE_SUPPLIED : ROE_SUBSTITUTED,
+      supplied: read.ok,
+      used: prepared.used,
+      substitute: read.ok ? null : { value: chosen.value, source: chosen.source, reason: read.reason },
+      clamp: prepared.clamp
+    }
+    used[field] = prepared.used
+  }
+
+  const wr = used.winRate / 100
+  const ap = used.avgPayout
+  const risk = used.riskPct / 100
+  const bal = used.balance
 
   const units = Math.floor(bal * risk > 0 ? 1 / risk : 1000)
   // The old /(ap+1) divisor HALVED the edge: at p=0.55 it reported ~13.9% RoR
@@ -1179,6 +1420,21 @@ export function riskOfRuin({ winRate, avgPayout, riskPct, balance } = {}) {
     expectedGrowthPct: Math.round(expectedGrowth * 10000) / 100 + "%",
     kellyFraction: Math.round(kellyFraction * 10000) / 100 + "%",
     halfKellyPct: Math.round(halfKelly * 10000) / 100 + "%",
-    inputs: { winRate: Math.round(wr * 100), avgPayout: ap, riskPct: Math.round(risk * 10000) / 100, balance: bal }
+    inputs: { winRate: Math.round(wr * 100), avgPayout: ap, riskPct: Math.round(risk * 10000) / 100, balance: bal },
+    /**
+     * WHICH OF THE FOUR INPUTS THE CALLER ACTUALLY SUPPLIED (UI-4).
+     *
+     * Additive: everything above is exactly as it was. `inputs` stays the
+     * ROUNDED echo it has always been — `provenance.<field>.used` carries the
+     * unrounded value the arithmetic actually ran on, so the two can differ by
+     * rounding and that is not a contradiction.
+     */
+    provenance: {
+      ...provenance,
+      /** Names, never counts: which inputs the caller did not supply. */
+      assumedInputs,
+      /** Names: which inputs had a bound applied on the way in. */
+      clampedInputs
+    }
   }
 }
