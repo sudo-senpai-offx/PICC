@@ -9,6 +9,7 @@ import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { PreMortemSection } from "@/pages/ministry/PreMortemSection"
 import { MarketAnalysisSection } from "@/pages/ministry/MarketAnalysisSection"
 import { CandleCalculatorSection } from "@/pages/ministry/CandleCalculatorSection"
+import { RiskOfRuinSection } from "@/pages/ministry/RiskOfRuinSection"
 import { getTradingSignals } from "@/lib/trading"
 import type { TradingSignal } from "@/lib/trading"
 import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
@@ -95,6 +96,23 @@ export function CommandCentreRoom() {
           `PaperLiveRoom.test.tsx` enumerates every interactive element against an
           allowlist. It places no order and holds no permit. */}
       <CandleCalculatorSection />
+
+      {/* UI-4. Last, and for a reason none of the sections above share: this is the
+          only one whose numbers are not all the operator's. The route substitutes
+          every input the caller omits — from their own recorded accuracy ledger
+          where one exists — and until this task it did so without saying a word, so
+          a readout could present four confident figures computed from four invented
+          values. The server now discloses the substitution per input and this panel
+          renders that disclosure beside each number rather than as a footnote, which
+          is the whole point: an assumption the reader can scroll past is not a
+          disclosure.
+
+          Same interaction caveat as UI-2 and UI-3 and for the same reason: four more
+          inputs and one more button in a room the header above already records as
+          order-executing, and still forbidden from the paper room, whose
+          `PaperLiveRoom.test.tsx` enumerates every interactive element against an
+          allowlist. It places no order and holds no permit. */}
+      <RiskOfRuinSection />
     </div>
   )
 }
