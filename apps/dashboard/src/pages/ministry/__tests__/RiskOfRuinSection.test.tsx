@@ -28,9 +28,24 @@
 // settle on the repo's SHARED `waitForText` (`src/test-utils/waitForText.ts`),
 // already imported by six sibling suites. No local copy, no `react-dom/test-utils`.
 //
-// EVERY MARKER BELOW IS FALSE AT MOUNT and was checked against the section's
-// static copy: `waitForText` searches the whole container, so a marker borrowed
-// from always-rendered text would settle the wait before anything committed.
+// EVERY MARKER BELOW IS NOW USED BY AT LEAST ONE `settleOn` CALL, and every one
+// is FALSE AT MOUNT. Both halves are load-bearing and neither was true of this
+// file before: a marker nothing waits on is a claim nobody checks, and a marker
+// that is TRUE at mount settles the wait before anything committed, so every
+// assertion written after it races the commit it was waiting for.
+//
+// The claim used to read "EVERY MARKER BELOW IS FALSE AT MOUNT" over a table
+// where three of seven markers were never passed to `settleOn` at all, so it was
+// unfalsifiable for them. Two of those three were false at mount and are now
+// asserted (`measuredAt`, `measuredZero`). The third, `winRateRow`, was NOT — it
+// has been DELETED rather than used, because "win rate" is the winRate field's
+// own always-rendered `<label>`, so it is true at mount and would have settled
+// every wait instantly.
+//
+// `waitForText` reads `container.textContent` only, so placeholder ATTRIBUTES
+// are invisible to it. The mount-time text is exactly: the heading, the note,
+// "Inputs", "run", the four field labels, and "not yet run." — which is why a
+// digit is a usable marker and a field label is not.
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { flushSync } from "react-dom"
@@ -38,7 +53,12 @@ import { createRoot } from "react-dom/client"
 import { waitForText } from "@/test-utils/waitForText"
 import { RiskOfRuinSection } from "../RiskOfRuinSection"
 import { fetchRiskOfRuin } from "@/lib/riskOfRuin"
-import type { RiskOfRuinInput, RiskOfRuinProvenanceEntry, RiskOfRuinResponse } from "@/lib/riskOfRuin"
+import type {
+  RiskOfRuinInput,
+  RiskOfRuinMeasured,
+  RiskOfRuinProvenanceEntry,
+  RiskOfRuinResponse
+} from "@/lib/riskOfRuin"
 
 // The section reuses `MeasuredAt` from the candle-calculator section (see its
 // header for why) rather than writing a fourth copy, and that pulls two modules
@@ -101,12 +121,17 @@ function clamped(
   }
 }
 
-/** A well-formed served response, exactly as `riskOfRuin` builds one. */
+/** A well-formed served response, exactly as `riskOfRuin` builds one.
+ *
+ *  Typed `RiskOfRuinMeasured`, NOT the `RiskOfRuinResponse` union, because every
+ *  payload this helper builds is `ok: true`. The narrower type is what lets a test
+ *  read `.inputs` without a cast, and a fixture that declared the union would have
+ *  to assert its way past a discriminant it already knows. */
 function served(
   provenance: Record<RiskOfRuinInput, RiskOfRuinProvenanceEntry>,
   assumedInputs: RiskOfRuinInput[],
   clampedInputs: RiskOfRuinInput[] = []
-): RiskOfRuinResponse {
+): RiskOfRuinMeasured {
   return {
     ok: true,
     riskOfRuin: 0.0181,
@@ -215,13 +240,15 @@ afterEach(() => {
 
 const settle = (marker: string) => waitForText({ host: container }, marker)
 
+// EVERY ENTRY IS FALSE AT MOUNT AND IS WAITED ON BY AT LEAST ONE TEST. See the
+// header for why `winRateRow` was removed rather than used: "win rate" is a
+// mount-time label, so it is true before anything is fetched.
 const MARKERS = {
   result: "risk of ruin",
   summary: "input(s) were not supplied",
   refused: "refused",
   error: "risk of ruin unavailable",
   measuredAt: "fetched",
-  winRateRow: "win rate",
   measuredZero: "0"
 } as const
 
@@ -363,7 +390,11 @@ describe("RiskOfRuinSection renders each input's provenance beside its own numbe
     roeMock.mockResolvedValue(MEASURED_ZERO_PAYOUT)
     render()
     fill({ avgPayout: "0" })
-    await settleOn("result")
+    // SETTLED ON THE ZERO ITSELF, not on the generic result marker. Nothing at
+    // mount contains a digit — the placeholder `blank = 0.8` is an ATTRIBUTE and
+    // `waitForText` reads `textContent` only — so "0" cannot arrive before the
+    // readout commits, which is exactly what this test is about.
+    await settleOn("measuredZero")
 
     const row = text("roe-input-avgPayout")
     expect(row).toContain("supplied")
@@ -395,7 +426,66 @@ describe("RiskOfRuinSection renders each input's provenance beside its own numbe
 })
 
 // ---------------------------------------------------------------------
-// 4. Refusals
+// 5. The renders the provenance summary does NOT stand in for
+// ---------------------------------------------------------------------
+
+describe("RiskOfRuinSection renders the two things its summary cannot replace", () => {
+  // BOTH OF THESE WERE UNBOUND. Deleting the whole `roe-echo` paragraph AND the
+  // `<MeasuredAt>` render from the section left every test in this file green,
+  // which means the suite had no opinion about either. They are asserted here
+  // because they carry information nothing else on the panel does: the stamp
+  // says WHEN the answer was computed, and the echo is the rounded block the
+  // server has always returned, which the per-input rows deliberately do NOT
+  // replace — they carry the exact `used` values instead.
+
+  it("a measured readout carries the staleness stamp, bound to that answer", async () => {
+    roeMock.mockResolvedValue(ALL_SUPPLIED)
+    render()
+    fill({ winRate: "55", avgPayout: "1", riskPct: "5", balance: "1000" })
+    await settleOn("measuredAt")
+
+    expect(id("roe-measured-at"), "a readout with no age is a number with no date").not.toBeNull()
+    expect(text("roe-measured-at")).toContain("fetched")
+  })
+
+  it("the server's rounded echo stays visible beside the exact per-input values", async () => {
+    // THE TWO NUMBERS DIFFER BY ROUNDING and the panel has to show both, or a
+    // reader comparing them has no statement of which is which. A ledger 47.5%
+    // reads 48 in `inputs` and 47.5 in the row; neither alone is the whole fact.
+    roeMock.mockResolvedValue(ALL_ASSUMED)
+    render()
+    fill({})
+    await settleOn("summary")
+
+    const echo = text("roe-echo")
+    expect(echo, "the echo is the server's own rounded block, not a re-derivation").toContain(
+      "win rate 55"
+    )
+    expect(echo).toContain("avg payout 1")
+    expect(echo).toContain("risk per trade 5")
+    expect(echo).toContain("balance 1000")
+  })
+
+  it("the summary denominator comes from the server's own block, not a literal", async () => {
+    // The count was hardcoded as `of 4`, which is the only figure in this panel
+    // that was not derived from the payload — so it was the one figure that
+    // could quietly become false the day a fifth input existed. A panel whose
+    // stated rule is that every number here comes from the server cannot keep
+    // one of them in a string literal.
+    roeMock.mockResolvedValue(ALL_ASSUMED)
+    render()
+    fill({})
+    await settleOn("summary")
+
+    const summary = text("roe-summary")
+    const inputs = ALL_ASSUMED.inputs
+    expect(Object.keys(inputs), "the fixture's own width is four").toHaveLength(4)
+    expect(summary).toContain(`4 of ${Object.keys(inputs).length} input(s) were not supplied`)
+  })
+})
+
+// ---------------------------------------------------------------------
+// 6. Refusals
 // ---------------------------------------------------------------------
 
 describe("RiskOfRuinSection renders a refusal as a refusal", () => {

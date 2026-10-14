@@ -316,9 +316,16 @@ function RiskOfRuinResult({ reading }: { reading: RoMeasured }) {
           values: a substituted `avgPayout` of 0.8 is indistinguishable from a
           typed 0.8, so counting values here would report a typed number as
           assumed — the false-accusation direction of this same defect. The names
-          are shown, not just the totals, because "2 of 4" does not say which two. */}
+          are shown, not just the totals, because "2 of 4" does not say which two.
+
+          THE DENOMINATOR IS COUNTED, NOT TYPED. `inputs` is the server's own
+          block listing exactly the inputs it computed over, so `4` is a fact the
+          server reports rather than a literal this panel would have to keep in
+          step by hand. It was the only figure here not derived from the
+          payload, which made it the one figure that could quietly become false
+          the day a fifth input was added. */}
       <p className="muted small" data-testid="roe-summary">
-        {data.provenance.assumedInputs.length} of 4 input(s) were not supplied
+        {data.provenance.assumedInputs.length} of {Object.keys(data.inputs).length} input(s) were not supplied
         {data.provenance.assumedInputs.length > 0
           ? ` — assumed: ${data.provenance.assumedInputs.join(", ")}`
           : " — every input is the number you sent"}
@@ -354,6 +361,12 @@ function RiskOfRuinResult({ reading }: { reading: RoMeasured }) {
           rounds. The two differ by rounding — a ledger 47.5% reads 48 here — and
           hiding either one would leave a reader comparing two numbers with no
           statement of which is which. */}
+      {/* THE ROUNDED ECHO, KEPT VISIBLE beside the exact per-input values it
+          rounds. The two differ by rounding — a ledger 47.5% reads 48 here — and
+          hiding either one would leave a reader comparing two numbers with no
+          statement of which is which. Asserted by
+          `RiskOfRuinSection.test.tsx`: deleting this paragraph was invisible to
+          the suite until that test existed. */}
       <p className="muted small" data-testid="roe-echo">
         the server&apos;s own rounded echo of the four inputs:{" "}
         {FIELDS.map((f) => `${f.label} ${formatNum(data.inputs[f.key])}`).join(" · ")}
