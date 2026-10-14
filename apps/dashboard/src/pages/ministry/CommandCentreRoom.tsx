@@ -8,6 +8,7 @@ import { PatternPanel } from "@/components/PatternPanel"
 import { AdvancedIndicatorsPanel } from "@/components/AdvancedIndicatorsPanel"
 import { PreMortemSection } from "@/pages/ministry/PreMortemSection"
 import { MarketAnalysisSection } from "@/pages/ministry/MarketAnalysisSection"
+import { CandleCalculatorSection } from "@/pages/ministry/CandleCalculatorSection"
 import { getTradingSignals } from "@/lib/trading"
 import type { TradingSignal } from "@/lib/trading"
 import { ReadOnlyRoom } from "@/terminal/routes/ReadOnlyRoom"
@@ -78,6 +79,22 @@ export function CommandCentreRoom() {
           every interactive element against an allowlist and would correctly reject
           four inputs and four buttons. */}
       <MarketAnalysisSection />
+
+      {/* UI-3. Last, for the same opt-in reason, and it is the ONLY section in
+          this room whose inputs are the dashboard's own candle series: these three
+          routes fetch nothing server-side (`handlers.mjs:5703`, `:5711`, `:5740`
+          all read `body.candles`), so each panel reads `fetchCandles` on demand.
+          That reuse is deliberate — a second candle source would mean two
+          provenance stories for one market — and it is why the panels print the
+          asset, the bars actually sent and the serving source beside every
+          number: a computed level is meaningless without the series under it.
+
+          Same interaction caveat as UI-2 and for the same reason: this adds nine
+          inputs and three buttons to a room the header already records as
+          order-executing, and it is still forbidden from the paper room, whose
+          `PaperLiveRoom.test.tsx` enumerates every interactive element against an
+          allowlist. It places no order and holds no permit. */}
+      <CandleCalculatorSection />
     </div>
   )
 }
