@@ -12,7 +12,7 @@
  * new block get the regimeEngine consensus on the same candles.
  */
 import { atr as computeAtr, adx as computeAdx, bollinger as computeBollingerBands } from "./indicators.mjs"
-import { detectRegimeEnhanced, MIN_BARS } from "./regimeEngine.mjs"
+import { detectRegimeEnhanced, MIN_BARS, CONFIDENCE_ABSTAINED } from "./regimeEngine.mjs"
 
 // Timeframe label -> seconds (the bias plane for the single-plane regime read).
 const TF_LABELS = new Map([
@@ -34,20 +34,73 @@ export function tfSecondsOf(timeframe) {
   return TF_LABELS.get(key) ?? null
 }
 
+/**
+ * ── THE SILENT LABEL→PLANE SUBSTITUTION ──
+ *
+ * The delegation used to be one expression:
+ *
+ *     const tf = tfSecondsOf(timeframe)
+ *     const engine = detectRegimeEnhanced({ planes: { [tf ?? 60]: candles }, biasTf: tf })
+ *
+ * and the `?? 60` was two lies in one place. The engine's plane map is keyed by
+ * SECONDS, so when `tfSecondsOf` returned null for an unrecognised label the
+ * candles were filed on a 60-second plane that no caller had ever named — and
+ * `latency.planes` then reported `[60]`, which reads as "I analysed a 1-minute
+ * series" to anyone comparing the response against the request. Meanwhile
+ * `biasTf` stayed null, so the engine's `Number(tf) === Number(biasTf)` became
+ * `60 === Number(null)` -> `60 === 0` -> false, and the bias weight was dropped
+ * without a word. The response was a read the engine would not have made.
+ *
+ * The UI now filters its labels to eight resolvable ones and cannot trip this.
+ * That is a CLIENT gate guarding a SERVER defect, which is why the defect was
+ * still worth fixing: every other caller still can, and a `??` that invents a
+ * unit is an invitation rather than a decision.
+ *
+ * So the adapter now REFUSES, which is the only honest option available: the
+ * engine's plane map is keyed by seconds, and with no seconds there is no honest
+ * key to use. A refusal costs the caller the engine read, and buys it a response
+ * that cannot be mistaken for one taken at a bar length nobody asked for. The
+ * legacy ADX/ATR surface above is untouched, because it never depended on the
+ * label — so a refused bias plane does not cost the caller the read it CAN make.
+ */
+function refuseEngineRead(timeframe) {
+  const label = timeframe === undefined ? "(absent)" : JSON.stringify(timeframe)
+  return {
+    regime: "unknown",
+    confidence: 0,
+    confidenceKind: CONFIDENCE_ABSTAINED,
+    factors: [`timeframe ${label} does not resolve to a bar length, so no bias plane could be selected`],
+    perPlane: {},
+    volatile: false,
+    latency: { planes: [], minBars: 0 },
+    source: "regimeEngine",
+    reason: `unresolvable timeframe ${label}; the candles were NOT filed on a substitute plane, and no bias weight was applied`
+  }
+}
+
 export function detectRegime(candles, timeframe = "1H") {
+  const tf = tfSecondsOf(timeframe)
+  const resolution = {
+    label: timeframe ?? null,
+    seconds: tf,
+    biasApplied: tf != null,
+    reason:
+      tf != null
+        ? null
+        : `timeframe ${timeframe === undefined ? "(absent)" : JSON.stringify(timeframe)} is not one of the known labels`
+  }
   if (!candles || candles.length < 30) {
     return {
       regime: "unknown",
       confidence: 0,
       factors: [],
+      timeframeResolution: resolution,
       regimeEngine: {
-        regime: "unknown",
-        confidence: 0,
+        ...refuseEngineRead(timeframe),
+        // The refusal above is about the LABEL; this one is about the BARS. The
+        // two reasons are different and must not be conflated, so a thin series
+        // on a resolvable label reports the bar reason and keeps the label read.
         factors: [`insufficient bars (< MIN_BARS ${MIN_BARS})`],
-        perPlane: {},
-        volatile: false,
-        latency: { planes: [], minBars: 0 },
-        source: "regimeEngine",
         reason: "insufficient bars"
       }
     }
@@ -75,15 +128,17 @@ export function detectRegime(candles, timeframe = "1H") {
   if (currentAdx < 20 && atrRatio < 0.8) { regime = "ranging"; confidence = 0.7; factors.push(`ADX ${currentAdx.toFixed(1)} < 20, ATR low`) }
   const suggestedStrategy = { trending: "momentum", ranging: "mean-reversion", volatile: "volatility-breakout", breakout: "breakout-follow" }[regime] || "adaptive"
   // B-REG-4: the regimeEngine single-plane read, additive. Same candles, same
-  // timeframe; `biasTf` = the resolved seconds (null when the label is unknown).
-  const tf = tfSecondsOf(timeframe)
-  const engine = detectRegimeEnhanced({ planes: { [tf ?? 60]: candles }, biasTf: tf })
+  // timeframe; `biasTf` = the resolved seconds, and there is NO substitute plane
+  // when the label does not resolve — see `refuseEngineRead`.
+  const engine =
+    tf == null ? refuseEngineRead(timeframe) : detectRegimeEnhanced({ planes: { [tf]: candles }, biasTf: tf })
   return {
     regime,
     confidence: Math.round(confidence * 100),
     factors,
     suggestedStrategy,
     metrics: { adx: Math.round(currentAdx * 10) / 10, atrRatio: Math.round(atrRatio * 100) / 100, timeframe },
+    timeframeResolution: resolution,
     regimeEngine: { ...engine, source: "regimeEngine" }
   }
 }

@@ -242,7 +242,14 @@ export function detectRegimeEnhanced({ planes = {}, biasTf = null } = {}) {
 
   for (const tf of tfs) {
     const candles = planes[tf]
-    const w = Number(tf) === Number(biasTf) ? BIAS_WEIGHT : 1
+    // A bias must be STATED to be applied. The old line was
+    // `Number(tf) === Number(biasTf)`, which compared an ABSENT biasTf as the
+    // NUMBER 0 against every plane key — safe only because no plane is keyed 0,
+    // i.e. the safety was a coincidence of the coercion table and not a stated
+    // invariant. `regimeDetection.mjs`'s `?? 60` sat right beside it relying on
+    // exactly that. Stating the precondition is what makes the invariant
+    // checkable rather than accidental.
+    const w = biasTf != null && Number(tf) === Number(biasTf) ? BIAS_WEIGHT : 1
     const bars = Array.isArray(candles) ? candles.length : 0
     minBars = Math.min(minBars, bars)
     if (!Array.isArray(candles) || bars < MIN_BARS) {

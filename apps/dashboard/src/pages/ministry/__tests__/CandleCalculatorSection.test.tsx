@@ -144,7 +144,11 @@ function servedRows(count = 120): CandleDatum[] {
   }))
 }
 
-/** `detectRegime` on a trending series (`regimeDetection.mjs:88`). */
+/**
+ * `detectRegime` on a trending series, with the label RESOLVED: the adapter now
+ * records which bar length it acted on, so a resolved label is visible rather
+ * than inferred from `latency.planes`.
+ */
 const regimeTrending: RegimeResponse = {
   ok: true,
   regime: "trending",
@@ -152,10 +156,12 @@ const regimeTrending: RegimeResponse = {
   factors: ["ADX 31.4 > 25"],
   suggestedStrategy: "momentum",
   metrics: { adx: 31.4, atrRatio: 1.21, timeframe: "1m" },
+  timeframeResolution: { label: "1m", seconds: 60, biasApplied: true, reason: null },
   regimeEngine: {
     regime: "TRENDING",
     volatile: false,
     confidence: 75,
+    confidenceKind: "measured",
     factors: ["plane 60 adx: trending (31.4)"],
     perPlane: { "60": { bars: 120, abstain: false, votes: {}, observed: 4 } },
     latency: { planes: [60], minBars: 120 },
@@ -165,17 +171,21 @@ const regimeTrending: RegimeResponse = {
 }
 
 /**
- * `regimeDetection.mjs:39` — under 30 bars. `confidence: 0` IS A LITERAL here and
- * `suggestedStrategy`/`metrics` are ABSENT keys, which is the whole hazard.
+ * Under 30 bars. `confidence: 0` is an abstention, not a score —
+ * `confidenceKind` says so — and `suggestedStrategy`/`metrics` are ABSENT keys,
+ * which is the whole hazard. The LABEL resolved fine here; it is the bars that
+ * were short, and the two reasons must not be conflated.
  */
 const regimeUnknown: RegimeResponse = {
   ok: true,
   regime: "unknown",
   confidence: 0,
   factors: [],
+  timeframeResolution: { label: "1m", seconds: 60, biasApplied: true, reason: null },
   regimeEngine: {
     regime: "unknown",
     confidence: 0,
+    confidenceKind: "abstained",
     factors: ["insufficient bars (< MIN_BARS 30)"],
     perPlane: {},
     volatile: false,

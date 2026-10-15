@@ -285,6 +285,27 @@ export interface RegimeEngineReading {
  * `?: never`: a renderer that reached for them would be reading a key the server
  * did not send.
  */
+/**
+ * WHICH TIMEFRAME THE SERVER ACTED ON, AND WHETHER IT COULD.
+ *
+ * `detectRegime` used to resolve the label with `tfSecondsOf` and, when that
+ * returned null, file the candles on a 60-SECOND plane (`tf ?? 60`) while
+ * leaving `biasTf` null. Nothing said so: `latency.planes` reported `[60]`,
+ * which reads as "I analysed a 1-minute series" to anyone comparing the response
+ * against the request, and the bias weight was dropped without a word. The
+ * adapter now refuses, and this field is the record of what it did with the
+ * label — the same idea as `riskOfRuin`'s `assumedInputs`, for a label.
+ */
+export interface TimeframeResolution {
+  label: string | null
+  /** The bar length the label resolved to, or null when it did not resolve. */
+  seconds: number | null
+  /** False means no bias plane was selected, so no bias weight was applied. */
+  biasApplied: boolean
+  /** Null when the label resolved. Names the label when it did not. */
+  reason: string | null
+}
+
 export interface RegimeUnknown {
   ok: true
   regime: "unknown"
@@ -292,6 +313,7 @@ export interface RegimeUnknown {
   factors: string[]
   suggestedStrategy?: never
   metrics?: never
+  timeframeResolution: TimeframeResolution
   regimeEngine: RegimeEngineReading
 }
 
@@ -311,6 +333,7 @@ export interface RegimeMeasured {
   factors: string[]
   suggestedStrategy: SuggestedStrategy
   metrics: { adx: number; atrRatio: number; timeframe: string }
+  timeframeResolution: TimeframeResolution
   regimeEngine: RegimeEngineReading
 }
 
