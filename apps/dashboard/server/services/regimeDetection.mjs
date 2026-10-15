@@ -84,8 +84,18 @@ export function tfSecondsOf(timeframe) {
  * requirement is discipline, not shape, and the two sites below now each say
  * which refusal they are reporting. A resolvable label on a thin series
  * therefore reads exactly as it did before — a bars-only refusal.
+ *
+ * ── WHY IT IS EXPORTED ──
+ *
+ * The throw below is the only thing making `labelRefused` REQUIRED at runtime:
+ * both call sites are exhaustive over the `tf == null` split, so neither can
+ * reach it, and the requirement therefore rests on a branch no caller test
+ * exercises. A future third refusal site that simply forgets the flag would
+ * discover the requirement in production rather than in CI. Exporting the
+ * writer lets the adapter tests call it directly with no flag at all, which is
+ * the one input that distinguishes the requirement from a default of `true`.
  */
-function refuseEngineRead(timeframe, { labelRefused, alsoRefused = null }) {
+export function refuseEngineRead(timeframe, { labelRefused, alsoRefused = null }) {
   const label = timeframe === undefined ? "(absent)" : JSON.stringify(timeframe)
   const labelReason = `unresolvable timeframe ${label}; the candles were NOT filed on a substitute plane, and no bias weight was applied`
   const labelFactor = `timeframe ${label} does not resolve to a bar length, so no bias plane could be selected`

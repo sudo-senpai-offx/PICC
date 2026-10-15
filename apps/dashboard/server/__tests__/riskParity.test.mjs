@@ -413,6 +413,16 @@ describe("riskParity no longer invents a 20% volatility", () => {
     // which a reinstated `0.0001` diagonal would not do.
     expect(r.portfolioVol).toBeGreaterThan(0)
     expect(r.portfolioVol).not.toBe(0.0001)
+    // 3 DECIMAL PLACES, AND THE BINDING CONSTRAINT IS THE 4dp PUBLICATION THAT
+    // IS PRESENT NOW — not a hypothetical future edit to ERC. `equalRiskContribution`
+    // returns `Math.round(portVol * 10000) / 10000` (`riskParity.mjs:140`), so the
+    // value under test is a quantised figure: the exact target is
+    // `0.0227534612…` against a published `0.0228`, an absolute difference of
+    // 4.654e-5. That sits 10.7x inside the 3dp tolerance and only 1.07x inside
+    // the 4dp one, so a 4dp assertion would be testing the rounding rather than
+    // the measurement, and would start failing the moment the quantum moved.
+    // (An earlier note here attributed the limit to changes to ERC's publication
+    // or its 1e-12 floor; those are not what binds it.)
     expect(r.portfolioVol).toBeCloseTo(r.vols.B / Math.sqrt(252), 3)
     // The weight list, not the matrix size, is what the caller reads; it carries
     // one key and that key is the symbol with a positive published volatility.

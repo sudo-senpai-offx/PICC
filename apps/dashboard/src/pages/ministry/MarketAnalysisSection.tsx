@@ -600,11 +600,22 @@ function RiskParityResult({
   // panel already renders".
   //
   // So it renders the names. Two populations, and they are NOT the same:
-  //   - a symbol with a `volStatus` entry was measured and then dropped, and the
+  //   - a symbol with a `volStatus` entry WAS measured and then dropped, and the
   //     state + reason say which measurement and which precision limit;
-  //   - a symbol with NO entry was never measured by the allocator at all (the
-  //     route dropped its history), and that remains honestly unnamed — so the
-  //     line says so rather than implying the whole gap is explained.
+  //   - a symbol with NO entry carries no measurement record at all — and the
+  //     line must NOT say why, because the payload cannot say either. An earlier
+  //     version of this comment (and of the line) claimed a missing entry meant
+  //     "the route dropped its history, so the allocator never saw them", and
+  //     that is FALSE: `handlers.mjs` gates at 30 closes while
+  //     `riskParityAllocation` keeps only symbols with `window + 5` (65 at the
+  //     route's default window). A 30-64-close series IS handed to the
+  //     allocator, IS seen, and is dropped for LENGTH — leaving exactly the
+  //     "no `volStatus` entry" signature. Two populations, one signature, and
+  //     only one of them is attributable from the payload.
+  // So the clause states what is actually known — the response names no
+  // mechanism — which is the coverage line's own claim, made a few lines above
+  // it. Having the allocator report the symbols it dropped for length would fix
+  // this properly; that is a new wire field, and out of scope here.
   // A count that matches neither population is reported as unattributable.
   const volStatus = data.volStatus
   const droppedByAllocator: Array<{ symbol: string; state: string; reason: string | null }> =
@@ -665,8 +676,8 @@ function RiskParityResult({
             ) : null}
             {namedNowhere.length > 0 ? (
               <>
-                {" — requested but with no measurement anywhere in the response, so the"}
-                {" allocator never saw them: "}
+                {" — requested, and carrying no measurement entry in this response,"}
+                {" which does not report which mechanism applied to any of them: "}
                 {namedNowhere.join(", ")}
               </>
             ) : null}

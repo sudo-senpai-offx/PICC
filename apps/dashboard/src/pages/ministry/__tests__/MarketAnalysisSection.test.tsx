@@ -969,22 +969,72 @@ describe("MarketAnalysisSection — risk parity", () => {
     expect(line).toContain("BTCUSD [measured-rounded-zero]")
     // …and the reason, in the service's own words rather than a paraphrase.
     expect(line).toContain("rounds to 0 at the published 4dp precision")
-    // AND the old falsehood is gone. This is the assertion that would have
-    // failed on the previous line, and it is the one worth having: a panel that
-    // says a thing was unnamed while naming it is worse than one that says
-    // nothing.
-    expect(line).not.toMatch(/without being named/i)
-    expect(line).not.toMatch(/had no usable volatility/i)
     // BTCUSD is dropped, not weighted, so it does not also appear as a holding.
     expect(ids("market-rp-weight-BTCUSD")).toHaveLength(0)
     expect(ids("market-rp-weight-EURUSD")).toHaveLength(1)
+    // AND the unattributable clause does NOT fire alongside a name the response
+    // did give. Rendering "cannot be attributed here" next to a symbol that IS
+    // attributed says the two disagree when they do not; deleting the
+    // `droppedByAllocator.length === 0 && namedNowhere.length === 0` guard puts
+    // the two clauses in the same sentence, and this fails.
+    expect(line).not.toContain("cannot be attributed here")
   })
 
-  // The OTHER population, which stays honestly unnamed: a requested symbol with
-  // NO `volStatus` entry at all was never measured by the allocator — the route
-  // dropped its history. The panel must say that rather than implying the whole
-  // gap is explained.
-  it("says a requested symbol with no measurement anywhere was never seen by the allocator", async () => {
+  // A symbol the allocator SAW, measured to nothing computable, and then had no
+  // published volatility to weight. `measureVolatility` produces exactly this
+  // state when `realizedVolatility` returns no annual figure, so the entry
+  // exists and the reason names the mechanism — which is why this symbol is
+  // attributable and belongs in the MEASURED clause, not the unnamed one.
+  //
+  // This pins the filter that keeps the two populations apart:
+  // `namedNowhere = absent.filter((s) => !(s in volStatus))`. Delete it and a
+  // symbol the payload DID measure renders under BOTH clauses at once —
+  // "measured, then dropped by the allocator, which names each one:
+  // ETHUSD [unmeasured]" AND "carrying no measurement entry in this response" —
+  // which is the panel disagreeing with itself about a symbol it just named.
+  // (The complementary `droppedByAllocator` filter has no non-crashing
+  // counterpart: with it gone, a symbol the payload holds nothing for throws on
+  // `volStatus[s].state`, so that one is killed by an error rather than by an
+  // assertion. Recorded rather than dressed up.)
+  it("routes a symbol the allocator measured to nothing into the NAMED clause, with its reason", async () => {
+    rp.mockResolvedValue({
+      ...rpPartial,
+      weights: { EURUSD: 1 },
+      vols: { EURUSD: 0.0651, ETHUSD: null },
+      volStatus: {
+        EURUSD: { state: "measured", annual: 0.0651, reason: null },
+        ETHUSD: {
+          state: "unmeasured",
+          annual: null,
+          reason:
+            "realizedVolatility returned no annual figure: too few usable positive-price transitions for the requested period"
+        }
+      }
+    } as RiskParityResponse)
+    render()
+    type("market-rp-symbols", "EURUSD, ETHUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-count-mismatch")
+    const line = text("market-rp-count-mismatch")
+    // Named, with the state AND the reason that make it attributable.
+    expect(line).toContain("ETHUSD [unmeasured]")
+    expect(line).toContain("too few usable positive-price transitions")
+    // …and therefore NOT in the clause for symbols the payload says nothing
+    // about. This is the assertion the filter survives on.
+    expect(line).not.toContain("does not report which mechanism applied")
+  })
+
+  // The OTHER population, which the payload does NOT explain — and the clause
+  // this round rewrote. It used to read "…with no measurement anywhere in the
+  // response, so the allocator never saw them", and that was FALSE, in the one
+  // field whose whole job is not to guess: the route gates at 30 closes while
+  // `riskParityAllocation` keeps only symbols with `window + 5`, so a
+  // 30-64-close series IS seen by the allocator and dropped for length, leaving
+  // exactly this signature. A test that asserted the false clause pinned the
+  // falsehood rather than catching it — the `volatilityModel` "conservative
+  // default" pattern, one level up. The line now claims only what the payload
+  // can support, which is the coverage line's own claim a few lines above.
+  it("names a symbol the payload carries no record for WITHOUT claiming the allocator never saw it", async () => {
     // EURUSD weighed; ETHUSD requested, absent from `weights` AND absent from
     // `volStatus` — so the response genuinely knows nothing about it.
     rp.mockResolvedValue({
@@ -999,9 +1049,16 @@ describe("MarketAnalysisSection — risk parity", () => {
     await settleOn("market-rp-count-mismatch")
     const line = text("market-rp-count-mismatch")
     expect(line).toContain("ETHUSD")
-    expect(line).toMatch(/no measurement anywhere in the response/i)
-    // Not credited with a reason the payload does not carry.
+    // The claim the payload supports: no record, and no mechanism reported.
+    expect(line).toContain("does not report which mechanism applied")
+    // NOT the claim it cannot support. Naming a cause here sends an operator to
+    // the wrong layer: a 47-close listing is dropped by the allocator's 65-close
+    // window, not by the route's 30-close gate, and "the allocator never saw it"
+    // points them at the data fetch instead.
+    expect(line).not.toMatch(/never saw/i)
+    // Not credited with a state or a reason the payload does not carry.
     expect(line).not.toMatch(/measured-rounded-zero/)
+    expect(line).not.toContain("[unmeasured]")
   })
 
   // And when the count disagrees with NO explanation in either population — the

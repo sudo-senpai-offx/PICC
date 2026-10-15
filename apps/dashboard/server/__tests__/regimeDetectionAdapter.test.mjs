@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { detectRegime, tfSecondsOf } from "../services/regimeDetection.mjs"
+import { detectRegime, refuseEngineRead, tfSecondsOf } from "../services/regimeDetection.mjs"
 import { detectRegimeEnhanced } from "../services/regimeEngine.mjs"
 import { TF_SECONDS } from "../services/mtfConvergence.mjs"
 
@@ -309,6 +309,49 @@ describe("regimeEngine delegation (B-REG-4)", () => {
     expect(r.regimeEngine.reason).toBeNull()
     expect(r.regimeEngine.factors.join(" | ")).not.toMatch(/insufficient bars/)
     expect(r.regimeEngine.factors.join(" | ")).not.toMatch(/does not resolve/)
+  })
+
+  // THE THROW, AND THE REQUIREDNESS IT ENFORCES. Neither call site can reach
+  // it — both are exhaustive over the `tf == null` split — so until now the
+  // `if (reasons.length === 0) throw` line had no test at all, and neither did
+  // the discipline it exists to impose. Deleting the throw left 17/17 green,
+  // and `{ labelRefused = true }` left 17/17 green: the requirement was carried
+  // entirely by an untested line, so a third refusal site forgetting the flag
+  // would have shipped a payload claiming the LABEL did not resolve.
+  //
+  // One call, no flag, no second refusal — the only input on which the two
+  // mutations differ:
+  //   - throw deleted          -> returns `{ reason: null, regime: "unknown" }`
+  //   - `labelRefused = true`  -> returns a LABEL refusal the caller never had
+  // Both are silent, which is why `toThrow()` is the assertion.
+  it("refuses to publish a refusal that names nothing, when no flag and no second reason are given", () => {
+    expect(() => refuseEngineRead("1H", {})).toThrow(
+      /refuseEngineRead called with no refusal to state/
+    )
+  })
+
+  // AND THE POSITIVE CONTROL: the same call with a reason does NOT throw, so the
+  // assertion above is about the emptiness and not about the function refusing
+  // every input it is ever handed.
+  it("still publishes a refusal that carries a reason", () => {
+    const labelOnly = refuseEngineRead("banana", { labelRefused: true })
+    expect(labelOnly.regime).toBe("unknown")
+    expect(labelOnly.reason).toMatch(/unresolvable timeframe "banana"/)
+    const barsOnly = refuseEngineRead("5m", {
+      labelRefused: false,
+      alsoRefused: { reason: "insufficient bars (< MIN_BARS 30)", factors: ["insufficient bars (< MIN_BARS 30)"] }
+    })
+    expect(barsOnly.reason).toMatch(/insufficient bars/)
+    expect(barsOnly.reason).not.toMatch(/unresolvable timeframe/)
+    // Both at once, joined — the shape neither `detectRegime` call site can
+    // produce on its own, and the one the writer exists to serve.
+    const both = refuseEngineRead("banana", {
+      labelRefused: true,
+      alsoRefused: { reason: "insufficient bars (< MIN_BARS 30)", factors: ["insufficient bars (< MIN_BARS 30)"] }
+    })
+    expect(both.reason).toMatch(/unresolvable timeframe/)
+    expect(both.reason).toMatch(/insufficient bars/)
+    expect(both.factors).toHaveLength(2)
   })
 })
 
