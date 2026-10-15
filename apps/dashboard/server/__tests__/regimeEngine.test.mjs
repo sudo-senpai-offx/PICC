@@ -325,6 +325,145 @@ describe("detectRegimeEnhanced consensus (B-REG-2)", () => {
   })
 })
 
+// ---------------------------------------------------------------------
+// TWO `confidence: 0` STATES, ONE IDENTICAL WIRE VALUE.
+//
+// `detectRegimeEnhanced` returned `confidence: 0` from two branches that mean
+// OPPOSITE things:
+//
+//   :251  observedCount === 0      -> NOTHING WAS OBSERVED. The engine abstained.
+//   :268  directional === 0        -> SOMETHING WAS OBSERVED and none of it
+//                                    leaned. A genuinely measured, directionless
+//                                    market, emitted as RANGING.
+//
+// And the asymmetry is the sharpest evidence that this was never intended: the
+// genuinely CONFLICTED case at :262 — two sides pulling equally hard, which is
+// the hardest thing in the file to conclude — gets a NON-ZERO confidence, while
+// the case where the engine simply saw nothing reports the same 0 as a read it
+// completed. A consumer holding only the number cannot tell "I do not know" from
+// "I looked and there is no direction", and the type system cannot catch it
+// because both are `number`.
+//
+// The discriminator is `confidenceKind`, additive on every branch, so nothing
+// that reads `confidence` changes behaviour and every consumer can now tell the
+// two apart without testing a value.
+// ---------------------------------------------------------------------
+describe("confidenceKind — 'abstained' and 'measured' are different facts", () => {
+  /**
+   * A REACHABLE "observed, but nothing leaned" plane. Not a guess — found by
+   * sweeping the voter space, and the reasons below are what the voters return.
+   *
+   * The existing suite's "all-flat planes" fixture does NOT reach this branch:
+   * `P("flat")` gives CHI 100 ("chop", which LEANS range) and an abstaining ADX,
+   * so it lands on the range-DOMINANT branch and returns confidence 100. Its test
+   * title says "directionless market" and the number says otherwise. Reaching
+   * `directional === 0` with `observedCount > 0` needs every observed voter to be
+   * a value that carries NO lean, and this series hits it exactly:
+   *
+   *   choppiness -> "neutral"  (CHI 42.2, inside the 38.2-61.8 band)  no lean
+   *   atr_ratio  -> "volatile" (ATR ratio 16.00x)                     annotation only
+   *   adx        -> abstains    (closes are flat, so every ADX value is 0)
+   *
+   * Two voters observed, zero leaning, so the read is RANGING with confidence 0.
+   * The shape is not exotic: a stale feed with a flat close that suddenly prints
+   * a three-bar range expansion is precisely what produces it.
+   */
+  const directionlessPlane = () => {
+    const rows = []
+    const close = 100
+    for (let i = 0; i < 60; i++) {
+      const r = i >= 57 ? 5 : 0.02 // a three-bar range expansion on flat closes
+      rows.push({ time: i * 60000, open: close, high: close + r / 2, low: close - r / 2, close })
+    }
+    return rows
+  }
+
+  /** Every way the engine can abstain: no planes, a plane too thin, a plane that is not an array. */
+  const ABSTAINING_INPUTS = [
+    ["no planes at all", {}, null],
+    ["one thin plane", { [TF_SECONDS.M5]: P("trend", "forex", 10) }, TF_SECONDS.M5],
+    ["one empty plane", { [TF_SECONDS.H1]: [] }, TF_SECONDS.H1],
+    ["a plane that is not an array", { [TF_SECONDS.H1]: "not candles" }, TF_SECONDS.H1],
+    ["two planes, both thin", { [TF_SECONDS.M5]: P("chop", "forex", 5), [TF_SECONDS.H1]: P("chop", "forex", 29) }, TF_SECONDS.H1]
+  ]
+
+  it("ABSTAINED: nothing observed -> confidence 0, and it says it abstained", () => {
+    for (const [name, planes, biasTf] of ABSTAINING_INPUTS) {
+      const read = detectRegimeEnhanced({ planes, biasTf })
+      expect(read.confidence, name).toBe(0)
+      expect(read.regime, name).toBe("unknown")
+      expect(read.confidenceKind, name).toBe("abstained")
+      expect(typeof read.reason, name).toBe("string")
+      expect(read.reason.length, name).toBeGreaterThan(0)
+    }
+  })
+
+  it("MEASURED but directionless -> confidence 0 too, and it says it MEASURED", () => {
+    const read = detectRegimeEnhanced({ planes: { [TF_SECONDS.H1]: directionlessPlane() }, biasTf: TF_SECONDS.H1 })
+    // The fixture really is the directionless branch, not the range-dominant one.
+    expect(read.regime).toBe("RANGING")
+    expect(read.volatile).toBe(true)
+    expect(read.confidence).toBe(0)
+    // MEASURED: the plane contributed two observed voters. The read happened.
+    expect(read.perPlane[TF_SECONDS.H1].observed).toBe(2)
+    expect(read.confidenceKind).toBe("measured")
+  })
+
+  // THE POINT OF THE FIX, stated as one assertion: the two `confidence: 0`
+  // branches are indistinguishable on the number alone and must be
+  // distinguishable on the pair.
+  it("the two confidence:0 branches are INDISTINGUISHABLE by value and DISTINGUISHABLE by kind", () => {
+    const abstained = detectRegimeEnhanced({ planes: { [TF_SECONDS.M5]: P("trend", "forex", 10) }, biasTf: TF_SECONDS.M5 })
+    const measured = detectRegimeEnhanced({ planes: { [TF_SECONDS.H1]: directionlessPlane() }, biasTf: TF_SECONDS.H1 })
+    // Same wire value. This is the whole defect.
+    expect(abstained.confidence).toBe(measured.confidence)
+    // Different fact.
+    expect(abstained.confidenceKind).not.toBe(measured.confidenceKind)
+  })
+
+  // THE OVER-CORRECTION GUARD. Every branch that produces a real regime must
+  // still say "measured", including the conflicted one that already returned a
+  // non-zero confidence — a fix that made confidenceKind track the VALUE would
+  // label the directionless read "abstained" and re-create the ambiguity under a
+  // new name.
+  it("every branch that produced a regime is 'measured', whatever its confidence", () => {
+    const reads = {
+      TRENDING: detectRegimeEnhanced({ planes: planes3Trend, biasTf: TF_SECONDS.H1 }),
+      UNCERTAIN: detectRegimeEnhanced({
+        planes: { [TF_SECONDS.M5]: P("chop", "energies"), [TF_SECONDS.M15]: P("flat", "indices"), [TF_SECONDS.H1]: P("trend", "metals") },
+        biasTf: TF_SECONDS.H1
+      }),
+      "RANGING (dominant)": detectRegimeEnhanced({
+        planes: { [TF_SECONDS.M5]: P("chop", "energies"), [TF_SECONDS.H1]: P("chop", "indices") },
+        biasTf: TF_SECONDS.H1
+      }),
+      "RANGING (directionless)": detectRegimeEnhanced({
+        planes: { [TF_SECONDS.H1]: directionlessPlane() },
+        biasTf: TF_SECONDS.H1
+      })
+    }
+    for (const [name, read] of Object.entries(reads)) {
+      expect(read.regime, name).not.toBe("unknown")
+      expect(read.confidenceKind, name).toBe("measured")
+    }
+    // And the spread of confidences across those branches really does include
+    // both zero and non-zero, so the assertion above is not vacuous.
+    expect(Object.values(reads).some((r) => r.confidence === 0)).toBe(true)
+    expect(Object.values(reads).some((r) => r.confidence > 0)).toBe(true)
+  })
+
+  // `detectRegimeLatched` spreads the raw read, so the latch must carry the
+  // distinction too — otherwise the settled state it hands a caller loses it.
+  it("the latched read carries confidenceKind through the latch", () => {
+    resetRegimeLatches()
+    const thin = { [TF_SECONDS.M5]: P("trend", "forex", 10) }
+    detectRegimeLatched({ assetId: "ABSTAIN", planes: thin, biasTf: TF_SECONDS.M5 })
+    const abstained = detectRegimeLatched({ assetId: "ABSTAIN", planes: thin, biasTf: TF_SECONDS.M5 })
+    expect(abstained.confidence).toBe(0)
+    expect(abstained.confidenceKind).toBe("abstained")
+  })
+})
+
 // A genuinely-different regime from planes3Trend: trend 3 vs range 3 -> UNCERTAIN.
 const uncertainTiePlanes = () => ({
   [TF_SECONDS.M5]: P("chop", "energies"),

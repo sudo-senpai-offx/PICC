@@ -67,11 +67,14 @@ import { getToken } from "./auth"
  *     `volatility` and `avgMove` entirely. `expiryIsScored` gates on the
  *     PRESENCE of `volatility`, never on its value — because a flat series makes
  *     that volatility exactly `0`, and that zero is real.
- *  2. `regimeDetection.mjs:39` — under 30 bars, `detectRegime` returns
+ *  2. `regimeDetection.mjs` — under 30 bars, `detectRegime` returns
  *     `confidence: 0` as a literal, with no `metrics` and no `suggestedStrategy`.
- *     Meanwhile `regimeEngine.mjs` returns `confidence: 0` for a genuinely
- *     measured "directionless RANGING" read. Two different zeros under one name,
- *     so the regime panel gates on the `regime` LABEL (`"unknown"`).
+ *     Meanwhile `regimeEngine.mjs` returned `confidence: 0` for a genuinely
+ *     measured "directionless RANGING" read, so two different zeros shared one
+ *     name. The engine now carries `confidenceKind` ("abstained" vs "measured")
+ *     to tell them apart, and the regime panel still gates on the `regime`
+ *     LABEL (`"unknown"`) — a field that is present on every read, so a client
+ *     pinned to the old contract is unaffected.
  *  3. `computeAdaptiveStops` discriminates on `reason`. Its
  *     `adx-unobservable` branch returns a real, non-null `atr` beside null stops
  *     and a null `adx`, so `stopsAreMeasured` cannot ask whether `atr` is
@@ -249,17 +252,26 @@ export interface RegimeEngineReading {
   regime: EngineRegime
   volatile: boolean
   /**
-   * `0` HERE IS AMBIGUOUS BY CONSTRUCTION AND IS NOT A DISCRIMINATOR.
+   * `0` HERE IS AMBIGUOUS BY VALUE, AND `confidenceKind` IS WHAT REMOVES THE
+   * AMBIGUITY.
+   *
    * `regimeEngine.mjs` returns `confidence: 0` both for an engine that abstained
-   * entirely and for a genuinely measured "directionless observed market"
-   * (`regime: "RANGING"`). Gate on `regime`, never on this number.
+   * entirely ("unknown") and for a genuinely measured "directionless observed
+   * market" (`regime: "RANGING"`, `confidenceKind: "measured"`), so the two were
+   * identical on the wire. The engine now names which one it is:
+   * `"abstained"` means no plane produced an observed read, `"measured"` means
+   * voters were observed and none leaned. Optional because the hand-built
+   * literal at `regimeDetection.mjs:43` is a separate writer — a reader that
+   * requires it must handle its absence, and a reader that wants the old
+   * guarantee still gates on `regime`.
    */
   confidence: number
+  confidenceKind?: "abstained" | "measured"
   factors: string[]
   perPlane: Record<string, RegimeEnginePlane>
   latency: { planes: number[]; minBars: number }
   source: "regimeEngine"
-  /** Present only on the hand-built literal `regimeDetection.mjs:43` writes. */
+  /** Present only on the hand-built literal `regimeDetection.mjs` writes. */
   reason?: string
   /** The legacy label this consensus maps to, when it maps cleanly. */
   legacy?: string | null

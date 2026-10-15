@@ -191,13 +191,43 @@ const LEANS = Object.freeze({
 })
 
 /**
+ * WHICH OF TWO FACTS A `confidence: 0` IS.
+ *
+ * `confidence: 0` used to be returned from two branches that mean opposite
+ * things, and a caller reading only the number could not tell them apart:
+ *
+ *   - "abstained" — no plane produced an observed read. The engine did not get
+ *     to have an opinion. `regime` is "unknown".
+ *   - "measured"  — voters were observed and none of them leaned. The engine
+ *     finished the read and the answer was "no direction". `regime` is "RANGING"
+ *     with `volatile` set if any plane called it volatile.
+ *
+ * The asymmetry is what proves this was never a deliberate encoding: the
+ * genuinely CONFLICTED case — two sides pulling equally hard, the hardest thing
+ * in this function to conclude — was the only one of the three to get a
+ * non-zero confidence, while "saw nothing" and "saw everything and it was
+ * directionless" both reported the same 0.
+ *
+ * ADDITIVE. `confidence` itself is unchanged on every branch, so every existing
+ * reader keeps working exactly as before; this is the key that lets a new reader
+ * stop guessing. It is deliberately NOT derived from `confidence` — a
+ * discriminator computed from the value it is meant to disambiguate would put
+ * the ambiguity straight back under a new name.
+ */
+export const CONFIDENCE_ABSTAINED = "abstained"
+export const CONFIDENCE_MEASURED = "measured"
+
+/**
  * Pure regime read over the plane set.
  * @param {object} opts.planes - { tfSeconds: candles[] }
  * @param {number} [opts.biasTf] - bias plane's tf seconds (bias weighting)
  * @returns {{ regime: "TRENDING"|"RANGING"|"UNCERTAIN"|"unknown", volatile,
- *   confidence:number, factors:string[], perPlane:object, latency:object,
- *   legacy:string|null }}
- * Thin planes abstain: regime "unknown" with confidence 0 — never a guess.
+ *   confidence:number, confidenceKind:"abstained"|"measured", reason:string|null,
+ *   factors:string[], perPlane:object, latency:object, legacy:string|null }}
+ * Thin planes abstain: regime "unknown" with confidence 0 and
+ * `confidenceKind: "abstained"` — never a guess. `reason` names the branch, so
+ * the abstention and the directionless read are distinguishable without reading
+ * `factors`.
  */
 export function detectRegimeEnhanced({ planes = {}, biasTf = null } = {}) {
   const perPlane = {}
@@ -245,27 +275,44 @@ export function detectRegimeEnhanced({ planes = {}, biasTf = null } = {}) {
   const directional = trend + range
   let regime
   let confidence
+  let confidenceKind
+  let reason
   let legacy
   if (observedCount === 0) {
     regime = "unknown"
     confidence = 0
+    // ABSTAINED: not "I looked and it was directionless". Nothing was observed,
+    // so there is no confidence to report and none is invented.
+    confidenceKind = CONFIDENCE_ABSTAINED
+    reason = `no plane produced an observed read (every plane is under MIN_BARS ${MIN_BARS}, or its indicators were undefined)`
     legacy = null
     if (factors.length === 0) factors.push(`no plane has enough bars (MIN_BARS ${MIN_BARS})`)
   } else if (trend >= TREND_MAJORITY && trend > range) {
     regime = "TRENDING"
     confidence = Math.round((100 * trend) / directional)
+    confidenceKind = CONFIDENCE_MEASURED
+    reason = null
     legacy = "trending"
   } else if (range >= TREND_MAJORITY && range > trend) {
     regime = "RANGING"
     confidence = Math.round((100 * range) / directional)
+    confidenceKind = CONFIDENCE_MEASURED
+    reason = null
     legacy = "ranging"
   } else if (directional > 0) {
     regime = "UNCERTAIN" // conflict: no side dominant (spec REQ-R4 escalation premise)
     confidence = Math.round((100 * Math.max(trend, range)) / directional)
+    confidenceKind = CONFIDENCE_MEASURED
+    reason = null
     legacy = volatile ? "volatile" : null // no honest single legacy equivalent otherwise
   } else {
     regime = "RANGING" // directionless observed market
+    // SAME 0 as the abstention above, and MEASURED — this is the whole reason
+    // `confidenceKind` exists. 0 here is the confidence of a read that ran and
+    // found no lean; 0 at the top of this block is the absence of a read.
     confidence = 0
+    confidenceKind = CONFIDENCE_MEASURED
+    reason = `${observedCount} voter read(s) observed across ${tfs.length} plane(s) and none leaned; a measured directionless market, not an abstention`
     legacy = "ranging"
   }
 
@@ -273,6 +320,8 @@ export function detectRegimeEnhanced({ planes = {}, biasTf = null } = {}) {
     regime,
     volatile,
     confidence,
+    confidenceKind,
+    reason,
     factors,
     perPlane,
     latency: { planes: tfs.map(Number), minBars: tfs.length ? minBars : 0 },
