@@ -59,14 +59,14 @@ import { getToken } from "./auth"
  * services put a literal constant exactly where a measurement would go, and one
  * puts a genuinely measured zero in a field of the same name:
  *
- *  1. `expiryOptimizer.mjs:20` — under 20 bars, `optimizeExpiry` returns
+ *  1. `expiryOptimizer.mjs` — under 20 bars, `optimizeExpiry` now REFUSES:
+ *     `recommended` is `null`, every option's `score` is `null`, and
+ *     `recommendation.reason` names the count that arrived. It used to return
  *     `recommended: EXPIRY_OPTIONS[3]`, the literal `"1m"` entry of its own
- *     option table, and gives every option a literal `score: 50`. It OMITS
- *     `volatility` and `avgMove` entirely. Presenting that `"1m"` as a
- *     recommendation would be the same defect as `riskParity.mjs:154`'s
- *     `portfolioVol: 0`: a constant wearing a measurement's label. `expiryIsScored`
- *     gates on the PRESENCE of `volatility`, never on its value — because a flat
- *     series makes that volatility exactly `0`, and that zero is real.
+ *     option table, and gave every option a literal `score: 50`. It still omits
+ *     `volatility` and `avgMove` entirely. `expiryIsScored` gates on the
+ *     PRESENCE of `volatility`, never on its value — because a flat series makes
+ *     that volatility exactly `0`, and that zero is real.
  *  2. `regimeDetection.mjs:39` — under 30 bars, `detectRegime` returns
  *     `confidence: 0` as a literal, with no `metrics` and no `suggestedStrategy`.
  *     Meanwhile `regimeEngine.mjs` returns `confidence: 0` for a genuinely
@@ -352,18 +352,41 @@ export interface ScoredExpiry extends ExpiryOption {
 }
 
 /**
- * UNDER 20 BARS (`expiryOptimizer.mjs:20`).
+ * WHICH BRANCH OF `optimizeExpiry` ANSWERED, AND WHY.
  *
- * `recommended` IS A CONSTANT: `EXPIRY_OPTIONS[3]`, the `"1m"` entry of the
- * service's own table, with no `score` of its own. `all` gives every option a
- * literal `score: 50`. `volatility` and `avgMove` are NOT PRESENT. This is the
- * same defect shape as `riskParity.mjs:154` and it is why the recommended option
- * must not be rendered as a recommendation on this branch.
+ * This is the field that makes the refusal renderable without a client gate. It
+ * exists on BOTH branches, so the scored branch is labelled as scored rather
+ * than merely lacking a reason — the same shape `riskOfRuin`'s `provenance`
+ * introduced: a value that says whether it was measured.
+ */
+export interface ExpiryRecommendation {
+  state: "recommended" | "unavailable"
+  /** Null on the scored branch. On the refusal it names what arrived. */
+  reason: string | null
+  requiredCandles: number
+  suppliedCandles: number
+}
+
+/**
+ * UNDER 20 BARS — THE SERVICE REFUSES.
+ *
+ * It used to return `recommended: EXPIRY_OPTIONS[3]`, the literal `"1m"` entry
+ * of the service's own option table, with no `score` of its own, and gave every
+ * option a literal `score: 50`. That was a trade instruction and ten invented
+ * scores produced by a function that had measured nothing — the same defect as
+ * `riskParity.mjs:154`'s `portfolioVol: 0`, and worse, because it named an
+ * action.
+ *
+ * `recommended` is now `null`, every option's `score` is `null`, and
+ * `recommendation.reason` is the sentence to show. `volatility` and `avgMove`
+ * are still ABSENT keys, which is what distinguishes this branch from a flat
+ * series that genuinely measured a volatility of 0.
  */
 export interface ExpiryUnscored {
   ok: true
-  recommended: ExpiryOption
-  all: Array<ExpiryOption & { score: number }>
+  recommended: null
+  recommendation: ExpiryRecommendation & { state: "unavailable"; reason: string }
+  all: Array<ExpiryOption & { score: null }>
   volatility?: never
   avgMove?: never
 }
@@ -372,6 +395,7 @@ export interface ExpiryUnscored {
 export interface ExpiryScored {
   ok: true
   recommended: ScoredExpiry
+  recommendation: ExpiryRecommendation & { state: "recommended"; reason: null }
   all: ScoredExpiry[]
   volatility: number
   avgMove: number

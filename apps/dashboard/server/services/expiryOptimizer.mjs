@@ -16,8 +16,58 @@ const EXPIRY_OPTIONS = [
   { label: "4h", seconds: 14400 },
 ]
 
+/**
+ * The bar count below which NO expiry can be scored.
+ *
+ * The scorer needs a return series with enough observations to mean anything by
+ * it, and below this it had been answering anyway — see `optimizeExpiry`.
+ */
+export const EXPIRY_MIN_CANDLES = 20
+
+/**
+ * ── THE INVENTED TRADE INSTRUCTION ──
+ *
+ * Under 20 candles this used to return
+ *
+ *     { recommended: EXPIRY_OPTIONS[3], all: EXPIRY_OPTIONS.map((e) => ({ ...e, score: 50 })) }
+ *
+ * and that is not a measurement, it is an INSTRUCTION. `EXPIRY_OPTIONS[3]` is
+ * this module's own `"1m"` table entry, handed back under the field name
+ * `recommended` after the function had measured nothing at all — so a caller
+ * that reads one field got "take a 1-minute expiry", derived from zero candles.
+ * The `score: 50` on every option is the same defect in a second field: ten
+ * equal numbers read as ten equally-good options, which is a measurement of
+ * nothing, made by the one caller that could measure something.
+ *
+ * The UI had a gate (`expiryIsScored`) that refused to RENDER the constant as a
+ * recommendation, so the defect had exactly one thing between it and a wrong
+ * instruction, and that one thing was a client. A service that cannot measure
+ * must not be able to hand out an instruction wearing a measurement's label, so
+ * the refusal now lives HERE, where the ignorance is:
+ *
+ *  - `recommended` is `null`. There is no recommendation to read.
+ *  - `all` carries `score: null` on every option — absent, never 50.
+ *  - `recommendation.state` is the discriminator, `reason` names the count the
+ *    caller actually supplied, and `volatility`/`avgMove` stay OMITTED so a
+ *    measured zero stays distinguishable from a value nobody produced.
+ *
+ * Additive: `recommendation` is a NEW key on both branches, so the scored branch
+ * gains a label rather than losing a field.
+ */
 export function optimizeExpiry(candles, regime = "ranging", signalStrength = 0.5) {
-  if (!candles || candles.length < 20) return { recommended: EXPIRY_OPTIONS[3], all: EXPIRY_OPTIONS.map((e) => ({ ...e, score: 50 })) }
+  const suppliedCandles = Array.isArray(candles) ? candles.length : 0
+  if (suppliedCandles < EXPIRY_MIN_CANDLES) {
+    return {
+      recommended: null,
+      recommendation: {
+        state: "unavailable",
+        reason: `insufficient candles (${suppliedCandles} < ${EXPIRY_MIN_CANDLES}); no expiry is scored and none is recommended`,
+        requiredCandles: EXPIRY_MIN_CANDLES,
+        suppliedCandles
+      },
+      all: EXPIRY_OPTIONS.map((e) => ({ ...e, score: null }))
+    }
+  }
   const returns = []
   for (let i = 1; i < candles.length; i++) {
     returns.push((candles[i].close - candles[i - 1].close) / candles[i - 1].close)
@@ -59,5 +109,16 @@ export function optimizeExpiry(candles, regime = "ranging", signalStrength = 0.5
     return { ...exp, score: Math.max(0, Math.min(100, Math.round(score))), expectedMove: Math.round(expectedMove * 10000) / 100 }
   })
   scored.sort((a, b) => b.score - a.score)
-  return { recommended: scored[0], all: scored, volatility: Math.round(volatility * 10000) / 100, avgMove: Math.round(avgMove * 10000) / 100 }
+  return {
+    recommended: scored[0],
+    recommendation: {
+      state: "recommended",
+      reason: null,
+      requiredCandles: EXPIRY_MIN_CANDLES,
+      suppliedCandles
+    },
+    all: scored,
+    volatility: Math.round(volatility * 10000) / 100,
+    avgMove: Math.round(avgMove * 10000) / 100
+  }
 }

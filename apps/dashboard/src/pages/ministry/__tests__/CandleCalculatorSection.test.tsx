@@ -304,6 +304,12 @@ beforeEach(() => {
   expiryMock.mockResolvedValue({
     ok: true,
     recommended: { label: "5m", seconds: 300, score: 80, expectedMove: 0.012 },
+    recommendation: {
+      state: "recommended",
+      reason: null,
+      requiredCandles: 20,
+      suppliedCandles: 60
+    },
     all: [{ label: "5m", seconds: 300, score: 80, expectedMove: 0.012 }],
     volatility: 0.0021,
     avgMove: 0.0019
@@ -904,22 +910,33 @@ describe("CandleCalculatorSection — regime", () => {
 // ---------------------------------------------------------------------
 
 /**
- * `expiryOptimizer.mjs:20`, verbatim: under 20 bars.
+ * Under 20 bars — the refusal `expiryOptimizer.mjs` now returns.
  *
- * `recommended` is `EXPIRY_OPTIONS[3]` — the `"1m"` entry of the service's OWN
- * table, returned as a constant with no `score` of its own — and every option
- * carries a literal `score: 50`. `volatility` and `avgMove` are ABSENT keys.
+ * REWRITTEN AGAINST THE FIXED SHAPE. This fixture used to be
+ * `expiryOptimizer.mjs:20` verbatim: `recommended` was `EXPIRY_OPTIONS[3]`, the
+ * `"1m"` entry of the service's OWN table, handed back under the field name
+ * `recommended` after nothing had been computed, with every option carrying a
+ * literal `score: 50`. The panel refused to RENDER that constant as a
+ * recommendation, so the fixture survived — but the payload still named an
+ * expiry, and the payload is what every other caller of this route reads.
  *
- * Rendering that `"1m"` as a RECOMMENDATION is the `riskParity.mjs:154` defect in
- * a second service: a constant wearing a measurement's label, telling an operator
- * to trade a 1-minute expiry when nothing was computed at all.
+ * The service now refuses instead: `recommended` is `null`, every option carries
+ * `score: null`, and `recommendation` names the count that arrived and why no
+ * expiry could be scored. Nothing here is a constant any more, so this fixture
+ * can no longer enshrine a trade instruction.
  */
 const expiryUnscored: ExpiryResponse = {
   ok: true,
-  recommended: { label: "1m", seconds: 60 },
+  recommended: null,
+  recommendation: {
+    state: "unavailable",
+    reason: "insufficient candles (12 < 20); no expiry is scored and none is recommended",
+    requiredCandles: 20,
+    suppliedCandles: 12
+  },
   all: [
-    { label: "5s", seconds: 5, score: 50 },
-    { label: "1m", seconds: 60, score: 50 }
+    { label: "5s", seconds: 5, score: null },
+    { label: "1m", seconds: 60, score: null }
   ]
 }
 
@@ -927,6 +944,12 @@ const expiryUnscored: ExpiryResponse = {
 const expiryScored: ExpiryResponse = {
   ok: true,
   recommended: { label: "5m", seconds: 300, score: 80, expectedMove: 0.012 },
+  recommendation: {
+    state: "recommended",
+    reason: null,
+    requiredCandles: 20,
+    suppliedCandles: 60
+  },
   all: [
     { label: "5m", seconds: 300, score: 80, expectedMove: 0.012 },
     { label: "15m", seconds: 900, score: 40, expectedMove: 0.0233 }
@@ -942,6 +965,12 @@ const expiryScored: ExpiryResponse = {
 const expiryMeasuredZero: ExpiryResponse = {
   ok: true,
   recommended: { label: "1m", seconds: 60, score: 45, expectedMove: 0 },
+  recommendation: {
+    state: "recommended",
+    reason: null,
+    requiredCandles: 20,
+    suppliedCandles: 60
+  },
   all: [{ label: "1m", seconds: 60, score: 45, expectedMove: 0 }],
   volatility: 0,
   avgMove: 0
@@ -993,11 +1022,13 @@ describe("CandleCalculatorSection — expiry", () => {
     expect(text("cc-expiry-inputs")).toContain("regime ranging")
   })
 
-  it("does NOT present the unscored branch's CONSTANT as a recommendation", async () => {
-    // THE HAZARD. Under 20 bars `optimizeExpiry` returns its own table entry as
-    // `recommended` and scores every option at a literal 50. Printed as a
-    // recommendation it tells an operator to take a 1-minute expiry, which is
-    // advice derived from a constant.
+  it("does NOT present the unscored branch as a recommendation", async () => {
+    // THE HAZARD. Under 20 bars the service used to return its own `"1m"` table
+    // entry as `recommended` and score every option at a literal 50. Printed as a
+    // recommendation it told an operator to take a 1-minute expiry, which is
+    // advice derived from a constant. The service now refuses instead, and this
+    // panel's job is to render that refusal as a refusal rather than to be the
+    // only thing standing between a constant and an operator.
     expiryMock.mockResolvedValue(expiryUnscored)
     render()
     type("cc-expiry-asset", "EURUSD")
@@ -1007,15 +1038,18 @@ describe("CandleCalculatorSection — expiry", () => {
 
     const line = text("cc-expiry-unscored")
     expect(line).toContain("NOT SCORED")
-    expect(line).toContain("constant")
-    // The label is named, so a reader comparing against the payload can see where
-    // the 1m came from — but it is never called a recommendation.
-    expect(line).toContain("1m")
+    // The reason the SERVICE gave is what is printed, so a reader comparing
+    // against the payload sees the same sentence the payload carries.
+    expect(line).toContain(expiryUnscored.recommendation!.reason!)
+    // And the count it was actually given, rather than a bare dash.
+    expect(line).toContain("12")
+    // No recommendation cell exists at all — the panel cannot print one even if
+    // it wanted to, because there is nothing pointed at as recommended.
     expect(text("cc-expiry-recommended")).toBe("")
     expect(id("cc-expiry-recommended")).toBeNull()
     // And no volatility/avgMove as measurements: those keys do not exist here.
     expect(text("cc-expiry-vol")).toBe("")
-    // The per-option scores are constants too, so no score table is offered.
+    // The per-option scores are absent too, so no score table is offered.
     expect(ids("cc-expiry-scores")).toHaveLength(0)
   })
 

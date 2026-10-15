@@ -769,18 +769,19 @@ function ExpiryReadout({
 }
 
 /**
- * UNDER 20 BARS (`expiryOptimizer.mjs:20`), AND IT IS THE SAME DEFECT AS
- * `riskParity.mjs:154` IN A SECOND SERVICE.
+ * UNDER 20 BARS — THE SERVICE'S REFUSAL, RENDERED AS A REFUSAL.
  *
- * `recommended` here is `EXPIRY_OPTIONS[3]` — the service's own table entry for
- * `"1m"` — returned as a CONSTANT with no `score` of its own, and every option
- * carries a literal `score: 50`. Nothing was computed over these bars.
+ * This branch used to receive the service's own `"1m"` table entry under the
+ * field name `recommended`, with every option carrying a literal `score: 50`,
+ * and it used to render that constant back as an explanation of where the 1m
+ * came from. Nothing was computed over those bars, so the panel's refusal to
+ * call it a recommendation was the ONLY thing between a literal and an operator
+ * told to take a 1-minute trade.
  *
- * So the constant is NAMED, because a reader comparing against the payload should
- * be able to see where the 1m came from, and it is never called a recommendation:
- * "recommended expiry 1m" would tell an operator to take a 1-minute expiry on the
- * strength of a literal. No score table is offered either, since every score in
- * it is the same literal 50.
+ * `optimizeExpiry` now refuses at the source: `recommended` is `null`, every
+ * option's `score` is `null`, and `recommendation.reason` names the count that
+ * arrived. This panel prints THAT sentence, so the sentence on screen is the one
+ * in the payload rather than a restatement of it that could drift from it.
  */
 function ExpiryUnscoredResult({
   data,
@@ -793,16 +794,19 @@ function ExpiryUnscoredResult({
 }) {
   return (
     <div className="panel muted" data-testid="cc-expiry-unscored">
-      <p data-testid="cc-expiry-unscored-reason">
-        NOT SCORED — `optimizeExpiry` returned its own table entry{" "}
-        {data.recommended.label} as a constant, not a recommendation
-      </p>
+      <p data-testid="cc-expiry-unscored-reason">NOT SCORED — no expiry is recommended</p>
       <p className="muted small">
-        {sentBars} bar(s) were sent; `optimizeExpiry` needs 20 before it scores
-        anything. On this branch every option carries the literal score 50 and the
-        response carries no volatility or average move at all, so no score, no
-        volatility and no table are shown. It was asked for regime {sent.regime} at
-        signal strength {sent.signalStrength}, and neither could be applied.
+        {/* THE SERVICE'S OWN WORDS, NOT A RESTATEMENT OF THEM. This branch used to
+            receive the service's own `"1m"` table entry under the field name
+            `recommended` and print it back as an explanation of where the 1m came
+            from. The service now refuses, so there is no constant left to explain
+            and the sentence to print is the reason IT gave — which is the only
+            version that can be checked against the payload. */}
+        {data.recommendation.reason}. {sentBars} bar(s) were sent and it needs{" "}
+        {data.recommendation.requiredCandles} before it scores anything. On this branch every
+        option carries no score at all, and the response carries no volatility or average move,
+        so no score, no volatility and no table are shown. It was asked for regime {sent.regime}{" "}
+        at signal strength {sent.signalStrength}, and neither could be applied.
       </p>
     </div>
   )

@@ -142,14 +142,96 @@ describe("expiry optimizer uses computed volatility, not hardcoded defaults", ()
 })
 
 describe("conservative defaults for insufficient data", () => {
-  it("falls back to the neutral 1m expiry with flat scores under 20 candles", () => {
-    for (const input of [null, [], flatRangeCandles(12, 100, 1)]) {
+  // ─────────────────────────────────────────────────────────────────────
+  // REWRITTEN. THE OLD ASSERTION WAS THE BUG.
+  //
+  // This test used to read:
+  //
+  //     expect(out.recommended.seconds).toBe(60)
+  //     expect(out.recommended.label).toBe("1m")
+  //     expect(out.all.every((e) => e.score === 50)).toBe(true)
+  //
+  // and its title called that a "conservative default". It was not a default
+  // and it was not conservative: `optimizeExpiry` had measured NOTHING, so
+  // `EXPIRY_OPTIONS[3]` was handed back as `recommended` — a specific, tradeable
+  // expiry fabricated from zero candles — and every option was given the literal
+  // `score: 50`, which reads as "all ten are equally good", i.e. a measurement.
+  // An operator who saw "recommended expiry 1m" would have taken a 1-minute
+  // trade on the strength of a constant. The old assertions did not merely
+  // tolerate the defect; they PINNED it, so the defect read as intended
+  // behaviour and any fix would have looked like a regression.
+  //
+  // THE HONEST SHAPE, SWEPT OVER THE WHOLE INSUFFICIENT DOMAIN: no
+  // recommendation at all, no score on any option, and a reason that names the
+  // count it was actually given so the client has something to be honest WITH.
+  // ─────────────────────────────────────────────────────────────────────
+  it("REFUSES to recommend an expiry under 20 candles — the old '1m' constant WAS the defect", () => {
+    const insufficient = [
+      null,
+      undefined,
+      [],
+      [flatRangeCandles(1, 100, 1)[0]], // 1 candle
+      flatRangeCandles(2, 100, 1),
+      flatRangeCandles(3, 100, 1),
+      flatRangeCandles(11, 100, 1),
+      flatRangeCandles(18, 100, 1),
+      flatRangeCandles(19, 100, 1) // the last insufficient count
+    ]
+    for (const input of insufficient) {
       const out = optimizeExpiry(input, "trending", 0.9)
-      expect(out.recommended.seconds).toBe(60)
-      expect(out.recommended.label).toBe("1m")
-      expect(out.all.every((e) => e.score === 50)).toBe(true)
+      // NO RECOMMENDATION. Not a constant, not a default, not a table entry.
+      expect(out.recommended).toBeNull()
+      // And it is LABELLED, so a client can say why rather than guess.
+      expect(out.recommendation.state).toBe("unavailable")
+      expect(typeof out.recommendation.reason).toBe("string")
+      expect(out.recommendation.reason.length).toBeGreaterThan(0)
+      // NO SCORE ON ANY OPTION. 50 was a constant in a measurement's clothing.
+      for (const e of out.all) expect(e.score).toBeNull()
+      // No measured quantity is invented to fill the gap.
       expect(out.volatility).toBeUndefined()
+      expect(out.avgMove).toBeUndefined()
+      // And the wire must not PRESENT the constant this branch used to emit. The
+      // unscored `all` table still lists "1m" — it is the option table, and a
+      // client that renders a table of unscored options is being honest — so the
+      // claim is about what is pointed at as the recommendation, not about the
+      // string being absent from the payload.
+      expect(out.recommended).toBeNull()
+      expect(out.all.find((e) => e.seconds === 60).label).toBe("1m")
+      expect(out.all.find((e) => e.seconds === 60).score).toBeNull()
     }
+  })
+
+  // THE MEASUREMENT DIRECTION — the control for the refusal above, and the
+  // guard against an over-correction that would make `optimizeExpiry` refuse
+  // everything. The whole scored domain, from the first sufficient count up.
+  it("STILL recommends a real, scored expiry from the first sufficient count upward", () => {
+    for (const n of [20, 21, 25, 60, 120]) {
+      for (const regime of ["trending", "ranging", "volatile", "breakout"]) {
+        for (const signalStrength of [0, 0.5, 0.9, 1]) {
+          const out = optimizeExpiry(flatRangeCandles(n, 100, 1), regime, signalStrength)
+          expect(out.recommended).not.toBeNull()
+          expect(typeof out.recommended.seconds).toBe("number")
+          expect(out.recommended.seconds).toBeGreaterThan(0)
+          expect(out.recommendation.state).toBe("recommended")
+          // A real score, scored per option — never the flat 50.
+          expect(typeof out.recommended.score).toBe("number")
+          expect(out.recommended.score).not.toBe(50)
+          expect(out.all.every((e) => typeof e.score === "number")).toBe(true)
+          expect(typeof out.volatility).toBe("number")
+          expect(typeof out.avgMove).toBe("number")
+        }
+      }
+    }
+  })
+
+  // The refusal must NAME the count it was given. A reason that does not say
+  // how many bars arrived leaves the client with nothing to print.
+  it("the refusal names the count it was actually given, on every insufficient input", () => {
+    expect(optimizeExpiry(flatRangeCandles(12, 100, 1)).recommendation.suppliedCandles).toBe(12)
+    expect(optimizeExpiry(flatRangeCandles(19, 100, 1)).recommendation.suppliedCandles).toBe(19)
+    expect(optimizeExpiry([]).recommendation.suppliedCandles).toBe(0)
+    expect(optimizeExpiry(null).recommendation.suppliedCandles).toBe(0)
+    expect(optimizeExpiry(flatRangeCandles(12, 100, 1)).recommendation.requiredCandles).toBe(20)
   })
 
   it("returns nulls instead of fabricated values for short series", () => {

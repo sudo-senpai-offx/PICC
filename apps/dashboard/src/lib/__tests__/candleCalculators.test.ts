@@ -253,17 +253,27 @@ describe("fetchAdaptiveStops", () => {
 
 describe("expiryIsScored — gates on the BRANCH, never on the value", () => {
   /**
-   * `expiryOptimizer.mjs:20`, verbatim. `volatility` and `avgMove` are ABSENT
-   * keys on this branch — not `undefined`-valued, not zero — and `recommended` is
-   * the literal `EXPIRY_OPTIONS[3]` with no `score` of its own.
+   * Under 20 bars, the refusal `optimizeExpiry` now returns: `recommended` is
+   * `null`, every option's `score` is `null`, and `reason` names the count.
+   *
+   * This fixture used to be `expiryOptimizer.mjs:20` verbatim, with
+   * `recommended` the literal `"1m"` table entry and a flat `score: 50` on every
+   * option — a fixture that made the defect look like a contract, because the
+   * `1m` and the 50s were what the panel's own gate had been written around.
    */
   const unscored: ExpiryResponse = {
     ok: true,
-    recommended: { label: "1m", seconds: 60 },
-    all: [{ label: "5s", seconds: 5, score: 50 }]
+    recommended: null,
+    recommendation: {
+      state: "unavailable",
+      reason: "insufficient candles (12 < 20); no expiry is scored and none is recommended",
+      requiredCandles: 20,
+      suppliedCandles: 12
+    },
+    all: [{ label: "5s", seconds: 5, score: null }]
   }
 
-  it("is FALSE on the short branch, where the recommendation is a CONSTANT", () => {
+  it("is FALSE on the refusal branch, which names no expiry at all", () => {
     expect(expiryIsScored(unscored)).toBe(false)
   })
 
@@ -274,6 +284,7 @@ describe("expiryIsScored — gates on the BRANCH, never on the value", () => {
     const scored: ExpiryResponse = {
       ok: true,
       recommended: { label: "1m", seconds: 60, score: 45, expectedMove: 0 },
+      recommendation: { state: "recommended", reason: null, requiredCandles: 20, suppliedCandles: 60 },
       all: [{ label: "1m", seconds: 60, score: 45, expectedMove: 0 }],
       volatility: 0,
       avgMove: 0
@@ -285,6 +296,7 @@ describe("expiryIsScored — gates on the BRANCH, never on the value", () => {
     const scored: ExpiryResponse = {
       ok: true,
       recommended: { label: "1m", seconds: 60, score: 45, expectedMove: 0 },
+      recommendation: { state: "recommended", reason: null, requiredCandles: 20, suppliedCandles: 60 },
       all: [],
       volatility: 0,
       avgMove: 0
