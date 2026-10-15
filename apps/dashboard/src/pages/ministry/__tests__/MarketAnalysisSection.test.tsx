@@ -14,8 +14,15 @@
 //   3. AN ABSENCE IS NEVER A ZERO. `orderflow.available === false` must not put
 //      a number where nobody measured one, and a measured `0` must still print
 //      as `0` — so every absence assertion has a measured-zero control beside it.
-//   4. `risk-parity` DROPS SYMBOLS WITHOUT SAYING SO, so the panel must state
-//      coverage against what it asked for and name what is missing.
+//   4. `risk-parity` STATES COVERAGE AGAINST WHAT IT ASKED FOR, and names what
+//      is missing. The header this replaces read "DROPS SYMBOLS WITHOUT SAYING
+//      SO", which was half-false and was left half-false by the round that fixed
+//      the panel: the response names the mechanism for every symbol the
+//      allocator MEASURED — state plus reason, in the service's own words — so
+//      "without saying so" describes only the second population, the one the
+//      payload genuinely cannot speak for. The panel now says exactly that: a
+//      measured drop is attributed, and a symbol the response holds no record for
+//      is reported as unattributable rather than left silent or blamed.
 //
 // `act()` IS NOT USED ANYWHERE IN THIS FILE. This harness is not configured for
 // it — react-dom reports "the current testing environment is not configured to
@@ -230,6 +237,55 @@ const rpPrecisionDrop: RiskParityResponse = {
   portfolioVol: 0.0041,
   portfolioVolPct: "0.41%",
   riskContributions: [{ symbol: "EURUSD", weight: 1, riskContribution: "100%" }],
+  iterations: 500,
+  reason: null
+}
+
+/**
+ * BOTH POPULATIONS IN ONE RESPONSE — the shape the panel's mixed branch exists
+ * for, and the shape no shipped fixture built.
+ *
+ * Verified end to end against the real allocator before being written down.
+ * A request for `TINY, KEPT, SHORT` where `TINY`'s computed volatility rounds to
+ * 0 at the published 4dp precision and `SHORT`'s series holds 40 closes returns:
+ *
+ *     weights     { KEPT: 1 }        symbolCount 2
+ *     volStatus   { KEPT, TINY }     — SHORT has NO entry at all
+ *
+ * TWO POPULATIONS, ONE SIGNATURE. `TINY` was measured and then dropped, so the
+ * response names the measurement and the precision limit. `SHORT` was ALSO seen
+ * by the allocator — 40 clears `handlers.mjs`'s 30-close gate but not the 65 the
+ * allocator keeps — and dropped for LENGTH, which the response does not report,
+ * so the response can say nothing about it. The payload cannot distinguish
+ * "measured then dropped" from "seen and dropped for length"; it can only say
+ * which of the two an entry's presence implies.
+ *
+ * The symbol names are deliberately WRONG-SHAPED rather than realistic: `TINY`
+ * and `SHORT` read as ticker symbols in a test a reader is scanning, which is
+ * the point. The property under test is which clause each name lands in.
+ */
+const rpMixedDrop: RiskParityResponse = {
+  ok: true,
+  weights: { KEPT: 1 },
+  method: "equal-risk-contribution",
+  symbolCount: 2,
+  vols: { KEPT: 0.0651, TINY: 0, SHORT: null },
+  volStatus: {
+    KEPT: { state: "measured", annual: 0.0651, reason: null },
+    TINY: {
+      state: "measured-rounded-zero",
+      annual: 0,
+      reason:
+        "the annualized volatility rounds to 0 at the published 4dp precision: the price series does move inside the window, but the computed figure is below 0.00005, so it publishes as 0 without being a measurement of no movement"
+    }
+    // SHORT is DELIBERATELY ABSENT. Not `unmeasured` — absent. `unmeasured`
+    // means the allocator ran the measurement and got nothing; absent means the
+    // response carries no record of the symbol at all, which is the only thing a
+    // length-dropped symbol looks like from here.
+  },
+  portfolioVol: 0.0041,
+  portfolioVolPct: "0.41%",
+  riskContributions: [{ symbol: "KEPT", weight: 1, riskContribution: "100%" }],
   iterations: 500,
   reason: null
 }
@@ -1059,6 +1115,68 @@ describe("MarketAnalysisSection — risk parity", () => {
     // Not credited with a state or a reason the payload does not carry.
     expect(line).not.toMatch(/measured-rounded-zero/)
     expect(line).not.toContain("[unmeasured]")
+  })
+
+  // -------------------------------------------------------------------
+  // THE MIXED POPULATION — the case the panel's two-clause sentence is FOR,
+  // and the one no fixture built before this one.
+  //
+  // Every fixture above holds one population per response: `rpPrecisionDrop` has
+  // a measured-rounded-zero drop and nothing else, the `unmeasured` case has a
+  // measured-nothing drop, and the "no record" case has a symbol absent from
+  // `volStatus` and nothing else. That is enough to pin each filter's VALUE in
+  // isolation, and it is why `droppedByAllocator`'s REMOVAL was invisible:
+  // `.filter((s) => s in volStatus)` -> `.filter(() => true)` reclassifies a
+  // symbol only when the response contains BOTH populations, and no shipped
+  // fixture did. With `edgePct`-style safeness added to the `.map`, the surviving
+  // mutant printed `SHORT [measured]: no reason given` — a fabricated state and
+  // a fabricated reason for a symbol the payload never measured, which is the
+  // exact defect this whole panel exists to refuse.
+  //
+  // This is the same shape as `volatilityModel`'s rewritten "conservative
+  // defaults": the old assertion did not tolerate the defect, it made the defect
+  // unreachable, so the suite read green over it.
+  it("splits a response holding BOTH populations, attributing only the one the payload names", async () => {
+    rp.mockResolvedValue(rpMixedDrop)
+    render()
+    type("market-rp-symbols", "TINY, KEPT, SHORT")
+    click("market-rp-run")
+    await settleOn("market-rp-count-mismatch")
+    const line = text("market-rp-count-mismatch")
+
+    // The count, and both names on one line — the whole point of the fixture.
+    expect(line).toContain("symbolCount 2 against 1 weight(s)")
+
+    // Each clause is read OUT of the line and asserted on its own, because the
+    // two clauses sit in one sentence and a substring search across the whole
+    // line cannot tell which clause a name landed in. That is the property under
+    // test, so it is asserted clause by clause.
+    const namedClause = (line.split("which names each one: ")[1] ?? "").split(
+      "requested, and carrying no measurement entry"
+    )[0]
+    const unnamedClause = line.split("which does not report which mechanism applied to any of them: ")[1] ?? ""
+
+    // TINY: in the NAMED clause, with the state AND the reason the payload gives.
+    expect(namedClause).toContain("TINY [measured-rounded-zero]")
+    expect(namedClause).toContain("rounds to 0 at the published 4dp precision")
+
+    // SHORT: in the UNATTRIBUTABLE clause, because the response carries no entry.
+    expect(line).toContain("does not report which mechanism applied")
+    expect(unnamedClause.trim()).toBe("SHORT.")
+
+    // AND — the assertions the mutation dies on. SHORT must not acquire a state
+    // or a reason from a clause the payload cannot support for it. Under
+    // `.filter(() => true)` it is moved into `droppedByAllocator` and renders a
+    // fabricated attribution; this catches that whether the mutant throws first
+    // (it cannot be rendered at all) or survives with optional access.
+    expect(namedClause).not.toContain("SHORT")
+    expect(namedClause).not.toMatch(/SHORT \[/)
+    expect(line).not.toMatch(/SHORT \[/)
+    expect(line).not.toMatch(/no reason given/)
+
+    // Neither clause collapses: both populations are reported, because the line
+    // reports the RESPONSE'S two populations rather than picking one.
+    expect(line).not.toContain("cannot be attributed here")
   })
 
   // And when the count disagrees with NO explanation in either population — the
