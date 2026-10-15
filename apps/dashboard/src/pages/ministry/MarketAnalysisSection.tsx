@@ -650,12 +650,24 @@ function RiskParityResult({
           carries no risk, which is the most dangerous direction for a risk
           number to lie in. It sends `null` now, with a reason.
 
-          THE GATE IS STILL ON `method`, NEVER ON THE VALUE. The ERC branch
-          really does compute a portfolio vol (`equalRiskContribution`'s
-          `sqrt(max(portVar, 1e-12))`, floored at 1e-12 and rounded to 4dp), so
-          an ERC response can legitimately serve `portfolioVol: 0` — and a
-          measured zero must still print as `0`. Collapsing zeros by value would
-          trade this defect for the opposite one. */}
+          THE GATE IS STILL ON `method`, NEVER ON THE VALUE — and the reason is
+          NOT that an ERC `0` is necessarily a measured zero, because it is not.
+          `equalRiskContribution` computes `sqrt(max(portVar, 1e-12))`, floors it
+          at 1e-6, and rounds to 4dp, so a DEGENERATE covariance of the right
+          shape also serves 0: verified, `equalRiskContribution([[0]], ["A"])`
+          returns `portfolioVol: 0`. So a 0 on this branch may be a measurement
+          below the published precision OR a degenerate input, and the panel
+          cannot tell which from the number alone — the service's own `reason`
+          is where that distinction belongs.
+
+          The gate still must not be on the value. `measured()` is
+          `Number.isFinite`, so a 0 the service sent on a branch that claims to
+          compute one prints as `0`; collapsing zeros by value would swallow a
+          real measurement to protect against a case this branch cannot produce
+          anyway. The residual defect — an ERC 0 that is really a precision limit
+          printing as a measurement — is in the service, not here, and is the
+          same `volatility.mjs:68` 4dp rounding that is out of this task's
+          scope. */}
       <div className="muted small" data-testid="market-rp-portfolio">
         portfolio vol:{" "}
         {data.method === "single-asset" ? (

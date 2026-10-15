@@ -243,14 +243,26 @@ const rpSingleAsset: RiskParityResponse = {
 /**
  * `riskParity.mjs:210` — the ERC branch, where `portfolioVol` IS computed.
  *
- * THE CONTROL FOR THE FIX ABOVE. `equalRiskContribution` computes
- * `Math.sqrt(Math.max(portVar, 1e-12))` (`:100`) and rounds to 4dp, so an ERC
- * response really can serve `portfolioVol: 0` — and that 0 is measured. It must
- * still print as `0`. The gate is therefore on `method`, never on the value: a gate
- * written as `portfolioVol === 0 → absent` would be exactly the defect this
- * fixture exists to rule out.
+ * THE CONTROL FOR THE FIX ABOVE, and its justification is NARROWER than it
+ * looks. `equalRiskContribution` computes `Math.sqrt(Math.max(portVar, 1e-12))`
+ * (`:100`) and rounds to 4dp, so an ERC response can serve `portfolioVol: 0`.
+ *
+ * What a `0` here does NOT mean, despite this fixture's old name: it is not
+ * necessarily a MEASURED zero. The same floor makes a DEGENERATE covariance
+ * serve 0 — verified, `equalRiskContribution([[0]], ["A"])` returns
+ * `portfolioVol: 0` — so a 0 on that branch may be a measurement below the
+ * published precision OR a malformed input, and the panel cannot tell which from
+ * the number. (The fixture is renamed for the same reason: a name that asserts
+ * "measured" is a claim the fixture cannot support.)
+ *
+ * The gate is therefore on `method`, never on the value, and the assertion
+ * stands on its own terms: `measured()` is `Number.isFinite`, so a 0 the
+ * service sent on a branch that claims to compute one must print as `0`, because
+ * collapsing zeros by value would swallow a real measurement. The residual
+ * defect — an ERC 0 that is really a precision limit printing as a measurement
+ * — belongs to the service's 4dp publication, not to this panel.
  */
-const rpErcMeasuredZero: RiskParityResponse = {
+const rpErcZero: RiskParityResponse = {
   ok: true,
   weights: { EURUSD: 0.5, BTCUSD: 0.5 },
   method: "equal-risk-contribution",
@@ -990,15 +1002,18 @@ describe("MarketAnalysisSection — risk parity", () => {
   })
 
   it("still prints an ERC portfolioVol of 0 as 0 — the gate is on method, not value", async () => {
-    rp.mockResolvedValue(rpErcMeasuredZero)
+    rp.mockResolvedValue(rpErcZero)
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD")
     click("market-rp-run")
     await settleOn("market-rp-portfolio-vol")
     const line = text("market-rp-portfolio")
-    // `equalRiskContribution` DOES compute this one (`:100`), so a measured zero
+    // `equalRiskContribution` DOES compute this one (`:100`), so a 0 it serves
     // must still print as `0`. A gate written on the VALUE rather than on the
-    // method would collapse this genuine measurement into an absence.
+    // method would collapse it into an absence and swallow the branch's own
+    // claim that it measured something. What the 0 does NOT mean — a riskless
+    // measurement — is documented on the fixture; the service owns that
+    // distinction, not this panel.
     expect(line).toContain("portfolio vol: 0")
     expect(line).toContain("(0%)")
     expect(line).not.toContain("absent")
@@ -1006,7 +1021,7 @@ describe("MarketAnalysisSection — risk parity", () => {
   })
 
   it("renders the ERC risk contributions, which no fixture exercised before", async () => {
-    rp.mockResolvedValue(rpErcMeasuredZero)
+    rp.mockResolvedValue(rpErcZero)
     render()
     type("market-rp-symbols", "EURUSD, BTCUSD")
     click("market-rp-run")

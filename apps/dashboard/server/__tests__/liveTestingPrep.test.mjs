@@ -4,7 +4,7 @@ import { predictDirection, backtestModels } from "../services/prediction.mjs"
 import { detectRegime } from "../services/regimeDetection.mjs"
 import { confluenceRead, winProbEstimate, pricePathRR, evGate, mttdEstimate } from "../services/adaptiveConfluence.mjs"
 import { computeKelly, kellySnapshot } from "../services/kellyCriterion.mjs"
-import { optimizeExpiry } from "../services/expiryOptimizer.mjs"
+import { optimizeExpiry, EXPIRY_MIN_CANDLES } from "../services/expiryOptimizer.mjs"
 import { analyzeOrderFlow } from "../services/orderFlow.mjs"
 
 function series(start, dailyReturn, n) {
@@ -226,6 +226,14 @@ describe("Kelly Criterion", () => {
 
 // ── Expiry Optimizer ─────────────────────────────────────────────
 describe("Expiry Optimizer", () => {
+  // CONFIRMED BY DOMAIN, NOT BY ACCIDENT. This assertion only holds because
+  // `syntheticCandles(100, ...)` happens to be 100 candles and
+  // `optimizeExpiry` refuses below 20 — a fixture-size coincidence, not a
+  // statement about the boundary. The threshold is `EXPIRY_MIN_CANDLES`, and
+  // the full sufficient/insufficient sweep lives in `volatilityModel.test.mjs`;
+  // the point pinned HERE is the boundary this fixture was sitting nowhere near,
+  // so a change to the threshold cannot quietly keep this file green for the
+  // wrong reason.
   it("recommends expiry from candles", () => {
     const candles = syntheticCandles(100, 0.002, 100)
     const result = optimizeExpiry(candles, "trending")
@@ -233,6 +241,26 @@ describe("Expiry Optimizer", () => {
     expect(result.recommended.seconds).toBeGreaterThan(0)
     expect(typeof result.recommended.label).toBe("string")
     expect(Array.isArray(result.all)).toBe(true)
+    // And it is above the threshold BY MARGIN, not by luck, and is scored rather
+    // than one of the old unscored constants.
+    expect(candles.length).toBeGreaterThan(EXPIRY_MIN_CANDLES)
+    expect(result.recommendation.state).toBe("recommended")
+    expect(result.recommendation.suppliedCandles).toBe(candles.length)
+    expect(result.recommended.score).not.toBe(50)
+  })
+
+  it("the fixture's length is what puts it on the scoring branch, not the score itself", () => {
+    // One candle fewer than the fixture would still refuse, so the margin above
+    // is real and the boundary is below the fixture rather than inside it.
+    // NOTE the argument order: `syntheticCandles(startPrice, drift, n)` — n is
+    // THIRD, so passing the count first would silently build 100 candles again
+    // and make this test the exact coincidence it is meant to rule out.
+    const atThreshold = syntheticCandles(100, 0.002, EXPIRY_MIN_CANDLES)
+    const belowThreshold = syntheticCandles(100, 0.002, EXPIRY_MIN_CANDLES - 1)
+    expect(atThreshold).toHaveLength(EXPIRY_MIN_CANDLES)
+    expect(belowThreshold).toHaveLength(EXPIRY_MIN_CANDLES - 1)
+    expect(optimizeExpiry(atThreshold, "trending").recommended).not.toBeNull()
+    expect(optimizeExpiry(belowThreshold, "trending").recommended).toBeNull()
   })
 })
 
