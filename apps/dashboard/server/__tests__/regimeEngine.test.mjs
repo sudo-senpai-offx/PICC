@@ -269,13 +269,39 @@ describe("detectRegimeEnhanced consensus (B-REG-2)", () => {
     expect(read.factors.some((f) => f.includes("61.8"))).toBe(true) // the chop reason is visible, not averaged away
   })
 
-  it("all-flat planes -> RANGING (directionless market)", () => {
+  // THE TITLE USED TO SAY "(directionless market)" AND THE NUMBER SAYS OTHERWISE,
+  // which is why the confidenceKind block at :355 spends a paragraph explaining
+  // that this fixture does NOT reach `directional === 0`. Instrumented against
+  // the engine: `confidence: 100`, `confidenceKind: "measured"`, and CHI 100.0
+  // above 61.8 on BOTH planes. `P("flat")` is not a market with no direction —
+  // it is the loudest range vote in the file, and a market leaning range on both
+  // planes is the best-determined read here, not the emptiest one. The reader
+  // was told the opposite one screen above the evidence.
+  //
+  // So the name is corrected to what the engine returns, and the assertions
+  // below now carry the claim the old title made for free: range-dominance is
+  // asserted through the CHI factor that produces it, and the confidence behind
+  // "RANGING at maximum certainty" is asserted rather than implied.
+  it("all-flat planes -> RANGING (range-dominant, confidence 100)", () => {
     const read = detectRegimeEnhanced({
       planes: { [TF_SECONDS.M5]: P("flat"), [TF_SECONDS.H1]: P("flat", "crypto") },
       biasTf: TF_SECONDS.H1
     })
     expect(read.regime).toBe("RANGING")
     expect(read.legacy).toBe("ranging")
+    // The reason it is RANGING, on both planes: CHI above the 61.8 range
+    // threshold. Two range leans and no trend lean is what produces the
+    // confidence below — assert the cause, not just the verdict. (The factors
+    // also carry two `atr_ratio` annotations, which are not votes, so the
+    // assertion is over the range-leaning factors rather than over all four.)
+    const rangeFactors = read.factors.filter((f) => f.includes("61.8"))
+    expect(rangeFactors).toHaveLength(2)
+    expect(rangeFactors.every((f) => f.includes("choppiness: CHI 100.0 > 61.8"))).toBe(true)
+    // MEASURED, not abstained: this read leaned, so it is a confidence a caller
+    // may act on. The directionless case that IS `directional === 0` lives in the
+    // `directionlessPlane` fixture below and reports `confidence: 0`.
+    expect(read.confidenceKind).toBe("measured")
+    expect(read.confidence).toBe(100)
   })
 
   it("a tied conflict (trend vs chop+flat) -> UNCERTAIN, honest legacy null", () => {

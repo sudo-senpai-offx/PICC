@@ -407,10 +407,48 @@ describe("regimeEngine bias membership is not decided by numeric coercion", () =
     expect(stated.confidence).not.toBe(readWith(undefined).confidence)
   })
 
+// THE TITLE MEASURED NOTHING. It read "a normal positive biasTf still weights
+  // its plane" while asserting only `latency.planes`, a non-`unknown` regime and
+  // a `confidenceKind` — three facts that hold identically whether or not the
+  // bias weight is applied at all. A test named for a weighting that cannot fail
+  // on the weighting is the `volatilityModel` "conservative default" pattern: it
+  // makes the defect it claims to cover unreachable.
+  //
+  // So the weighting is MEASURED, the way the sibling above measures it: reads
+  // that differ ONLY in which bias was stated, with a fixture where the weight is
+  // visible in the confidence rather than saturated. Instrumented against the
+  // engine: these two planes are a TIE — one trend lean against one range lean,
+  // reading 50 with no bias — so the 1.5 the weight applies is the only thing
+  // standing between a tie and a lean, and the confidence reports it directly.
+  //
+  // THE SINGLE-PLANE FIXTURE COULD NOT HAVE DONE IT, and that is worth recording:
+  // one trending plane alone reads confidence 100 with a bias, 100 without one,
+  // and 100 with the bias pointed at a plane that is not even present. The
+  // original fixture saturated the confidence and so was structurally blind to
+  // exactly the thing its title claimed to cover.
+  //
+  // The shape is the sibling's, with positive keys instead of the synthetic `0`:
+  // same two candle helpers, same tie, same 50 -> 60 readout.
   it("a normal positive biasTf still weights its plane", () => {
-    const read = detectRegimeEnhanced({ planes: { 300: plane() }, biasTf: 300 })
-    expect(read.latency.planes).toEqual([300])
-    expect(read.regime).not.toBe("unknown")
-    expect(read.confidenceKind).toBe("measured")
+    const planes = () => ({ 300: trendCandles(), 3600: noiseCandles() })
+    const biasOnTrend = detectRegimeEnhanced({ planes: planes(), biasTf: 300 })
+    const noBias = detectRegimeEnhanced({ planes: planes() })
+    const biasOnChop = detectRegimeEnhanced({ planes: planes(), biasTf: 3600 })
+
+    expect(biasOnTrend.latency.planes).toEqual([300, 3600])
+    expect(biasOnTrend.regime).not.toBe("unknown")
+    expect(biasOnTrend.confidenceKind).toBe("measured")
+
+    // A stated bias must move the confidence off the unweighted read. Had the
+    // weight been dropped for POSITIVE keys, this would read 50 and be
+    // indistinguishable from `noBias` — which is the whole point.
+    expect(biasOnTrend.confidence).toBe(60)
+    expect(noBias.confidence, "the same planes with no stated bias").toBe(50)
+    expect(biasOnTrend.confidence).not.toBe(noBias.confidence)
+
+    // And the weight followed the plane that was NAMED rather than the first one
+    // in the object: biasing 3600 moves the number just as much. A weight applied
+    // by position would leave this at 50 and only the assertion above would move.
+    expect(biasOnChop.confidence).toBe(60)
   })
 })

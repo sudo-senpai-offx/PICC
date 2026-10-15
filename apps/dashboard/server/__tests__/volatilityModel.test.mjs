@@ -141,7 +141,17 @@ describe("expiry optimizer uses computed volatility, not hardcoded defaults", ()
   })
 })
 
-describe("conservative defaults for insufficient data", () => {
+// THE FRAME, CORRECTED. This container used to read "conservative defaults for
+// insufficient data", over a branch that emits NO defaults at all: no
+// recommendation, no score, no table entry. "Conservative default" named a
+// behaviour the code removed, so the one `it` inside it — correctly rewritten to
+// assert a refusal — sat under a header promising the opposite. A reader who
+// trusted the container would expect a fallback and find none, and the next
+// person to add a fallback would find the suite green while doing it.
+//
+// The header now states the branch's actual contract: under the floor, the
+// honest answer is a refusal carrying the count it was given.
+describe("insufficient data gets a REFUSAL, not conservative defaults", () => {
   // ─────────────────────────────────────────────────────────────────────
   // REWRITTEN. THE OLD ASSERTION WAS THE BUG.
   //
