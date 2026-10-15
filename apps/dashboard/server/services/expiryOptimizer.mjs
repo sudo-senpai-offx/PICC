@@ -92,7 +92,10 @@ export function optimizeExpiry(candles, regime = "ranging", signalStrength = 0.5
     barSec = Math.max(1, Math.round(gaps[Math.floor(gaps.length / 2)]))
   }
   const scored = EXPIRY_OPTIONS.map((exp) => {
-    let score = 50
+    // No initializer: `score` was `let score = 50`, and 50 was dead on every path
+    // — all four regime arms assign it before either adjustment reads it, so the
+    // literal survived only as a shape a reader could mistake for a fallback.
+    let score
     const expectedMove = avgMove * Math.sqrt(exp.seconds / barSec)
     if (regime === "trending") {
       score = exp.seconds >= 300 ? 80 : exp.seconds >= 60 ? 65 : 40
