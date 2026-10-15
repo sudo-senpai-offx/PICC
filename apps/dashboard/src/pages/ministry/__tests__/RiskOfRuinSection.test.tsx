@@ -166,6 +166,33 @@ const ALL_ASSUMED = served(
   ["winRate", "avgPayout", "riskPct", "balance"]
 )
 
+/**
+ * A SERVER WHOSE `inputs` BLOCK IS WIDER THAN THE PANEL'S FOUR ROWS.
+ *
+ * WHY THIS SHAPE EXISTS, stated plainly because the server does not produce it
+ * today: `riskOfRuinProvenance.test.mjs:498` pins the served block to exactly
+ * the four keys below, and nothing in this repo emits a fifth. The fixture is
+ * the payload as it would arrive the moment that service grows an input — and
+ * the panel's only defence against being wrong about that is that it does not
+ * TYPE the count. The service is untyped `.mjs`, so nothing at the wire stops
+ * the fifth key; the client's four-key interface is the only thing asserting
+ * four, and a client assertion is not a guarantee a server change cannot break.
+ *
+ * The assertion below is cast rather than widened deliberately: the extra key is
+ * a fact about the WIRE, not about `RiskOfRuinInputs`, and typing the fixture to
+ * the interface would make the thing under test unreachable to a reader who
+ * believes the interface.
+ *
+ * `edgePct` is a name that does not exist anywhere in this panel on purpose. It
+ * has no `provenance` entry and no `<li>`, so a renderer that walked
+ * `Object.keys(data.inputs)` to build its rows would produce a fifth row with no
+ * number on it; the panel maps `FIELDS`, so it produces four.
+ */
+const FIFTH_INPUT: RiskOfRuinMeasured = {
+  ...ALL_ASSUMED,
+  inputs: { ...ALL_ASSUMED.inputs, edgePct: 12 } as RiskOfRuinMeasured["inputs"]
+}
+
 /** THE MIXED CASE, and the one a real operator meets: two typed, two assumed. */
 const MIXED = served(
   {
@@ -259,6 +286,7 @@ const render = (element: React.ReactElement = <RiskOfRuinSection />) => {
 }
 
 const id = (testId: string) => container.querySelector(`[data-testid="${testId}"]`)
+const ids = (testId: string) => [...container.querySelectorAll(`[data-testid="${testId}"]`)]
 const text = (testId: string) => id(testId)?.textContent ?? ""
 
 function click(testId: string) {
@@ -466,21 +494,88 @@ describe("RiskOfRuinSection renders the two things its summary cannot replace", 
     expect(echo).toContain("balance 1000")
   })
 
-  it("the summary denominator comes from the server's own block, not a literal", async () => {
-    // The count was hardcoded as `of 4`, which is the only figure in this panel
-    // that was not derived from the payload — so it was the one figure that
-    // could quietly become false the day a fifth input existed. A panel whose
-    // stated rule is that every number here comes from the server cannot keep
-    // one of them in a string literal.
-    roeMock.mockResolvedValue(ALL_ASSUMED)
+  // THE OLD TEST, AND WHY IT CERTIFIED NOTHING. It read
+  //
+  //     expect(summary).toContain(`4 of ${Object.keys(inputs).length} input(s) …`)
+  //
+  // over a fixture the line above had already pinned to four keys. So the
+  // expectation was built from the same expression the component uses AND from
+  // the one number that made a literal indistinguishable from a derivation: a
+  // hardcoded `of {4}` and `of {Object.keys(data.inputs).length}` rendered the
+  // identical string. A test named "comes from the server's own block, not a
+  // literal" that passes when the literal is restored certifies nothing; this is
+  // the `volatilityModel` "conservative default" pattern, one level up.
+  //
+  // THE FIX IS A FIXTURE WHERE THE TWO WIDTHS DIFFER. `FIFTH_INPUT` is a
+  // five-key server block, so the panel's four `FIELDS` rows and the payload's
+  // width are not the same number and cannot both be right. The expectation
+  // below is a hand-written literal, so it cannot be recomputed from whatever
+  // expression the component happens to use.
+  it("the summary denominator is the server block's own width, which this fixture makes differ from the row count", async () => {
+    roeMock.mockResolvedValue(FIFTH_INPUT)
     render()
     fill({})
     await settleOn("summary")
 
     const summary = text("roe-summary")
-    const inputs = ALL_ASSUMED.inputs
-    expect(Object.keys(inputs), "the fixture's own width is four").toHaveLength(4)
-    expect(summary).toContain(`4 of ${Object.keys(inputs).length} input(s) were not supplied`)
+    expect(
+      Object.keys(FIFTH_INPUT.inputs),
+      "the fixture's own server block is five wide, or this test proves nothing"
+    ).toHaveLength(5)
+    // HAND-WRITTEN, not derived from anything the component computes. Four of
+    // the server's five inputs were assumed; the fifth is a key this panel has no
+    // row for. A literal `of {4}` renders "4 of 4" and fails here; so does
+    // `FIELDS.length`, which would read the panel's row count instead of the
+    // payload's.
+    expect(summary).toContain("4 of 5 input(s) were not supplied")
+    // AND the panel still renders four ROWS — it maps `FIELDS`, so a payload key
+    // with no row does not become a row with no provenance sentence beside it.
+    expect(ids("roe-input-winRate")).toHaveLength(1)
+    expect(ids("roe-input-balance")).toHaveLength(1)
+  })
+
+  // THE ECHO'S LEAD-IN COUNT, WHICH WAS THE WORD "four" IN A STRING LITERAL.
+  //
+  // Two lines above this one in the same describe, the same commit derived the
+  // SUMMARY's count from the payload and said why: it was "the one figure that
+  // could quietly become false the day a fifth input was added". This sentence
+  // stayed a literal, and it is a claim about how many values the paragraph
+  // lists — so a literal in it is the identical defect one line down.
+  //
+  // THE ASSERTION IS SELF-CONSISTENCY, NOT A PINNED NUMBER, because that is the
+  // property that can actually fail: the stated width is read back OUT of the
+  // rendered sentence and compared with the number of values that sentence is
+  // followed by. Those are two different derivations — one from the string, one
+  // from the rendered output — so neither `four`, `five`, nor a dropped count
+  // can pass it.
+  it("the echo states how many values it lists, and lists that many", async () => {
+    roeMock.mockResolvedValue(FIFTH_INPUT)
+    render()
+    fill({})
+    await settleOn("summary")
+
+    const echo = text("roe-echo")
+    // Digits, not a word. `rounded echo of the four inputs:` cannot satisfy this
+    // pattern, which is the point: a spelled-out count is a count nothing in the
+    // payload can check.
+    const stated = /rounded echo of the (\d+) inputs:/.exec(echo)
+    expect(
+      stated,
+      `the echo must state its own width in digits; rendered as ${JSON.stringify(echo)}`
+    ).not.toBeNull()
+
+    const listed = (echo.split("inputs:")[1] ?? "").trim().split(" · ").filter(Boolean)
+    // The stated width is the number of values actually rendered after it. A
+    // literal "four" beside four values survives this only by accident; a literal
+    // that drifts does not, and neither does deriving the count from the server's
+    // block (five) when the paragraph lists four.
+    expect(listed, "the stated width must equal the number of values listed").toHaveLength(
+      Number(stated![1])
+    )
+    // Which four: the panel's rows, not the payload's keys. `edgePct` is in the
+    // server block and has no row, so counting the payload here would state five
+    // over four values.
+    expect(listed).toEqual(["win rate 55", "avg payout 1", "risk per trade 5", "balance 1000"])
   })
 })
 

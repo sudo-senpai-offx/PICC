@@ -360,15 +360,29 @@ function RiskOfRuinResult({ reading }: { reading: RoMeasured }) {
       {/* THE ROUNDED ECHO, KEPT VISIBLE beside the exact per-input values it
           rounds. The two differ by rounding — a ledger 47.5% reads 48 here — and
           hiding either one would leave a reader comparing two numbers with no
-          statement of which is which. */}
-      {/* THE ROUNDED ECHO, KEPT VISIBLE beside the exact per-input values it
-          rounds. The two differ by rounding — a ledger 47.5% reads 48 here — and
-          hiding either one would leave a reader comparing two numbers with no
           statement of which is which. Asserted by
           `RiskOfRuinSection.test.tsx`: deleting this paragraph was invisible to
-          the suite until that test existed. */}
+          the suite until that test existed.
+
+          THE COUNT IN THE LEAD-IN IS `FIELDS.length`, NOT THE WORD "four". The
+          sentence is a claim about how many values this paragraph lists, and it
+          lists one per `FIELDS` entry, so the count is derived from the same
+          array the values come from and cannot disagree with them. The literal
+          was the sibling defect to the summary's `of {4}`, fixed one commit
+          earlier in this file: `FIELDS` and `data.inputs` are INDEPENDENT
+          SOURCES, so a server that starts reporting a fifth input makes the
+          summary read "1 of 5" while a literal here still reads "the four
+          inputs:" — a count the payload can contradict, stated where the
+          payload's own width is on screen one line above.
+
+          It is deliberately `FIELDS.length` and NOT
+          `Object.keys(data.inputs).length`. This paragraph is a projection of
+          the server's block onto the rows this panel has labels for, so the
+          number of values IN IT is the width of `FIELDS`. Counting the server's
+          block instead would state a width the paragraph does not render the
+          moment the two lists differ in width. */}
       <p className="muted small" data-testid="roe-echo">
-        the server&apos;s own rounded echo of the four inputs:{" "}
+        the server&apos;s own rounded echo of the {FIELDS.length} inputs:{" "}
         {FIELDS.map((f) => `${f.label} ${formatNum(data.inputs[f.key])}`).join(" · ")}
       </p>
     </div>
