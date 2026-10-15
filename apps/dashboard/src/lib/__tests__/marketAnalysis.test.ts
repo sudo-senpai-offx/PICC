@@ -162,15 +162,21 @@ describe("fetchRiskParity", () => {
   })
 
   it("fills every branch-absent key with null rather than leaving it undefined", async () => {
-    // The single-asset branch (`riskParity.mjs:154`) carries neither `vols` nor
-    // `symbolCount`. Undefined would be indistinguishable, at the render
-    // boundary, from a key the server sent as null.
+    // The single-asset branch carries no `symbolCount`, no `riskContributions`,
+    // no `iterations`, and no `portfolioVol` — it builds no covariance, so it
+    // computes no portfolio volatility and now says so with `null` rather than
+    // the literal `0` this fixture used to send. Undefined would be
+    // indistinguishable, at the render boundary, from a key the server sent as
+    // null, which is the distinction the whole normaliser exists to preserve.
     fetchMock.mockResolvedValue(
       response(200, {
         ok: true,
         weights: { EURUSD: 1 },
         method: "single-asset",
-        portfolioVol: 0
+        vols: { EURUSD: 0.0651 },
+        volStatus: { EURUSD: { state: "measured", annual: 0.0651, reason: null } },
+        portfolioVol: null,
+        reason: "single-asset portfolio: no covariance is built"
       })
     )
     const out = await fetchRiskParity(["EURUSD"])
@@ -179,12 +185,39 @@ describe("fetchRiskParity", () => {
       weights: { EURUSD: 1 },
       method: "single-asset",
       symbolCount: null,
-      vols: null,
-      portfolioVol: 0,
+      vols: { EURUSD: 0.0651 },
+      volStatus: { EURUSD: { state: "measured", annual: 0.0651, reason: null } },
+      portfolioVol: null,
       portfolioVolPct: null,
       riskContributions: null,
-      iterations: null
+      iterations: null,
+      reason: "single-asset portfolio: no covariance is built"
     })
+  })
+
+  it("normalises an UNMEASURED per-symbol vol to null and keeps it named", async () => {
+    // The allocator no longer substitutes 0.20 for a symbol it could not measure,
+    // so `vols` carries a null and `volStatus` says which of the three states it
+    // was. A client that printed `vols[symbol]` without checking would otherwise
+    // print a null it did not expect, so the state is what makes it legible.
+    fetchMock.mockResolvedValue(
+      response(200, {
+        ok: true,
+        weights: { A: 1 },
+        method: "inverse-vol",
+        symbolCount: 2,
+        vols: { A: 0.0651, B: null },
+        volStatus: {
+          A: { state: "measured", annual: 0.0651, reason: null },
+          B: { state: "unmeasured", annual: null, reason: "too few usable positive-price transitions" }
+        }
+      })
+    )
+    const out = await fetchRiskParity(["A", "B"])
+    if (out.ok === false) throw new Error("expected a measurement")
+    expect(out.vols?.B).toBeNull()
+    expect(out.volStatus?.B.state).toBe("unmeasured")
+    expect(out.volStatus?.B.reason).toMatch(/too few usable/)
   })
 
   it("keeps a genuine measured portfolioVol of 0 as 0", async () => {

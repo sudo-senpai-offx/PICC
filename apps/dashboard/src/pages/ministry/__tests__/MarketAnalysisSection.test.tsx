@@ -191,10 +191,15 @@ const rpPartial: RiskParityResponse = {
   method: "inverse-vol",
   symbolCount: 2,
   vols: { EURUSD: 0.0651, BTCUSD: 0.9112 },
+  volStatus: {
+    EURUSD: { state: "measured", annual: 0.0651, reason: null },
+    BTCUSD: { state: "measured", annual: 0.9112, reason: null }
+  },
   portfolioVol: null,
   portfolioVolPct: null,
   riskContributions: null,
-  iterations: null
+  iterations: null,
+  reason: null
 }
 
 /** `handlers.mjs:5173` — the route refused before allocating. */
@@ -205,29 +210,32 @@ const rpRouteRefused: RiskParityResponse = {
 }
 
 /**
- * `riskParity.mjs:154` — ONE survivor, so the allocator returns a literal.
+ * ONE survivor, so the allocator takes the single-asset branch.
  *
- * ```js
- * if (symbols.length === 1) {
- *   return { ok: true, weights: { [symbols[0]]: 1 }, method: "single-asset", portfolioVol: 0 }
- * }
- * ```
+ * REWRITTEN. This fixture used to carry `portfolioVol: 0`, which was a LITERAL in
+ * the source, returned above the covariance build on a branch that builds no
+ * covariance. It is now `portfolioVol: null` with a reason, and — the change
+ * that matters for this panel — the asset's own MEASURED volatility is now
+ * present in `vols`, where before the branch discarded it entirely.
  *
- * `portfolioVol: 0` HERE IS NOT A MEASUREMENT. It is a constant in the source, sits
- * above the covariance build at `:157`, and is returned before any volatility is
- * computed — the branch also omits `vols` entirely, which is why `vols === null` and
- * `symbolCount === null` on this payload. Presenting it as `portfolio vol: 0` beside
- * `weight 1` tells an operator the position carries no risk, which is the exact
- * failure this file's governing rule exists to prevent.
+ * So the two lines below can no longer contradict each other: the weight line
+ * prints the volatility that was measured, and the portfolio line says the
+ * portfolio-level number does not exist. Previously the weight line said
+ * "annual vol absent" beside a "portfolio vol: 0", which is one unmeasured
+ * thing called an absence and a second one called a measurement, two lines
+ * apart.
  */
 const rpSingleAsset: RiskParityResponse = {
   ok: true,
   weights: { EURUSD: 1 },
   method: "single-asset",
   symbolCount: null,
-  vols: null,
-  portfolioVol: 0,
+  vols: { EURUSD: 0.0651 },
+  volStatus: { EURUSD: { state: "measured", annual: 0.0651, reason: null } },
+  portfolioVol: null,
   portfolioVolPct: null,
+  reason:
+    "single-asset portfolio: no covariance is built, so no portfolio volatility is computed; the asset's own measured volatility is in vols",
   riskContributions: null,
   iterations: null
 }
@@ -248,6 +256,10 @@ const rpErcMeasuredZero: RiskParityResponse = {
   method: "equal-risk-contribution",
   symbolCount: 2,
   vols: { EURUSD: 0.0651, BTCUSD: 0.9112 },
+  volStatus: {
+    EURUSD: { state: "measured", annual: 0.0651, reason: null },
+    BTCUSD: { state: "measured", annual: 0.9112, reason: null }
+  },
   portfolioVol: 0,
   portfolioVolPct: "0%",
   riskContributions: [
@@ -937,7 +949,7 @@ describe("MarketAnalysisSection — risk parity", () => {
   // The single-asset constant — a server 0 that is not a measurement
   // -------------------------------------------------------------------
 
-  it("does NOT render the single-asset branch's literal 0 as a portfolio volatility", async () => {
+  it("does NOT render the single-asset branch's absent portfolio vol as a measurement", async () => {
     rp.mockResolvedValue(rpSingleAsset)
     render()
     type("market-rp-symbols", "EURUSD")
@@ -945,24 +957,25 @@ describe("MarketAnalysisSection — risk parity", () => {
     await settleOn("market-rp-portfolio")
 
     const line = text("market-rp-portfolio")
-    // THE HAZARD. `riskParity.mjs:154` returns `portfolioVol: 0` as a literal
-    // constant, before any covariance is built. Printed as a measurement beside
+    // THE HAZARD. `riskParity.mjs` used to return `portfolioVol: 0` as a literal
+    // constant, before any covariance was built, on the one branch where a
+    // fabricated "no risk" is most dangerous. Printed as a measurement beside
     // `weight 1`, it reads as "this position carries no risk".
     expect(line).not.toMatch(/portfolio vol:\s*0\b/)
     expect(id("market-rp-portfolio-absent")).not.toBeNull()
     expect(id("market-rp-portfolio-vol")).toBeNull()
-    // The reason is named rather than left as a bare dash, and it names the
-    // constant on the wire so a reader comparing against the payload is not
-    // left wondering where the panel's disagreement came from.
+    // The reason is named rather than left as a bare dash.
     expect(line).toContain("absent")
-    expect(line).toContain("literal 0")
-    expect(line).toContain("without computing a volatility")
+    expect(line).toContain("no covariance")
+    expect(line).toContain("single-asset branch")
   })
 
-  it("treats the single-asset vols omission and the portfolioVol constant CONSISTENTLY", async () => {
-    // Two lines apart the panel must not call one unmeasured thing an absence and
-    // the other a measurement. `vols` is already absent here; `portfolioVol` has to
-    // reach the same verdict, because the branch omitted it for the same reason.
+  it("prints the single-asset asset's OWN measured vol beside its weight", async () => {
+    // THE COMPANION TO THE ASSERTION ABOVE, and the reason it is no longer a
+    // contradiction. The branch discards no measurement: the asset's own
+    // annualized volatility is measured and printed, while the PORTFOLIO-level
+    // field says it does not exist. "Not computed at this level" and "not
+    // computed at all" are different facts and get different renderings.
     rp.mockResolvedValue(rpSingleAsset)
     render()
     type("market-rp-symbols", "EURUSD")
@@ -970,8 +983,8 @@ describe("MarketAnalysisSection — risk parity", () => {
     await settleOn("market-rp-weight-EURUSD")
     const weightLine = text("market-rp-weight-EURUSD")
     expect(weightLine).toContain("weight 1")
-    expect(weightLine).toContain("annual vol absent")
-    expect(text("market-rp-portfolio")).toContain("absent")
+    expect(weightLine).toContain("0.0651")
+    expect(weightLine).not.toContain("annual vol absent")
     // And the branch is named, so the reader can see which allocator path this is.
     expect(text("market-rp-method")).toContain("single-asset")
   })

@@ -642,27 +642,26 @@ function RiskParityResult({
         ))}
       </ul>
 
-      {/* THE 0 ON THE WIRE IS NOT ALWAYS A MEASUREMENT.
-          `riskParity.mjs:154` returns `{ok:true, weights:{X:1}, method:"single-asset",
-          portfolioVol: 0}` — that `0` is a LITERAL CONSTANT sitting above the
-          covariance build at `:157`, returned before any volatility is computed,
-          and the same branch omits `vols` entirely. So `measured(0, ...)` passes its
-          own `Number.isFinite` test and prints `portfolio vol: 0` two lines below
-          `X: weight 1 · annual vol absent`. Two lines apart, one unmeasured thing is
-          called an absence and the other a measurement. An operator allocating a
-          single asset would read that as "this position carries no risk".
+      {/* A MISSING PORTFOLIO VOL IS NOT THE SAME FACT AS A ZERO ONE.
+          The single-asset branch used to send `portfolioVol: 0` — a LITERAL in
+          the source, returned above the covariance build on the one branch that
+          builds no covariance, because a one-asset portfolio has no allocation
+          to compute. Printed as a measurement it told an operator the position
+          carries no risk, which is the most dangerous direction for a risk
+          number to lie in. It sends `null` now, with a reason.
 
-          THE GATE IS ON `method`, NEVER ON THE VALUE. The ERC branch really does
-          compute a portfolio vol (`riskParity.mjs:100`, floored at `1e-12` and
-          rounded to 4dp), so an ERC response can legitimately serve `portfolioVol: 0`
-          — and a measured zero must still print as `0`. Collapsing zeros by value
-          would trade this defect for the opposite one. */}
+          THE GATE IS STILL ON `method`, NEVER ON THE VALUE. The ERC branch
+          really does compute a portfolio vol (`equalRiskContribution`'s
+          `sqrt(max(portVar, 1e-12))`, floored at 1e-12 and rounded to 4dp), so
+          an ERC response can legitimately serve `portfolioVol: 0` — and a
+          measured zero must still print as `0`. Collapsing zeros by value would
+          trade this defect for the opposite one. */}
       <div className="muted small" data-testid="market-rp-portfolio">
         portfolio vol:{" "}
         {data.method === "single-asset" ? (
           <span data-testid="market-rp-portfolio-absent">
-            absent — the single-asset branch sends the literal 0 without computing a
-            volatility
+            absent — the single-asset branch builds no covariance, so it reports no portfolio
+            volatility; the asset's own measured volatility is above
           </span>
         ) : (
           <span data-testid="market-rp-portfolio-vol">

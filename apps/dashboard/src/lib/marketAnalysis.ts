@@ -335,15 +335,49 @@ export interface RiskParityMeasured {
   method: RiskParityMethod
   /** Set only on the inverse-vol and ERC branches; null on single-asset. */
   symbolCount: number | null
-  /** Annualised vol per surviving symbol. Absent on the single-asset branch. */
-  vols: Record<string, number> | null
+  /**
+   * Annualised vol per surviving symbol, INCLUDING the ones that got no weight.
+   * A null entry is a symbol the allocator could not measure at all; a 0 entry is
+   * a real measurement of no movement. The allocator used to replace both with
+   * an invented 0.20 and weight by it.
+   */
+  vols: Record<string, number | null> | null
+  /**
+   * Per-symbol record of what the volatility measurement actually was, so a
+   * dropped symbol's absence is named rather than visible only as a missing key.
+   */
+  volStatus: Record<string, VolStatus> | null
   portfolioVol: number | null
   portfolioVolPct: string | null
   riskContributions: RiskContribution[] | null
   iterations: number | null
+  /** Present on branches that refuse or decline to compute; null otherwise. */
+  reason?: string | null
 }
 
 export type RiskParityResponse = RiskParityRefused | RiskParityMeasured
+
+/**
+ * WHAT A PER-SYMBOL VOLATILITY MEASUREMENT ACTUALLY WAS.
+ *
+ * Three states, and the distinction between the last two is the whole point:
+ *
+ *  - `measured`      — a real, positive annualized volatility. The only state
+ *                      that may be inverse-volatility weighted.
+ *  - `measured-zero` — a REAL measurement of exactly 0 (or one that rounds to 0
+ *                      at 4dp). The asset does not move. Collapsing this into
+ *                      "no data" would be as dishonest as the constant it
+ *                      replaced, in the opposite direction.
+ *  - `unmeasured`    — nothing was computed: too few usable log returns for the
+ *                      requested period.
+ *
+ * The allocator used to collapse all three into an invented 0.20.
+ */
+export interface VolStatus {
+  state: "measured" | "measured-zero" | "unmeasured"
+  annual: number | null
+  reason: string | null
+}
 
 /**
  * The wire shape, before normalisation. Every branch-dependent key is optional
@@ -352,12 +386,14 @@ export type RiskParityResponse = RiskParityRefused | RiskParityMeasured
 interface RawRiskParity {
   ok: boolean
   error?: string
+  reason?: string
   weights?: Record<string, number>
   method?: string
   symbolCount?: number
-  vols?: Record<string, number>
-  portfolioVol?: number
-  portfolioVolPct?: string
+  vols?: Record<string, number | null>
+  volStatus?: Record<string, VolStatus>
+  portfolioVol?: number | null
+  portfolioVolPct?: string | null
   riskContributions?: RiskContribution[]
   iterations?: number
 }
@@ -377,10 +413,14 @@ export async function fetchRiskParity(
     method: raw.method as RiskParityMethod,
     symbolCount: raw.symbolCount ?? null,
     vols: raw.vols ?? null,
+    volStatus: raw.volStatus ?? null,
+    // `?? null` rather than `|| null`: an explicit `0` from a MEASURED branch
+    // must survive as 0. Only an absent key becomes an absence.
     portfolioVol: raw.portfolioVol ?? null,
     portfolioVolPct: raw.portfolioVolPct ?? null,
     riskContributions: raw.riskContributions ?? null,
-    iterations: raw.iterations ?? null
+    iterations: raw.iterations ?? null,
+    reason: raw.reason ?? null
   }
 }
 
