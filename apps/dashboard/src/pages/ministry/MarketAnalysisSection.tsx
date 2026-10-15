@@ -588,6 +588,33 @@ function RiskParityResult({
   const requested = asked ?? []
   const absent = requested.filter((s) => !present.includes(s))
 
+  // THE MISMATCH LINE NAMES THE DROP, RATHER THAN SAYING IT WAS NEVER NAMED.
+  //
+  // This line used to read "…was dropped from the weights without being named",
+  // and that was FALSE: the payload carries a `volStatus` entry for every symbol
+  // the allocator measured, with a state that distinguishes a real zero from a
+  // real figure below the published precision, and a reason in words. The panel
+  // simply never read it, so it told an operator the mechanism was unknown in
+  // the one field that knows it exactly — and `riskParity.mjs` leaned on the
+  // line, justifying the ERC exclusion as visible "through the mismatch the
+  // panel already renders".
+  //
+  // So it renders the names. Two populations, and they are NOT the same:
+  //   - a symbol with a `volStatus` entry was measured and then dropped, and the
+  //     state + reason say which measurement and which precision limit;
+  //   - a symbol with NO entry was never measured by the allocator at all (the
+  //     route dropped its history), and that remains honestly unnamed — so the
+  //     line says so rather than implying the whole gap is explained.
+  // A count that matches neither population is reported as unattributable.
+  const volStatus = data.volStatus
+  const droppedByAllocator: Array<{ symbol: string; state: string; reason: string | null }> =
+    volStatus === null
+      ? []
+      : absent
+          .filter((s) => s in volStatus)
+          .map((s) => ({ symbol: s, state: volStatus[s].state, reason: volStatus[s].reason }))
+  const namedNowhere = volStatus === null ? absent : absent.filter((s) => !(s in volStatus))
+
   return (
     <div data-testid="market-rp-result">
       <p data-testid="market-rp-method">
@@ -627,8 +654,28 @@ function RiskParityResult({
         {data.symbolCount !== null && data.symbolCount !== present.length ? (
           <p data-testid="market-rp-count-mismatch">
             the allocation also reports symbolCount {data.symbolCount} against{" "}
-            {present.length} weight(s) — the difference had no usable volatility and was
-            dropped from the weights without being named.
+            {present.length} weight(s)
+            {droppedByAllocator.length > 0 ? (
+              <>
+                {" — measured, then dropped by the allocator, which names each one: "}
+                {droppedByAllocator
+                  .map((d) => `${d.symbol} [${d.state}]: ${d.reason ?? "no reason given"}`)
+                  .join(" · ")}
+              </>
+            ) : null}
+            {namedNowhere.length > 0 ? (
+              <>
+                {" — requested but with no measurement anywhere in the response, so the"}
+                {" allocator never saw them: "}
+                {namedNowhere.join(", ")}
+              </>
+            ) : null}
+            {droppedByAllocator.length === 0 && namedNowhere.length === 0 ? (
+              <>
+                {" — and this response names no symbol for the difference, so it cannot be attributed here"}
+              </>
+            ) : null}
+            .
           </p>
         ) : null}
       </div>

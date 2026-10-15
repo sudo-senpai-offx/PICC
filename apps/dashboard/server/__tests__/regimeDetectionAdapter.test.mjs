@@ -301,7 +301,12 @@ describe("regimeEngine delegation (B-REG-4)", () => {
   // joining did not regress the branch that has no second reason to join.
   it("a RESOLVABLE label with enough bars is not refused at all", () => {
     const r = detectRegime(trendCandles(), "5m")
-    expect(r.regimeEngine.reason ?? null).toBeNull()
+    // REWRITTEN. `r.regimeEngine.reason ?? null` passes for BOTH `null` and
+    // `undefined`, so it asserted nothing about which absence the engine
+    // reported — the one assertion in this file about a NON-refusal. `toBeNull()`
+    // states the contract: the engine reports no reason as `null` explicitly,
+    // and an absent key would now fail here instead of passing quietly.
+    expect(r.regimeEngine.reason).toBeNull()
     expect(r.regimeEngine.factors.join(" | ")).not.toMatch(/insufficient bars/)
     expect(r.regimeEngine.factors.join(" | ")).not.toMatch(/does not resolve/)
   })

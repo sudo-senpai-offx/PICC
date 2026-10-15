@@ -254,6 +254,50 @@ describe("riskParity no longer invents a 20% volatility", () => {
     expect(r.volStatus.A.state).toBe("measured-zero")
   })
 
+  // ─────────────────────────────────────────────────────────────────────
+  // M12, REBORN — the THIRD all-published-zero shape, and the one the
+  // four-state split itself created.
+  //
+  // `allPublishedZero` tests for `measured-zero` OR `measured-rounded-zero`,
+  // and the source comment claims the rounded arm is handled. NO TEST DID. Every
+  // `oneTick` use in this file pairs it with a measured partner, and the only
+  // all-published-zero test uses `flat()` — so deleting `||
+  // VOL_MEASURED_ROUNDED_ZERO` from `riskParity.mjs:307` flipped the refusal to
+  // "no symbol has a measurable volatility" (false about three measurements that
+  // all happened) and left the whole suite green. The mutant is dead below.
+  //
+  // The distinction matters BECAUSE the two refusals say opposite things about
+  // the portfolio: here every symbol MOVED and was measured; told the portfolio
+  // had nothing measurable, an operator concludes the data is absent rather
+  // than that every figure fell below the published 4dp floor.
+  // ─────────────────────────────────────────────────────────────────────
+  it("refuses when every symbol MOVES but every measurement publishes as 0", () => {
+    const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
+    const r = riskParityAllocation(
+      { A: oneTick(200, 1e-3), B: oneTick(200, 1e-3), C: oneTick(200, 1e-3) },
+      { window: 60 }
+    )
+    // All three were MEASURED — that is the premise; the test fails loudly if a
+    // future change makes one of them unmeasurable, because then this refusal
+    // would no longer be the shape it is pinning.
+    expect(r.ok).toBe(false)
+    for (const s of ["A", "B", "C"]) {
+      expect(r.volStatus[s].state, s).toBe("measured-rounded-zero")
+      expect(r.vols[s], s).toBe(0)
+      // The precision limit is named per symbol, not once in aggregate.
+      expect(r.volStatus[s].reason, s).toMatch(/rounds to 0 at the published 4dp precision/i)
+    }
+    expect(r.weights).toEqual({})
+    // THE DISCRIMINATING ASSERTION, in both directions. Dropping the
+    // `|| VOL_MEASURED_ROUNDED_ZERO` arm makes this fail: the error becomes the
+    // unmeasurable message, which is a falsehood about all three measurements.
+    expect(r.error).toMatch(/every symbol/i)
+    expect(r.error).not.toMatch(/no symbol has a measurable volatility/i)
+    // And the published-zero claim is the one that is true of these three:
+    // "rounds to 0" is exactly what happened, so the message may say so.
+    expect(r.error).toMatch(/rounded to 0 at the published 4dp precision/i)
+  })
+
   // The two refusals name DIFFERENT facts about the measurements behind them, and
   // that difference survives a mixed portfolio too. Asserted as a pair because
   // the failure mode is precisely "they are the same string".
@@ -273,10 +317,14 @@ describe("riskParity no longer invents a 20% volatility", () => {
   // ─────────────────────────────────────────────────────────────────────
   // THE ERC DIAGONAL'S INVENTED 0.0001 VARIANCE — A SEVENTH INSTANCE.
   //
-  // `covMatrix[i][i] = vols[s] ? … : 0.0001` invents a 63%-annualised daily
-  // variance for any symbol with no positive published vol, and because the
-  // refusal above means such a symbol is always PUBLISHED-ZERO rather than
-  // unmeasured, the constant is reachable through exactly one route. Measured
+  // `covMatrix[i][i] = vols[s] ? … : 0.0001` invents a daily variance for any
+  // symbol with no positive published vol. For the record, that constant
+  // annualises to 15.87% (`sqrt(0.0001 * 252)`) and is 63% of the daily
+  // variance of the 20% annualised constant it replaced — two different
+  // quantities, and the old comment here conflated them into one wrong number.
+  // Because the refusal above means such a symbol is always PUBLISHED-ZERO
+  // rather than unmeasured, the constant is reachable through exactly one route.
+  // Measured
   // before this fix, one 1e-3 tick in a 200-bar otherwise-flat series returned
   //
   //     weights: { A: 0.4911, B: 0.213, C: 0.2959 }      <- the LOWEST published
@@ -315,19 +363,60 @@ describe("riskParity no longer invents a 20% volatility", () => {
   // The CONTROL: with every symbol genuinely measured, ERC allocates over all of
   // them and invents nothing. Without this the drop above could be satisfied by
   // a matrix that is always too small.
+  //
+  // REWRITTEN, not deleted: this ran `for (const method of ["erc"])`, a
+  // one-element loop that reads as a sweep of both methods and tests exactly
+  // one. A future second entry would silently change what this pins, so it now
+  // names the method it means. The inverse-vol control is the sweep at the end
+  // of this file, which really does iterate both.
   it("ERC still allocates over EVERY symbol when all of them are genuinely measured", () => {
-    for (const method of ["erc"]) {
-      const r = riskParityAllocation(
-        { A: moving(200, 2), B: moving(200, 5), C: moving(200, 0.7) },
-        { window: 60, method }
-      )
-      expect(r.ok).toBe(true)
-      expect(Object.keys(r.weights).sort()).toEqual(["A", "B", "C"])
-      expect(r.symbolCount).toBe(3)
-      expect(r.riskContributions).toHaveLength(3)
-      const sum = Object.values(r.weights).reduce((s, x) => s + x, 0)
-      expect(sum).toBeCloseTo(1, 3)
-    }
+    const r = riskParityAllocation(
+      { A: moving(200, 2), B: moving(200, 5), C: moving(200, 0.7) },
+      { window: 60, method: "erc" }
+    )
+    expect(r.ok).toBe(true)
+    expect(Object.keys(r.weights).sort()).toEqual(["A", "B", "C"])
+    expect(r.symbolCount).toBe(3)
+    expect(r.riskContributions).toHaveLength(3)
+    const sum = Object.values(r.weights).reduce((s, x) => s + x, 0)
+    expect(sum).toBeCloseTo(1, 3)
+  })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // THE 1x1 MATRIX. The n===1 ERC branch was reachable and untested.
+  //
+  // It is a genuinely distinct shape: the covariance build loops i,j over the
+  // SURVIVING symbols, so excluding one symbol from a two-symbol portfolio
+  // produces a 1x1 matrix rather than refusing — and a 1x1 covariance is the
+  // degenerate case `equalRiskContribution` can still solve. The behaviour is
+  // correct (verified), so this pins it rather than changing it.
+  //
+  // What this pins that a 2x2 test cannot: that the excluded symbol leaves the
+  // MATRIX and not just the weights, that `symbolCount` still counts it, and
+  // that a 1x1 portfolio volatility is the surviving asset's OWN measured risk
+  // in daily units — the one place a fabricated constant would still fit.
+  // ─────────────────────────────────────────────────────────────────────
+  it("ERC on a two-symbol portfolio with one unweightable symbol solves the 1x1 matrix it is left with", () => {
+    const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
+    const r = riskParityAllocation({ A: oneTick(200, 1e-3), B: moving(200, 2) }, { window: 60, method: "erc" })
+    expect(r.ok).toBe(true)
+    // A is out of the matrix; B is all that is left, so B is the whole portfolio.
+    expect(r.weights).toEqual({ B: 1 })
+    expect(r.riskContributions).toEqual([{ symbol: "B", weight: 1, riskContribution: "100%" }])
+    // The exclusion stays visible: two symbols were asked for, one was weighed.
+    expect(r.symbolCount).toBe(2)
+    // And A's measurement is still reported, named as the precision limit it is.
+    expect(r.vols.A).toBe(0)
+    expect(r.volStatus.A.state).toBe("measured-rounded-zero")
+    // THE FABRICATION CHECK. With a single asset the portfolio's risk IS that
+    // asset's daily volatility, so the number must track B's own measurement —
+    // which a reinstated `0.0001` diagonal would not do.
+    expect(r.portfolioVol).toBeGreaterThan(0)
+    expect(r.portfolioVol).not.toBe(0.0001)
+    expect(r.portfolioVol).toBeCloseTo(r.vols.B / Math.sqrt(252), 3)
+    // The weight list, not the matrix size, is what the caller reads; it carries
+    // one key and that key is the symbol with a positive published volatility.
+    expect(Object.keys(r.weights)).toEqual(["B"])
   })
 
   // THE MEASUREMENT DIRECTION — the control for all five refusals above, and the

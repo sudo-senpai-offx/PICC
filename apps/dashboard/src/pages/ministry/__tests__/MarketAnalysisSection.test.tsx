@@ -202,6 +202,38 @@ const rpPartial: RiskParityResponse = {
   reason: null
 }
 
+/**
+ * A symbol the allocator MEASURED and then dropped, plus the count that proves
+ * it: `symbolCount: 2` against one weight.
+ *
+ * This is the payload the ERC exclusion produces — one asset whose real, non-zero
+ * volatility falls below the published 4dp precision, so it publishes as 0, has
+ * no published volatility to weight, and leaves the matrix. The panel used to
+ * render that mismatch as "dropped from the weights without being named", which
+ * was false: the payload names the precision limit in `volStatus`, in words.
+ */
+const rpPrecisionDrop: RiskParityResponse = {
+  ok: true,
+  weights: { EURUSD: 1 },
+  method: "equal-risk-contribution",
+  symbolCount: 2,
+  vols: { EURUSD: 0.0651, BTCUSD: 0 },
+  volStatus: {
+    EURUSD: { state: "measured", annual: 0.0651, reason: null },
+    BTCUSD: {
+      state: "measured-rounded-zero",
+      annual: 0,
+      reason:
+        "the annualized volatility rounds to 0 at the published 4dp precision: the price series does move inside the window, but the computed figure is below 0.00005, so it publishes as 0 without being a measurement of no movement"
+    }
+  },
+  portfolioVol: 0.0041,
+  portfolioVolPct: "0.41%",
+  riskContributions: [{ symbol: "EURUSD", weight: 1, riskContribution: "100%" }],
+  iterations: 500,
+  reason: null
+}
+
 /** `handlers.mjs:5173` — the route refused before allocating. */
 const rpRouteRefused: RiskParityResponse = {
   ok: false,
@@ -916,6 +948,72 @@ describe("MarketAnalysisSection — risk parity", () => {
     click("market-rp-run")
     await settleOn("market-rp-count-mismatch")
     expect(text("market-rp-count-mismatch")).toContain("symbolCount 3 against 2 weight(s)")
+  })
+
+  // THE MISSPOKEN SENTENCE, CORRECTED. This line used to claim the dropped
+  // symbol was "dropped from the weights without being named", while the payload
+  // it was describing carries a `volStatus` state and a reason in words — so the
+  // panel told an operator the mechanism was unknown in the one field that knows
+  // it exactly, and `riskParity.mjs` leaned on that line to justify the ERC
+  // exclusion. It renders the name now.
+  it("names the measurement and the precision limit behind a dropped symbol", async () => {
+    rp.mockResolvedValue(rpPrecisionDrop)
+    render()
+    type("market-rp-symbols", "EURUSD, BTCUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-count-mismatch")
+    const line = text("market-rp-count-mismatch")
+    expect(line).toContain("symbolCount 2 against 1 weight(s)")
+    // The dropped symbol is named, with the state that distinguishes a real
+    // zero from a real figure the 4dp floor swallowed…
+    expect(line).toContain("BTCUSD [measured-rounded-zero]")
+    // …and the reason, in the service's own words rather than a paraphrase.
+    expect(line).toContain("rounds to 0 at the published 4dp precision")
+    // AND the old falsehood is gone. This is the assertion that would have
+    // failed on the previous line, and it is the one worth having: a panel that
+    // says a thing was unnamed while naming it is worse than one that says
+    // nothing.
+    expect(line).not.toMatch(/without being named/i)
+    expect(line).not.toMatch(/had no usable volatility/i)
+    // BTCUSD is dropped, not weighted, so it does not also appear as a holding.
+    expect(ids("market-rp-weight-BTCUSD")).toHaveLength(0)
+    expect(ids("market-rp-weight-EURUSD")).toHaveLength(1)
+  })
+
+  // The OTHER population, which stays honestly unnamed: a requested symbol with
+  // NO `volStatus` entry at all was never measured by the allocator — the route
+  // dropped its history. The panel must say that rather than implying the whole
+  // gap is explained.
+  it("says a requested symbol with no measurement anywhere was never seen by the allocator", async () => {
+    // EURUSD weighed; ETHUSD requested, absent from `weights` AND absent from
+    // `volStatus` — so the response genuinely knows nothing about it.
+    rp.mockResolvedValue({
+      ...rpPartial,
+      weights: { EURUSD: 1 },
+      vols: { EURUSD: 0.0651 },
+      volStatus: { EURUSD: { state: "measured", annual: 0.0651, reason: null } }
+    } as RiskParityResponse)
+    render()
+    type("market-rp-symbols", "EURUSD, ETHUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-count-mismatch")
+    const line = text("market-rp-count-mismatch")
+    expect(line).toContain("ETHUSD")
+    expect(line).toMatch(/no measurement anywhere in the response/i)
+    // Not credited with a reason the payload does not carry.
+    expect(line).not.toMatch(/measured-rounded-zero/)
+  })
+
+  // And when the count disagrees with NO explanation in either population — the
+  // phantom-third-symbol shape the mock at the top of this describe block
+  // produces — the line reports it as unattributable instead of inventing one.
+  it("reports an unexplained count difference as unattributable rather than naming a cause", async () => {
+    rp.mockResolvedValue({ ...rpPartial, symbolCount: 3 } as RiskParityResponse)
+    render()
+    type("market-rp-symbols", "EURUSD, BTCUSD")
+    click("market-rp-run")
+    await settleOn("market-rp-count-mismatch")
+    expect(text("market-rp-count-mismatch")).toMatch(/cannot be attributed here/i)
   })
 
   it("renders the ROUTE-level refusal as a refusal and shows no allocation", async () => {

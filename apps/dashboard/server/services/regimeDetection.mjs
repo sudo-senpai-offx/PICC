@@ -75,14 +75,17 @@ export function tfSecondsOf(timeframe) {
  * one thing while its sibling says another is how the wrong reading gets made.
  *
  * So `reason` is JOINED and `factors` are APPENDED — but only for refusals that
- * ACTUALLY HAPPENED. `labelRefused` is passed in rather than assumed, because
- * the thin-series branch calls this writer for every caller, including the ones
- * whose label resolved perfectly well: naming "5m" unresolvable because the
- * BARS were short would be a fresh falsehood in the exact field this task is
- * about. A resolvable label on a thin series therefore reads exactly as it did
- * before — a bars-only refusal.
+ * ACTUALLY HAPPENED. `labelRefused` is a REQUIRED argument rather than a default
+ * of `true`: the thin-series branch calls this writer for every caller,
+ * including the ones whose label resolved perfectly well, and a defaulted flag
+ * means a future refusal site that simply forgets it silently inherits a
+ * LABEL refusal it did not have — naming "5m" unresolvable because the BARS
+ * were short. Nothing about the current call sites needs the default; the
+ * requirement is discipline, not shape, and the two sites below now each say
+ * which refusal they are reporting. A resolvable label on a thin series
+ * therefore reads exactly as it did before — a bars-only refusal.
  */
-function refuseEngineRead(timeframe, { labelRefused = true, alsoRefused = null } = {}) {
+function refuseEngineRead(timeframe, { labelRefused, alsoRefused = null }) {
   const label = timeframe === undefined ? "(absent)" : JSON.stringify(timeframe)
   const labelReason = `unresolvable timeframe ${label}; the candles were NOT filed on a substitute plane, and no bias weight was applied`
   const labelFactor = `timeframe ${label} does not resolve to a bar length, so no bias plane could be selected`
@@ -96,6 +99,18 @@ function refuseEngineRead(timeframe, { labelRefused = true, alsoRefused = null }
     reasons.push(alsoRefused.reason)
     factors.push(...alsoRefused.factors)
   }
+  // A REFUSAL THAT NAMES NOTHING IS THE CONTRADICTION THIS WRITER EXISTS TO
+  // AVOID. `reason: null` beside `regime: "unknown"` tells a caller the read was
+  // declined for a reason that does not exist, and the reachable
+  // `reasons.length ? … : null` guarded only against a case no call site makes.
+  // `labelRefused` being required means the only way to get here is to pass
+  // `labelRefused: false` with no `alsoRefused` — a refusal with nothing to say,
+  // which is a caller bug and is reported as one rather than published.
+  if (reasons.length === 0) {
+    throw new Error(
+      "refuseEngineRead called with no refusal to state: a decline that carries no reason is the contradiction it exists to prevent"
+    )
+  }
   return {
     regime: "unknown",
     confidence: 0,
@@ -105,7 +120,7 @@ function refuseEngineRead(timeframe, { labelRefused = true, alsoRefused = null }
     volatile: false,
     latency: { planes: [], minBars: 0 },
     source: "regimeEngine",
-    reason: reasons.length ? reasons.join("; ") : null
+    reason: reasons.join("; ")
   }
 }
 
@@ -165,7 +180,9 @@ export function detectRegime(candles, timeframe = "1H") {
   // timeframe; `biasTf` = the resolved seconds, and there is NO substitute plane
   // when the label does not resolve — see `refuseEngineRead`.
   const engine =
-    tf == null ? refuseEngineRead(timeframe) : detectRegimeEnhanced({ planes: { [tf]: candles }, biasTf: tf })
+    tf == null
+      ? refuseEngineRead(timeframe, { labelRefused: true })
+      : detectRegimeEnhanced({ planes: { [tf]: candles }, biasTf: tf })
   return {
     regime,
     confidence: Math.round(confidence * 100),

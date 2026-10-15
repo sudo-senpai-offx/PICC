@@ -358,7 +358,14 @@ export function riskParityAllocation(priceHistories, { window = 60, method = "in
   //
   //     row.push(vols[symbols[i]] ? (vols[symbols[i]] / Math.sqrt(252)) ** 2 : 0.0001)
   //
-  // and `0.0001` is an INVENTED daily variance — 63% annualised, from nothing.
+  // and `0.0001` is an INVENTED daily variance. TWO NUMBERS ABOUT IT, NEITHER OF
+  // THEM A MEASUREMENT: it annualises to `sqrt(0.0001 * 252) = 0.1587`, i.e.
+  // 15.87% a year, and it is 63% of the daily variance of the 20% constant it
+  // replaced — `0.0001 / ((0.20 / sqrt(252)) ** 2) = 0.63` — so it was a third
+  // SMALLER than the fabrication it stood in for, and equally invented. (An
+  // earlier version of this comment printed the 63% as though it were the
+  // annualised figure, wrong by ~4x, in the one comment whose entire job is to
+  // document how bad the removed constant was.)
   // It is reachable through exactly one route, because the refusal above means
   // every symbol reaching here has either a positive published volatility or a
   // published ZERO: so the fallback fires only for a symbol whose volatility was
@@ -375,7 +382,10 @@ export function riskParityAllocation(priceHistories, { window = 60, method = "in
   // now does the same thing rather than the opposite: a symbol with no positive
   // PUBLISHED volatility is excluded from the matrix, and the drop is visible
   // through `symbolCount` (which still counts everything asked for) against the
-  // weights actually returned — which is the mismatch the panel already renders.
+  // weights actually returned. The panel renders that mismatch TOGETHER WITH the
+  // `volStatus` state and reason for each dropped symbol, so the exclusion is
+  // named in the UI rather than merely counted — see the mismatch line in
+  // `MarketAnalysisSection.tsx`.
   // No required-key or type change: `symbolCount` and `weights` keep their
   // shapes, and `vols`/`volStatus` still carry the excluded symbol.
   const erceSymbols = symbols.filter((s) => volStatus[s].state === VOL_MEASURED)
