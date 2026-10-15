@@ -209,10 +209,26 @@ describe("regimeEngine delegation (B-REG-4)", () => {
     expect(absent.regimeEngine.latency.planes).toEqual([3600])
   })
 
-  // The bias WEIGHT is what the substitution silently cost, so pin that a
-  // resolved plane is actually weighted differently from an unresolved one
-  // rather than trusting that BIAS_WEIGHT is still applied after the refactor.
-  it("a resolved bias plane is still weighted, and the refusal carries no weight at all", () => {
+  // ─────────────────────────────────────────────────────────────────────
+  // RENAMED, NOT DELETED — the old title claimed a measurement this test does
+  // not make. "a resolved bias plane is still weighted, and the refusal carries
+  // no weight at all" reads as a weighting assertion; the body asserts plane
+  // lists and regime labels, and weighting is a function of the engine's own
+  // votes rather than of the adapter. A title that overstates its test is the
+  // same defect class as a comment that asserts a property the code lacks:
+  // it makes a reader believe coverage exists here that does not.
+  //
+  // The weighting coverage genuinely exists, and is measured where the weight
+  // is actually applied — see the `regimeEngine bias membership is not decided
+  // by numeric coercion` block below, which drives the confidence readout
+  // directly from whether a bias was stated.
+  //
+  // What this test measures, stated plainly: the same candles on a resolved
+  // label produce an engine read on that label's plane, and on an unresolved
+  // label produce no read and no plane. Both were handed identical input, so
+  // the only honest thing the second can report is that it used no plane.
+  // ─────────────────────────────────────────────────────────────────────
+  it("the same candles are read on a resolved plane and refused on an unresolved one", () => {
     const resolved = detectRegime(trendCandles(), "5m")
     expect(resolved.regimeEngine.latency.planes).toEqual([300])
     const refused = detectRegime(trendCandles(), "quarterly")
@@ -234,6 +250,60 @@ describe("regimeEngine delegation (B-REG-4)", () => {
     // and the two reasons must not be conflated.
     expect(r.timeframeResolution.biasApplied).toBe(true)
     expect(r.timeframeResolution.seconds).toBe(300)
+  })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // THE COLLISION THE COMMENT ABOVE DENIED.
+  //
+  // Every test above passes a RESOLVABLE label, so the two refusals were never
+  // both live at once and the overwrite was invisible. The comment claimed
+  // they "must not be conflated" while `reason: "insufficient bars"` conflated
+  // them by erasing the label reason: `detectRegime(candles(29), "banana")`
+  // shipped `reason === "insufficient bars"`, `planes: []`, and a sibling block
+  // that said the label was the problem — so a caller reading the ENGINE block
+  // concluded the label was fine.
+  //
+  // Two independent wrongs in one call, so both reasons are carried on the
+  // block. Asserted on the SUBSTRINGS rather than on equality, because the
+  // discriminating claim is "both are present", not "the sentence reads a
+  // particular way".
+  // ─────────────────────────────────────────────────────────────────────
+  it("a thin series on an UNRESOLVABLE label carries BOTH refusal reasons, not the last one written", () => {
+    const r = detectRegime(noiseCandles(29), "banana")
+    expect(r.regimeEngine.latency.planes).toEqual([])
+    expect(r.regimeEngine.confidenceKind).toBe("abstained")
+    // The LABEL refusal survives on the engine block itself, not only on the
+    // sibling `timeframeResolution`.
+    expect(r.regimeEngine.reason).toMatch(/unresolvable timeframe "banana"/)
+    // And so does the BARS refusal, which is the one it used to be overwritten by.
+    expect(r.regimeEngine.reason).toMatch(/insufficient bars/)
+    // Both are named in `factors` too, so neither is invisible to a client that
+    // renders that array instead of `reason`.
+    expect(r.regimeEngine.factors.join(" | ")).toMatch(/does not resolve to a bar length/)
+    expect(r.regimeEngine.factors.join(" | ")).toMatch(/insufficient bars/)
+    // And the sibling block agrees with it rather than telling a different story.
+    expect(r.timeframeResolution.biasApplied).toBe(false)
+    expect(r.timeframeResolution.seconds).toBeNull()
+    expect(r.timeframeResolution.reason).toMatch(/banana/)
+  })
+
+  // THE OTHER DIRECTION. A thin series on a RESOLVABLE label has only ONE
+  // refusal, so joining must not invent a label problem the caller did not have.
+  it("a thin series on a RESOLVABLE label still reads as a bars-only refusal", () => {
+    const r = detectRegime(noiseCandles(29), "5m")
+    expect(r.regimeEngine.reason).toMatch(/insufficient bars/)
+    expect(r.regimeEngine.reason).not.toMatch(/unresolvable timeframe/)
+    expect(r.regimeEngine.factors).toHaveLength(1)
+    expect(r.regimeEngine.factors.join(" | ")).not.toMatch(/does not resolve/)
+  })
+
+  // And the label-only refusal is unchanged when the bars are sufficient, so
+  // joining did not regress the branch that has no second reason to join.
+  it("a RESOLVABLE label with enough bars is not refused at all", () => {
+    const r = detectRegime(trendCandles(), "5m")
+    expect(r.regimeEngine.reason ?? null).toBeNull()
+    expect(r.regimeEngine.factors.join(" | ")).not.toMatch(/insufficient bars/)
+    expect(r.regimeEngine.factors.join(" | ")).not.toMatch(/does not resolve/)
   })
 })
 

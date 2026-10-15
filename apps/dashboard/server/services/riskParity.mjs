@@ -149,15 +149,26 @@ export function equalRiskContribution(covMatrix, symbols, iterations = 500) {
 // ---------------------------------------------------------------------
 
 /**
- * The three states a per-asset volatility measurement can be in.
+ * The states a per-asset volatility measurement can be in.
  *
- * Added because the allocator used to collapse all three into one number on the
- * wire. `measured-zero` in particular is a REAL measurement that must survive as
- * a real measurement — collapsing it into "no data" would be as dishonest as
- * the constant it replaced, just in the other direction.
+ * Added because the allocator used to collapse all of them into one number on
+ * the wire. `measured-zero` in particular is a REAL measurement that must
+ * survive as a real measurement — collapsing it into "no data" would be as
+ * dishonest as the constant it replaced, just in the opposite direction.
+ *
+ * There are FOUR, because a published `0` has two genuinely different causes
+ * and the earlier three-state version called both of them "no movement". That
+ * claim is false for the rounding case, and it is not an exotic shape: one
+ * spike among N-1 flat prices gives a standard deviation proportional to
+ * 1/sqrt(N), so a LONGER history makes the 4dp floor easier to fall under, not
+ * harder. Measured at window 60, a single one-bar tick of 1e-3 in an otherwise
+ * flat series publishes `annual: 0` at 70, 200 and 1000 bars alike — the shape
+ * behind it being a thinly-traded instrument that prints one tick per 200 days,
+ * which is told it carries no movement when it plainly does.
  */
 export const VOL_MEASURED = "measured"
 export const VOL_MEASURED_ZERO = "measured-zero"
+export const VOL_MEASURED_ROUNDED_ZERO = "measured-rounded-zero"
 export const VOL_UNMEASURED = "unmeasured"
 
 /**
@@ -181,22 +192,26 @@ export const VOL_UNMEASURED = "unmeasured"
  *      assets presented as carrying 20% each.
  *   2. `0` from ROUNDING. `realizedVolatility` rounds `annual` to 4dp, so a real
  *      but tiny volatility (daily ~1e-7) rounds to exactly 0 and takes the same
- *      path. The measurement exists; the rounding is what makes it falsy.
+ *      path. The measurement exists and is NON-ZERO; the published precision is
+ *      what destroys it, so this is a PRECISION limit and not "no movement".
  *   3. `null` when the series yields fewer usable log returns than `period` —
  *      65 prices with 10 non-positive values gives `logReturns.length < 60`.
  *      Nothing was measured at all, and 20% was reported as though it had been.
  *
  * So the states are distinguished rather than collapsed:
- *   - `null`        -> `unmeasured`,  no volatility was computed. Reason named.
- *   - finite, `> 0` -> `measured`,    the only state that may be weighted by.
- *   - finite, `== 0`-> `measured-zero`, a real measurement of "no movement".
+ *   - `null`                 -> `unmeasured`,          nothing was computed.
+ *   - finite, `> 0`          -> `measured`,            the only weightable state.
+ *   - finite, `== 0`, flat   -> `measured-zero`,        a real measurement of no movement.
+ *   - finite, `== 0`, moving -> `measured-rounded-zero`, non-zero but below 0.00005.
  *
- * A `measured-zero` asset gets no weight, because there is no volatility to
- * invert, and that exclusion is named in `volStatus` rather than being visible
- * only as a missing key.
+ * The last two both carry a PUBLISHED 0, so both are excluded from inverse-vol
+ * weighting — there is no published volatility to invert, and that exclusion is
+ * named in `volStatus` rather than visible only as a missing key. What they no
+ * longer do is assert that the asset does not move.
  */
 function measureVolatility(prices, window) {
-  const rv = realizedVolatility(prices, { period: Math.min(window, prices.length - 1) })
+  const period = Math.min(window, prices.length - 1)
+  const rv = realizedVolatility(prices, { period })
   const annual = rv.annual
   if (annual == null) {
     return {
@@ -209,12 +224,35 @@ function measureVolatility(prices, window) {
     }
   }
   if (!(annual > 0)) {
+    // A published 0 has TWO causes, and only one of them is "no movement".
+    // Discriminating them needs no new maths: `realizedVolatility` selects its
+    // sample with the same `positive-price-transition` filter this module's own
+    // `logReturns` applies, so re-running it here reproduces exactly the sample
+    // that produced the 0. If every log return in that sample is exactly 0, the
+    // series really did not move and the 0 is a real measurement. If any of them
+    // is non-zero, the computed standard deviation was positive and the 4dp
+    // publication destroyed it — the same rounding that `volatility.mjs:68`
+    // applies repo-wide, inherited here rather than re-performed.
+    const sample = logReturns(prices).slice(-period)
+    const genuinelyFlat = sample.length > 0 && sample.every((r) => r === 0)
+    if (genuinelyFlat) {
+      return {
+        annual: 0,
+        status: {
+          state: VOL_MEASURED_ZERO,
+          annual: 0,
+          reason:
+            "measured volatility is exactly 0: every positive-price transition in the window is identical, so this is a real measurement of no movement and there is no volatility to invert"
+        }
+      }
+    }
     return {
       annual: 0,
       status: {
-        state: VOL_MEASURED_ZERO,
+        state: VOL_MEASURED_ROUNDED_ZERO,
         annual: 0,
-        reason: "measured volatility is exactly 0 (or rounds to 0 at 4dp); a real measurement of no movement, so this asset cannot be inverse-vol weighted"
+        reason:
+          "the annualized volatility rounds to 0 at the published 4dp precision: the price series does move inside the window, but the computed figure is below 0.00005, so it publishes as 0 without being a measurement of no movement"
       }
     }
   }
@@ -257,14 +295,25 @@ export function riskParityAllocation(priceHistories, { window = 60, method = "in
   // `ok: true, weights: {A: 0.5, B: 0.5}, vols: {A: 0.2, B: 0.2}` for two series
   // from which no volatility could be computed at all.
   if (measurable.length === 0) {
-    const allZero = symbols.every((s) => volStatus[s].state === VOL_MEASURED_ZERO)
+    // TWO REFUSALS, because the measurements behind them are two different
+    // facts. "Every symbol published 0" and "no symbol published anything" are
+    // not the same statement about the portfolio, and the earlier
+    // `/volatil/i` assertion was satisfied by both — which is why collapsing
+    // this ternary to one constant kept every test green.
+    //
+    // A `measured-rounded-zero` counts toward "published 0", not toward
+    // "measured as no movement": the portfolio's published volatilities are all
+    // zero, which is true, and saying so is the honest answer.
+    const allPublishedZero = symbols.every(
+      (s) => volStatus[s].state === VOL_MEASURED_ZERO || volStatus[s].state === VOL_MEASURED_ROUNDED_ZERO
+    )
     return {
       ok: false,
       weights: {},
       vols,
       volStatus,
-      error: allZero
-        ? "every symbol's volatility was measured as exactly 0, so there is no risk to allocate against"
+      error: allPublishedZero
+        ? "every symbol's published annual volatility is 0 — measured as exactly 0, or a real non-zero figure rounded to 0 at the published 4dp precision — so there is no risk to allocate against"
         : "no symbol has a measurable volatility"
     }
   }
@@ -301,22 +350,50 @@ export function riskParityAllocation(priceHistories, { window = 60, method = "in
     }
   }
 
-  // ERC method: build covariance matrix from returns
+  // ERC method: build covariance matrix from returns.
+  //
+  // ── A SEVENTH INSTANCE OF THE SAME CLASS, ONE LEVEL DOWN ──
+  //
+  // The diagonal used to be
+  //
+  //     row.push(vols[symbols[i]] ? (vols[symbols[i]] / Math.sqrt(252)) ** 2 : 0.0001)
+  //
+  // and `0.0001` is an INVENTED daily variance — 63% annualised, from nothing.
+  // It is reachable through exactly one route, because the refusal above means
+  // every symbol reaching here has either a positive published volatility or a
+  // published ZERO: so the fallback fires only for a symbol whose volatility was
+  // measured and publishes as 0. Measured at window 60, one 1e-3 tick in a
+  // 200-bar otherwise-flat series alongside two ordinary symbols returns
+  //
+  //     weights: { A: 0.4911, B: 0.213, C: 0.2959 }     <- A is the LARGEST
+  //
+  // so the one asset whose published risk is lowest was handed the biggest
+  // allocation, out of a constant, and the response read as a measurement.
+  //
+  // `inverseVolWeights` above already solved this exact problem by DROPPING a
+  // symbol it cannot weight, rather than inventing one for it. The ERC branch
+  // now does the same thing rather than the opposite: a symbol with no positive
+  // PUBLISHED volatility is excluded from the matrix, and the drop is visible
+  // through `symbolCount` (which still counts everything asked for) against the
+  // weights actually returned — which is the mismatch the panel already renders.
+  // No required-key or type change: `symbolCount` and `weights` keep their
+  // shapes, and `vols`/`volStatus` still carry the excluded symbol.
+  const erceSymbols = symbols.filter((s) => volStatus[s].state === VOL_MEASURED)
   const returnsMap = {}
-  for (const s of symbols) {
+  for (const s of erceSymbols) {
     returnsMap[s] = logReturns(priceHistories[s].slice(-window))
   }
 
-  const n = symbols.length
+  const n = erceSymbols.length
   const covMatrix = []
   for (let i = 0; i < n; i++) {
     const row = []
     for (let j = 0; j < n; j++) {
       if (i === j) {
-        row.push(vols[symbols[i]] ? (vols[symbols[i]] / Math.sqrt(252)) ** 2 : 0.0001)
+        row.push((vols[erceSymbols[i]] / Math.sqrt(252)) ** 2)
       } else {
-        const ri = returnsMap[symbols[i]]
-        const rj = returnsMap[symbols[j]]
+        const ri = returnsMap[erceSymbols[i]]
+        const rj = returnsMap[erceSymbols[j]]
         const minLen = Math.min(ri.length, rj.length)
         if (minLen < 5) {
           row.push(0)
@@ -334,12 +411,15 @@ export function riskParityAllocation(priceHistories, { window = 60, method = "in
     covMatrix.push(row)
   }
 
-  const result = equalRiskContribution(covMatrix, symbols)
+  const result = equalRiskContribution(covMatrix, erceSymbols)
   return {
     ok: true,
     ...result,
     vols,
     volStatus,
+    // Everything ASKED for, against a weights map that may be smaller: the gap
+    // is what makes the exclusion visible rather than silent. See the mismatch
+    // line the panel renders when the two disagree.
     symbolCount: symbols.length
   }
 }

@@ -234,6 +234,71 @@ describe("conservative defaults for insufficient data", () => {
     expect(optimizeExpiry(flatRangeCandles(12, 100, 1)).recommendation.requiredCandles).toBe(20)
   })
 
+  // The `suppliedCandles` FIELD is not the same claim as the count appearing in
+  // the `reason` SENTENCE. A reason built from a constant — "insufficient
+  // candles; none recommended" — is satisfied by the field assertion above
+  // while telling the client nothing it can act on, which is the whole point of
+  // the field. Counts 1/7/13/19 are chosen because none of their digits occurs
+  // in the fixed part of the sentence, so `toContain` cannot pass by accident.
+  it("the refusal REASON itself names the count and the threshold, not only the field", () => {
+    for (const n of [1, 7, 13, 19]) {
+      const { reason } = optimizeExpiry(flatRangeCandles(n, 100, 1)).recommendation
+      expect(reason, `count ${n}`).toContain(`${n} < 20`)
+    }
+    // A non-array input is refused as ZERO candles supplied — not as whatever
+    // length the value happens to expose.
+    expect(optimizeExpiry({ length: 60 }).recommendation.reason).toContain("0 < 20")
+  })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // THE ARRAY GUARD, WHICH THE REFUSAL SWEEP ABOVE NEVER REACHED.
+  //
+  // Every entry in `insufficient` is an array or nullish, so the sweep stopped
+  // at the array boundary and `Array.isArray` was never load-bearing in any
+  // test. Drop that one expression and the whole file stays green — while
+  // `optimizeExpiry({})`, `(42)` and `(true)` return a FABRICATED, score-95
+  // `{label: "5m", seconds: 300}` recommendation with `vol = NaN` and
+  // `expectedMove = NaN`, and `({length: 60})` throws on `candles[i].close`.
+  // That is byte-for-byte the defect this branch was written to remove, reached
+  // through the most ordinary caller mistake there is: posting `{}`.
+  //
+  // The shape of the assertion matters. `recommended === null` is the claim; a
+  // "no NaN anywhere" claim would be satisfied by a merely-uglier fabrication.
+  // ─────────────────────────────────────────────────────────────────────
+  it("refuses a NON-ARRAY candle input rather than scoring it", () => {
+    const NON_ARRAYS = [
+      ["plain object", {}],
+      ["object with unrelated keys", { close: 100, high: 101 }],
+      ["a string", "abc"],
+      ["a 60-character string", "x".repeat(60)],
+      ["a number", 42],
+      ["zero", 0],
+      ["a boolean", true],
+      ["an array-LIKE object claiming 60 candles", { length: 60 }],
+      ["an array-like object claiming 60, with no candles", { length: 60, 0: { close: 1 } }],
+      ["a typed array", new Float64Array(60)]
+    ]
+    for (const [name, input] of NON_ARRAYS) {
+      // It must REFUSE, not throw. A throw is a crash on the route, and the
+      // whole point of a guard is to turn a bad shape into an honest answer.
+      let out
+      expect(() => {
+        out = optimizeExpiry(input, "trending", 0.9)
+      }, name).not.toThrow()
+
+      expect(out.recommended, name).toBeNull()
+      expect(out.recommendation.state, name).toBe("unavailable")
+      expect(out.recommendation.suppliedCandles, name).toBe(0)
+      // Nothing scored, and nothing measured, on the unscored branch.
+      for (const e of out.all) {
+        expect(e.score, name).toBeNull()
+        expect(e.expectedMove, name).toBeUndefined()
+      }
+      expect(out.volatility, name).toBeUndefined()
+      expect(out.avgMove, name).toBeUndefined()
+    }
+  })
+
   it("returns nulls instead of fabricated values for short series", () => {
     const stops = computeAdaptiveStops(flatRangeCandles(19, 100, 1), "up")
     expect(stops.takeProfit).toBeNull()

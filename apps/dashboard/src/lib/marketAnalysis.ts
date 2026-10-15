@@ -337,9 +337,10 @@ export interface RiskParityMeasured {
   symbolCount: number | null
   /**
    * Annualised vol per surviving symbol, INCLUDING the ones that got no weight.
-   * A null entry is a symbol the allocator could not measure at all; a 0 entry is
-   * a real measurement of no movement. The allocator used to replace both with
-   * an invented 0.20 and weight by it.
+   * A null entry is a symbol the allocator could not measure at all; a 0 entry
+   * is a measurement that PUBLISHES as 0 — either measured as exactly 0, or
+   * non-zero and below the published 4dp precision (see `VolStatus`). The
+   * allocator used to replace both with an invented 0.20 and weight by it.
    */
   vols: Record<string, number | null> | null
   /**
@@ -360,21 +361,35 @@ export type RiskParityResponse = RiskParityRefused | RiskParityMeasured
 /**
  * WHAT A PER-SYMBOL VOLATILITY MEASUREMENT ACTUALLY WAS.
  *
- * Three states, and the distinction between the last two is the whole point:
+ * Four states, and the distinction between the last three is the whole point —
+ * a published `0` is not one fact but three, and calling all of them "the asset
+ * does not move" is a false statement about a measurement:
  *
- *  - `measured`      — a real, positive annualized volatility. The only state
- *                      that may be inverse-volatility weighted.
- *  - `measured-zero` — a REAL measurement of exactly 0 (or one that rounds to 0
- *                      at 4dp). The asset does not move. Collapsing this into
- *                      "no data" would be as dishonest as the constant it
- *                      replaced, in the opposite direction.
- *  - `unmeasured`    — nothing was computed: too few usable log returns for the
- *                      requested period.
+ *  - `measured`              — a real, positive annualized volatility. The only
+ *                              state that may be inverse-volatility weighted.
+ *  - `measured-zero`         — a REAL measurement of exactly 0: every
+ *                              positive-price transition in the window is
+ *                              identical. Collapsing this into "no data" would
+ *                              be as dishonest as the constant it replaced, in
+ *                              the opposite direction.
+ *  - `measured-rounded-zero` — the figure is real and NON-ZERO but falls below
+ *                              the published 4dp precision, so it serves as 0.
+ *                              Reachable at any window length: one tick among
+ *                              N-1 flat prices gives a standard deviation
+ *                              proportional to 1/sqrt(N), so a LONGER history
+ *                              reaches the floor more easily, not less. This is
+ *                              the thinly-traded instrument that prints one tick
+ *                              per 200 days; it must not be told it never moved.
+ *  - `unmeasured`            — nothing was computed: too few usable log returns
+ *                              for the requested period.
  *
- * The allocator used to collapse all three into an invented 0.20.
+ * The two zero states both get no weight (there is no PUBLISHED volatility to
+ * invert) and the allocator refuses a portfolio made only of them.
+ *
+ * The allocator used to collapse all four into an invented 0.20.
  */
 export interface VolStatus {
-  state: "measured" | "measured-zero" | "unmeasured"
+  state: "measured" | "measured-zero" | "measured-rounded-zero" | "unmeasured"
   annual: number | null
   reason: string | null
 }

@@ -62,19 +62,50 @@ export function tfSecondsOf(timeframe) {
  * that cannot be mistaken for one taken at a bar length nobody asked for. The
  * legacy ADX/ATR surface above is untouched, because it never depended on the
  * label — so a refused bias plane does not cost the caller the read it CAN make.
+ *
+ * ── AND A THIN SERIES MAY ALSO REFUSE ──
+ *
+ * A caller can be wrong about BOTH at once: `detectRegime(candles(29), "banana")`
+ * refuses twice, for two independent reasons. This writer used to spread a
+ * SECOND refusal over the first, so the shipped `reason` read
+ * `"insufficient bars"` while the block's own comment insisted the label reason
+ * "must not be conflated" with it — and a caller reading the engine block
+ * concluded the label had been fine. `timeframeResolution` still carried the
+ * label truth, so the payload as a whole was not wrong, but a block that says
+ * one thing while its sibling says another is how the wrong reading gets made.
+ *
+ * So `reason` is JOINED and `factors` are APPENDED — but only for refusals that
+ * ACTUALLY HAPPENED. `labelRefused` is passed in rather than assumed, because
+ * the thin-series branch calls this writer for every caller, including the ones
+ * whose label resolved perfectly well: naming "5m" unresolvable because the
+ * BARS were short would be a fresh falsehood in the exact field this task is
+ * about. A resolvable label on a thin series therefore reads exactly as it did
+ * before — a bars-only refusal.
  */
-function refuseEngineRead(timeframe) {
+function refuseEngineRead(timeframe, { labelRefused = true, alsoRefused = null } = {}) {
   const label = timeframe === undefined ? "(absent)" : JSON.stringify(timeframe)
+  const labelReason = `unresolvable timeframe ${label}; the candles were NOT filed on a substitute plane, and no bias weight was applied`
+  const labelFactor = `timeframe ${label} does not resolve to a bar length, so no bias plane could be selected`
+  const reasons = []
+  const factors = []
+  if (labelRefused) {
+    reasons.push(labelReason)
+    factors.push(labelFactor)
+  }
+  if (alsoRefused) {
+    reasons.push(alsoRefused.reason)
+    factors.push(...alsoRefused.factors)
+  }
   return {
     regime: "unknown",
     confidence: 0,
     confidenceKind: CONFIDENCE_ABSTAINED,
-    factors: [`timeframe ${label} does not resolve to a bar length, so no bias plane could be selected`],
+    factors,
     perPlane: {},
     volatile: false,
     latency: { planes: [], minBars: 0 },
     source: "regimeEngine",
-    reason: `unresolvable timeframe ${label}; the candles were NOT filed on a substitute plane, and no bias weight was applied`
+    reason: reasons.length ? reasons.join("; ") : null
   }
 }
 
@@ -90,19 +121,22 @@ export function detectRegime(candles, timeframe = "1H") {
         : `timeframe ${timeframe === undefined ? "(absent)" : JSON.stringify(timeframe)} is not one of the known labels`
   }
   if (!candles || candles.length < 30) {
+    // TWO INDEPENDENT REFUSALS, CARRIED TOGETHER. A thin series AND an
+    // unresolvable label is one call that is wrong twice, and reporting only
+    // whichever refusal happened to be written last tells the caller the other
+    // one did not apply. `refuseEngineRead` joins them; see its doc comment.
     return {
       regime: "unknown",
       confidence: 0,
       factors: [],
       timeframeResolution: resolution,
-      regimeEngine: {
-        ...refuseEngineRead(timeframe),
-        // The refusal above is about the LABEL; this one is about the BARS. The
-        // two reasons are different and must not be conflated, so a thin series
-        // on a resolvable label reports the bar reason and keeps the label read.
-        factors: [`insufficient bars (< MIN_BARS ${MIN_BARS})`],
-        reason: "insufficient bars"
-      }
+      regimeEngine: refuseEngineRead(timeframe, {
+        labelRefused: tf == null,
+        alsoRefused: {
+          reason: `insufficient bars (< MIN_BARS ${MIN_BARS})`,
+          factors: [`insufficient bars (< MIN_BARS ${MIN_BARS})`]
+        }
+      })
     }
   }
   const closes = candles.map((c) => c.close)
