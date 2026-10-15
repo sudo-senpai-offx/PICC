@@ -124,6 +124,16 @@ describe("riskParity no longer invents a 20% volatility", () => {
     Array.from({ length: n }, (_, i) => (i < nonPositive ? 0 : 100 + i * 0.05))
   /** A series with a real, measurable, non-zero volatility. */
   const moving = (n = 70, seed = 1) => Array.from({ length: n }, (_, i) => 100 + Math.sin(i * seed) * 2 + i * 0.03)
+  /**
+   * MOVES, and has exactly zero dispersion.
+   *
+   * Every bar multiplies by `1 + 1ulp`, and the repeated multiplication
+   * quantises to a single ratio, so every log return is bit-identical and
+   * non-zero: the standard deviation is exactly 0 while the price plainly rose.
+   * This is the shape that reaches `measured-rounded-zero` now that
+   * `volatility.mjs` no longer rounds a real figure down to a zero.
+   */
+  const constantStep = (n = 70) => Array.from({ length: n }, (_, i) => 100 * 1.0000000000000002 ** i)
 
   it("a FLAT series reports its measured 0, never a substituted 0.20", () => {
     const r = riskParityAllocation({ A: flat(), B: moving() }, { window: 60, method: "inverse-vol" })
@@ -139,62 +149,86 @@ describe("riskParity no longer invents a 20% volatility", () => {
   })
 
   // ─────────────────────────────────────────────────────────────────────
-  // REWRITTEN. The old assertion here was `state === "measured-zero"` — which
-  // is the DEFECT the brief names, not the fix. `realizedVolatility` rounds
-  // `annual` to 4dp, so this series' real, non-zero volatility publishes as 0,
-  // and calling that "a real measurement of no movement" is a false statement
-  // about a measurement, in the one field this task exists to keep honest.
+  // REWRITTEN AGAIN, AND THIS TIME BY THE ROOT CAUSE.
   //
-  // The two causes of a published 0 are different FACTS and now say so:
-  //   - a genuinely FLAT window (every log return exactly 0)  -> `measured-zero`
-  //   - a MOVING window whose figure falls below 0.00005      -> `measured-rounded-zero`
+  // The previous version of this test was already a rewrite: it split "published
+  // 0" into `measured-zero` and `measured-rounded-zero` and refused to call a
+  // rounded zero a measurement of no movement. It named the cause exactly —
+  // "`realizedVolatility` rounds `annual` to 4dp" — and that cause has now been
+  // removed at the source.
   //
-  // The exclusion from the allocation is unchanged and still defensible: there
-  // is no PUBLISHED volatility to invert. What changed is that the caller is no
-  // longer told a thinly-traded instrument that ticks once per 200 days is
-  // riskless.
+  // `volatility.mjs` publishes significant figures in the band where 4dp would
+  // erase the figure, so this series measures 3.202e-8 and says so. The premise
+  // it used to assert — "the measurement is real, the ROUNDING is what produces
+  // the falsy value" — no longer holds, and a test that kept asserting it would
+  // be pinning a defect that no longer exists.
+  //
+  // What it asserts now is the payoff: the instrument is measured, it is told
+  // what it measures, and it is no longer described as riskless.
   // ─────────────────────────────────────────────────────────────────────
-  it("a real-but-tiny volatility that publishes as 0 is named as a PRECISION limit, not as no movement", () => {
-    // ±1e-7 alternating: daily vol ~1e-7, annual ~1.6e-6, which
-    // `realizedVolatility` rounds to 0.0000 at 4dp. The measurement is real; the
-    // ROUNDING is what produces the falsy value, and it must not become 20%.
+  it("a real-but-tiny volatility is now measured and published, not rounded away", () => {
+    // ±1e-7 alternating: daily vol ~1e-7, annual ~3.2e-8. 4dp published this as
+    // 0 and it took the rounded-zero path; it now carries its own value.
     const tiny = Array.from({ length: 70 }, (_, i) => 100 + (i % 2 ? 1e-7 : -1e-7))
     const r = riskParityAllocation({ A: tiny, B: moving() }, { window: 60, method: "inverse-vol" })
     expect(r.vols.A).not.toBe(0.2)
-    expect(r.volStatus.A.state).toBe("measured-rounded-zero")
-    // NOT the riskless claim. The reason has to say which side of the rounding
-    // it is on, or the state name is doing all the work and the prose lies.
-    expect(r.volStatus.A.reason).toMatch(/rounds to 0 at the published 4dp precision/i)
-    expect(r.volStatus.A.reason).not.toMatch(/exactly 0/)
-    // Still no weight — a published 0 has no volatility to invert — and the
-    // exclusion is still visible rather than silent.
-    expect(r.weights.A).toBeUndefined()
+    // The real, non-zero measurement survives all the way to the consumer.
+    expect(r.vols.A).toBeGreaterThan(0)
+    expect(r.volStatus.A.state).toBe("measured")
+    expect(r.volStatus.A.reason).toBeNull()
+    // It is weightable: there is a published volatility to invert.
+    expect(r.weights.A).toBeGreaterThan(0)
+    // And it is NOT described as riskless, which was the whole defect.
+    expect(["measured-zero", "measured-rounded-zero"]).not.toContain(r.volStatus.A.state)
   })
 
-  // REACHABILITY. "A longer history makes it MORE reachable" is the claim that
-  // made this a real finding rather than a curiosity: one spike among N-1 zeros
-  // gives a standard deviation proportional to 1/sqrt(N), so the annualised
-  // figure falls under the 4dp floor as the window grows. Measured at window 60:
-  //
-  //   bars 70   one-bar tick 1e-3  -> rv.annual 0  -> measured-zero, weight undefined
-  //   bars 200  one-bar tick 1e-3  -> rv.annual 0  -> measured-zero, weight undefined
-  //   bars 1000 one-bar tick 1e-3  -> rv.annual 0  -> measured-zero, weight undefined
-  //
-  // A thinly-traded instrument that prints one tick per 200 days is the real
-  // shape behind it, and every one of these is a series that MOVES.
-  it("one tick in an otherwise flat window is a PRECISION limit at every window length", () => {
+  // The same collapse, one step downstream. `weights` is the payload's only
+  // statement of which symbols were allocated — the panel derives its
+  // dropped-symbol count from the difference between what it asked for and what
+  // appears there — so a real allocation published as `0` reports the symbol as
+  // absent. Measured at window 120: one 1e-3 tick measures 1.449e-5 annualized
+  // against a partner's 0.4215, a true weight of 3.438e-5, which 4dp served as
+  // `0`. This path opened when `volatility.mjs` stopped erasing small
+  // measurements, so the fix has to close it too.
+  it("a genuinely allocated symbol is never published with a weight of 0", () => {
     const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
-    for (const n of [70, 200, 1000]) {
-      const partner = moving(n, 3)
-      const r = riskParityAllocation({ A: oneTick(n, 1e-3), B: partner }, { window: 60 })
-      expect(r.vols.A, `bars ${n}`).toBe(0)
-      expect(r.volStatus.A.state, `bars ${n}`).toBe("measured-rounded-zero")
-      expect(r.volStatus.A.reason, `bars ${n}`).toMatch(/below 0\.00005/)
-      // The partner is unaffected: a precision limit on one symbol must not
-      // become a refusal of the portfolio.
-      expect(r.ok, `bars ${n}`).toBe(true)
-      expect(r.weights.B, `bars ${n}`).toBeGreaterThan(0)
+    for (const window of [30, 60, 120]) {
+      const r = riskParityAllocation({ A: oneTick(300, 1e-3), B: moving(300, 3) }, { window })
+      expect(r.ok, `window ${window}`).toBe(true)
+      // Both symbols are weightable here, so both keys must carry a real weight.
+      expect(r.weights.A, `window ${window}`).toBeGreaterThan(0)
+      expect(r.weights.B, `window ${window}`).toBeGreaterThan(0)
+      // And the pair still describes one whole portfolio.
+      expect(r.weights.A + r.weights.B, `window ${window}`).toBeCloseTo(1, 3)
     }
+  })
+
+  // REACHABILITY, MEASURED HONESTLY. The old version of this test swept the
+  // history length `n` over 70/200/1000 and claimed the annualised figure falls
+  // as 1/sqrt(N). It does not, and never did: `period` is `Math.min(window,
+  // length - 1)`, so at `window: 60` all three of those run the IDENTICAL
+  // computation on the same last-60 sample and published the identical 0. Three
+  // copies of one case, described as a sweep.
+  //
+  // What genuinely varies the figure is the WINDOW. This sweeps that instead, so
+  // the claim the test is named for is the claim it actually demonstrates.
+  it("one tick in an otherwise flat window is measured at every window length", () => {
+    const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
+    const seen = new Set()
+    for (const window of [30, 60, 120]) {
+      const r = riskParityAllocation({ A: oneTick(300, 1e-3), B: moving(300, 3) }, { window })
+      // A tick among N-1 flat prices is a real, nonzero measurement at every
+      // window length: it is no longer rounded to a zero nobody measured.
+      expect(r.vols.A, `window ${window}`).toBeGreaterThan(0)
+      expect(r.volStatus.A.state, `window ${window}`).toBe("measured")
+      // The partner is unaffected: one symbol's measurement must not become a
+      // refusal of the portfolio.
+      expect(r.ok, `window ${window}`).toBe(true)
+      expect(r.weights.B, `window ${window}`).toBeGreaterThan(0)
+      seen.add(r.vols.A)
+    }
+    // The windows really are different computations, not one case repeated.
+    expect(seen.size).toBe(3)
   })
 
   // The CONTROL for the split: a genuinely flat series is still a real
@@ -262,19 +296,25 @@ describe("riskParity no longer invents a 20% volatility", () => {
   // and the source comment claims the rounded arm is handled. NO TEST DID. Every
   // `oneTick` use in this file pairs it with a measured partner, and the only
   // all-published-zero test uses `flat()` — so deleting `||
-  // VOL_MEASURED_ROUNDED_ZERO` from `riskParity.mjs:307` flipped the refusal to
+  // VOL_MEASURED_ROUNDED_ZERO` from `riskParity.mjs` flipped the refusal to
   // "no symbol has a measurable volatility" (false about three measurements that
   // all happened) and left the whole suite green. The mutant is dead below.
+  //
+  // The fixture had to change with the root-cause fix. `oneTick(200, 1e-3)` used
+  // to publish `0`; it now measures ~2.05e-5 and lands in `measured`, so it no
+  // longer reaches this refusal AT ALL. `constantStep` does: exactly-zero
+  // dispersion over a series that demonstrably moved, which is what
+  // `measured-rounded-zero` now means. The arm is still load-bearing and the
+  // mutant below still has to die.
   //
   // The distinction matters BECAUSE the two refusals say opposite things about
   // the portfolio: here every symbol MOVED and was measured; told the portfolio
   // had nothing measurable, an operator concludes the data is absent rather
-  // than that every figure fell below the published 4dp floor.
+  // than that every figure measured exactly no dispersion.
   // ─────────────────────────────────────────────────────────────────────
   it("refuses when every symbol MOVES but every measurement publishes as 0", () => {
-    const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
     const r = riskParityAllocation(
-      { A: oneTick(200, 1e-3), B: oneTick(200, 1e-3), C: oneTick(200, 1e-3) },
+      { A: constantStep(200), B: constantStep(200), C: constantStep(200) },
       { window: 60 }
     )
     // All three were MEASURED — that is the premise; the test fails loudly if a
@@ -284,8 +324,9 @@ describe("riskParity no longer invents a 20% volatility", () => {
     for (const s of ["A", "B", "C"]) {
       expect(r.volStatus[s].state, s).toBe("measured-rounded-zero")
       expect(r.vols[s], s).toBe(0)
-      // The precision limit is named per symbol, not once in aggregate.
-      expect(r.volStatus[s].reason, s).toMatch(/rounds to 0 at the published 4dp precision/i)
+      // The zero-dispersion fact is named per symbol, not once in aggregate.
+      expect(r.volStatus[s].reason, s).toMatch(/exactly 0 over a series that did move/i)
+      expect(r.volStatus[s].reason, s).not.toMatch(/no movement/i)
     }
     expect(r.weights).toEqual({})
     // THE DISCRIMINATING ASSERTION, in both directions. Dropping the
@@ -293,9 +334,9 @@ describe("riskParity no longer invents a 20% volatility", () => {
     // unmeasurable message, which is a falsehood about all three measurements.
     expect(r.error).toMatch(/every symbol/i)
     expect(r.error).not.toMatch(/no symbol has a measurable volatility/i)
-    // And the published-zero claim is the one that is true of these three:
-    // "rounds to 0" is exactly what happened, so the message may say so.
-    expect(r.error).toMatch(/rounded to 0 at the published 4dp precision/i)
+    // And the published-zero claim is the one that is true of these three: all
+    // three published 0, so the message may say so.
+    expect(r.error).toMatch(/published annual volatility is 0/i)
   })
 
   // The two refusals name DIFFERENT facts about the measurements behind them, and
@@ -333,10 +374,13 @@ describe("riskParity no longer invents a 20% volatility", () => {
   //
   // i.e. `inverseVolWeights`' honest drop, inverted, on the sibling branch.
   // `inverseVolWeights` DROPS a symbol it cannot weight; ERC was inventing one.
+  //
+  // The fixture changed with the root-cause fix: `oneTick(200, 1e-3)` now
+  // measures ~2.05e-5 and is weightable, so the drop this test pins comes from
+  // `constantStep` — exactly zero dispersion over a series that did move.
   // ─────────────────────────────────────────────────────────────────────
   it("the ERC covariance build DROPS a symbol it cannot weight rather than inventing a variance for it", () => {
-    const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
-    const r = riskParityAllocation({ A: oneTick(200, 1e-3), B: moving(200, 2), C: moving(200, 5) }, {
+    const r = riskParityAllocation({ A: constantStep(200), B: moving(200, 2), C: moving(200, 5) }, {
       window: 60,
       method: "erc"
     })
@@ -397,8 +441,7 @@ describe("riskParity no longer invents a 20% volatility", () => {
   // in daily units — the one place a fabricated constant would still fit.
   // ─────────────────────────────────────────────────────────────────────
   it("ERC on a two-symbol portfolio with one unweightable symbol solves the 1x1 matrix it is left with", () => {
-    const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
-    const r = riskParityAllocation({ A: oneTick(200, 1e-3), B: moving(200, 2) }, { window: 60, method: "erc" })
+    const r = riskParityAllocation({ A: constantStep(200), B: moving(200, 2) }, { window: 60, method: "erc" })
     expect(r.ok).toBe(true)
     // A is out of the matrix; B is all that is left, so B is the whole portfolio.
     expect(r.weights).toEqual({ B: 1 })

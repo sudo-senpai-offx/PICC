@@ -372,14 +372,18 @@ export type RiskParityResponse = RiskParityRefused | RiskParityMeasured
  *                              identical. Collapsing this into "no data" would
  *                              be as dishonest as the constant it replaced, in
  *                              the opposite direction.
- *  - `measured-rounded-zero` — the figure is real and NON-ZERO but falls below
- *                              the published 4dp precision, so it serves as 0.
- *                              Reachable at any window length: one tick among
- *                              N-1 flat prices gives a standard deviation
- *                              proportional to 1/sqrt(N), so a LONGER history
- *                              reaches the floor more easily, not less. This is
- *                              the thinly-traded instrument that prints one tick
- *                              per 200 days; it must not be told it never moved.
+ *  - `measured-rounded-zero` — measured as EXACTLY 0 while the series moved:
+ *                              every positive-price transition carries the
+ *                              same non-zero log return, so the price climbed
+ *                              or fell by a constant factor with no dispersion.
+ *                              It used to mean something else — that a real
+ *                              non-zero figure had been rounded away at the
+ *                              published 4dp precision — but `volatility.mjs`
+ *                              no longer rounds a measurement to zero, so that
+ *                              cause is gone and this is what remains. The name
+ *                              still describes the old cause and does not match
+ *                              it; it is kept because it is a wire contract,
+ *                              and renaming it is its own change.
  *  - `unmeasured`            — nothing was computed: too few usable log returns
  *                              for the requested period.
  *

@@ -2,7 +2,7 @@
 // risk contribution across assets. Uses volatility scaling and correlation
 // matrix to compute inverse-volatility or full risk-parity weights.
 
-import { realizedVolatility } from "./volatility.mjs"
+import { realizedVolatility, roundPublished } from "./volatility.mjs"
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
@@ -24,6 +24,19 @@ function logReturns(prices) {
  * Compute inverse-volatility weights. Each asset's weight is proportional
  * to 1/sigma, so risk contribution is approximately equal.
  *
+ * WEIGHTS ARE PUBLISHED UNDER THE SAME RULE AS THE VOLATILITIES THEY COME FROM
+ * (`roundPublished`, imported rather than copied). A weight is a dimensionless
+ * ratio, and `weights` is the payload's only statement of which symbols were
+ * allocated — the panel derives its dropped-symbol count from the difference
+ * between what it asked for and what appears here. Rounding to 4dp therefore
+ * publishes a genuinely-allocated symbol as absent: one 1e-3 tick in a 300-bar
+ * window measures 1.449e-5 annualized against a partner's 0.4215, which is a
+ * true weight of 3.438e-5 — and 4dp served that as `0`.
+ *
+ * That path was barely open before `volatility.mjs` stopped erasing small
+ * measurements: a symbol had to clear a 5e-5 volatility floor to be weightable
+ * at all. It is wide open now that the floor is gone.
+ *
  * @param {Object} assetVols - { symbol: annualizedVol }
  * @returns {{ weights: Object, method: string }}
  */
@@ -34,7 +47,7 @@ export function inverseVolWeights(assetVols) {
   const totalInv = invVols.reduce((s, x) => s + x.inv, 0)
   const weights = {}
   for (const { sym, inv } of invVols) {
-    weights[sym] = Math.round((inv / totalInv) * 10000) / 10000
+    weights[sym] = roundPublished(inv / totalInv)
   }
   return { weights, method: "inverse-vol" }
 }
@@ -126,10 +139,12 @@ export function equalRiskContribution(covMatrix, symbols, iterations = 500) {
   const weights = {}
   const details = []
   for (let i = 0; i < n; i++) {
-    weights[symbols[i]] = Math.round(w[i] * 10000) / 10000
+    // Same publication rule as the inverse-vol branch: a symbol the solver
+    // actually allocated must not be published as holding nothing.
+    weights[symbols[i]] = roundPublished(w[i])
     details.push({
       symbol: symbols[i],
-      weight: Math.round(w[i] * 10000) / 10000,
+      weight: roundPublished(w[i]),
       riskContribution: Math.round((riskContributions[i] / totalRC) * 10000) / 100 + "%"
     })
   }
@@ -190,19 +205,27 @@ export const VOL_UNMEASURED = "unmeasured"
  *      level that had never been observed. Three flat symbols used to return
  *      `vols = {A: 0.2, B: 0.2, C: 0.2}` with equal weights: three riskless
  *      assets presented as carrying 20% each.
- *   2. `0` from ROUNDING. `realizedVolatility` rounds `annual` to 4dp, so a real
- *      but tiny volatility (daily ~1e-7) rounds to exactly 0 and takes the same
- *      path. The measurement exists and is NON-ZERO; the published precision is
- *      what destroys it, so this is a PRECISION limit and not "no movement".
+ *   2. `0` from ROUNDING. `volatility.mjs` used to round `annual` to 4dp, so a
+ *      real but tiny volatility (daily ~1e-7) rounded to exactly 0 and took the
+ *      same path. The measurement existed and was NON-ZERO; the published
+ *      precision was what destroyed it, so that was a PRECISION limit and not
+ *      "no movement". That rounding no longer happens — `volatility.mjs` keeps
+ *      significant figures in the band where 4dp would erase the figure — so
+ *      this route is gone, and what remains is item 4 below.
  *   3. `null` when the series yields fewer usable log returns than `period` —
  *      65 prices with 10 non-positive values gives `logReturns.length < 60`.
  *      Nothing was measured at all, and 20% was reported as though it had been.
+ *   4. `0` from ZERO VARIANCE over a MOVING series. A price path whose every
+ *      log return is bit-identical but non-zero — a constant multiplicative
+ *      step — has a standard deviation of exactly zero while demonstrably not
+ *      being flat. Measured on `100 * (1 + 1ulp) ** i`, where the repeated
+ *      multiplication quantises to one ratio.
  *
  * So the states are distinguished rather than collapsed:
  *   - `null`                 -> `unmeasured`,          nothing was computed.
  *   - finite, `> 0`          -> `measured`,            the only weightable state.
  *   - finite, `== 0`, flat   -> `measured-zero`,        a real measurement of no movement.
- *   - finite, `== 0`, moving -> `measured-rounded-zero`, non-zero but below 0.00005.
+ *   - finite, `== 0`, moving -> `measured-rounded-zero`, zero variance, not no movement.
  *
  * The last two both carry a PUBLISHED 0, so both are excluded from inverse-vol
  * weighting — there is no published volatility to invert, and that exclusion is
@@ -230,9 +253,16 @@ function measureVolatility(prices, window) {
     // `logReturns` applies, so re-running it here reproduces exactly the sample
     // that produced the 0. If every log return in that sample is exactly 0, the
     // series really did not move and the 0 is a real measurement. If any of them
-    // is non-zero, the computed standard deviation was positive and the 4dp
-    // publication destroyed it — the same rounding that `volatility.mjs:68`
-    // applies repo-wide, inherited here rather than re-performed.
+    // is non-zero, every one of them is bit-identical (that is the only way a
+    // standard deviation reaches exactly 0), so the series climbed or fell by a
+    // constant factor and has no dispersion to allocate against.
+    //
+    // This arm used to name a PRECISION limit, because `volatility.mjs:68` used
+    // to round `annual` to 4dp. That rounding is gone; the state is reachable
+    // only through exactly-zero variance now, and the reason says so. The NAME
+    // still says "rounded", which no longer describes any cause — renaming it
+    // changes a wire contract and belongs in its own change, not in the one that
+    // removed the rounding it was named for.
     const sample = logReturns(prices).slice(-period)
     const genuinelyFlat = sample.length > 0 && sample.every((r) => r === 0)
     if (genuinelyFlat) {
@@ -252,7 +282,7 @@ function measureVolatility(prices, window) {
         state: VOL_MEASURED_ROUNDED_ZERO,
         annual: 0,
         reason:
-          "the annualized volatility rounds to 0 at the published 4dp precision: the price series does move inside the window, but the computed figure is below 0.00005, so it publishes as 0 without being a measurement of no movement"
+          "measured volatility is exactly 0 over a series that did move: every positive-price transition in the window carries the same non-zero log return, so the price climbed or fell by a constant factor with no dispersion. There is a real measurement here and it is a real 0, but the series is not a riskless one"
       }
     }
   }
@@ -313,7 +343,7 @@ export function riskParityAllocation(priceHistories, { window = 60, method = "in
       vols,
       volStatus,
       error: allPublishedZero
-        ? "every symbol's published annual volatility is 0 — measured as exactly 0, or a real non-zero figure rounded to 0 at the published 4dp precision — so there is no risk to allocate against"
+        ? "every symbol's published annual volatility is 0 — either measured as no movement at all, or measured as exactly zero dispersion over a series that moved by a constant factor — so there is no risk to allocate against"
         : "no symbol has a measurable volatility"
     }
   }
