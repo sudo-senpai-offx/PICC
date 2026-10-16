@@ -491,26 +491,100 @@ export function volatilityRegime(candles, { period = 14 } = {}) {
 // Volatility-adjusted position sizing
 // ---------------------------------------------------------------------
 
+// ── THE SIZING FLOOR, AND WHY IT IS 5e-5 ──
+//
+// A VOLATILITY PARALLEL TO THE PUBLICATION FLOOR, AND NOT A SECOND NUMBER.
+//
+// Low measured volatility is supposed to earn a larger position — that is the
+// whole contract of `volatilityPositionSize`, and `volScale` clamping at 2.0 is
+// a deliberate bound on it. The failure this floor exists to stop is the case
+// where the measurement cannot support that inference at all.
+//
+// The threshold is 5e-5, the same boundary `roundPublished` uses, for a reason
+// that is measured rather than chosen: below it, this file's own publisher
+// cannot distinguish the figure from zero. A 4dp render of anything under 5e-5
+// is exactly `0`, and the significant-figures fallback exists only because that
+// would discard a real measurement. So a volatility under 5e-5 is a number this
+// module is unable to publish as a measurement — which makes it unusable as a
+// risk estimate too, and not merely small. Treating it as "low risk" reads a
+// rendering limitation as a property of the market.
+//
+// The direction matters more than the threshold. Such figures are the thinly
+// traded population: an instrument that ticks once in 300 bars measures ~2e-5
+// because it barely trades, not because it is safe, and scaling a position UP
+// into something you cannot exit is the worst available response to that. A
+// genuine stall — a flat series measuring exactly 0 — lands in the same band for
+// the same reason. Both are staleness, and staleness is not a risk signal.
+//
+// WHY NOT A HIGHER, "TRADEABLE-ISH" FLOOR. A floor near 0.01 would also be
+// defensible on liquidity grounds, and it was considered. It is rejected because
+// it would refuse to size across [5e-5, 0.01) — a band that IS measurable and
+// that sizes correctly today — on the strength of a judgement about what
+// volatility a tradable instrument should have. That judgement is real, but it
+// is a new risk decision with its own failure modes, and it is not this one's to
+// make. 5e-5 is the boundary where this file can already PROVE the measurement
+// has stopped being trustworthy; the gate does exactly that much and no more.
+//
+// WHY NOT `>=` FOR THE BOUNDARY VALUE. `roundPublished(5e-5) === 0.0001` —
+// exactly 5e-5 IS published, so it is a measurement and not an absence. The
+// comparison is therefore strict, and the half-up doubling at the boundary
+// (documented above) does not make the value itself unpublishable.
+export const VOL_SIZING_FLOOR = 0.00005
+
 /**
  * Compute position size scaled to current volatility.
  * Higher volatility → smaller position (risk parity intuition).
  *
+ * `currentVol` is REQUIRED and has no default. It is a measurement, and a
+ * default standing in for a measurement is an invented number — the same defect
+ * `autopilot.mjs` used to carry as `rv.annual || 0.30`. `riskPct` and `targetVol`
+ * keep their defaults because those are policy parameters rather than
+ * observations, so a default sets them rather than inventing them.
+ *
  * @param {Object} opts
  * @param {number} opts.capital - Account capital ($)
  * @param {number} opts.riskPct - Max risk per trade as fraction (e.g. 0.02 = 2%)
- * @param {number} opts.currentVol - Current annualized volatility (e.g. 0.30 = 30%)
+ * @param {number} opts.currentVol - Current annualized volatility (e.g. 0.30 = 30%). Required; absent or below `VOL_SIZING_FLOOR` refuses to size.
  * @param {number} opts.targetVol - Target volatility for scaling (e.g. 0.20 = 20%)
  * @param {number} opts.entryPrice - Entry price per unit
- * @returns {Object} Position sizing metrics
+ * @returns {Object} Position sizing metrics, or a refusal that says it refused
  */
-export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol = 0.30, targetVol = 0.20, entryPrice } = {}) {
+export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol, targetVol = 0.20, entryPrice } = {}) {
+  const target = Math.max(0.01, targetVol)
+
+  // ── REFUSING TO SIZE IS A RESULT, NOT A ZERO BUDGET ──
+  //
+  // The caller must be able to tell "measured 0.02, so size up" from "could not
+  // measure, so nothing here is sized", because those two are different facts
+  // and only the first one justifies more capital. Returning a plausible number
+  // here would leave nobody able to state where it came from, which is the whole
+  // defect. So the refusal is explicit, it names the figure it refused and why,
+  // and it still CARRIES THE MEASUREMENT rather than dropping it — `currentVolPct`
+  // publishes the true value, so a 2.9e-5 vol reads as 0.0029% instead of the
+  // 1% the floor below would have substituted for it.
+  if (!Number.isFinite(currentVol) || currentVol < VOL_SIZING_FLOOR) {
+    return {
+      sized: false,
+      reason: Number.isFinite(currentVol)
+        ? `currentVol ${currentVol} is below the sizing floor ${VOL_SIZING_FLOOR} — an unmeasurable volatility, not a low-risk one`
+        : `currentVol is not a finite measurement (got ${currentVol}) — nothing to scale against`,
+      volScale: null,
+      riskBudget: null,
+      units: 0,
+      positionValue: 0,
+      positionPct: roundVolPct(0),
+      currentVolPct: Number.isFinite(currentVol) ? roundVolPct(currentVol) : null,
+      targetVolPct: roundVolPct(target)
+    }
+  }
+
   // THE FLOOR FALSIFIES `currentVolPct`, AND THAT IS PRE-EXISTING — AND STILL
   // TRUE AFTER THE RULE UNIFICATION BELOW.
   //
   // `vol` is floored at 0.01 BEFORE the percentage is published, so a true
   // annualized volatility below 1% is reported as 1%:
   //
-  //   true currentVol 0.00002923  ->  vol 0.01  ->  currentVolPct "1%"
+  //   true currentVol 0.00923   ->  vol 0.01  ->  currentVolPct "1%"
   //
   // which is 342x the truth. The sizing maths genuinely needs a floor — a
   // `volScale` of 20,000 would blow the size up without limit — so the floor
@@ -521,8 +595,12 @@ export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol = 0
   // remove, one level down, and it is a SEPARATE defect from the rule split —
   // fixing one does not fix the other. Tracked as
   // `vol-followup-position-size-publishes-the-floor`.
+  //
+  // IT NO LONGER COVERS THE SUB-FLOOR BAND, and that is the point of the gate
+  // above: a `currentVol` under 5e-5 now refuses outright, so it never reaches
+  // this floor and is never published as its 1%. The floor's reachable domain is
+  // [5e-5, 0.01), where the substitution is still a lie.
   const vol = Math.max(0.01, currentVol)
-  const target = Math.max(0.01, targetVol)
   const cap = Math.max(1, capital)
   const price = Math.max(0.0001, entryPrice)
 
@@ -533,6 +611,8 @@ export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol = 0
   const positionValue = units * price
 
   return {
+    sized: true,
+    reason: null,
     volScale: Math.round(volScale * 10000) / 10000,
     riskBudget: Math.round(riskBudget * 100) / 100,
     units: Math.max(0, units),

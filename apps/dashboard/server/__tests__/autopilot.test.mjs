@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
 // Pure-logic coverage for the advisory engine. Execution internals were
 // removed (PICC is advisory-first); what remains here is the decision
@@ -187,7 +188,75 @@ describe("scopeHealth (asset-scope resolvability)", () => {
   it("unknown junk ids stay flagged even when feed is empty", () => {
     const cfg = { assets: [{ assetId: "QQQJUNK", enabled: true }], assetId: "QQQJUNK" }
     const h = autopilot.scopeHealth(cfg, { feedAssets: [] })
-    expect(h.rows[0].resolvable).toBe(false)
+    expect(h.rows.find((r) => r.assetId === "QQQJUNK").resolvable).toBe(false)
     expect(h.problems).toEqual(["QQQJUNK"])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// THE INVENTED 0.30 IS GONE FROM THE AUTOPILOT SIZING PATH.
+//
+// `defaultAmount` read `const currentVol = rv.annual || 0.30` — an unmeasured
+// constant standing in for a measurement, in the function that decides how much
+// money goes at risk. It fired on `null` (too few returns to measure) and on a
+// genuine measured 0 (a flat series), and after the precision fix it stopped
+// firing on the sub-floor band that mattered most. The gate now lives in
+// `volatilityPositionSize`, so the caller passes the measurement through
+// unchanged.
+//
+// WHAT THIS TEST CAN AND CANNOT SHOW, because a source guard that is mistaken
+// for behavioural coverage is worse than none:
+//
+//   CAN show the substitution is absent and the refusal is honoured at the call
+//   site — both are properties of the source text, and reverting either breaks
+//   this test.
+//
+//   CANNOT show what `defaultAmount` computes, because `defaultAmount` is NOT
+//   CALLED by anything in this repository. It is defined at autopilot.mjs:806
+//   and has no call site. So the sizing it performs cannot be exercised through
+//   any exported seam, and asserting its arithmetic would require exporting a
+//   dead function purely to test it. The arithmetic is covered where it lives —
+//   `volatility.test.mjs` drives `volatilityPositionSize` directly, including
+//   the sub-floor refusal and the 0.02 still-sizes-up direction. What is pinned
+//   HERE is the thing that is specific to this file: that it stopped inventing
+//   the number, and that it checks the gate's verdict rather than assuming one.
+// ─────────────────────────────────────────────────────────────────────
+describe("the autopilot sizing path no longer invents a volatility", () => {
+  const src = readFileSync(
+    resolve(fileURLToPath(import.meta.url), "../../services/autopilot.mjs"),
+    "utf8"
+  )
+  const fn = src.slice(src.indexOf("async function defaultAmount"))
+  // COMMENTS ARE STRIPPED BEFORE ANY ASSERTION, and that is not a convenience —
+  // it is the whole reason this guard is trustworthy. The explanation of why the
+  // constant was removed quotes the removed constant verbatim, so an assertion
+  // against raw source text matches this file's own prose and reports a green
+  // defect as red. Only lines that are wholly a `//` comment are dropped, which
+  // cannot touch a string literal or a URL on a line of code.
+  const defaultAmount = fn
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("//"))
+    .join("\n")
+
+  it("does not substitute an invented constant for a missing or unmeasurable volatility", () => {
+    // The premise, asserted: the comments really did have to come out, so the
+    // guard below is reading code and not prose.
+    expect(fn).toMatch(/rv\.annual\s*\|\|\s*0\.30/)
+    expect(defaultAmount).not.toMatch(/rv\.annual\s*\|\|\s*0\.30/)
+
+    // And the generic form: no `annual` read anywhere in this function is
+    // defaulted behind `||`, whatever number it might be by the next ruling.
+    const annualReads = defaultAmount.match(/rv\.annual\s*\|\|[^\n]*/g) ?? []
+    expect(annualReads, "no rv.annual may be defaulted with ||").toEqual([])
+
+    // The measurement is passed through as measured — present, and named.
+    expect(defaultAmount).toMatch(/const currentVol = rv\.annual\s*$/m)
+  })
+
+  it("honours the gate's refusal instead of assuming a scale factor came back", () => {
+    // `units >= 1` alone would have accepted a refusal that returned units 1;
+    // checking `sized` is what makes the refusal authoritative. The assertion is
+    // on the conjunction, so dropping the `sized` half breaks it.
+    expect(defaultAmount).toMatch(/sizing\.sized\s*&&\s*sizing\.units\s*>=\s*1/)
   })
 })

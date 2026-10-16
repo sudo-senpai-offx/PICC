@@ -3,6 +3,7 @@ import {
   realizedVolatility,
   volatilityRegime,
   volatilityPositionSize,
+  VOL_SIZING_FLOOR,
   garmanKlassVolatility,
   yangZhangVolatility,
   parkinsonVolatility,
@@ -421,17 +422,21 @@ describe("publication precision: null stays distinguishable from a measured zero
   //   currentVol 0.01    -> currentVolPct "1%"   volScale 2   riskBudget 400
   //   currentVol 0.005   -> currentVolPct "1%"   volScale 2   riskBudget 400
   //   currentVol 0.0001  -> currentVolPct "1%"   volScale 2   riskBudget 400
-  //   currentVol 0.00001 -> currentVolPct "1%"   volScale 2   riskBudget 400
   //
-  // all four identical, which is the falsification stated as a measurement: a
-  // true 0.00002923 is reported as 1%, 342x over. With the floor at 0.0001 the
-  // first and last lines publish "0.01%" and "0.001%" instead.
+  // all three identical, which is the falsification stated as a measurement: a
+  // true 0.00923 is reported as 1%, 108x over. With the floor at 0.0001 they
+  // publish "0.01%" instead.
   //
-  // THIS PINS THE DEFECT, NOT THE FIX. It asserts the floor is 0.01 so that
-  // `vol-followup-position-size-publishes-the-floor` has a premise that is
-  // actually held down, and so that whoever fixes that ticket breaks this test
-  // loudly instead of quietly. A test that described the defect as fixed would
-  // be the same defect this file exists to remove.
+  // THE SWEEP USED TO RUN TO 0.00001 AND IT NO LONGER DOES, WHICH IS THE RULING
+  // LANDING RATHER THAN A LOOSENING. This comment originally listed 0.00001
+  // alongside the others and said, in terms, that whoever fixed the sub-floor
+  // ticket would break this test loudly. It did, and the break was correct: 1e-5
+  // is below `VOL_SIZING_FLOOR`, so it now REFUSES rather than being floored and
+  // published as "1%". The floor's reachable domain is [5e-5, 0.01), which is
+  // what the sweep below covers; the value that used to sit just under it is
+  // asserted in the gate's own tests to refuse, rather than to publish a
+  // substituted figure. Nothing here was relaxed — the domain shrank, because
+  // the values below it are no longer allowed in.
   it("the sizing floor is 0.01, and it publishes as the figure it substitutes", () => {
     const base = { capital: 10000, riskPct: 0.02, targetVol: 0.2, entryPrice: 100 }
 
@@ -440,11 +445,11 @@ describe("publication precision: null stays distinguishable from a measured zero
     expect(volatilityPositionSize({ ...base, currentVol: 0.0001 }).currentVolPct).toBe("1%")
     expect(volatilityPositionSize({ ...base, targetVol: 0.005 }).targetVolPct).toBe("1%")
 
-    // And the falsification itself: a whole decade of sub-floor volatilities
-    // collapses onto one published figure, because the floor is applied BEFORE
+    // And the falsification itself: the whole reachable sub-1% band collapses
+    // onto one published figure, because the floor is applied BEFORE
     // publication rather than after it.
     const seen = new Set()
-    for (const v of [0.01, 0.005, 0.0001, 0.00001]) {
+    for (const v of [0.01, 0.005, 0.0001]) {
       seen.add(volatilityPositionSize({ ...base, currentVol: v }).currentVolPct)
     }
     expect(seen.size).toBe(1)
@@ -509,5 +514,183 @@ describe("publication precision: null stays distinguishable from a measured zero
     // unification is behaviour-preserving for every ordinary input.
     expect(s.currentVolPct).toBe("5%")
     expect(s.targetVolPct).toBe("4%")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
+// THE SIZING GATE: A VOLATILITY TOO SMALL TO MEASURE IS NOT A LOW-RISK ONE.
+//
+// `volatilityPositionSize` scales a position UP as measured volatility falls,
+// clamped at 2.0. Below the publication floor that inference has no basis: the
+// figure is one this module cannot publish as a measurement, and in practice it
+// describes an instrument that barely trades. So the gate refuses, and the
+// refusal is a value the caller can read rather than a plausible number it has
+// to take on trust.
+//
+// These four blocks are the four things that can be wrong independently:
+// the threshold itself, the refusal, the sizing that must SURVIVE the gate, and
+// the in-range figures that must not move. A gate at the wrong threshold passes
+// the refusal block and fails the surviving-sizing block, which is why they are
+// not one test.
+// ─────────────────────────────────────────────────────────────────────
+describe("volatilityPositionSize refuses a volatility it cannot measure", () => {
+  const base = { capital: 10000, riskPct: 0.02, targetVol: 0.2, entryPrice: 100 }
+
+  it("the threshold is 5e-5, asserted as a literal", () => {
+    // A LITERAL, and deliberately not re-derived from the implementation. The
+    // tempting alternative is to assert `VOL_SIZING_FLOOR === 0.00005` by
+    // recomputing the collapse band from `roundPublished` — which would make the
+    // test pass by construction if someone moved the publisher's boundary, and
+    // a sizing floor that silently follows a publication change is not a floor
+    // anyone decided on. This is a number in a capital-committing path; it gets
+    // pinned the way the 0.01 floor above is pinned, as a fact about the code.
+    expect(VOL_SIZING_FLOOR).toBe(0.00005)
+
+    // And the boundary is strict in the direction that makes it a measurement:
+    // `roundPublished(5e-5) === 0.0001`, so exactly 5e-5 IS publishable and
+    // sizes, while the largest sub-floor value refuses. Asserted as literals
+    // for the same reason.
+    expect(volatilityPositionSize({ ...base, currentVol: 0.00005 }).sized).toBe(true)
+    expect(volatilityPositionSize({ ...base, currentVol: 0.0000499 }).sized).toBe(false)
+  })
+
+  it("a sub-floor volatility does not produce maximum position", () => {
+    // The defect, stated as the exact outcome it produced. At the ruling's
+    // premise (a measured 0.00002923) the old path was: floored to 0.01, volScale
+    // clamped at its 2.0 ceiling, riskBudget 400, positionPct 4% — three times
+    // the budget an ordinary 0.30 volatility got, for an instrument with no
+    // measurable volatility at all.
+    //
+    // The sweep is the whole sub-floor domain rather than one value, because a
+    // gate that only catches the example would be a gate against a test case.
+    // 0 is included and is not hypothetical: a perfectly flat series measures
+    // exactly 0 (`realizedVolatility` on 60 identical closes), which is the
+    // purest form of "the market told us nothing".
+    const SUB_FLOOR = [0, 1e-9, 1e-7, 1e-6, 3.15e-6, 1e-5, 2.923e-5, 3.55e-5, 4.99e-5]
+    for (const v of SUB_FLOOR) {
+      const s = volatilityPositionSize({ ...base, currentVol: v })
+      expect(s.sized, `currentVol ${v}`).toBe(false)
+      // None of the three figures that commit capital.
+      expect(s.volScale, `currentVol ${v}`).toBeNull()
+      expect(s.riskBudget, `currentVol ${v}`).toBeNull()
+      expect(s.units, `currentVol ${v}`).toBe(0)
+      expect(s.positionValue, `currentVol ${v}`).toBe(0)
+      expect(s.positionPct, `currentVol ${v}`).toBe("0%")
+      // And specifically NOT the saturated values. Named, so a regression here
+      // names the regression rather than a null.
+      expect(s.volScale, `currentVol ${v} saturated`).not.toBe(2)
+      expect(s.riskBudget, `currentVol ${v} saturated`).not.toBe(400)
+    }
+  })
+
+  it("an absent or non-finite volatility refuses too, and does not crash", () => {
+    // `annualizedVolatility` returns `{ annual: null }` when there are too few
+    // returns to measure, and `autopilot.mjs` used to turn that into 0.30 with
+    // `||`. Passing null through is the whole point of the change, so the gate
+    // has to own it: without the `Number.isFinite` arm, `Math.max(0.01, null)`
+    // is 0.01 and a MISSING measurement would size at maximum — strictly worse
+    // than the bug being fixed.
+    for (const v of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const s = volatilityPositionSize({ ...base, currentVol: v })
+      expect(s.sized, `currentVol ${String(v)}`).toBe(false)
+      expect(s.volScale, `currentVol ${String(v)}`).toBeNull()
+      expect(s.riskBudget, `currentVol ${String(v)}`).toBeNull()
+      expect(s.units, `currentVol ${String(v)}`).toBe(0)
+      // There is no figure to publish, and "0%" would be a claim that the
+      // instrument is riskless — the precise confusion this gate exists to end.
+      expect(s.currentVolPct, `currentVol ${String(v)}`).toBeNull()
+    }
+    // Omitting `currentVol` entirely is the same case: the parameter has no
+    // default, because a default standing in for a measurement is an invented
+    // number. The old signature defaulted it to 0.30.
+    expect(volatilityPositionSize(base).sized).toBe(false)
+  })
+
+  it("a refusal SAYS it refused, and still carries the measurement it refused", () => {
+    const s = volatilityPositionSize({ ...base, currentVol: 0.00002923 })
+
+    // Stated, so a caller is never left holding a number whose provenance
+    // nobody can name. The floor renders as `0.00005` because it is interpolated
+    // from the constant, not spelled "5e-5" — the assertion matches what a
+    // reader of the message would actually see.
+    expect(s.sized).toBe(false)
+    expect(s.reason).toMatch(/below the sizing floor 0\.00005/)
+    expect(s.reason).toContain("0.00002923")
+    // The reasoning travels with it: this is staleness, not safety.
+    expect(s.reason).toMatch(/not a low-risk one/)
+
+    // AND THE MEASUREMENT SURVIVES. Before the gate, `Math.max(0.01, …)` put 1%
+    // in this field — 342x the truth — which is how a caller could not tell an
+    // illiquid instrument from a riskless one. The refusal publishes the real
+    // figure: 0.00002923 annualized is 0.002923%.
+    expect(s.currentVolPct).toBe("0.002923%")
+    expect(s.currentVolPct).not.toBe("1%")
+
+    // `targetVolPct` still publishes: the refusal is about the volatility that
+    // could not be measured, not about the target the caller asked for.
+    expect(s.targetVolPct).toBe("20%")
+  })
+})
+
+describe("the sizing gate does not swallow the volatilities that are measurable", () => {
+  const base = { capital: 10000, riskPct: 0.02, targetVol: 0.2, entryPrice: 100 }
+
+  it("a genuinely LOW but measurable volatility still sizes up — the over-correction direction", () => {
+    // THIS IS THE DIRECTION THAT GETS MISSED. A gate is easy to write so that
+    // anything small refuses, and such a gate passes the block above perfectly
+    // while quietly destroying risk parity for every calm instrument — which is
+    // the feature `volatilityPositionSize` exists to provide. 0.02 is 2%
+    // annualized: low by any market standard, and measured. It MUST size up.
+    for (const v of [0.1, 0.05, 0.02, 0.01, 0.005, 0.0001, 0.00005]) {
+      const s = volatilityPositionSize({ ...base, currentVol: v })
+      expect(s.sized, `currentVol ${v} must still size`).toBe(true)
+      expect(s.reason, `currentVol ${v}`).toBeNull()
+      // All of these clamp at the same 2.0 ceiling — that ceiling is the
+      // contract, not the defect. The defect was only ever the sub-floor band.
+      expect(s.volScale, `currentVol ${v}`).toBe(2)
+      expect(s.riskBudget, `currentVol ${v}`).toBe(400)
+      expect(s.units, `currentVol ${v}`).toBe(4)
+      expect(s.positionPct, `currentVol ${v}`).toBe("4%")
+    }
+
+    // The 0.02 line called out on its own, because it is the value the ruling
+    // named: comfortably above any plausible floor, and the case a badly-placed
+    // gate takes with it.
+    const low = volatilityPositionSize({ ...base, currentVol: 0.02 })
+    expect(low.sized).toBe(true)
+    expect(low.volScale).toBe(2)
+    expect(low.riskBudget).toBe(400)
+    expect(low.currentVolPct).toBe("2%")
+  })
+
+  it("an in-range volatility is byte-identical to the pre-gate figures", () => {
+    // The gate adds a branch, so what has to be pinned is that the branch does
+    // not move anything on the far side of it. Every published field, exact
+    // values, across the range a real caller uses. These are the figures the old
+    // code produced and they must not have moved by a rounding step.
+    const cases = [
+      { currentVol: 0.30, volScale: 0.6667, riskBudget: 133.33, units: 1, positionValue: 100, positionPct: "1%", currentVolPct: "30%" },
+      { currentVol: 0.50, volScale: 0.4, riskBudget: 80, units: 0, positionValue: 0, positionPct: "0%", currentVolPct: "50%" },
+      { currentVol: 0.40, volScale: 0.5, riskBudget: 100, units: 1, positionValue: 100, positionPct: "1%", currentVolPct: "40%" },
+      { currentVol: 0.20, volScale: 1, riskBudget: 200, units: 2, positionValue: 200, positionPct: "2%", currentVolPct: "20%" },
+      // The LOWER clamp, 0.25, which is what an above-target volatility actually
+      // produces: `targetVol / vol` goes below 0.25 and the position is floored,
+      // not scaled to nothing. Pinned because it is a second clamp the gate
+      // could plausibly have moved and this table would not have noticed.
+      { currentVol: 1.00, volScale: 0.25, riskBudget: 50, units: 0, positionValue: 0, positionPct: "0%", currentVolPct: "100%" },
+      { currentVol: 2.00, volScale: 0.25, riskBudget: 50, units: 0, positionValue: 0, positionPct: "0%", currentVolPct: "200%" }
+    ]
+    for (const c of cases) {
+      const s = volatilityPositionSize({ ...base, currentVol: c.currentVol })
+      expect(s.sized, `currentVol ${c.currentVol}`).toBe(true)
+      expect(s.reason, `currentVol ${c.currentVol}`).toBeNull()
+      expect(s.volScale, `currentVol ${c.currentVol}`).toBe(c.volScale)
+      expect(s.riskBudget, `currentVol ${c.currentVol}`).toBe(c.riskBudget)
+      expect(s.units, `currentVol ${c.currentVol}`).toBe(c.units)
+      expect(s.positionValue, `currentVol ${c.currentVol}`).toBe(c.positionValue)
+      expect(s.positionPct, `currentVol ${c.currentVol}`).toBe(c.positionPct)
+      expect(s.currentVolPct, `currentVol ${c.currentVol}`).toBe(c.currentVolPct)
+      expect(s.targetVolPct, `currentVol ${c.currentVol}`).toBe("20%")
+    }
   })
 })

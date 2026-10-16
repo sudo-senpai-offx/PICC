@@ -811,51 +811,40 @@ async function defaultAmount(balance, riskPct, closes, times) {
       // realized volatility today; if OHLC ever reaches this seam the F-11
       // Yang-Zhang / Garman-Klass estimators take over automatically.
       const rv = annualizedVolatility(closes, { period: 20, times })
-      // KNOWN DEFECT, NOT FIXED HERE: this `||` fires on `null` as well as on a
-      // genuine measured 0, and 0.30 is an invented constant rather than a
-      // measurement — the same class `riskParity.mjs` removed at its own
-      // consumer (`vols[s] = rv.annual || 0.20`). Whether this sizing path
-      // should refuse, or fall back to plain percentage sizing, is a SIZING
-      // decision rather than a publication rule, so it is tracked as
-      // `vol-followup-autopilot-falsy-zero-vol` rather than fixed in a
-      // precision round.
-      const currentVol = rv.annual || 0.30
-      // ── A SIZING CONSEQUENCE OF THE PRECISION FIX, DELIBERATELY ACCEPTED ──
+      // ── `|| 0.30` IS GONE. IT WAS AN INVENTED NUMBER, AND THE SUBSTITUTION
+      // ── NOW LIVES WHERE IT CAN BE SEEN AND ARGUED WITH. ──
       //
-      // `rv.annual` no longer collapses sub-5e-5 volatilities to 0, and this
-      // line feeds the figure straight into `volatilityPositionSize`. The
-      // consequence is real and was previously unflagged, so it is stated here
-      // in the source rather than left for the next reader to discover:
+      // This line used to read `const currentVol = rv.annual || 0.30`. 0.30 is a
+      // constant nobody measured, standing in for a measurement, in the one place
+      // that decides how much money goes at risk. Three things were wrong with
+      // it at once, and only the first was ever written down:
       //
-      //   measured (one 1e-3 tick in 300 bars)  currentVol 0.0000355
-      //     -> floored to 0.01 by `volatilityPositionSize`
-      //     -> volScale clamps at its 2.0 ceiling (target 0.20 / vol)
-      //     -> riskBudget 133.33 becomes 400, and units 1 becomes 4
+      //   1. It fired on `null` as well as on 0, so an instrument with too few
+      //      returns to measure was sized as though it had measured 30%.
+      //   2. It fired on a genuine measured 0 — a series that has not moved —
+      //      which is the definition of the staleness case below.
+      //   3. After the precision fix it stopped firing on the population that
+      //      matters most: a true 0.00002923 is truthy, so it reached
+      //      `volatilityPositionSize` unchanged.
       //
-      // So EVERY instrument whose true annualized volatility is below 5e-5 —
-      // exactly the thinly-traded population the precision fix exists to stop
-      // calling riskless — now receives 3x the risk budget. Measured, not
-      // inferred; the ratio is 3.000075.
+      // Those are not three bugs. They are one bug with three faces, and the
+      // ruling is that a volatility this module cannot measure is evidence of
+      // ILLIQUIDITY, not of low risk — sizing up into an instrument you cannot
+      // exit is the wrong direction to be wrong in. So the value is passed
+      // through as measured, and `volatilityPositionSize` owns the decision for
+      // every caller rather than each one inventing its own guard. The gate, the
+      // threshold and the alternative that was rejected are documented at
+      // `VOL_SIZING_FLOOR` in `volatility.mjs`.
       //
-      // THE DECISION IS TO ACCEPT IT, and the reasoning matters more than the
-      // acceptance. `volatilityPositionSize`'s contract is genuine: vol scaling
-      // means low measured risk earns a larger position, and 2.0 is a
-      // deliberate clamp, not a bug. Reverting or gating the figure HERE would
-      // re-suppress a true measurement at the sizing seam, which is the same
-      // defect class this change exists to remove, and inventing a
-      // "is-this-vol-plausible-for-sizing" threshold would be a fresh design
-      // decision with its own failure modes — one that belongs in its own
-      // change, argued on its own evidence, rather than smuggled into a
-      // precision round.
-      //
-      // THE COUNTER-ARGUMENT IS RECORDED BECAUSE IT IS SERIOUS: low measured
-      // volatility here usually means ILLIQUID rather than safe, and sizing UP
-      // into something you cannot exit is the wrong direction. That is exactly
-      // the reasoning behind the ms/seconds normalisation fix at
-      // `volatility.mjs:94-96`, where a bad vol estimate pinned vol-scaled
-      // sizing to its floor permanently — this file treats sizing fed by a
-      // suspect vol estimate as a real defect class. Follow-up ticket
-      // `vol-followup-sizing-on-sub-floor-vol` tracks it.
+      // ONE DELTA THIS CAUSES, STATED BECAUSE IT MOVES CAPITAL: when the
+      // volatility is genuinely unmeasurable, the amount used to be
+      // `balance * riskPct * 0.6667` (the volScale that 0.30 produced). It is
+      // now the plain configured percentage below — no vol adjustment at all.
+      // That is not "sizing up on a suspect volatility", it is declining to
+      // vol-adjust, and the number now has a provenance that can be stated:
+      // the operator's `riskPerTradePct`. The old 0.667x was a discount with no
+      // measurement behind it. In-range volatilities are untouched.
+      const currentVol = rv.annual
       const sizing = volatilityPositionSize({
         capital: balance,
         riskPct: (Number(riskPct) || 2) / 100,
@@ -863,8 +852,12 @@ async function defaultAmount(balance, riskPct, closes, times) {
         targetVol: 0.20,
         entryPrice: closes[closes.length - 1]
       })
-      // Use vol-scaled amount but fallback to simple pct if units < 1
-      if (sizing.units >= 1 && Number.isFinite(sizing.riskBudget)) {
+      // `sized === false` means the volatility was below the sizing floor or
+      // absent, and `volatilityPositionSize` declined to scale on it. The trade
+      // still proceeds, at the flat configured percentage below — which is the
+      // same place the `units < 1` and `catch` branches already land, so the
+      // refusal reuses a path that was already there rather than adding one.
+      if (sizing.sized && sizing.units >= 1 && Number.isFinite(sizing.riskBudget)) {
         return clamp(round2(sizing.riskBudget), 1, 1000)
       }
     } catch {
