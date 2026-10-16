@@ -292,6 +292,17 @@ describe("publication precision: the ordinary range is unchanged", () => {
     expect(yangZhangVolatility(candles, { period: 20, annualize: 252 }).annualPct).toBe("25.12%")
   })
 
+  // PINNED TO AN EXACT FIGURE, NOT TO THE IMPLEMENTATION'S OWN EXPRESSION.
+  //
+  // This assertion used to read
+  //     expect(Number(below.daily.toPrecision(4))).toBe(below.daily)
+  // which is true of ANY result carrying four or fewer significant figures. It
+  // held the BAND down — a result outside the band fails it — and held nothing
+  // else: `toPrecision(1)` and `toPrecision(3)` both survived a green 52-test
+  // suite, so the file could publish `3.15e-6` as `3e-6`, a 5% error in a
+  // published risk measurement, with everything green. A measurement compared
+  // against a re-derivation of the expression that produced it cannot catch
+  // that, however carefully the re-derivation is written. Only a literal can.
   it("keeps 4 significant figures exactly where 4 decimal places would destroy the figure", () => {
     // The band is not "rounded differently", it is rounded to a precision that
     // depends on magnitude: 4dp everywhere it survives, 4 significant figures
@@ -299,9 +310,23 @@ describe("publication precision: the ordinary range is unchanged", () => {
     const below = realizedVolatility(alternatingCloses(4e-5), { period: 20, annualize: 252 })
     expect(below.daily).toBeGreaterThan(0)
     expect(below.daily).toBeLessThan(0.0001) // still under the old floor
-    expect(Number(below.daily.toPrecision(4))).toBe(below.daily)
+
+    // THE PIN, as a measured literal rather than a re-derivation. This fixture's
+    // raw daily volatility is 4.1039134083438e-5 — below 5e-5, so the fallback is
+    // what publishes it at all, and every neighbouring precision is a DIFFERENT
+    // number. Measured, on this input:
+    //
+    //   4 dp   0              the measurement's absence, not a rounded figure
+    //   1 sig  0.00004        2.5% error
+    //   3 sig  0.000041       0.095% error
+    //   5 sig  0.000041039
+    //   4 sig  0.00004104     <- what this file commits to publishing
+    expect(below.daily).toBe(0.00004104)
 
     // Above the floor, the old precision still applies — the two schemes meet.
+    // This one is NOT the same kind of assertion: 4dp is the rule above the
+    // band, so "this figure is 4dp-quantised" is the property under test rather
+    // than a restatement of it.
     const above = realizedVolatility(alternatingCloses(0.05), { period: 20, annualize: 252 })
     expect(above.daily).toBe(Math.round(above.daily * 10000) / 10000)
   })
@@ -377,6 +402,58 @@ describe("publication precision: null stays distinguishable from a measured zero
     const fraction = sized.positionValue / 10000
     expect(fraction).toBeLessThan(5e-5)
     expect(Math.round(fraction * 10000) / 100).toBe(0)
+  })
+
+  // THE `Math.max(0.01, ...)` FLOOR, PINNED — IT WAS AN UNPINNED DECISION.
+  //
+  // Round 1 established that this floor makes `currentVolPct` and
+  // `targetVolPct` falsify a sub-1% volatility, and tracked it as
+  // `vol-followup-position-size-publishes-the-floor`. But nothing pinned the
+  // floor ITSELF, so `Math.max(0.0001, ...)` — one hundredth of the floor, and
+  // a 100x change in how much of the measured range gets swallowed — also
+  // passed the whole suite. The ticket's premise was therefore unverified: it
+  // said "the floor falsifies the figure" about a number no test could read.
+  //
+  // It IS observable, in `currentVolPct` alone, and nowhere else: `volScale` is
+  // clamped at 2.0 and `riskBudget`/`units` follow from it, so every sub-floor
+  // currentVol already produces the identical sizing. Measured:
+  //
+  //   currentVol 0.01    -> currentVolPct "1%"   volScale 2   riskBudget 400
+  //   currentVol 0.005   -> currentVolPct "1%"   volScale 2   riskBudget 400
+  //   currentVol 0.0001  -> currentVolPct "1%"   volScale 2   riskBudget 400
+  //   currentVol 0.00001 -> currentVolPct "1%"   volScale 2   riskBudget 400
+  //
+  // all four identical, which is the falsification stated as a measurement: a
+  // true 0.00002923 is reported as 1%, 342x over. With the floor at 0.0001 the
+  // first and last lines publish "0.01%" and "0.001%" instead.
+  //
+  // THIS PINS THE DEFECT, NOT THE FIX. It asserts the floor is 0.01 so that
+  // `vol-followup-position-size-publishes-the-floor` has a premise that is
+  // actually held down, and so that whoever fixes that ticket breaks this test
+  // loudly instead of quietly. A test that described the defect as fixed would
+  // be the same defect this file exists to remove.
+  it("the sizing floor is 0.01, and it publishes as the figure it substitutes", () => {
+    const base = { capital: 10000, riskPct: 0.02, targetVol: 0.2, entryPrice: 100 }
+
+    // The floor, read through the one field it is observable in. `targetVol`
+    // pinned the same way: 0.005 is below 0.01 and above 0.0001.
+    expect(volatilityPositionSize({ ...base, currentVol: 0.0001 }).currentVolPct).toBe("1%")
+    expect(volatilityPositionSize({ ...base, targetVol: 0.005 }).targetVolPct).toBe("1%")
+
+    // And the falsification itself: a whole decade of sub-floor volatilities
+    // collapses onto one published figure, because the floor is applied BEFORE
+    // publication rather than after it.
+    const seen = new Set()
+    for (const v of [0.01, 0.005, 0.0001, 0.00001]) {
+      seen.add(volatilityPositionSize({ ...base, currentVol: v }).currentVolPct)
+    }
+    expect(seen.size).toBe(1)
+    expect([...seen]).toEqual(["1%"])
+
+    // The sizing maths genuinely needs a floor — a `volScale` of 20,000 would
+    // blow the position up without limit — so this is a floor whose necessity
+    // is not in question. Only the publication of it as a measurement is.
+    expect(volatilityPositionSize({ ...base, currentVol: 0.0001 }).volScale).toBe(2)
   })
 
   it("volatilityPositionSize applies ONE percentage rule to all three percentage fields", () => {
