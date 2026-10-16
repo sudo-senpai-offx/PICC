@@ -348,4 +348,89 @@ describe("publication precision: null stays distinguishable from a measured zero
     expect(rv.annual).toBeNull()
     expect(rv.daily).toBeNull()
   })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // `volatilityPositionSize` PUBLISHES PERCENTAGES, AND HAD NO TEST FOR IT.
+  //
+  // `positionPct` (and its two siblings) went through `roundVolPct` in the
+  // precision change and survived mutation with no coverage at all. The band is
+  // reachable: `riskPct` of 1e-4 puts `positionValue / cap` at 2.5e-5, and 4dp
+  // on that published `"0%"` — the identical defect `annualPct` had.
+  // ─────────────────────────────────────────────────────────────────────
+  it("volatilityPositionSize publishes a nonzero position as a nonzero percentage", () => {
+    // capital 10000, riskPct 1e-4, volScale 0.4 (currentVol 0.50 / target 0.20)
+    // => riskBudget 0.40, entryPrice 0.25 => units 1, positionValue 0.25.
+    // positionValue/cap = 2.5e-5, which is inside the collapsed band: 4dp on it
+    // returned `0`, so this field published `"0%"` before the rule was applied.
+    const sized = volatilityPositionSize({
+      capital: 10000,
+      riskPct: 1e-4,
+      currentVol: 0.5,
+      targetVol: 0.20,
+      entryPrice: 0.25
+    })
+    expect(sized.positionValue).toBe(0.25)
+    expect(sized.positionPct).toBe("0.0025%")
+    // The premise, asserted rather than assumed: the underlying fraction really
+    // is one 4dp would erase, so the assertion above is a bite and not a
+    // tautology.
+    const fraction = sized.positionValue / 10000
+    expect(fraction).toBeLessThan(5e-5)
+    expect(Math.round(fraction * 10000) / 100).toBe(0)
+  })
+
+  it("volatilityPositionSize applies ONE percentage rule to all three percentage fields", () => {
+    // M1: `positionPct` used `roundVolPct` while `currentVolPct` and
+    // `targetVolPct` were left on raw `Math.round(v * 10000) / 100`, so one
+    // object mixed two rules for the same job.
+    //
+    // WHAT THIS TEST CAN AND CANNOT SHOW, because getting that backwards is how
+    // a passing suite ends up vouching for nothing:
+    //
+    //   CANNOT show the rules were unified. `vol` and `target` are both floored
+    //   at 0.01, and `roundVolPct` only falls back below 5e-5, so on every
+    //   reachable input the two rules agree. Reverting either field to raw 4dp
+    //   is an EQUIVALENT MUTANT and survives; that is the floor, not a coverage
+    //   hole. Asserting otherwise here would be a test that lies about what it
+    //   holds down.
+    //
+    //   CAN show the equivalence still holds. That is the property worth
+    //   pinning: if anyone lowers or removes the floor, raw-4dp and
+    //   `roundVolPct` start to disagree (below 0.01 the former prints "0%" and
+    //   the latter prints the real figure), and this test is what notices.
+    const roundVolPct = (fraction) => {
+      const pct = fraction * 100
+      const fixed = Math.round(pct * 100) / 100
+      if (fixed === 0 && fraction !== 0) return `${Number(pct.toPrecision(4))}%`
+      return `${fixed}%`
+    }
+    const raw4dp = (v) => Math.round(v * 10000) / 100 + "%"
+
+    // Sweep the reachable domain for both vol fields.
+    for (let v = 0.01; v <= 3; v += 0.0001) {
+      const floored = Math.max(0.01, v)
+      expect(raw4dp(floored), `raw4dp vs roundVolPct at ${floored}`).toBe(roundVolPct(floored))
+    }
+
+    // And the object publishes all three through the one rule, with ordinary
+    // figures unchanged by the unification.
+    const s = volatilityPositionSize({
+      capital: 10000,
+      riskPct: 0.02,
+      currentVol: 0.05,
+      targetVol: 0.04,
+      entryPrice: 100
+    })
+    for (const field of ["positionPct", "currentVolPct", "targetVolPct"]) {
+      expect(typeof s[field], field).toBe("string")
+      expect(s[field], field).toMatch(/%$/)
+      expect(s[field], field).not.toBe("0%")
+    }
+    expect(s.currentVolPct).toBe(roundVolPct(0.05))
+    expect(s.targetVolPct).toBe(roundVolPct(0.04))
+    // 5% and 4% at 2dp are the same strings the raw formula produced, so the
+    // unification is behaviour-preserving for every ordinary input.
+    expect(s.currentVolPct).toBe("5%")
+    expect(s.targetVolPct).toBe("4%")
+  })
 })

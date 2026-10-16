@@ -49,6 +49,22 @@ const DAY_SECONDS = 86400
 //
 // Exported because `riskParity.mjs` publishes inverse-volatility WEIGHTS under
 // the same rule, and one rule with two copies is a rule that will drift.
+//
+// ── ONE BOUNDARY WHERE THIS OVERSTATES RATHER THAN ERASES ──
+//
+// The threshold is exactly 5e-5 and JS `Math.round` is half-up, so a value
+// landing exactly on it is doubled:
+//
+//   roundPublished(5e-5)    === 0.0001     2x the measurement
+//   roundVolPct(5e-7)      === "0.005%"   2x, though it reads as rounding
+//
+// This is the ONLY direction in which this publisher misstates a measurement —
+// everywhere else a nonzero value survives as itself. It is pre-existing, it is
+// visible in the review's own table, and it is recorded rather than quietly
+// "fixed": switching the boundary to round-half-even would make `4.99999e-5`
+// and `5e-5` publish as the same number, which reintroduces a discontinuity at
+// the one place the discontinuity is currently honest about being one. Left as
+// is, deliberately.
 // ---------------------------------------------------------------------
 export function roundPublished(value) {
   if (!Number.isFinite(value)) return value
@@ -464,6 +480,23 @@ export function volatilityRegime(candles, { period = 14 } = {}) {
  * @returns {Object} Position sizing metrics
  */
 export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol = 0.30, targetVol = 0.20, entryPrice } = {}) {
+  // THE FLOOR FALSIFIES `currentVolPct`, AND THAT IS PRE-EXISTING — AND STILL
+  // TRUE AFTER THE RULE UNIFICATION BELOW.
+  //
+  // `vol` is floored at 0.01 BEFORE the percentage is published, so a true
+  // annualized volatility below 1% is reported as 1%:
+  //
+  //   true currentVol 0.00002923  ->  vol 0.01  ->  currentVolPct "1%"
+  //
+  // which is 342x the truth. The sizing maths genuinely needs a floor — a
+  // `volScale` of 20,000 would blow the size up without limit — so the floor
+  // stays, and so `currentVolPct` keeps publishing the floored value: routing
+  // it through `roundVolPct` does not help, because 0.01 is well above that
+  // rule's collapse band. Publishing a floored value as though it were a
+  // measured one is the measurement-substitution defect this file exists to
+  // remove, one level down, and it is a SEPARATE defect from the rule split —
+  // fixing one does not fix the other. Tracked as
+  // `vol-followup-position-size-publishes-the-floor`.
   const vol = Math.max(0.01, currentVol)
   const target = Math.max(0.01, targetVol)
   const cap = Math.max(1, capital)
@@ -481,8 +514,28 @@ export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol = 0
     units: Math.max(0, units),
     positionValue: Math.round(positionValue * 100) / 100,
     positionPct: roundVolPct(positionValue / cap),
-    currentVolPct: Math.round(vol * 10000) / 100 + "%",
-    targetVolPct: Math.round(target * 10000) / 100 + "%"
+    // ONE RULE, NOT TWO — AND, MEASURED, NO OBSERVABLE DIFFERENCE TODAY.
+    //
+    // These two sat on raw `Math.round(v * 10000) / 100` while `positionPct`
+    // used `roundVolPct`, so the object mixed two rules for the same job.
+    //
+    // THE HONEST PART, WHICH THE CHANGE ITSELF DOES NOT SHOW: unifying them
+    // changes NOTHING observable today, and claiming otherwise would be the
+    // same over-trust this round exists to remove. `vol` and `target` are both
+    // floored at 0.01 by the lines above, and `roundVolPct` only falls back to
+    // significant figures below 5e-5, so on every reachable input both rules
+    // produce the same string. Measured over 0.01..3 at 1e-4 steps — 29,900
+    // inputs — the two rules differ on 0 of them. Reverting either field to raw
+    // 4dp is an EQUIVALENT MUTANT: mutation testing confirms both survive, and
+    // the reason is the floor, not missing coverage.
+    //
+    // They are unified anyway, for the reason the floor itself creates: the
+    // moment anyone lowers or removes that floor, the raw-4dp pair diverges
+    // silently — below 0.01 they publish `"0%"` where `roundVolPct` publishes
+    // the real figure (`0.00002923` -> `"0.002923%"`). A difference no test can
+    // see is not a reason to leave a split rule in place.
+    currentVolPct: roundVolPct(vol),
+    targetVolPct: roundVolPct(target)
   }
 }
 

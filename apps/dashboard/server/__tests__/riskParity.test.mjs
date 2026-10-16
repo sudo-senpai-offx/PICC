@@ -18,11 +18,39 @@ describe("riskParity.inverseVolWeights", () => {
     expect(weights.C).toBeCloseTo(1 / 3, 2)
   })
 
-  it("weights sum to 1 and higher vol gets lower weight", () => {
+  // RENAMED, because the old name promised something this fixture cannot show.
+  //
+  // It was called "weights sum to 1" while asserting `toBeCloseTo(1, 3)`, and
+  // on a TWO-symbol fixture that assertion is vacuous: two weights are
+  // complementary fractions, and rounding complementary fractions to 4dp lands
+  // back on a sum of exactly 1. Measured over 200,000 random two-symbol pairs,
+  // max |sum - 1| is 0.000e+00 — not "small", identically zero. So the sum line
+  // could never fail, and it would not have failed against the pre-fix 4dp
+  // publisher either. It is kept as a partition check and renamed to say so;
+  // the drift band is exercised separately, on a symbol count where it exists.
+  it("orders weights inversely to vol and partitions the pair exactly", () => {
     const { weights } = inverseVolWeights({ Volatile: 0.1, Calm: 0.01 })
     const sum = Object.values(weights).reduce((s, x) => s + x, 0)
-    expect(sum).toBeCloseTo(1, 3)
+    expect(sum).toBe(1)
     expect(weights.Calm).toBeGreaterThan(weights.Volatile)
+  })
+
+  // The drift band, on a shape where it actually exists. Two weights cannot
+  // drift; three or more each round independently and can.
+  it("keeps a multi-symbol allocation within 1e-4 of 1, the band independent rounding opens", () => {
+    // Measured: max |sum - 1| is 1.0e-4 at n=3 and n=4, and 2.0e-4 at n=5, over
+    // 200,000 random vol sets each. `toBeCloseTo(1, 3)` allows 5e-4, so the
+    // tolerance this file relies on is set from that measurement rather than
+    // from a guess — and the bound is asserted explicitly so a publisher that
+    // widens its precision cannot quietly consume the slack.
+    for (const n of [3, 4, 5]) {
+      const vols = {}
+      for (let i = 0; i < n; i++) vols[`S${i}`] = 0.01 + i * 0.031
+      const { weights } = inverseVolWeights(vols)
+      const sum = Object.values(weights).reduce((s, x) => s + x, 0)
+      expect(Math.abs(sum - 1), `${n} symbols`).toBeLessThanOrEqual(2e-4)
+      expect(sum, `${n} symbols`).toBeCloseTo(1, 3)
+    }
   })
 })
 
@@ -182,14 +210,20 @@ describe("riskParity no longer invents a 20% volatility", () => {
     expect(["measured-zero", "measured-rounded-zero"]).not.toContain(r.volStatus.A.state)
   })
 
-  // The same collapse, one step downstream. `weights` is the payload's only
-  // statement of which symbols were allocated — the panel derives its
-  // dropped-symbol count from the difference between what it asked for and what
-  // appears there — so a real allocation published as `0` reports the symbol as
-  // absent. Measured at window 120: one 1e-3 tick measures 1.449e-5 annualized
-  // against a partner's 0.4215, a true weight of 3.438e-5, which 4dp served as
-  // `0`. This path opened when `volatility.mjs` stopped erasing small
-  // measurements, so the fix has to close it too.
+  // The same collapse, one step downstream — and the claim about WHAT it did is
+  // deliberately narrow, because an earlier version of this comment said the
+  // symbol was reported ABSENT and that was false.
+  //
+  // 4dp did not remove the key. `MarketAnalysisSection.tsx:587` builds
+  // `present` from `Object.keys(data.weights)`, so a weight that rounded to `0`
+  // was still present and still counted. Measured at window 120, on this very
+  // fixture: old `{A: 0.9999, B: 0}` and new `{A: 0.9999, B: 0.00003438}` both
+  // give `present = 2`, `absent = []`.
+  //
+  // What actually broke is the VALUE. The panel's coverage line counts keys and
+  // so says the symbol "carries a weight", and the weight it then renders is 0
+  // — a true 3.438e-5 allocation presented as no allocation. That is the defect
+  // this test pins: not a dropped symbol, a real one published as zero.
   it("a genuinely allocated symbol is never published with a weight of 0", () => {
     const oneTick = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
     for (const window of [30, 60, 120]) {
@@ -200,6 +234,59 @@ describe("riskParity no longer invents a 20% volatility", () => {
       expect(r.weights.B, `window ${window}`).toBeGreaterThan(0)
       // And the pair still describes one whole portfolio.
       expect(r.weights.A + r.weights.B, `window ${window}`).toBeCloseTo(1, 3)
+    }
+  })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // THE ERC BRANCH NEVER GOT THE TEST ITS SIBLING GOT.
+  //
+  // `riskParity.mjs:144` and `:147` publish ERC weights through the same
+  // `roundPublished` rule as the inverse-vol branch above, and both survived
+  // mutation with zero coverage — because every ERC test in this file uses a
+  // mild covariance matrix whose weights are all comfortably above the 4dp
+  // floor. Equal RC means `w_i ∝ 1/sigma_i`, so the weight spread equals the
+  // volatility spread, and it takes a spread of ~1e5 before the smallest weight
+  // crosses under 5e-5.
+  //
+  // Reached through the PUBLIC API rather than the exported solver, so this
+  // also proves the branch is reachable from a real request and not only by
+  // calling `equalRiskContribution` directly. Measured on this fixture:
+  //
+  //   vols  A 0.1968   B 0.3561   C 0.000001122
+  //   ERC   A 3.851e-6  B 2.173e-6  C 1
+  //
+  // Two of the three weights sit below the collapse band, and 4dp published
+  // both as `0`. Both publication sites are asserted, because they are two
+  // separate lines with two separate obligations.
+  // ─────────────────────────────────────────────────────────────────────
+  it("an ERC-allocated symbol is never published with a weight of 0, in either publication site", () => {
+    const wiggle = (n, amp, step) => Array.from({ length: n }, (_, i) => 100 + i * step + Math.sin(i) * amp)
+    const nearFlat = (n, tick) => Array.from({ length: n }, (_, i) => 100 + (i === n - 1 ? tick : 0))
+    const r = riskParityAllocation(
+      { A: wiggle(300, 2, 0.05), B: wiggle(300, 4, 0.11), C: nearFlat(300, 1e-4) },
+      { window: 200, method: "erc" }
+    )
+    expect(r.ok).toBe(true)
+
+    // The premise: at least one allocated weight really is inside the band that
+    // 4dp erases. Without this, a publisher that reverted to 4dp and happened
+    // to produce ordinary weights would still pass the assertions below.
+    const subFloor = Object.values(r.weights).filter((w) => w > 0 && w < 5e-5)
+    expect(subFloor.length).toBeGreaterThan(0)
+
+    // Site 1 — `weights[symbols[i]]`.
+    for (const [symbol, weight] of Object.entries(r.weights)) {
+      expect(weight, symbol).toBeGreaterThan(0)
+      if (weight < 5e-5) expect(Math.round(weight * 10000) / 10000, symbol).toBe(0)
+    }
+
+    // Site 2 — `details[i].weight`. It is a separate line publishing the same
+    // number, and a fix that touched only `weights` would leave it lying.
+    for (const detail of r.riskContributions) {
+      expect(detail.weight, detail.symbol).toBeGreaterThan(0)
+      // The two sites must agree, or the payload describes one allocation two
+      // different ways.
+      expect(detail.weight, detail.symbol).toBe(r.weights[detail.symbol])
     }
   })
 

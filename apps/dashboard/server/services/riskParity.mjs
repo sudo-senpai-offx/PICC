@@ -26,12 +26,31 @@ function logReturns(prices) {
  *
  * WEIGHTS ARE PUBLISHED UNDER THE SAME RULE AS THE VOLATILITIES THEY COME FROM
  * (`roundPublished`, imported rather than copied). A weight is a dimensionless
- * ratio, and `weights` is the payload's only statement of which symbols were
- * allocated — the panel derives its dropped-symbol count from the difference
- * between what it asked for and what appears here. Rounding to 4dp therefore
- * publishes a genuinely-allocated symbol as absent: one 1e-3 tick in a 300-bar
- * window measures 1.449e-5 annualized against a partner's 0.4215, which is a
- * true weight of 3.438e-5 — and 4dp served that as `0`.
+ * ratio, and a nonzero one published as `0` is the same defect the volatilities
+ * had: 4dp keeps four figures AFTER the point, so a true weight of 3.438e-5 —
+ * one 1e-3 tick in a 300-bar window, measuring 1.449e-5 annualized against a
+ * partner's 0.4215 — served as exactly `0`, and `0` is a value an allocator
+ * cannot distinguish from "this symbol was given nothing".
+ *
+ * WHAT IT DID NOT DO, STATED PRECISELY BECAUSE AN EARLIER VERSION OF THIS
+ * COMMENT GOT IT WRONG: rounding did not make the symbol ABSENT. The panel
+ * counts coverage from key presence — `present = Object.keys(data.weights)`
+ * (`MarketAnalysisSection.tsx:587`), and `absent` is what is missing from that
+ * list — so a key whose value rounded to 0 was still present, still counted,
+ * and still listed. Measured on the fixture below, at window 120:
+ *
+ *     old 4dp  { A: 0.9999, B: 0 }        -> present 2, absent []
+ *     new      { A: 0.9999, B: 0.00003438 } -> present 2, absent []   IDENTICAL
+ *
+ * The old defect is therefore NOT a dropped symbol, and calling it one was
+ * false. It is this, which is bad enough on its own: the panel's coverage line
+ * says `2 of 2 requested symbol(s) carry a weight` and lists B, and then
+ * renders `{symbol}: weight {data.weights[symbol]}` — `B: weight 0`. The payload
+ * claims the symbol carries a weight and then states that the weight is zero,
+ * in the same view, and the second half is a rounding artefact rather than an
+ * allocation decision. A consumer reading only the number sees an allocated
+ * symbol with no allocation; one reading only the count sees an allocation that
+ * is fully present.
  *
  * That path was barely open before `volatility.mjs` stopped erasing small
  * measurements: a symbol had to clear a 5e-5 volatility floor to be weightable

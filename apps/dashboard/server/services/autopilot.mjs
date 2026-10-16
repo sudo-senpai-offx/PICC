@@ -811,7 +811,51 @@ async function defaultAmount(balance, riskPct, closes, times) {
       // realized volatility today; if OHLC ever reaches this seam the F-11
       // Yang-Zhang / Garman-Klass estimators take over automatically.
       const rv = annualizedVolatility(closes, { period: 20, times })
+      // KNOWN DEFECT, NOT FIXED HERE: this `||` fires on `null` as well as on a
+      // genuine measured 0, and 0.30 is an invented constant rather than a
+      // measurement — the same class `riskParity.mjs` removed at its own
+      // consumer (`vols[s] = rv.annual || 0.20`). Whether this sizing path
+      // should refuse, or fall back to plain percentage sizing, is a SIZING
+      // decision rather than a publication rule, so it is tracked as
+      // `vol-followup-autopilot-falsy-zero-vol` rather than fixed in a
+      // precision round.
       const currentVol = rv.annual || 0.30
+      // ── A SIZING CONSEQUENCE OF THE PRECISION FIX, DELIBERATELY ACCEPTED ──
+      //
+      // `rv.annual` no longer collapses sub-5e-5 volatilities to 0, and this
+      // line feeds the figure straight into `volatilityPositionSize`. The
+      // consequence is real and was previously unflagged, so it is stated here
+      // in the source rather than left for the next reader to discover:
+      //
+      //   measured (one 1e-3 tick in 300 bars)  currentVol 0.0000355
+      //     -> floored to 0.01 by `volatilityPositionSize`
+      //     -> volScale clamps at its 2.0 ceiling (target 0.20 / vol)
+      //     -> riskBudget 133.33 becomes 400, and units 1 becomes 4
+      //
+      // So EVERY instrument whose true annualized volatility is below 5e-5 —
+      // exactly the thinly-traded population the precision fix exists to stop
+      // calling riskless — now receives 3x the risk budget. Measured, not
+      // inferred; the ratio is 3.000075.
+      //
+      // THE DECISION IS TO ACCEPT IT, and the reasoning matters more than the
+      // acceptance. `volatilityPositionSize`'s contract is genuine: vol scaling
+      // means low measured risk earns a larger position, and 2.0 is a
+      // deliberate clamp, not a bug. Reverting or gating the figure HERE would
+      // re-suppress a true measurement at the sizing seam, which is the same
+      // defect class this change exists to remove, and inventing a
+      // "is-this-vol-plausible-for-sizing" threshold would be a fresh design
+      // decision with its own failure modes — one that belongs in its own
+      // change, argued on its own evidence, rather than smuggled into a
+      // precision round.
+      //
+      // THE COUNTER-ARGUMENT IS RECORDED BECAUSE IT IS SERIOUS: low measured
+      // volatility here usually means ILLIQUID rather than safe, and sizing UP
+      // into something you cannot exit is the wrong direction. That is exactly
+      // the reasoning behind the ms/seconds normalisation fix at
+      // `volatility.mjs:94-96`, where a bad vol estimate pinned vol-scaled
+      // sizing to its floor permanently — this file treats sizing fed by a
+      // suspect vol estimate as a real defect class. Follow-up ticket
+      // `vol-followup-sizing-on-sub-floor-vol` tracks it.
       const sizing = volatilityPositionSize({
         capital: balance,
         riskPct: (Number(riskPct) || 2) / 100,
