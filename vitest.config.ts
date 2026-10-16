@@ -33,10 +33,31 @@ import dashboardConfig from "./apps/dashboard/vite.config"
 // and the package's own `npm test` differ in `root` and in nothing else.
 //
 // MEASURED, NOT ASSUMED: the whole suite was run at the repo root under
-// `command: "build"` and returned the identical result - 452 files / 6401 tests,
-// exit 0, `apps/dashboard/server/data` unchanged - the same numbers `"serve"`
-// gives. So the two are equivalent on this box, and `"serve"` is chosen because
-// it is what vitest actually passes, not because `"build"` would break.
+// `command: "build"`, and it returned the IDENTICAL result to the `"serve"` run
+// this file makes — same collected files, same test count, exit 0,
+// `apps/dashboard/server/data` byte-identical before and after. So the two are
+// equivalent on this box, and `"serve"` is chosen because it is what vitest
+// actually passes, not because `"build"` would break. (Measured at `b749632`.)
+//
+// THE COUNTS ARE DELIBERATELY NOT WRITTEN DOWN, and that is the discipline the
+// same file argues for two hundred lines below. This comment used to state
+// "452 files / 6401 tests", which was true when measured and was stale within one
+// commit — the two BOM tests added by `1b7a453` moved it to 6403, and a guard
+// added after that moved it again. A count in a comment whose entire point is
+// "MEASURED, NOT ASSUMED" has to be re-measured to stay honest, and nobody
+// re-measures a comment. What does not go stale is the RELATIONSHIP the count was
+// standing in for: the two commands agree. That is what is asserted here.
+//
+// WHAT THE NEW GUARD DOES AND DOES NOT COVER, so the two are not confused.
+// `ws7RootVitestConfigGuard.test.mjs` resolves this file's factory on every run
+// and asserts the CONTRACT the argument above depends on — that `setupFiles`,
+// `exclude` and `root` reach vitest through the merge, and that a root-local
+// `test:` override cannot displace them. It does NOT re-run the suite twice to
+// re-measure the `"serve"`/`"build"` parity, because doing that on every run
+// would double the suite to defend a comment. What the guard makes impossible is
+// the drift that would invalidate the measurement silently: if the `test` block
+// stops surviving the merge, the file no longer does what it was measured doing,
+// and the suite says so by name instead of by crashing with no summary.
 //
 // WHY they are equivalent, read off the config rather than guessed. There is
 // exactly one delta between the two branches in `apps/dashboard/vite.config.ts`:
