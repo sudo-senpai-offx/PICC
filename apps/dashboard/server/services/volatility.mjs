@@ -563,6 +563,16 @@ export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol, ta
   // publishes the true value, so a 2.9e-5 vol reads as 0.0029% instead of the
   // 1% the floor below would have substituted for it.
   if (!Number.isFinite(currentVol) || currentVol < VOL_SIZING_FLOOR) {
+    // `sized` IS THE ENTIRE CONTRACT. Branch on it; never infer it from these
+    // numbers. They are deliberately not all one thing on purpose — `volScale`
+    // and `riskBudget` are `null` because there is no such quantity, while
+    // `units`/`positionValue` are 0 and `positionPct` publishes a real `"0%"`
+    // because the field has to exist. That asymmetry is deliberate but it is
+    // also a trap: a measured `currentVol: 0` publishes `currentVolPct "0%"`,
+    // which reads as "riskless" when it means "nothing was measurable", and
+    // `units: 0` cannot be told apart from "measured, sized to nothing". A
+    // caller that adds up the numbers instead of reading `sized` will conclude
+    // the position is riskless. It is not; it is unsized.
     return {
       sized: false,
       reason: Number.isFinite(currentVol)
@@ -586,7 +596,26 @@ export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol, ta
   //
   //   true currentVol 0.00923   ->  vol 0.01  ->  currentVolPct "1%"
   //
-  // which is 342x the truth. The sizing maths genuinely needs a floor — a
+  // The magnitude of that substitution is `0.01 / currentVol`, and it is NOT
+  // constant across the band the floor actually reaches. This comment used to
+  // claim the example above was "342x the truth", which is false for it — it is
+  // 1.08x — and 342 is the figure for a DIFFERENT currentVol (0.00002923), left
+  // behind when the example was edited. Stated over the reachable domain
+  // [VOL_SIZING_FLOOR, 0.01), where VOL_SIZING_FLOOR is 5e-5:
+  //
+  //   currentVol 0.009999  ->  0.01 / 0.009999  =    1.000x   <- barely a lie
+  //   currentVol 0.00923   ->  0.01 / 0.00923   =    1.083x   <- the example above
+  //   currentVol 0.001     ->  0.01 / 0.001     =   10.00x
+  //   currentVol 5e-5      ->  0.01 / 5e-5      =  200.00x   <- at the floor
+  //
+  // So the honest range is 1x at the top of the band to 200x at the floor, and
+  // anyone who wants a different example's figure can divide. A single bare
+  // multiplier is what made the first version of this comment wrong twice: a
+  // reader who computes 0.01/0.00923 and gets 1.08 is entitled to conclude the
+  // floor barely matters, lower it, or close this ticket — which is how a false
+  // number in a comment becomes a behaviour change.
+  //
+  // The sizing maths genuinely needs a floor — a
   // `volScale` of 20,000 would blow the size up without limit — so the floor
   // stays, and so `currentVolPct` keeps publishing the floored value: routing
   // it through `roundVolPct` does not help, because 0.01 is well above that
@@ -598,8 +627,11 @@ export function volatilityPositionSize({ capital, riskPct = 0.02, currentVol, ta
   //
   // IT NO LONGER COVERS THE SUB-FLOOR BAND, and that is the point of the gate
   // above: a `currentVol` under 5e-5 now refuses outright, so it never reaches
-  // this floor and is never published as its 1%. The floor's reachable domain is
-  // [5e-5, 0.01), where the substitution is still a lie.
+  // this floor and is never published as its 1%. What is left of the floor's
+  // domain is [5e-5, 0.01) — the band whose substitution factor runs from
+  // 1.000x to 200x as tabulated above. Near 0.01 the lie is too small to act
+  // on; deep in the band it is two orders of magnitude, and which of those a
+  // given instrument sits at is not knowable from the published figure alone.
   const vol = Math.max(0.01, currentVol)
   const cap = Math.max(1, capital)
   const price = Math.max(0.0001, entryPrice)

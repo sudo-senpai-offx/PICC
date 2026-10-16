@@ -424,7 +424,10 @@ describe("publication precision: null stays distinguishable from a measured zero
   //   currentVol 0.0001  -> currentVolPct "1%"   volScale 2   riskBudget 400
   //
   // all three identical, which is the falsification stated as a measurement: a
-  // true 0.00923 is reported as 1%, 108x over. With the floor at 0.0001 they
+  // true 0.00923 is reported as 1%. The size of THAT lie is 0.01 / 0.00923 =
+  // 1.08x — it used to be written here as "108x over", which was a unit error
+  // (dividing 1, meaning 1%, by the fraction, rather than dividing 0.01 by it).
+  // At the floor it is 200x, not 108x: 0.01 / 5e-5. With the floor at 0.0001 they
   // publish "0.01%" instead.
   //
   // THE SWEEP USED TO RUN TO 0.00001 AND IT NO LONGER DOES, WHICH IS THE RULING
@@ -437,7 +440,7 @@ describe("publication precision: null stays distinguishable from a measured zero
   // asserted in the gate's own tests to refuse, rather than to publish a
   // substituted figure. Nothing here was relaxed — the domain shrank, because
   // the values below it are no longer allowed in.
-  it("the sizing floor is 0.01, and it publishes as the figure it substitutes", () => {
+  it("the PUBLICATION floor is 0.01, and it publishes as the figure it substitutes", () => {
     const base = { capital: 10000, riskPct: 0.02, targetVol: 0.2, entryPrice: 100 }
 
     // The floor, read through the one field it is observable in. `targetVol`
@@ -620,7 +623,10 @@ describe("volatilityPositionSize refuses a volatility it cannot measure", () => 
     expect(s.reason).toMatch(/not a low-risk one/)
 
     // AND THE MEASUREMENT SURVIVES. Before the gate, `Math.max(0.01, …)` put 1%
-    // in this field — 342x the truth — which is how a caller could not tell an
+    // in this field — 342x the truth (0.01 / 0.00002923 = 342.11, spelled out
+    // because a bare multiplier is how the OTHER two sites in this file came to
+    // be wrong: this one is specific to currentVol 0.00002923 and is not the
+    // factor for any other volatility) — which is how a caller could not tell an
     // illiquid instrument from a riskless one. The refusal publishes the real
     // figure: 0.00002923 annualized is 0.002923%.
     expect(s.currentVolPct).toBe("0.002923%")
