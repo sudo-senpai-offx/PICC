@@ -22,7 +22,6 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { pathToFileURL } from "node:url"
 import { handleApi } from "../handlers.mjs"
 import { registerBroker, unregisterBroker } from "../services/brokers/index.mjs"
 
@@ -216,7 +215,13 @@ describe("T9 chartPrefs file-schema lock (real write path)", () => {
         ...process.env,
         VITEST: "false",
         PICC_DATA_DIR: tmp,
-        CHART_PREFS_ENTRY: pathToFileURL(join("server", "services", "chartPrefs.mjs")).href
+        // Anchored to THIS FILE, not to process.cwd(). `pathToFileURL` resolves a
+        // relative path against the cwd, so the previous spelling resolved to
+        // `<cwd>/server/services/chartPrefs.mjs` — correct only because `npm test`
+        // runs through the @picc/dashboard workspace. A vitest invocation from the
+        // repository root got ERR_MODULE_NOT_FOUND and a false red. `npm test` is
+        // not the only way anyone runs this suite; CI does not go through npm.
+        CHART_PREFS_ENTRY: new URL("../services/chartPrefs.mjs", import.meta.url).href
       }
     })
     const says = (out) => String(out ?? "").trim()

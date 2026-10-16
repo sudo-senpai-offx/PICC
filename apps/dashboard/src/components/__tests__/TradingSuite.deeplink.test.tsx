@@ -212,6 +212,14 @@ describe("deep-link landing (T6 / REQ-9)", () => {
   it("?venue=expertoption resolves a verified tradeUrl and calls openBrokerTab once", async () => {
     const m = mount("/suites?asset=BTCUSD&panel=chart&venue=expertoption", <MarketsSuite />)
     mounted.push(m)
+    // BOTH observables are awaited before either is asserted, because the venue
+    // path and the asset path are independent effects and either can land first.
+    // Waiting only on `openBrokerTab` raced the chart select: the bridge is called
+    // from the venue deep-link, while the catalog-driven asset selection commits
+    // a tick later, so under a loaded worker `chartSelect().value` was still the
+    // EURUSD default and line 216 failed on ~1 full-suite run in 7. Same rule and
+    // the same reason as the BTCUSD test above.
+    await waitFor(() => chartSelect()?.value === "BTCUSD", "chart select == BTCUSD")
     await waitFor(() => vi.mocked(openBrokerTab).mock.calls.length > 0, "openBrokerTab call")
     expect(chartSelect()?.value).toBe("BTCUSD")
     expect(vi.mocked(openBrokerTab)).toHaveBeenCalledTimes(1)
