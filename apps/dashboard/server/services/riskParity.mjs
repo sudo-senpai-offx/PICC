@@ -39,8 +39,14 @@ function logReturns(prices) {
  * list — so a key whose value rounded to 0 was still present, still counted,
  * and still listed. Measured on the fixture below, at window 120:
  *
- *     old 4dp  { A: 0.9999, B: 0 }        -> present 2, absent []
- *     new      { A: 0.9999, B: 0.00003438 } -> present 2, absent []   IDENTICAL
+ *     old 4dp  { A: 1, B: 0 }            -> present 2, absent []
+ *     new      { A: 1, B: 0.00003438 }  -> present 2, absent []   IDENTICAL
+ *
+ * (`A` publishes as exactly `1`, not `0.9999`: its raw weight is 0.99996619 and
+ * `Math.round` is half-up, so 4dp rounds A up to 1 in both versions. An earlier
+ * version of this comment printed `0.9999` and implied a second, separate
+ * under-reporting of A that does not exist — the two versions differ only in B,
+ * which is the whole defect.)
  *
  * The old defect is therefore NOT a dropped symbol, and calling it one was
  * false. It is this, which is bad enough on its own: the panel's coverage line

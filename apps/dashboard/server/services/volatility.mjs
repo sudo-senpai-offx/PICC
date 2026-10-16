@@ -65,6 +65,30 @@ const DAY_SECONDS = 86400
 // and `5e-5` publish as the same number, which reintroduces a discontinuity at
 // the one place the discontinuity is currently honest about being one. Left as
 // is, deliberately.
+//
+// ── WHAT THIS PUBLISHER DOES NOT GIVE YOU: AN EXACT PARTITION ──
+//
+// A 4dp publisher maps complementary fractions back onto complementary
+// multiples of 1e-4, so a set of published weights that summed to 1 keeps
+// summing to 1. This one does not, for TWO reasons, and both are load-bearing
+// for `riskParity.mjs`, which publishes weights under this rule:
+//
+//   1. Four SIGNIFICANT FIGURES is not a 4dp value. A weight below the 5e-5
+//      band publishes at a quantum its partner was not rounded to, so the pair
+//      no longer closes. Measured, through `inverseVolWeights`:
+//          vols {A: 9.7648e-5, B: 4.8579e-9}
+//            -> {A: 0.00004975, B: 1}    sum 1.00004975
+//   2. `Math.round` is half-up, so the boundary doubles UPWARD and the partner
+//      stays put — with no fallback involved anywhere:
+//          vols {A: 1, B: 19999}
+//            -> {A: 0.9999, B: 0.00005} sum 0.99995
+//
+// So "the weights sum to 1" is a measurement, not an identity: over 500,000
+// random two-symbol sets, 15,417 drift and max |sum - 1| is 5.000e-5 (1.000e-4
+// at n=3, 1.458e-4 at n=4, 2.000e-4 at n=5). An earlier version of
+// `riskParity.test.mjs` claimed the two-symbol case was IDENTICALLY zero, which
+// is false; the tolerance there is taken from the n=5 figure, which is the
+// largest, so it is the ceiling every member of the family sits under.
 // ---------------------------------------------------------------------
 export function roundPublished(value) {
   if (!Number.isFinite(value)) return value

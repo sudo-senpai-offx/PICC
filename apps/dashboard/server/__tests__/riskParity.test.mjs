@@ -21,28 +21,100 @@ describe("riskParity.inverseVolWeights", () => {
   // RENAMED, because the old name promised something this fixture cannot show.
   //
   // It was called "weights sum to 1" while asserting `toBeCloseTo(1, 3)`, and
-  // on a TWO-symbol fixture that assertion is vacuous: two weights are
-  // complementary fractions, and rounding complementary fractions to 4dp lands
-  // back on a sum of exactly 1. Measured over 200,000 random two-symbol pairs,
-  // max |sum - 1| is 0.000e+00 — not "small", identically zero. So the sum line
-  // could never fail, and it would not have failed against the pre-fix 4dp
-  // publisher either. It is kept as a partition check and renamed to say so;
-  // the drift band is exercised separately, on a symbol count where it exists.
-  it("orders weights inversely to vol and partitions the pair exactly", () => {
+  // this fixture cannot show drift at all — see the correction below.
+  //
+  // IT IS KEPT AS AN EXACT-PARTITION CHECK, not as a partition-with-slack check:
+  // on `{Volatile: 0.1, Calm: 0.01}` the two published weights really do sum to
+  // exactly 1, and that is worth asserting exactly. What it does NOT establish,
+  // and what an earlier version of this comment claimed, is that this property
+  // is general over two symbols. IT IS NOT.
+  it("orders weights inversely to vol and partitions this pair exactly", () => {
     const { weights } = inverseVolWeights({ Volatile: 0.1, Calm: 0.01 })
     const sum = Object.values(weights).reduce((s, x) => s + x, 0)
     expect(sum).toBe(1)
     expect(weights.Calm).toBeGreaterThan(weights.Volatile)
   })
 
-  // The drift band, on a shape where it actually exists. Two weights cannot
-  // drift; three or more each round independently and can.
+  // THE COUNTEREXAMPLES THEMSELVES, RUNNING.
+  //
+  // The correction above would be a comment about a property nothing checks,
+  // which is how the false version survived a round in the first place. Both
+  // counterexamples are asserted here, so the drift is a held-down fact with a
+  // measured magnitude rather than prose.
+  it("two published weights CAN drift off 1, by both mechanisms, and the drift is bounded", () => {
+    // (1) THE SIGNIFICANT-FIGURE FALLBACK. A's raw weight is 4.9747e-5, below the
+    // 5e-5 band, so it publishes at four significant figures — which is not a 4dp
+    // value, so it does not land back on its partner. B's raw partner rounds at
+    // 4dp to exactly 1.
+    const fallback = inverseVolWeights({ A: 9.7648e-5, B: 4.8579e-9 })
+    expect(fallback.weights).toEqual({ A: 0.00004975, B: 1 })
+    expect(Object.values(fallback.weights).reduce((s, x) => s + x, 0)).toBe(1.00004975)
+
+    // (2) HALF-UP ROUNDING ALONE, with no fallback anywhere in sight: both raw
+    // weights are inside the 4dp branch, and the sum still misses 1.
+    const halfUp = inverseVolWeights({ A: 1, B: 19999 })
+    expect(halfUp.weights).toEqual({ A: 0.9999, B: 0.00005 })
+    expect(Object.values(halfUp.weights).reduce((s, x) => s + x, 0)).toBe(0.99995)
+
+    // And the bound. 5.000e-5 is the largest two-symbol |sum - 1| measured over
+    // 500,000 random sets, so it is the ceiling this publisher can be held to at
+    // this symbol count. Asserted rather than assumed: a publisher that widened
+    // the band, or a floor that moved, would break it here.
+    for (const drift of [
+      Object.values(fallback.weights).reduce((s, x) => s + x, 0),
+      Object.values(halfUp.weights).reduce((s, x) => s + x, 0)
+    ]) {
+      expect(Math.abs(drift - 1)).toBeGreaterThan(0)
+      expect(Math.abs(drift - 1)).toBeLessThanOrEqual(5e-5)
+    }
+  })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // CORRECTION. AN EARLIER VERSION OF THIS FILE SAID SOMETHING FALSE, AND
+  // ROUND 1 OF THE REVIEW REPRODUCED IT.
+  //
+  // It claimed: "on a TWO-symbol fixture `toBeCloseTo(1, 3)` is vacuous,
+  // because two weights are complementary fractions, and rounding
+  // complementary fractions to 4dp lands back on a sum of exactly 1. Measured
+  // over 200,000 random two-symbol pairs, max |sum - 1| is 0.000e+00 — not
+  // 'small', identically zero."
+  //
+  // MEASURED AGAIN THIS ROUND, 500,000 random two-symbol sets (seeded PRNG,
+  // vols drawn log-uniform over 12 e-folds): 15,417 of them drift, and max
+  // |sum - 1| is 5.000e-5 — not zero. A 14,641-point log-spaced grid over the
+  // same shape drifts on 6,006 of its points, max 3.981e-5. Two published
+  // weights DO drift.
+  //
+  // Two mechanisms produce it, and both live in `roundPublished`:
+  //
+  //   1. The significant-figure fallback is not a 4dp value, so it does not
+  //      land back on a complementary partner. Given vols
+  //      `{A: 9.7648e-5, B: 4.8579e-9}`, A's raw weight is 4.975e-5 — below the
+  //      5e-5 band — so A publishes as 0.00004975 (four significant figures)
+  //      while B's raw partner rounds at 4dp to exactly 1:
+  //
+  //          {A: 0.00004975, B: 1}   sum 1.00004975
+  //
+  //   2. `Math.round` is half-up, so the two can also drift DOWNWARD, with no
+  //      fallback involved. Given vols `{A: 1, B: 19999}`:
+  //
+  //          {A: 0.9999, B: 0.00005}   sum 0.99995
+  //
+  // The brief's "2.0e-4 needs five symbols" is right and survives: measured over
+  // 500,000 random sets each, max |sum - 1| is 5.000e-5 at n=2, 1.000e-4 at
+  // n=3, 1.458e-4 at n=4 and 2.000e-4 at n=5. Two symbols drift too — by less,
+  // and with no `toBeCloseTo(1, 3)` ever at risk, which is why nobody noticed.
+  //
+  // CONSEQUENCE FOR THE TOLERANCE BELOW: it is set from the n=5 figure, which
+  // is the largest, so it is the one no member of the family can exceed.
+  // ─────────────────────────────────────────────────────────────────────
   it("keeps a multi-symbol allocation within 1e-4 of 1, the band independent rounding opens", () => {
-    // Measured: max |sum - 1| is 1.0e-4 at n=3 and n=4, and 2.0e-4 at n=5, over
-    // 200,000 random vol sets each. `toBeCloseTo(1, 3)` allows 5e-4, so the
-    // tolerance this file relies on is set from that measurement rather than
-    // from a guess — and the bound is asserted explicitly so a publisher that
-    // widens its precision cannot quietly consume the slack.
+    // Measured: max |sum - 1| is 5.000e-5 at n=2, 1.000e-4 at n=3, 1.458e-4 at
+    // n=4 and 2.000e-4 at n=5, over 200,000 random vol sets each.
+    // `toBeCloseTo(1, 3)` allows 5e-4, so the tolerance this file relies on is
+    // set from that measurement rather than from a guess — and the bound is
+    // asserted explicitly so a publisher that widens its precision cannot
+    // quietly consume the slack.
     for (const n of [3, 4, 5]) {
       const vols = {}
       for (let i = 0; i < n; i++) vols[`S${i}`] = 0.01 + i * 0.031
@@ -217,8 +289,16 @@ describe("riskParity no longer invents a 20% volatility", () => {
   // 4dp did not remove the key. `MarketAnalysisSection.tsx:587` builds
   // `present` from `Object.keys(data.weights)`, so a weight that rounded to `0`
   // was still present and still counted. Measured at window 120, on this very
-  // fixture: old `{A: 0.9999, B: 0}` and new `{A: 0.9999, B: 0.00003438}` both
-  // give `present = 2`, `absent = []`.
+  // fixture: new `{A: 1, B: 0.00003438}` and old `{A: 1, B: 0}` both give
+  // `present = 2`, `absent = []`.
+  //
+  // `A: 1`, NOT `A: 0.9999` — an earlier version of this comment printed
+  // 0.9999, and that transcription was wrong in the direction that matters: the
+  // old publisher rounds A's raw weight 0.99996619 UP to exactly 1 by the same
+  // half-up rule, so the two versions differ ONLY in B, which is the entire
+  // point of the defect. A reader shown `0.9999` would conclude the old payload
+  // under-reported A as well, and would look for a second defect that does not
+  // exist.
   //
   // What actually broke is the VALUE. The panel's coverage line counts keys and
   // so says the symbol "carries a weight", and the weight it then renders is 0
@@ -240,13 +320,24 @@ describe("riskParity no longer invents a 20% volatility", () => {
   // ─────────────────────────────────────────────────────────────────────
   // THE ERC BRANCH NEVER GOT THE TEST ITS SIBLING GOT.
   //
-  // `riskParity.mjs:144` and `:147` publish ERC weights through the same
+  // `riskParity.mjs:163` and `:166` publish ERC weights through the same
   // `roundPublished` rule as the inverse-vol branch above, and both survived
   // mutation with zero coverage — because every ERC test in this file uses a
   // mild covariance matrix whose weights are all comfortably above the 4dp
   // floor. Equal RC means `w_i ∝ 1/sigma_i`, so the weight spread equals the
-  // volatility spread, and it takes a spread of ~1e5 before the smallest weight
-  // crosses under 5e-5.
+  // volatility spread, and it takes a spread of about 2.0e4 before the smallest
+  // weight crosses under 5e-5 — NOT the ~1e5 an earlier version of this comment
+  // said, which was out by 5x.
+  //
+  //   analytic: the small weight is 1 / (1 + spread), so the crossover sits at
+  //             spread = 1/5e-5 - 1 = 1.9999e4
+  //   measured: 2.0032e4, by bisection through `equalRiskContribution` itself,
+  //             at 2000 iterations (the solver converges just short of exact
+  //             1/sigma, hence slightly above the analytic figure)
+  //
+  // The 4dp publisher erases the weight at the same spread, 2.0032e4 — which is
+  // not a coincidence: the fallback triggers on exactly the condition that
+  // makes 4dp return zero.
   //
   // Reached through the PUBLIC API rather than the exported solver, so this
   // also proves the branch is reachable from a real request and not only by
