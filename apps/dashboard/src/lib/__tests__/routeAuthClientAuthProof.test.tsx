@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 //
 // THE LOOPBACK PROOF: a client of a gated route, checked against the REAL
 // credential verifier rather than against a status code.
@@ -44,14 +44,34 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
 const TOKEN = "d".repeat(64)
 const USER_ID = "proof-user"
 const AUTH_KEY = "picc.auth"
 
-// jsdom serves `import.meta.url` over http:, so `fileURLToPath` cannot be used
-// here. The vitest root is the dashboard package, which is also the cwd.
-const AUTH_SRC = resolve(process.cwd(), "server/services/auth.mjs")
+// Anchored to THIS FILE, not to `process.cwd()`. The previous spelling was
+// `resolve(process.cwd(), "server/services/auth.mjs")`, correct only because
+// `npm test` runs through the @picc/dashboard workspace, which makes the cwd the
+// package. `npm test` is not the only way anyone runs this suite — the repository
+// root is a supported vitest invocation too — and from there the cwd is the repo
+// root, the path resolved to `<repo>/server/services/auth.mjs`, and this file
+// reported a false red. Same anchor as `contractLocks.test.mjs` uses for its
+// child entry.
+//
+// THE GLOBAL `URL` IS JSDOM'S, AND THAT IS THE WHOLE TRAP. The obvious
+// `new URL("../../../server/…", import.meta.url)` does not work here, and fails
+// in a way that looks like a bad path rather than a bad constructor: the
+// `@vitest-environment jsdom` directive at the top of this file replaces
+// `globalThis.URL`, and jsdom's implementation resolved against its own origin,
+// so `import.meta.url` — measured, still the real
+// `file:///…/routeAuthClientAuthProof.test.tsx` — produced
+// `http://localhost:3000/server/services/auth.mjs`. `fileURLToPath` and
+// `node:path` are Node's own and are untouched by the environment swap, so this
+// uses those and nothing else. An earlier revision of this comment claimed the
+// jsdom directive made `import.meta.url` unusable; it does not, and asserting so
+// without measuring is what the original comment did.
+const AUTH_SRC = resolve(fileURLToPath(import.meta.url), "../../../../server/services/auth.mjs")
 
 /**
  * Re-seed the session for EVERY test.
@@ -140,7 +160,7 @@ async function loadVerifyUser(): Promise<(h?: string) => Promise<string | null>>
 describe("the credential is a bearer and only a bearer", () => {
   it("PICC's server sets no cookie, so credentials:'include' carries nothing", () => {
     // The premise the two broken callers were built on, checked at the source.
-    expect(existsSync(AUTH_SRC), `auth service not found at ${AUTH_SRC} — vitest cwd moved`).toBe(true)
+    expect(existsSync(AUTH_SRC), `auth service not found at ${AUTH_SRC} — the anchor above moved`).toBe(true)
     const src = readFileSync(AUTH_SRC, "utf8")
     const body = src.slice(src.indexOf("export async function verifyUser"))
     expect(body.slice(0, 200), "verifyUser must gate on the Bearer shape").toContain('startsWith("Bearer ")')
