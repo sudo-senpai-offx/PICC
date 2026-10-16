@@ -1,4 +1,4 @@
-﻿// WS-7 slice C — the rate limiter's KEY is a client identity, and the identity is
+// WS-7 slice C — the rate limiter's KEY is a client identity, and the identity is
 // only as good as its source.
 //
 // TWO DEFECTS, ONE LAYER APART.

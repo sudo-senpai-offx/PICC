@@ -187,6 +187,50 @@ function looksBinary(bytes) {
   return control / sample.length > BINARY_CONTROL_RATIO
 }
 
+// ── A UTF-8 BOM IS THE SAME FINGERPRINT, WITH NO DAMAGE VISIBLE YET ──
+//
+// Everything above detects the DAMAGE the PowerShell 5.1 text-cmdlet round-trip
+// produces. It did not detect the round-trip itself, and on 2026-10-16 that gap
+// let a real one through: `routeAuthClientAuthProof.test.tsx` was committed with
+// `EF BB BF` prepended, by `c47f9b7`. Every assertion in this file passed while
+// it sat there, because a file containing no character above U+007F has nothing
+// for a CP1252 misread to damage. The BOM was the whole of the evidence.
+//
+// WHY THE BYTES AND NOT THE CHARACTER. `Buffer.prototype.toString("utf8")`
+// decodes `EF BB BF` to U+FEFF and KEEPS it, so the decoded text and the raw
+// bytes agree - but the raw bytes are the unambiguous fact, and this guard's
+// house rule is that the damage is a byte-level fact rather than a string the
+// author chose. So the check is on the bytes.
+//
+// WHY IT MATTERS EVEN THOUGH IT IS FUNCTIONALLY INERT HERE. Vite, vitest,
+// esbuild and tsc all strip or tolerate a leading BOM, so nothing is currently
+// broken - which is exactly what makes it dangerous, because "inert" is the
+// reason nobody looks. The two concrete costs:
+//
+//   1. IT IS THE ROUND-TRIP'S SIGNATURE. PowerShell 5.1's `Out-File`,
+//      `Set-Content` and `Add-Content` emit a UTF-8 BOM by default. A BOM on a
+//      file that also lost its characters would be caught by the mojibake scan;
+//      a BOM on a file with no non-ASCII characters would not. So this check is
+//      what makes the detector cover the whole class rather than the subset that
+//      happens to be legible afterwards.
+//   2. IT BREAKS THE STRICTEST READER IN THE TOOLCHAIN. `JSON.parse` THROWS on
+//      a BOM - `agents/picc_agents/settings.example.json` carried one from
+//      `510428c` (2026-09-26) and `JSON.parse(readFileSync(p, "utf8"))` failed
+//      with "Unexpected token" until this round. That file exists to be copied
+//      into `settings.json` and read, so its consumer is a `JSON.parse` that
+//      does not exist yet.
+//
+// NOT BANNED AS A CHARACTER. U+FEFF in the MIDDLE of a file, or a file whose
+// first character legitimately needs it, is not what this checks; the rule is
+// scoped to byte 0, and the sample below proves the detector stays silent on
+// every other position so the next reader cannot widen it by accident.
+const UTF8_BOM = [0xef, 0xbb, 0xbf]
+
+/** True when `bytes` begins with the UTF-8 byte order mark. */
+function hasUtf8Bom(bytes) {
+  return UTF8_BOM.every((byte, i) => bytes[i] === byte)
+}
+
 /** Why each tracked file was not scanned. Absent means "it was scanned". */
 const SKIPPED = new Map()
 
@@ -203,16 +247,20 @@ function readText(rel) {
     SKIPPED.set(rel, "binary")
     return null
   }
-  return bytes.toString("utf8")
+  return { text: bytes.toString("utf8"), bom: hasUtf8Bom(bytes) }
 }
 
-/** file -> { mojibake: [...], fffd: n } for every scannable tracked text file. */
+/** file -> { mojibake, fffd, bom } for every scannable tracked text file. */
 const SCAN = (() => {
   const out = new Map()
   for (const rel of trackedFiles) {
-    const text = readText(rel)
-    if (text === null) continue
-    out.set(rel, { mojibake: findMojibake(text), fffd: (text.match(REPLACEMENT_CHAR) || []).length })
+    const read = readText(rel)
+    if (read === null) continue
+    out.set(rel, {
+      mojibake: findMojibake(read.text),
+      fffd: (read.text.match(REPLACEMENT_CHAR) || []).length,
+      bom: read.bom
+    })
   }
   return out
 })()
@@ -284,6 +332,24 @@ describe("WS-7 T5c - encoding integrity: the detector can actually fail", () => 
 
   it("detects a U+FFFD replacement character", () => {
     expect("broken \uFFFD text".match(REPLACEMENT_CHAR)).toHaveLength(1)
+  })
+
+  it("detects a UTF-8 BOM at byte 0, and ONLY at byte 0", () => {
+    // Built from HEX for the same reason the misread samples are: a literal BOM
+    // written into this file would give this guard a finding of its own.
+    const BOM_ONLY = Buffer.from("efbbbf", "hex")
+    const BOM_THEN_TEXT = Buffer.concat([BOM_ONLY, Buffer.from('const x = 1\n')])
+    const TEXT_THEN_BOM = Buffer.concat([Buffer.from('const x = 1\n'), BOM_ONLY])
+    const NO_BOM = Buffer.from('const x = 1\n')
+
+    expect(hasUtf8Bom(BOM_ONLY), "a BOM must be detected on its own").toBe(true)
+    expect(hasUtf8Bom(BOM_THEN_TEXT), "a BOM must be detected on a real file").toBe(true)
+    expect(hasUtf8Bom(TEXT_THEN_BOM), "the rule is byte 0 only, not 'contains a BOM'").toBe(false)
+    expect(hasUtf8Bom(NO_BOM), "clean text must not be flagged").toBe(false)
+    // A near-miss must not pass as a BOM either, or the check would be a
+    // three-byte coincidence rather than a signature.
+    expect(hasUtf8Bom(Buffer.from("efbb", "hex")), "a truncated BOM").toBe(false)
+    expect(hasUtf8Bom(Buffer.alloc(0)), "an empty file").toBe(false)
   })
 
   it("keeps non-ASCII characters that are legitimate, rather than banning them", () => {
@@ -419,6 +485,28 @@ describe("WS-7 T5c - encoding integrity: no tracked text file is damaged", () =>
       if (result.fffd > allowance) violations.push(`${file}: ${result.fffd} U+FFFD`)
     }
     expect(violations, "U+FFFD means a decode already lost the original byte").toEqual([])
+  })
+
+  it("finds no UTF-8 byte order mark, because no tracked text file may carry one", () => {
+    // NO ALLOWLIST ENTRIES FOR THIS, AND THAT IS THE POINT. A BOM is not text
+    // the project needs to keep - it is the residue of a tool writing a file it
+    // had no business rewriting. Allowing one would be the same shape as the
+    // structural exclusion this guard already argues against: an exception that
+    // reads as coverage, and which rots the first time somebody renames a file
+    // onto it. Four files carried one when this rule was added
+    // (routeAuthClientAuthProof.test.tsx from c47f9b7, rateLimitClientIdentity
+    // .test.mjs, settings.example.json from 510428c, and a docs plan); all four
+    // were stripped, and settings.example.json went from `JSON.parse` throwing
+    // to parsing.
+    const violations = [...SCAN].filter(([, result]) => result.bom).map(([file]) => file)
+    expect(
+      violations,
+      "A leading UTF-8 BOM is the PowerShell 5.1 text-cmdlet round-trip's signature, and it " +
+        "survives every other check in this file because a file with no character above U+007F " +
+        "has nothing for a CP1252 misread to damage. It is inert under vite/vitest/tsc, which is " +
+        "precisely why nobody looks at it - and `JSON.parse` THROWS on one. Repair by stripping " +
+        "the three bytes, never by re-saving the file with PowerShell 5.1."
+    ).toEqual([])
   })
 })
 

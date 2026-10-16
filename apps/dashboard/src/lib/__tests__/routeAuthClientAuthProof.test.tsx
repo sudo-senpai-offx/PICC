@@ -1,4 +1,4 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 //
 // THE LOOPBACK PROOF: a client of a gated route, checked against the REAL
 // credential verifier rather than against a status code.
