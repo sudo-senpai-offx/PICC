@@ -184,11 +184,19 @@ const TRACKED_SOURCE = lsFiles(["*.mjs", "*.js", "*.mts", "*.cts", "*.ts", "*.ts
  *
  * Variant B had no string-literal awareness at all, so it deleted from the `//`
  * of an `http://` string literal to end of line. Measured on `handlers.mjs` it
- * destroyed the URL on exactly 13 lines, and 557 lines across ws5's scan surface.
- * Variant A's `[^:]` guard spared it that one, but both variants DELETED comments
- * rather than blanking them, which takes the newlines with them: every line index
- * after the first block comment named the wrong source line. On these four guards'
- * own corpora that collapsed 2/2, 51/71, 3/8 and 366/912 files respectively. It was
+ * destroyed the URL on exactly 13 lines, and on 189 lines across ws5's OWN scan
+ * surface — its 455 files, which is `codeFilesForScope()` and not the 912-file
+ * directory walk that feeds it. This comment used to say "557 lines across ws5's
+ * scan surface", and named that same 912-file walk as a per-guard corpus size:
+ * both figures were measured BEFORE the filter, so they described a file set no
+ * guard scans. Every figure here is now a fraction of the surface its own guard
+ * scans, with that guard named: `orderFlowHonestySeamGuard` 2/2, `ws6SafetySeamGuard`
+ * 51/71, `ws4LeaderSourcingSeamGuard` 3/8, `ws5SeamGuard` 290/455.
+ *
+ * Variant A's `[^:]` guard spared it the URL half, but both variants DELETED
+ * comments rather than blanking them, which takes the newlines with them: every
+ * line index after the first block comment named the wrong source line, and on
+ * those four corpora that is the collapse the fractions above count. It was
  * invisible, because all four assert by whole-file substring rather than by
  * position — and it is exactly the hazard a guard starts reporting the first time
  * someone makes it report a `file:line`.

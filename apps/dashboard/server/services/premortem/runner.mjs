@@ -60,8 +60,22 @@
 // to end: a sandbox carries the junction, and `dispose()` removes the link before
 // `git worktree remove` or any recursive delete runs, so with no link left those
 // paths can only ever delete files the sandbox itself checked out. Measured: a
-// sandbox runs `sharedCommentLexer.test.mjs` green — 19 tests, 19 passed — that
-// way.
+// sandbox runs `sharedCommentLexer.test.mjs` to completion with no failing test —
+// the whole file green, not a subset of it — which is what a live junction looks
+// like from inside.
+//
+// THE COUNT IS DELIBERATELY NOT WRITTEN DOWN. This paragraph said "19 tests, 19
+// passed", which was true when measured and stopped being true the moment a guard
+// test was added. A count in a comment has to be re-measured to stay honest and
+// nobody re-measures a comment; `0b8ffdc` dropped the same class of number from
+// `vitest.config.ts` for exactly this reason, and that is the precedent being
+// followed rather than a second one invented here. What does not go stale is the
+// RELATIONSHIP the count stood in for — the guard COLLECTS tests, it RUNS them,
+// and none fail — and that is re-measured on every run: the mutation tier builds a
+// fresh sandbox and runs this very guard. The count is not retained anywhere this
+// comment could cite it from, because `readMeasurement` reduces a vitest report to
+// `{ failed }` and discards the totals on purpose, so a total here would be a
+// transcript no reader could re-check.
 //
 // ── ONE MEASUREMENT PER GUARD FILE, PER SANDBOX ─────────────────────────────
 //

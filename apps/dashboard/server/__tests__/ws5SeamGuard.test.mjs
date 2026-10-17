@@ -577,9 +577,11 @@ describe("WS-5 seam guard", () => {
     // awareness at all, so it deleted from the `//` of a `http://` string literal
     // to end of line, and it DELETED comments rather than blanking them. Deleting
     // takes the newlines with it, so every line index after the first block comment
-    // named the wrong source line; the URL truncation destroyed real text on 557
-    // lines of this corpus, 13 of them in handlers.mjs. Neither shows up in a
-    // whole-corpus substring scan, which is why both are asserted here instead.
+    // named the wrong source line; the URL truncation destroyed real text on 189
+    // lines of `codeFilesForScope()` — this guard's own scan surface, and NOT the
+    // raw directory walk that feeds it, which is where the 557 this used to claim
+    // was measured. 13 of them in handlers.mjs. Neither shows up in a whole-corpus
+    // substring scan, which is why both are asserted here instead.
     it("the stripped view keeps every source line at its own index, across the whole scope", () => {
       const files = codeFilesForScope()
       expect(files.length, "the scope must not be empty, or this proves nothing").toBeGreaterThan(100)

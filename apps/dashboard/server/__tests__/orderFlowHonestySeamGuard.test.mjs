@@ -123,7 +123,9 @@ describe("order-flow honesty seam guard (WS-6 D14 / AC-008)", () => {
     const line = raw.findIndex((l) => l.includes('"http://localhost:5173"'))
     expect(line, "handlers.mjs must still carry a localhost:5173 origin literal").toBeGreaterThan(-1)
     expect(view[line], `line ${line + 1} lost its URL`).toContain("http://localhost:5173")
-    // And the route the guard actually inspects still spans the same lines.
-    expect(stripComments(source(HANDLERS)).length).toBe(source(HANDLERS).length)
+    // Reading `view[line]` is only sound because the stripped view keeps one source
+    // line per index, which the assertion above already proves FOR THIS FILE — it
+    // is in `STRIPPED_INPUTS`. Not re-checked here: a third copy of the same length
+    // comparison is not a route-span check, and this test locates no route.
   })
 })

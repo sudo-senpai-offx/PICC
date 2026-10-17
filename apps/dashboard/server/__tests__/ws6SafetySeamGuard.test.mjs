@@ -119,14 +119,27 @@ describe("AC-017 — no secret boundary in the terminal tree", () => {
     // two deny-list regexes whose bodies enumerate credential names, and it also
     // carries those same names as legitimate STRING literals — so a whole-file
     // `not.toContain` would be asserting the wrong thing and would have failed
-    // here. The claim is about the regex line alone, found by the assignment whose
-    // body is the enumeration, so it survives reformatting and stays exact.
+    // here. The claim is about the regex line alone, found by the declaration head.
+    //
+    // THE LOCATOR TOLERATES A REFORMAT; THE ASSERTION DOES NOT, AND THE DIFFERENCE
+    // IS PINNED IN CODE RATHER THAN PROMISED IN PROSE. The anchor asks only for
+    // `const SECRET_ASSIGNMENT`, so joining the binding and its body onto one line
+    // still finds the declaration. But "a regex body must not read as code" is a
+    // claim about a body ON A LINE OF ITS OWN: joined onto its binding it is
+    // ordinary code and no lexer is being asked to hide it. So the single-line
+    // shape is asserted as a REQUIREMENT below — which is a different statement from
+    // claiming the anchor tolerates it, and one that fails by name if a formatter
+    // does exactly that.
     const src = readFileSync(join(TERMINAL_DIR, "adapters/redaction.ts"), "utf8")
     const raw = src.split("\n")
     const view = stripComments(src).split("\n")
-    const assignment = raw.findIndex((l) => /^const SECRET_ASSIGNMENT =\s*$/.test(l))
+    const assignment = raw.findIndex((l) => /^const\s+SECRET_ASSIGNMENT\b/.test(l))
     const body = assignment + 1
     expect(assignment, "redaction.ts must still carry the SECRET_ASSIGNMENT regex").toBeGreaterThan(-1)
+    expect(
+      raw[assignment],
+      "the deny-list body must stay on a line of its own, or 'a regex body is not readable as code' says nothing"
+    ).not.toContain("mnemonic")
     expect(raw[body], "the pinned line must really be the regex body this asserts on").toContain("mnemonic")
     expect(view[body], `line ${body + 1}: the regex body must not be readable as code`).not.toContain("mnemonic")
     expect(view[assignment], `line ${assignment + 1}: the binding itself must survive`).toContain("SECRET_ASSIGNMENT")
