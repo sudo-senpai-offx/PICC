@@ -30,6 +30,23 @@
 // both files had been changed together and broken, which is the copy-drift defect
 // `vitest.config.ts` was written to prevent.
 //
+// AND THE LIMIT ON THE `root` CLAIM, STATED BECAUSE THE OTHER TWO ARE NOT
+// LIMITED. `root` is asserted below, but a `root` that has MOVED OFF THE PACKAGE
+// is never reached by that assertion. Vitest resolves `setupFiles` against
+// `root`, so the relative `./testSupport/vitestStoreIsolation.setup.mjs` stops
+// resolving FIRST, and the run dies during COLLECTION with `Cannot find module
+// …/testSupport/vitestStoreIsolation.setup.mjs`. Every assertion in this file
+// lives inside that suite, so all of them — the `root` comparison included — sit
+// downstream of a crash they cannot survive.
+//
+// So a misplaced `root` is CAUGHT but not DIAGNOSED, and what the reader gets is
+// a collection error that never names `root`. Nothing inside this suite can do
+// better: a check that would catch it earlier has to run somewhere that crash
+// does not reach, i.e. outside vitest. A future change CAN — resolving this
+// config in a separate process would survive the collection failure — and if one
+// is added, this paragraph is the thing it replaces. Claiming the diagnosis today
+// would be an unevidenced claim of exactly the kind this round exists to remove.
+//
 // THE LAST CLAUSE IS THE ONE THAT CATCHES THIS FINDING, AND IT NEEDS A PROBE.
 // "A root-local `test:` override does not displace the delegated fields" cannot be
 // shown on the shipped config, because `ROOT_TEST` is empty on purpose: with
@@ -63,8 +80,8 @@
 // The data dir is gitignored (`.gitignore:38`), has zero tracked files, and lives
 // outside the repository's history, so `git status` will never report damage to it.
 // That is why the fingerprint discipline around THIS file is operational —
-// hashed before and after every run of this test, by hand, and the digests
-// recorded below — and not a runtime assertion. A runtime whole-tree fingerprint
+// hashed before and after every run of this test, by hand, and the comparison
+// recorded at the end of this header — and not a runtime assertion. A runtime whole-tree fingerprint
 // was built, measured and REMOVED from
 // `testSupport/vitestStoreIsolation.setup.mjs` for exactly this reason, and that
 // file's own header carries the measurement: a live PICC process rewrites
@@ -76,12 +93,23 @@
 // checked to be set at the moment the factory runs.
 //
 // Measured around this file's own development, before and after every run,
-// including a 187-second full-suite run:
+// including a full-suite run. WHAT IS RECORDED HERE IS A RELATIONSHIP, NOT A
+// DIGEST, and the distinction is the whole of it: these are LIVE files — a
+// running PICC process rewrites them continuously — so any single figure written
+// down here goes stale the moment the app touches it. That is precisely the
+// go-stale-figure defect `vitest.config.ts` was rewritten to remove, and
+// reintroducing it in a comment whose subject is measurement discipline would be
+// the same mistake wearing a new hat. A digest that cannot be reproduced is worse
+// than no digest, because the reader cannot tell a stale one from a false one.
 //
-//     files=5 fingerprint=748f8f05e59d2099a89817744987f6c2b808b862a524c1ffec5008b1b8be07bd
-//
-// — byte-identical before and after, so the resolution this file performs writes
-// nothing to the live store.
+// So the OPERATION is named instead of its result, and it is one anyone can redo
+// without first agreeing a serialisation: hash each file in the data dir
+// individually, compare the whole set before and after, and require every digest
+// to be unchanged. No combined-tree hash, because a combined digest is a single
+// number with a hidden serialisation nobody is told, and reproducing it requires
+// guessing how the files were ordered and joined first. The measured result, every
+// time: byte-identical before and after, so the resolution this file performs
+// writes nothing to the live store.
 import { describe, expect, it } from "vitest"
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { isAbsolute, join, relative, resolve, sep } from "node:path"

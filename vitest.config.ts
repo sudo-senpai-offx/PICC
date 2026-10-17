@@ -39,8 +39,8 @@ import dashboardConfig from "./apps/dashboard/vite.config"
 // equivalent on this box, and `"serve"` is chosen because it is what vitest
 // actually passes, not because `"build"` would break. (Measured at `b749632`.)
 //
-// THE COUNTS ARE DELIBERATELY NOT WRITTEN DOWN, and that is the discipline the
-// same file argues for two hundred lines below. This comment used to state
+// THE COUNTS ARE DELIBERATELY NOT WRITTEN DOWN, and this comment is that
+// discipline applied to itself. This comment used to state
 // "452 files / 6401 tests", which was true when measured and was stale within one
 // commit — the two BOM tests added by `1b7a453` moved it to 6403, and a guard
 // added after that moved it again. A count in a comment whose entire point is
@@ -50,11 +50,20 @@ import dashboardConfig from "./apps/dashboard/vite.config"
 //
 // WHAT THE NEW GUARD DOES AND DOES NOT COVER, so the two are not confused.
 // `ws7RootVitestConfigGuard.test.mjs` resolves this file's factory on every run
-// and asserts the CONTRACT the argument above depends on — that `setupFiles`,
-// `exclude` and `root` reach vitest through the merge, and that a root-local
-// `test:` override cannot displace them. It does NOT re-run the suite twice to
-// re-measure the `"serve"`/`"build"` parity, because doing that on every run
-// would double the suite to defend a comment. What the guard makes impossible is
+// and asserts the CONTRACT the argument above depends on — that `setupFiles` and
+// `exclude` survive the merge, that a root-local `test:` override cannot displace
+// them, and that `root` still points at the package. `root` gets its own clause
+// because it is the one field that is NOT merged: it is set after the spread, so
+// the guard checks it directly rather than through the delegation. It does NOT
+// re-run the suite twice to re-measure the `"serve"`/`"build"` parity, because
+// doing that on every run would double the suite to defend a comment. And the
+// `root` assertion carries a limit worth stating plainly: vitest resolves
+// `setupFiles` against `root`, so a `root` moved off the package breaks the
+// relative setup-file path first and the run dies during collection with
+// `Cannot find module …/testSupport/vitestStoreIsolation.setup.mjs` — which takes
+// the guard's own assertions down with it. A misplaced `root` is therefore CAUGHT
+// but not DIAGNOSED by name, and the guard's header records that rather than
+// claiming the credit. What the guard does make impossible is
 // the drift that would invalidate the measurement silently: if the `test` block
 // stops surviving the merge, the file no longer does what it was measured doing,
 // and the suite says so by name instead of by crashing with no summary.
