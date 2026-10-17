@@ -7,6 +7,8 @@ import { dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolve } from "node:path"
 
+import { stripComments } from "../scripts/guard-primitives.mjs"
+
 const MODULES = {
   leaderIdeasState: "../services/commandCentre/leaderIdeasState.mjs",
   leaderFeedContract: "../services/copytrade/leaderFeedContract.mjs",
@@ -35,13 +37,6 @@ const BANNED_EXEC =
   /(?:\b(?:placeOrder|mirrorOrder|copyOrder|copyTrade|submitOrder|createOrder|openOrder|closeOrder|execute)\b)|(?:proposeCcxtOrder|executeCcxtOrder|autopilot|hyperliquidPerps|ccxtExecution|positionManager)/i
 
 const source = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")
-
-const stripComments = (code) =>
-  code
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((line) => line.replace(/\/\/.*$/, ""))
-    .join("\n")
 
 const importSpecifiers = (code) => {
   const out = []
@@ -155,6 +150,51 @@ describe("WS-4 AC-7 (a) — no execution path reachable from the WS-4 modules", 
       for (const abs of reachableFrom(rel)) combined.push(stripComments(readFileSync(abs, "utf8")))
     }
     expect(combined.join("\n")).not.toMatch(BANNED_EXEC)
+  })
+
+  // THE MIGRATION HAZARD, PINNED ON THIS GUARD'S OWN SCAN SURFACE. This file used
+  // to carry its own lexer, which DELETED comments. Deleting a multi-line block
+  // comment takes its newlines with it, so every line index after the first block
+  // comment named the wrong source line — invisible while the only assertion is a
+  // whole-file substring match, fatal the first time a finding reports a position.
+  // The shared lexer blanks comments to spaces instead, and this asserts the
+  // property on the real closure rather than on a fixture.
+  it("the stripped view keeps every source line at its own index, across the whole closure", () => {
+    const reached = new Set()
+    for (const rel of Object.values(MODULES)) for (const abs of reachableFrom(rel)) reached.add(abs)
+    expect(reached.size, "the closure must not be empty, or this proves nothing").toBeGreaterThan(1)
+    for (const abs of reached) {
+      const src = readFileSync(abs, "utf8")
+      const view = stripComments(src)
+      expect(view.length, `${abs}: length changed, so a column offset would point at the wrong token`).toBe(src.length)
+      expect(view.split("\n"), `${abs}: line count changed`).toHaveLength(src.split("\n").length)
+    }
+  })
+
+it("the reachability scan BITES: a planted execution identifier is caught", () => {
+    // A negative scan over a corpus that happened to read as clean passes whether
+    // or not the instrument works. Measured on this closure the local lexer used
+    // to carry destroyed 2 lines of real text and collapsed 3 of the 8 files'
+    // line counts; the shared lexer destroys none, and this proves the scan can
+    // still SEE a defect rather than merely reporting that it sees none.
+    const real = readFileSync(fileURLToPath(new URL(MODULES.leaderGuard, import.meta.url)), "utf8")
+    // The control first, and it is the assertion that would have caught a scan
+    // reading nothing: this file genuinely carries no execution identifier.
+    expect(BANNED_EXEC.test(stripComments(real)), "the control must read clean, or the plant proves nothing").toBe(false)
+    expect(stripComments(real).split("\n").length, "the control must keep its line count").toBe(real.split("\n").length)
+
+    // Then the plant, at a known line, and checked at THAT line.
+    const plantedLine = 40
+    const lines = real.split("\n")
+    const planted = [
+      ...lines.slice(0, plantedLine),
+      "await placeOrder()",
+      ...lines.slice(plantedLine)
+    ].join("\n")
+    const view = stripComments(planted)
+    expect(view.split("\n").length, "the plant must not shift the line count").toBe(planted.split("\n").length)
+    expect(view.split("\n")[plantedLine], "the plant must be readable at its own line").toContain("placeOrder")
+    expect(BANNED_EXEC.test(view), "the scan must catch the planted identifier").toBe(true)
   })
 
   it("none of F1–F5 exports an order-mirroring/execution symbol", async () => {

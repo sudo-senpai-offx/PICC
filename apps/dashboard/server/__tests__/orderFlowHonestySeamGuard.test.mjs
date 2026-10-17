@@ -12,18 +12,26 @@ import { describe, expect, it } from "vitest"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
-const source = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")
+import { stripComments } from "../scripts/guard-primitives.mjs"
 
-const stripComments = (code) =>
-  code
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+const source = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")
 
 const ORDER_FLOW = "../services/orderFlow.mjs"
 const HANDLERS = "../handlers.mjs"
 
 const orderFlowCode = stripComments(source(ORDER_FLOW))
 const handlersCode = stripComments(source(HANDLERS))
+
+// The files this guard reads through the shared lexer, named once so the
+// line-preservation proof below cannot drift away from the scans above.
+const STRIPPED_INPUTS = [
+  ["orderFlow.mjs", source(ORDER_FLOW)],
+  ["handlers.mjs", source(HANDLERS)],
+  ...["orderFlow.test.mjs", "decisionEngine.test.mjs", "liveTestingPrep.test.mjs"].map((f) => [
+    `${f}`,
+    source(`../__tests__/${f}`)
+  ])
+]
 
 // Identifiers that only exist in the removed candle-derived approximation.
 const FABRICATION_IDENTIFIERS = ["bodyRatio", "buyPct", "sellPct"]
@@ -85,5 +93,37 @@ describe("order-flow honesty seam guard (WS-6 D14 / AC-008)", () => {
         expect(code, `${f} must not read or construct ${re}`).not.toMatch(re)
       }
     }
+  })
+
+  // THE MIGRATION HAZARD, PINNED ON THIS GUARD'S OWN INPUTS. This file used to
+  // carry its own lexer, which DELETED comments instead of blanking them. That is
+  // invisible while every assertion is a whole-file substring test, and fatal the
+  // moment one reports a position: deleting a multi-line block comment removes
+  // its newlines, so every line index after it names the wrong source line. The
+  // shared lexer preserves both length and line count, and this asserts it on the
+  // real files rather than on a fixture, so the contract cannot rot silently.
+  it("the stripped view keeps every source line at its own index", () => {
+    for (const [label, src] of STRIPPED_INPUTS) {
+      const view = stripComments(src)
+      expect(view.length, `${label}: length changed, so a column offset would point at the wrong token`).toBe(src.length)
+      expect(view.split("\n"), `${label}: line count changed, so a file:line finding would name the wrong line`).toHaveLength(
+        src.split("\n").length
+      )
+    }
+  })
+
+  it("a `//` inside a URL string in handlers.mjs survives, at its own line", () => {
+    // `handlers.mjs` really does put URL defaults beside route logic, and the
+    // lexer this guard used to carry had no string-literal awareness at all. The
+    // line number is read from the source rather than written down, so the pin
+    // names the FILE and the TOKEN and stays correct when the file is edited; if
+    // it fails, the source line it names is where to look.
+    const raw = source(HANDLERS).split("\n")
+    const view = stripComments(source(HANDLERS)).split("\n")
+    const line = raw.findIndex((l) => l.includes('"http://localhost:5173"'))
+    expect(line, "handlers.mjs must still carry a localhost:5173 origin literal").toBeGreaterThan(-1)
+    expect(view[line], `line ${line + 1} lost its URL`).toContain("http://localhost:5173")
+    // And the route the guard actually inspects still spans the same lines.
+    expect(stripComments(source(HANDLERS)).length).toBe(source(HANDLERS).length)
   })
 })

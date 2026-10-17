@@ -173,34 +173,53 @@ const codeOf = (rel) => stripComments(read(rel))
 const TRACKED_SOURCE = lsFiles(["*.mjs", "*.js", "*.mts", "*.cts", "*.ts", "*.tsx"])
 
 /**
- * KNOWN DUPLICATE LEXERS — a list of VIOLATIONS, not of members, and it must shrink.
+ * KNOWN DUPLICATE LEXERS — a list of VIOLATIONS, not of members. IT IS NOW EMPTY,
+ * and the emptiness is the deliverable rather than a leftover.
  *
- * Deriving the consumer set surfaced four files that declare their own
- * `stripComments`, all carrying the same naive form: two chained `replace`
- * calls, one blanking a C-style block comment and one blanking a `//` to end of
- * line via a `[^:]` guard. (The literal is deliberately not reproduced here —
- * its closing sequence would terminate this block comment.)
+ * Deriving the consumer set surfaced four files that declared their own
+ * `stripComments`. They were not one algorithm but two, and the second was wrong.
  *
- * That is precisely the form this file's header blames for the original
- * vacuous-pass incidents — the one that blanked a legitimate one-line gate from
- * the `//` of a `https://` string default onward. The shared primitive is a
- * character-level lexer BECAUSE the naive form is wrong, so these four guards are
- * scanning with the known-inferior instrument. They currently pass, which is not
- * evidence: a zero-call-site vacuous scan also passes.
+ *   VARIANT A — `orderFlowHonestySeamGuard`, `ws6SafetySeamGuard`
+ *   VARIANT B — `ws4LeaderSourcingSeamGuard`, `ws5SeamGuard`
  *
- * The previous hand-maintained `VITEST_CONSUMERS` list never saw them, because
- * they were never registered — they were written AFTER the list was considered
- * settled. So the claim "the four local lexers are gone" was false while sitting
- * in a green test.
+ * Variant B had no string-literal awareness at all, so it deleted from the `//`
+ * of an `http://` string literal to end of line. Measured on `handlers.mjs` it
+ * destroyed the URL on exactly 13 lines, and 557 lines across ws5's scan surface.
+ * Variant A's `[^:]` guard spared it that one, but both variants DELETED comments
+ * rather than blanking them, which takes the newlines with them: every line index
+ * after the first block comment named the wrong source line. On these four guards'
+ * own corpora that collapsed 2/2, 51/71, 3/8 and 366/912 files respectively. It was
+ * invisible, because all four assert by whole-file substring rather than by
+ * position — and it is exactly the hazard a guard starts reporting the first time
+ * someone makes it report a `file:line`.
+ *
+ * The hand-maintained `VITEST_CONSUMERS` list this file replaced never saw them,
+ * because they were written AFTER that list was considered settled. So the claim
+ * that the four local lexers are gone was false while sitting in a green test —
+ * which is the whole reason the sets above are DERIVED from the tracked tree.
+ *
+ * W3-07 migrated all four to the imported primitive and deleted the local copies.
+ * That is why the list is empty rather than shorter.
  *
  * THIS LIST IS DELIBERATELY OPPOSITE IN KIND TO THE LIST IT REPLACES. The old one
- * had to grow every time somebody adopted the lexer. This one can only shrink,
- * and it is pinned from both sides: an unlisted declarer fails the scan, and a
- * listed entry that has STOPPED declaring fails too, so migrating a file without
- * removing it here turns the suite red rather than letting the entry rot. Owner:
- * W3-07.
+ * had to grow every time somebody adopted the lexer. This one could only shrink,
+ * and it was pinned from both sides: an unlisted declarer failed the scan, and a
+ * listed entry that had STOPPED declaring failed too. With it empty, both pins
+ * degenerate, so the proof below is REPLACED rather than removed — an empty
+ * `toEqual([])` that fails the moment an entry is re-added, the positive half that
+ * each of the four now IMPORTS the primitive rather than merely ceasing to declare
+ * one, and a bite test that proves the declaration scan still has teeth on those
+ * four files specifically. Owner: W3-07.
  */
-const KNOWN_DUPLICATE_LEXERS = Object.freeze([
+const KNOWN_DUPLICATE_LEXERS = Object.freeze([])
+
+/**
+ * THE FOUR THAT MIGRATED IN W3-07. Named rather than derived, because the claim
+ * being made is about specific files and not about whatever the scan happens to
+ * find today. Each is asserted below to be a CONSUMER of the shared primitive and
+ * not a DECLARER of its own.
+ */
+const MIGRATED_IN_W3_07 = Object.freeze([
   "apps/dashboard/server/__tests__/orderFlowHonestySeamGuard.test.mjs",
   "apps/dashboard/server/__tests__/ws4LeaderSourcingSeamGuard.test.mjs",
   "apps/dashboard/server/__tests__/ws5SeamGuard.test.mjs",
@@ -271,10 +290,58 @@ describe(`the shared comment lexer — ONE implementation, ${CONSUMERS.length} c
       `tracked files declaring their own stripComments with no recorded reason: ${unlisted.join(", ")}`
     ).toEqual([SHARED_REL])
 
+    // WITH THE LIST EMPTY this second pin degenerates into `[] toEqual []`, which
+    // is the vacuous assertion this repository has already paid for four times. So
+    // the pin is restated as a DIRECT one: the list must be empty, and any entry
+    // put back into it fails here rather than quietly becoming a new allowance.
     expect(
-      DECLARERS.filter((rel) => KNOWN_DUPLICATE_LEXERS.includes(rel)),
-      "these are listed as KNOWN duplicates but no longer declare one — remove them from the list"
-    ).toEqual([...KNOWN_DUPLICATE_LEXERS])
+      [...KNOWN_DUPLICATE_LEXERS],
+      "KNOWN_DUPLICATE_LEXERS is a list of VIOLATIONS and must stay empty; a re-added entry needs a migration, not an exception"
+    ).toEqual([])
+  })
+
+  it("each of the four W3-07 guards now IMPORTS the primitive, and declares none", () => {
+    // NOT-DECLARING IS NECESSARY BUT NOT SUFFICIENT. A file can stop declaring its
+    // own lexer and still not be a consumer — it could have deleted every scan, or
+    // imported a lexer from somewhere else entirely, or imported nothing at all.
+    // All three would satisfy the declarer scan above and leave the guard with no
+    // comment-stripping instrument, which is the vacuous pass by another road.
+    //
+    // So the positive half is asserted per named file: each is in the derived
+    // CONSUMERS set, each references the primitive exactly once, and each resolves
+    // to the same absolute module the loop below already checks. The four files
+    // were also the ones the scan NEVER saw, because the hand-maintained list that
+    // used to exist had already been declared settled — so an assertion that names
+    // them is the point, not a formality.
+    for (const rel of MIGRATED_IN_W3_07) {
+      expect(ALL_DECLARERS, `${rel} must not declare its own stripComments any more`).not.toContain(rel)
+      expect(CONSUMERS, `${rel} must be a consumer of the shared primitive`).toContain(rel)
+      expect(referencesIn(codeOf(rel)).length, `${rel} must reference guard-primitives.mjs exactly once`).toBe(1)
+    }
+    // And the count, so a fifth migration shows up here rather than only in the
+    // derived title. Written as a relationship, because a literal count is the
+    // kind of number nobody re-reads before adding the next file.
+    expect(MIGRATED_IN_W3_07.length, "the W3-07 migration set must name all four guards").toBe(4)
+  })
+
+  it("the declaration scan still BITES on each of the four W3-07 files", () => {
+    // The half that could go stale silently. "The four no longer declare one"
+    // would keep holding if the scan had stopped being able to see a declaration
+    // in those four files at all — which is the same failure the file's header
+    // records four times over, in the opposite direction. So the real text of each
+    // file is read, a local lexer is pasted into a COPY, and the scan is required
+    // to flag the copy.
+    //
+    // A COPY, and the file is never written: this is the same rule the mutation
+    // harnesses in this repository follow, because four of them once reported from
+    // a runner that never ran.
+    const PLANT = '\nconst stripComments = (code) => code.replace(/\\/\\*[\\s\\S]*?\\*\\//g, "")\n'
+    for (const rel of MIGRATED_IN_W3_07) {
+      const original = codeOf(rel)
+      expect(DECLARATION.test(original), `${rel} really did migrate — this file no longer declares one`).toBe(false)
+      const pasted = `${original}\n${PLANT}`
+      expect(DECLARATION.test(pasted), `a lexer pasted back into ${rel} went UNDETECTED`).toBe(true)
+    }
   })
 
   it("the derived scan really read the tree, so the single declarer means something", () => {

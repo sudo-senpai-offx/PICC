@@ -12,9 +12,9 @@ import { readFileSync, readdirSync, existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 
+import { stripComments } from "../scripts/guard-primitives.mjs"
+
 const repoFile = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")
-const stripComments = (code) =>
-  code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1")
 
 const PKG = repoFile("../../package.json")
 const TERMINAL_DIR = fileURLToPath(new URL("../../src/terminal/", import.meta.url))
@@ -81,6 +81,57 @@ describe("AC-017 — no secret boundary in the terminal tree", () => {
 
   it("contains no bare 64-hex literal that could be key material", () => {
     expect(TERMINAL_CODE).not.toMatch(/(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])/)
+  })
+
+  // THE MIGRATION HAZARD, PINNED ON THIS GUARD'S OWN SCAN SURFACE. This file used
+  // to carry its own lexer, which DELETED comments. Deleting a multi-line block
+  // comment removes its newlines, so every line index after the first one named the
+  // wrong source line — and 51 of the 71 terminal files collapsed. Invisible while
+  // every assertion is a whole-corpus substring match, fatal the first time a
+  // finding reports a position. The shared lexer blanks comments to spaces.
+  //
+  // THE COMPANION HALF, which runs the other way and is the reason this is worth
+  // stating rather than assuming: the local lexer left regex BODIES readable, and
+  // the shared lexer blanks them. On this corpus that is 206 lines the old
+  // instrument showed and this one does not — including the two deny-list regexes
+  // in `adapters/redaction.ts`. Both are the deliberate direction (a regex body is
+  // not code), but "the scan can no longer see the pattern text" is exactly the
+  // blind spot that made the regex blanking load-bearing for the connectors
+  // enumeration elsewhere, so it is measured here rather than left unsaid.
+  it("the stripped view keeps every source line at its own index, across the terminal tree", () => {
+    expect(TERMINAL_SOURCES.length, "the terminal tree must not be empty, or this proves nothing").toBeGreaterThan(10)
+    for (const f of TERMINAL_SOURCES) {
+      const src = readFileSync(f, "utf8")
+      const view = stripComments(src)
+      expect(view.length, `${f}: length changed, so a column offset would point at the wrong token`).toBe(src.length)
+      expect(view.split("\n"), `${f}: line count changed, so a file:line finding would name the wrong line`).toHaveLength(
+        src.split("\n").length
+      )
+    }
+  })
+
+  it("a regex BODY is blanked on its own line, and the code around it survives", () => {
+    // The complement of the assertion above, stated in the direction that matters:
+    // a regex body must not read as code, and blanking it must not take the call
+    // site with it. This is the shape that made the two ws7 guards pass vacuously.
+    //
+    // PINNED TO A LINE, and located rather than written down. `redaction.ts` carries
+    // two deny-list regexes whose bodies enumerate credential names, and it also
+    // carries those same names as legitimate STRING literals — so a whole-file
+    // `not.toContain` would be asserting the wrong thing and would have failed
+    // here. The claim is about the regex line alone, found by the assignment whose
+    // body is the enumeration, so it survives reformatting and stays exact.
+    const src = readFileSync(join(TERMINAL_DIR, "adapters/redaction.ts"), "utf8")
+    const raw = src.split("\n")
+    const view = stripComments(src).split("\n")
+    const assignment = raw.findIndex((l) => /^const SECRET_ASSIGNMENT =\s*$/.test(l))
+    const body = assignment + 1
+    expect(assignment, "redaction.ts must still carry the SECRET_ASSIGNMENT regex").toBeGreaterThan(-1)
+    expect(raw[body], "the pinned line must really be the regex body this asserts on").toContain("mnemonic")
+    expect(view[body], `line ${body + 1}: the regex body must not be readable as code`).not.toContain("mnemonic")
+    expect(view[assignment], `line ${assignment + 1}: the binding itself must survive`).toContain("SECRET_ASSIGNMENT")
+    expect(view.join("\n"), "code after a blanked regex must survive").toContain("containsSecretMaterial")
+    expect(view.join("\n"), "the call sites must survive").toContain("SECRET_ASSIGNMENT.test(text)")
   })
 
   it("routes rendered values through the redaction boundary", () => {

@@ -6,6 +6,8 @@ import { createRequire } from "node:module"
 import { describe, expect, it } from "vitest"
 import ts from "typescript"
 
+import { stripComments } from "../scripts/guard-primitives.mjs"
+
 const require_ = createRequire(fileURLToPath(import.meta.url))
 
 const BASELINE = "d400c70"
@@ -20,13 +22,6 @@ const normalize = (value) => value.replaceAll("\\", "/")
 const relativeToRoot = (value) => normalize(relative(ROOT, value))
 
 const git = (...args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" })
-
-const stripComments = (code) =>
-  code
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((line) => line.replace(/\/\/.*$/, ""))
-    .join("\n")
 
 const importSpecifiers = (code) => {
   const out = []
@@ -477,14 +472,23 @@ const isRemovalOnly = (before, after) => {
 
 // RAW baseline text, for the token comparison only.
 //
-// This is deliberately NOT the `stripComments` form above. `stripComments` cuts
-// each line at the first `//`, and this corpus is full of URLs, so a line inside
+// This is deliberately NOT the `stripComments` form above, and the reason CHANGED
+// when this file migrated off its own lexer (W3-07). It used to read: "`stripComments`
+// cuts each line at the first `//`, and this corpus is full of URLs, so a line inside
 // a multi-line template literal gets cut mid-literal and leaves the literal
-// unterminated. Feeding that to a scanner makes the token stream depend on
-// whether a `//` happened to fall inside a string on that line, which is how the
-// comparison ended up rejecting two files whose real changes were pure
-// deletions. The scanner already drops comments on its own, so the raw text is
-// both the correct input and the simpler one.
+// unterminated." That was TRUE of the local lexer and FALSE of the shared one, which
+// is string-aware, so leaving the sentence in place would have left a guard
+// justifying itself with a defect it no longer has.
+//
+// The reason that still holds is narrower and is about REGEX LITERALS. The shared
+// lexer blanks a regex body to spaces, deliberately, so its contents cannot read as
+// code. Feeding that blanked text to the scanner below therefore removes the regex
+// bodies from the token stream, which is a different stream from the one the
+// baseline comparison is about. Measured on the three frozen venue files this guard
+// plants against, `isRemovalOnly` gives the SAME verdict on raw and on stripped
+// input for all three probes, so the split is belt-and-braces rather than
+// load-bearing — but it is kept, because "the scanner classifies comments and regexes
+// itself" is the simpler statement and needs no justification at all.
 const BASELINE_VENUE_RAW = (() => {
   const cache = new Map()
   return (path) => {
@@ -566,6 +570,43 @@ describe("WS-5 seam guard", () => {
       const hits = tokenHits(files, /audit:startup-health/g)
       expect(new Set(hits.map(({ rel }) => rel))).toEqual(new Set(["apps/dashboard/server/services/commandCentre/startupHealth.mjs"]))
       expect(hits.length).toBeGreaterThan(0)
+    })
+
+    // THE MIGRATION HAZARD, PINNED ON THIS GUARD'S OWN SCAN SURFACE. This file
+    // used to carry its own lexer, and it was the WRONG kind: no string-literal
+    // awareness at all, so it deleted from the `//` of a `http://` string literal
+    // to end of line, and it DELETED comments rather than blanking them. Deleting
+    // takes the newlines with it, so every line index after the first block comment
+    // named the wrong source line; the URL truncation destroyed real text on 557
+    // lines of this corpus, 13 of them in handlers.mjs. Neither shows up in a
+    // whole-corpus substring scan, which is why both are asserted here instead.
+    it("the stripped view keeps every source line at its own index, across the whole scope", () => {
+      const files = codeFilesForScope()
+      expect(files.length, "the scope must not be empty, or this proves nothing").toBeGreaterThan(100)
+      for (const { rel, code } of files) {
+        const view = stripComments(code)
+        expect(view.length, `${rel}: length changed, so a column offset would point at the wrong token`).toBe(code.length)
+        expect(view.split("\n"), `${rel}: line count changed, so a file:line finding would name the wrong line`).toHaveLength(
+          code.split("\n").length
+        )
+      }
+    })
+
+    it("a `//` inside a URL string survives, at its own line, in the scope's biggest file", () => {
+      // `handlers.mjs` is in this scan surface and puts URL defaults beside route
+      // logic — the Stripe success/cancel defaults and the 5173 origin default. The
+      // line is located in the source rather than written down, so the pin names
+      // the file and the token and cannot rot when the file is edited.
+      const handlers = readFileSync(resolve(ROOT, "apps/dashboard/server/handlers.mjs"), "utf8")
+      const raw = handlers.split("\n")
+      const view = stripComments(handlers).split("\n")
+      const urls = raw
+        .map((l, i) => [l, i])
+        .filter(([l]) => /(?:https?|wss?):\/\//.test(l))
+      expect(urls.length, "handlers.mjs must still carry URL literals").toBeGreaterThan(5)
+      for (const [line, i] of urls) {
+        expect(view[i], `line ${i + 1} lost its URL to the stripper`).toBe(line)
+      }
     })
 
     it("keeps the trading suite surface free of new route or router components", () => {
@@ -675,12 +716,13 @@ describe("WS-5 seam guard", () => {
       // pins the verdict, so a future edit that weakens the discriminator
       // (drops a signal, flips a comparison, widens a tolerance) fails HERE.
       const path = "apps/dashboard/server/services/captureProfiles.mjs"
-      // Two forms, on purpose. The signal check compares COMMENT-STRIPPED text
-      // so a doc comment cannot register as a venue id. The structural check
-      // compares RAW text, because `stripComments` cuts each line at the first
-      // `//` and this corpus is full of URLs, so it leaves template literals
-      // unterminated and the token stream meaningless. Feeding the stripped
-      // form to the structural check is a bug this test used to have.
+      // Two forms, on purpose. The signal check compares COMMENT-STRIPPED text so a
+      // doc comment cannot register as a venue id. The structural check compares RAW
+      // text, because the shared lexer blanks regex BODIES to spaces, so feeding it
+      // to the scanner below removes those bodies from the token stream. Measured on
+      // this file and the two in the test below, `isRemovalOnly` reaches the same
+      // verdict either way — so the raw/stripped split is now belt-and-braces. It
+      // used to be load-bearing, and the reason it gave has changed with the lexer.
       const baselineStripped = BASELINE_VENUE_SURFACE(path)
       const baselineRaw = BASELINE_VENUE_RAW(path)
       expect(baselineStripped, "the surviving frozen path must have a readable baseline").not.toBeNull()
