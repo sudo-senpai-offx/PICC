@@ -1,8 +1,8 @@
 import { RoomFrame } from "../components/RoomFrame"
 import { CopilotScoreSurface } from "../components/CopilotScoreSurface"
 import { copilotUnavailable, describeConfluence } from "../domain/copilotDecision"
-import type { CopilotDecisionView } from "../domain/copilotDecision"
-import type { ConfluenceScore, ExecutionTier, VetoOutcome } from "../contracts"
+import type { CopilotDecisionView, ScoreWithOptionalComputedAt } from "../domain/copilotDecision"
+import type { ExecutionTier, VetoOutcome } from "../contracts"
 
 /**
  * WS-7 T7 — room instance 1 of 18 (D1's order): Markets / COP-22.
@@ -46,8 +46,12 @@ export type MarketsRoomProps = {
   /**
    * The engine's reading, or `null` when there is none. A caller that has no
    * reading passes `null`; it never constructs a placeholder score.
+   *
+   * `computedAt` is allowed to be `null` here — see
+   * `ScoreWithOptionalComputedAt`. The room renders that as "not observed"
+   * rather than substituting a date, so the prop type has to admit it.
    */
-  confluence: ConfluenceScore | null
+  confluence: ScoreWithOptionalComputedAt | null
   vetoes?: readonly VetoOutcome[]
   /** D5. Defaults to `false`: an absent flag must never mean permitted. */
   automationPermitted?: boolean

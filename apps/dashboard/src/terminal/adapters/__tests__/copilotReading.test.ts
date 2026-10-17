@@ -20,15 +20,27 @@ import { describe, expect, it } from "vitest"
 import { copilotDecisionForAsset } from "../../../../server/services/copilot/decision.mjs"
 import { fetchCopilotReading, projectDecision, projectRisk } from "../copilotReading"
 
+/** The bar's own time in epoch MILLISECONDS — the unit the engine's contract declares. */
 const AT = Date.UTC(2023, 10, 14, 13, 0, 0)
 
-/** A deterministic ramp — the same shape the server-side test uses. */
+/**
+ * A deterministic ramp — the same shape the server-side test uses.
+ *
+ * `time` is in unix SECONDS, because that is the only unit any producer in this
+ * tree emits (`yahooAdapter.mjs:75`, `ccxtConnector.mjs:103`, `trading.mjs:407`
+ * all build it as `Math.floor(ts / 1000)`, and `marketDataBus.mjs:157` multiplies
+ * the raw difference back up by 1000 to report a span in ms). Writing
+ * milliseconds here would hand `decision.mjs` a shape no broker produces, and it
+ * is what let the missing seconds-to-ms conversion in `lastTime()` go unnoticed:
+ * the fixture agreed with the bug rather than with the wire.
+ */
 function ramp(n: number, { start = 1.08, step = 0.0004 } = {}) {
   const out = []
+  const lastSec = Math.floor(AT / 1000)
   for (let i = 0; i < n; i++) {
     const close = start + step * i
     out.push({
-      time: AT - (n - 1 - i) * 60_000,
+      time: lastSec - (n - 1 - i) * 60,
       open: close - step / 2,
       high: close + Math.abs(step),
       low: close - Math.abs(step),
@@ -189,6 +201,50 @@ describe("WS-7 T7R-B — the HTTP layer", () => {
     expect(refused.confluence).toBeNull()
     expect(refused.reason).toMatch(/not evaluated/i)
     expect(refused.reason).toContain("only 5 bars, 60 required")
+  })
+
+  // -------------------------------------------------------------------------
+  // THE ABSENCE MUST STAY ABSENCE.
+  // -------------------------------------------------------------------------
+  //
+  // `CopilotScoreSurface.tsx:41-43` has always been able to say "not observed":
+  //   `return ms == null ? "not observed" : new Date(ms).toISOString()`
+  // That branch was DEAD, because this adapter answered every absent input with
+  // the literal `0` — a finite number — and `new Date(0)` is a real date,
+  // 1970-01-01T00:00:00.000Z. One line below it, `CopilotScoreSurface.tsx:69-72`
+  // carries the comment "rendering the absence as 0 - is the fabrication this
+  // branch exists to prevent", and the timestamp line was doing exactly that.
+  //
+  // `domain/copilotDecision.ts:103` types the view's own field `computedAt:
+  // number | null`, so the room already had somewhere honest to put this. The
+  // adapter was the only thing stopping it.
+  //
+  // Epoch zero itself (`0`) and anything before it (`-1`) are in the list on the
+  // brief's authority and on the obvious reading: no market has ever closed
+  // before 1970, and the invariant is that an absence renders as NO date at all,
+  // so a pre-epoch date is as fabricated as an epoch-zero one. Every POSITIVE
+  // value still passes — no threshold is invented that would reject real history.
+  it("carries a computedAt it could not read through as null, never as epoch zero", () => {
+    for (const computedAt of [undefined, null, NaN, "nonsense", 0, -1, {}, [], Infinity]) {
+      const label = `computedAt=${JSON.stringify(computedAt) ?? String(computedAt)}`
+      const reading = projectDecision("EURUSD", { ok: true, confluence: { score: 12, computedAt } } as never)
+
+      // The reading still EXISTS — a missing timestamp is not a missing score,
+      // and collapsing it into an absence would throw away a real confluence.
+      expect(reading.confluence, `${label} must not erase the reading`).not.toBeNull()
+      expect(reading.confluence!.score, `${label} score must survive`).toBe(12)
+      // And the absence is carried AS an absence.
+      expect(reading.confluence!.computedAt, `${label} must project as null, not as a number`).toBeNull()
+    }
+  })
+
+  it("still carries a real finite timestamp through untouched", () => {
+    // The tightening must not become a loosening: a genuine observation is
+    // copied, not clamped, not rounded, and not dropped.
+    for (const computedAt of [1, 1_699_966_800_000, Date.UTC(2026, 9, 17, 12, 0, 0)]) {
+      const reading = projectDecision("EURUSD", { ok: true, confluence: { score: 12, computedAt } } as never)
+      expect(reading.confluence!.computedAt).toBe(computedAt)
+    }
   })
 
   it("treats a MALFORMED score as an absence rather than coercing it to zero", async () => {

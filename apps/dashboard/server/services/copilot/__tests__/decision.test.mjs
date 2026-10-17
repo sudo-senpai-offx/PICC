@@ -29,13 +29,23 @@ import { copilotDecisionForAsset, COPILOT_DECISION_VERSION } from "../decision.m
 import { MIN_DAILY_CLOSES, MIN_WORKING_CANDLES } from "../marketState.mjs"
 import { CONFLICT_RULE_IDS } from "../conflicts/index.mjs"
 
-/** A deterministic ramp: enough bars to warm every series, no clock involved. */
-function ramp(n, { start = 1.08, step = 0.0004, at = Date.UTC(2023, 10, 14, 13, 0, 0) } = {}) {
+/**
+ * A deterministic ramp: enough bars to warm every series, no clock involved.
+ *
+ * `time` is in unix SECONDS, because that is what every broker adapter in this
+ * tree emits (yahooAdapter.mjs:75, ccxtConnector.mjs:103, trading.mjs:407) and
+ * what `marketDataBus.mjs:157` treats as seconds when it multiplies by 1000 to
+ * report a span in ms. An earlier version of this fixture wrote milliseconds
+ * here, which is not a shape any producer produces — and that mismatch is why
+ * the missing conversion in `lastTimeMs()` survived: the fixture agreed with the
+ * bug instead of with the wire.
+ */
+function ramp(n, { start = 1.08, step = 0.0004, atSec = Math.floor(Date.UTC(2023, 10, 14, 13, 0, 0) / 1000) } = {}) {
   const out = []
   for (let i = 0; i < n; i++) {
     const close = start + step * i
     out.push({
-      time: at - (n - 1 - i) * 60_000,
+      time: atSec - (n - 1 - i) * 60,
       open: close - step / 2,
       high: close + Math.abs(step),
       low: close - Math.abs(step),
@@ -47,13 +57,14 @@ function ramp(n, { start = 1.08, step = 0.0004, at = Date.UTC(2023, 10, 14, 13, 
 }
 
 /** A broker seam that serves the same ramp at whichever timeframe is asked for. */
-function broker({ working = 240, h4 = 200, daily = 420, source = "test-broker" } = {}) {
+function broker({ working = 240, h4 = 200, daily = 420, source = "test-broker", atSec } = {}) {
   const asked = []
+  const anchor = { atSec }
   const fetchCandles = async (_assetId, { timeframe, count }) => {
     asked.push({ timeframe, count })
-    if (timeframe === 14400) return { candles: h4 > 0 ? ramp(h4) : [], source }
-    if (timeframe === 86400) return { candles: daily > 0 ? ramp(daily, { step: 0.002 }) : [], source }
-    return { candles: working > 0 ? ramp(working) : [], source }
+    if (timeframe === 14400) return { candles: h4 > 0 ? ramp(h4, anchor) : [], source }
+    if (timeframe === 86400) return { candles: daily > 0 ? ramp(daily, { ...anchor, step: 0.002 }) : [], source }
+    return { candles: working > 0 ? ramp(working, anchor) : [], source }
   }
   return { fetchCandles, asked }
 }
@@ -111,6 +122,58 @@ describe("WS-7 T7R-B — the first caller of the deterministic engine", () => {
     expect(out.computedAt).toBe(expected)
     expect(out.computedAt).not.toBeGreaterThan(expected + 1000)
     expect(out.confluence.computedAt).toBe(out.computedAt)
+  })
+
+  // ---------------------------------------------------------------------------
+  // THE UNIT THE WIRE ACTUALLY CARRIES.
+  // ---------------------------------------------------------------------------
+  //
+  // Every broker adapter in this tree emits OHLC `time` in unix SECONDS:
+  //
+  //   yahooAdapter.mjs:75   time: Math.floor(dates[i] / 1000)
+  //   ccxtConnector.mjs:103 time: Math.floor(Number(ts) / 1000) || 0
+  //   trading.mjs:407       time: Math.floor(history.dates[i] / 1000)
+  //   handlers.mjs:4727/5285/5682  time: Math.floor(ts / 1000)
+  //
+  // and the fan-in that feeds this route says so itself — `marketDataBus.mjs:157`
+  // computes a span in MILLISECONDS as `(b - a) * 1000` over the raw `.time`
+  // difference. `accuracyLedger.mjs:83` documents it in prose ("`.time` (unix
+  // SECONDS)") and `volatility.mjs:142` carries the scar of the same class of bug.
+  //
+  // `marketState.mjs:137` declares the OTHER unit: "`computedAt` must be a
+  // supplied finite epoch-ms number". So `lastTimeMs()` must convert. When it did
+  // not, the raw seconds value flowed into `regime.mjs:103` (`decimalUtcHour`)
+  // and `sessionOpen.mjs:49` (the safety veto), which both do
+  // `new Date(ms).getUTCHours()` — so the mis-scaled value silently classified
+  // the WRONG SESSION, and the client rendered `1970-01-21T17:49:46.140Z`.
+  //
+  // This test drives a seconds-denominated series, because that is what the wire
+  // carries. A milliseconds fixture here would agree with the bug, which is
+  // exactly how it survived.
+  it("converts the bar's unix-SECOND time to the epoch-ms computedAt the engine's contract declares", async () => {
+    const AT_MS = Date.UTC(2023, 10, 14, 13, 0, 0)
+    const AT_SEC = Math.floor(AT_MS / 1000)
+
+    const out = await copilotDecisionForAsset({ assetId: "EURUSD", ...broker({ atSec: AT_SEC }) })
+
+    // The engine's contract, asserted at the boundary that supplies it.
+    expect(out.computedAt).toBe(AT_MS)
+    // NOT the raw seconds — this is the assertion that fails without the fix.
+    expect(out.computedAt, "computedAt must not be the un-converted seconds value").not.toBe(AT_SEC)
+    // And therefore the hour the engine derives is the hour the bar was stamped
+    // in, not an hour in January 1970. `regime.mjs` and `sessionOpen.mjs` both
+    // read this value through `new Date(ms).getUTCHours()`.
+    const d = new Date(out.computedAt)
+    expect(d.getUTCFullYear()).toBe(2023)
+    expect(d.getUTCHours()).toBe(13)
+    expect(out.confluence.computedAt).toBe(AT_MS)
+    // The vetoes carry the same instant, so `stamp(v.evaluatedAt)` on the client
+    // agrees with the score line rather than contradicting it by 1000x.
+    for (const v of out.vetoes) {
+      expect(new Date(v.evaluatedAt).getUTCFullYear(), `${v.ruleId} evaluatedAt`).toBe(2023)
+    }
+    // And the ATR observation, which is stamped from the same value.
+    expect(out.risk.atr.observedAt).toBe(AT_MS)
   })
 
   it("is byte-reproducible: the same series scores the same twice", async () => {

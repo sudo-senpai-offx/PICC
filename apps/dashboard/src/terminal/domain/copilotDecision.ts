@@ -95,6 +95,25 @@ export const VETO_RULE_IDS: readonly VetoRuleId[] = [
  */
 export const COPILOT_ENGINE_OWNER = "WS-7 market-state supply"
 
+/**
+ * A `ConfluenceScore` whose `computedAt` may be absent.
+ *
+ * `contracts.ts:209` types the ENGINE's own `computedAt` as a plain `number`,
+ * and that is correct: `marketState.mjs:135` refuses to derive a market state
+ * without a finite one, so a score the engine actually produced always carries a
+ * time. This type is what the SURROUNDING route can hand the room instead — a
+ * score that arrived from a server without a readable timestamp.
+ *
+ * It exists because the alternative was worse. `describeConfluence` used to
+ * reject that case by throwing, which meant the adapter upstream had no honest
+ * way to pass it on and so substituted `0` for it, and the room printed
+ * `1970-01-01T00:00:00.000Z` as a computed market time. A missing timestamp is
+ * not a room that crashes and not a fabricated date; it is a reading whose TIME
+ * was not observed, which is precisely what `CopilotDecisionView.computedAt`
+ * below has always been able to say.
+ */
+export type ScoreWithOptionalComputedAt = Omit<ConfluenceScore, "computedAt"> & { computedAt: number | null }
+
 export type CopilotDecisionView = {
   /** `false` when the engine has produced no reading. Nothing numeric is shown. */
   available: boolean
@@ -238,15 +257,24 @@ export function copilotUnavailable(reason: string): CopilotDecisionView {
  *    read as a contribution.
  */
 export function describeConfluence(input: {
-  score: ConfluenceScore
+  score: ScoreWithOptionalComputedAt
   vetoes: readonly VetoOutcome[]
   automationPermitted: boolean
   rung: ExecutionTier["rung"]
 }): CopilotDecisionView {
   const s = input.score
   text(s.engineVersion, "engineVersion")
-  if (typeof s.computedAt !== "number" || !Number.isFinite(s.computedAt)) {
-    throw new TypeError("confluence: computedAt must be a finite number")
+  // `computedAt` is NOT validated into an exception. It used to be, and that
+  // rejection is why this function's absence branch was unreachable: the only
+  // callers left could not pass an absent timestamp without crashing, so the
+  // adapter coerced it to `0` first and the room rendered
+  // `1970-01-01T00:00:00.000Z` as a computed market time. `null` is carried
+  // through to the view, where `CopilotScoreSurface`'s `stamp()` already renders
+  // it as "not observed". A value that is neither `null` nor a finite number is
+  // still a contract violation and is still refused — a number that is not a
+  // time is not an absence, it is garbage.
+  if (s.computedAt !== null && (typeof s.computedAt !== "number" || !Number.isFinite(s.computedAt))) {
+    throw new TypeError("confluence: computedAt must be a finite number or null")
   }
   if (s.score !== null && (typeof s.score !== "number" || !Number.isFinite(s.score))) {
     throw new TypeError("confluence: score must be a finite number or null")

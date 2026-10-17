@@ -170,8 +170,9 @@ export async function copilotDecisionForAsset({ assetId, source = "auto", fetchC
     byLeg.daily = `only ${dailyCloses.length} daily closes were obtained and ${MIN_DAILY_CLOSES} are required for the 200/400 EMA legs`
   }
 
-  // `computedAt` is the LAST BAR'S OWN TIME. See the header: never `Date.now()`.
-  const computedAt = lastTime(workingCandles)
+  // `computedAt` is the LAST BAR'S OWN TIME, in the epoch-MILLISECONDS unit
+  // `marketState.mjs:137` declares. See the header: never `Date.now()`.
+  const computedAt = lastTimeMs(workingCandles)
   if (computedAt === null) {
     byLeg.working = "no working-timeframe bar carried a usable timestamp, so the state has no time to be computed at"
   }
@@ -340,11 +341,40 @@ function closes(leg) {
     .filter((v) => Number.isFinite(v))
 }
 
-/** The newest bar's own timestamp, or null when no bar carried one. */
-function lastTime(candles) {
+/**
+ * The newest bar's own timestamp in EPOCH MILLISECONDS, or null when no bar
+ * carried one.
+ *
+ * THE CONVERSION, AND WHY IT LIVES HERE. The previous `lastTime()` returned the bar's
+ * `.time` verbatim, but that field is unix SECONDS on every wire in this tree —
+ * `yahooAdapter.mjs:75`, `ccxtConnector.mjs:103`, `trading.mjs:407` and
+ * `handlers.mjs:4727/5285/5682` all build it as `Math.floor(ts / 1000)`, and
+ * `marketDataBus.mjs:157` converts the same difference back up by `* 1000` to
+ * report a span in ms. `marketState.mjs:137` meanwhile declares `computedAt` to
+ * be "a supplied finite epoch-ms number", so the un-converted value violated the
+ * engine's own contract at the only place the caller supplies it.
+ *
+ * It was not cosmetic. `computedAt` is what `regime.mjs:103` reads through
+ * `decimalUtcHour` and what `sessionOpen.mjs:49` reads through
+ * `new Date(evaluatedAt).getUTCHours()`, so a value three orders of magnitude
+ * too small classified the WRONG SESSION — a safety veto measured against
+ * January 1970 — and rendered on the client as `1970-01-21T17:49:46.140Z`.
+ *
+ * THIS IS NOT A CLOCK. The result is still the last bar's own time, scaled into
+ * the unit the engine declares; no wall clock is read here, so the route stays
+ * reproducible for the same series and `sessionOpen` still cannot be moved by
+ * whoever called last. See the header's "PURE WITH RESPECT TO THE ENGINE".
+ *
+ * The conversion is unconditional rather than a magnitude guess. There is no
+ * milliseconds-denominated candle producer in this tree to accommodate, and a
+ * heuristic would reintroduce exactly the silent unit inference this file's
+ * header forbids — `volatility.mjs:142-147` needed `if (d > 14400)` only
+ * because it is handed two different feeds, and this path is handed one.
+ */
+function lastTimeMs(candles) {
   for (let i = candles.length - 1; i >= 0; i--) {
     const t = Number(candles[i].time)
-    if (Number.isFinite(t) && t > 0) return t
+    if (Number.isFinite(t) && t > 0) return t * 1000
   }
   return null
 }

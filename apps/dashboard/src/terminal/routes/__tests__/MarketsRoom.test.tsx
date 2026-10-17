@@ -297,6 +297,55 @@ describe("T7 room 1 - the engine's absence is reported, not filled in", () => {
     const html = renderToStaticMarkup(<MarketsRoom confluence={score()} />)
     expect(html).toContain('data-vetoes="none"')
   })
+
+  // The invariant, asserted on RENDERED OUTPUT rather than on a projected
+  // value, because the invariant is about what a reader sees.
+  //
+  // This is the browser E2E defect: the Markets copilot printed
+  // `computed 1970-01-21T17:49:46.140Z`. Two independent routes reached a date
+  // the market never produced, and both had to be closed for this to pass:
+  //
+  //   - an ABSENT `computedAt` reaching the surface as `0` (Defect A, closed in
+  //     `adapters/copilotReading.ts`), and
+  //   - a REAL `computedAt` arriving in unix SECONDS and being read as
+  //     milliseconds (Defect B, closed in `server/services/copilot/decision.mjs`).
+  //
+  // Asserting on the HTML means neither can be reintroduced silently: restoring
+  // the `: 0` fallback prints 1970 here, dropping `stamp()`'s null branch prints
+  // "1970-01-01T00:00:00.000Z" here, and un-scaling the server value prints 1970
+  // here. A test that only checked the adapter's output would catch the first
+  // and none of the others.
+  it("renders NO date at all for a computedAt the server did not supply", () => {
+    for (const computedAt of [undefined, null, 0, -1, "nonsense", NaN]) {
+      const label = `computedAt=${JSON.stringify(computedAt) ?? String(computedAt)}`
+      const reading = projectDecision("EURUSD", { ok: true, confluence: { score: 12, computedAt } } as never)
+      const html = renderToStaticMarkup(
+        <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+      )
+      expect(html, `${label} must not render a 1970 date`).not.toContain("1970-01-01")
+      expect(html, `${label} must not render a pre-epoch date`).not.toContain("1969-12-31")
+      expect(html, `${label} must say the time was not observed`).toContain("not observed")
+      // And the reading is still there — the absence is the TIMESTAMP's, not the
+      // score's. Collapsing it would make this pass by hiding the whole surface.
+      expect(html, `${label} must still show the real score`).toContain('data-score="12"')
+    }
+  })
+
+  it("renders a real computedAt as its own date, not as 1970", () => {
+    // The other half of the invariant: the honest path must still print a date.
+    // Without this, `stamp()` could be replaced with a constant and the test
+    // above would still pass.
+    const reading = projectDecision("EURUSD", {
+      ok: true,
+      confluence: { score: 12, computedAt: Date.UTC(2023, 10, 14, 13, 0, 0) }
+    } as never)
+    const html = renderToStaticMarkup(
+      <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+    )
+    expect(html).toContain("2023-11-14T13:00:00.000Z")
+    expect(html).not.toContain("1970")
+    expect(html).not.toContain("not observed")
+  })
 })
 
 describe("T7R-B - the room renders REAL engine output through the seam", () => {
@@ -312,10 +361,18 @@ describe("T7R-B - the room renders REAL engine output through the seam", () => {
   //     -> projectDecision (the adapter's pure projection)
   //       -> <MarketsRoom />
   // with the broker as the only injected leaf.
+  // The bar's own time in epoch MILLISECONDS — the unit the engine's contract declares.
   const AT = Date.UTC(2023, 10, 14, 13, 0, 0)
 
+  // `time` is in unix SECONDS: every broker adapter in this tree emits it that way
+  // (`yahooAdapter.mjs:75`, `ccxtConnector.mjs:103`, `trading.mjs:407`, and
+  // `marketDataBus.mjs:157` multiplies the raw difference back up by 1000 to
+  // report a span in ms). A milliseconds fixture here is not a shape any
+  // producer produces, and it is why the seconds-to-ms conversion in
+  // `decision.mjs`'s `lastTimeMs` could be missing while every test here passed.
   function ramp(n: number, { start = 1.08, step = 0.0004 } = {}) {
     const out: Array<{ open: number; high: number; low: number; close: number; volume: number; time: number }> = []
+    const lastSec = Math.floor(AT / 1000)
     for (let i = 0; i < n; i++) {
       const close = start + step * i
       const open = close - step / 2
@@ -325,7 +382,7 @@ describe("T7R-B - the room renders REAL engine output through the seam", () => {
         low: close - Math.abs(step),
         close,
         volume: 1000,
-        time: AT - (n - 1 - i) * 60_000
+        time: lastSec - (n - 1 - i) * 60
       })
     }
     return out

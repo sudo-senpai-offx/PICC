@@ -49,6 +49,7 @@
  */
 
 import type { ConfluenceScore, VetoOutcome } from "../contracts"
+import type { ScoreWithOptionalComputedAt } from "../domain/copilotDecision"
 import type { AtrObservation, DrawdownObservation, ThreeStrikeObservation } from "../domain/riskLayer"
 
 /**
@@ -58,9 +59,19 @@ import type { AtrObservation, DrawdownObservation, ThreeStrikeObservation } from
  * room maps a null score to `ignore`/`hold` through
  * `domain/confluenceDecision.ts`, and conflating the two is the failure the
  * availability contract exists to prevent.
+ *
+ * `computedAt` is the one field where this type is DELIBERATELY WIDER than the
+ * engine's `ConfluenceScore`. The engine itself can never produce a null there —
+ * `marketState.mjs:135` refuses to derive a state without a finite one — but the
+ * ROUTE around it can, and this adapter is the boundary that receives what the
+ * route actually sent. Carrying `number | null` here is what lets an unreadable
+ * timestamp reach the room as the absence it is, instead of being answered with a
+ * fabricated number on its way past. See `projectDecision`'s `computedAt` below,
+ * and `domain/copilotDecision.ts`'s `ScoreWithOptionalComputedAt` for why the
+ * room accepts it.
  */
 export type CopilotReading = {
-  confluence: ConfluenceScore | null
+  confluence: ScoreWithOptionalComputedAt | null
   vetoes: readonly VetoOutcome[]
   /** D5 safety flag. `false` unless a real gate said otherwise. */
   automationPermitted: boolean
@@ -199,7 +210,28 @@ export function projectDecision(assetId: string, body: DecisionResponse): Copilo
   // `deadZone` is the contract's own name for "no regime could be read", and the
   // spec's note at `contracts.ts:191-194` is that it is a REGIME, not a score.
   // Falling back to it keeps an unreadable regime from reading as a market call.
-  const computedAt = finite(raw.computedAt) ? raw.computedAt : 0
+  // THE ABSENCE OF A TIMESTAMP IS AN ABSENCE, NOT A NUMBER.
+  //
+  // This used to be `finite(raw.computedAt) ? raw.computedAt : 0`, and the `0`
+  // made `CopilotScoreSurface.tsx`'s `stamp()` branch unreachable: `stamp` takes
+  // `number | null` and already answers `null` with "not observed", but a `0`
+  // is finite, so it went to `new Date(0).toISOString()` and printed
+  // `1970-01-01T00:00:00.000Z` as a computed market time. Measured over nine
+  // server inputs — `null`, `undefined`, `"nonsense"`, `NaN`, `{}`, `[]` — every
+  // one rendered a real-looking 1970 date, and `-1` rendered
+  // `1969-12-31T23:59:59.999Z`. Nine lines above, `stamp` is written to prevent
+  // precisely that; a line below on the score line, `CopilotScoreSurface.tsx:69-72`
+  // calls rendering the absence as `0` "the fabrication this branch exists to
+  // prevent".
+  //
+  // `> 0` rather than `finite` alone, because epoch zero itself must not print as
+  // a date either, and neither may anything before it: no market has closed
+  // before 1970. This is the epoch boundary the invariant already names, NOT an
+  // invented floor — every positive millisecond value, including genuine
+  // historical data, passes through untouched. Pinning that both directions is
+  // `copilotReading.test.ts`'s "carries a computedAt it could not read through as
+  // null" and "still carries a real finite timestamp through untouched".
+  const computedAt = finite(raw.computedAt) && raw.computedAt > 0 ? raw.computedAt : null
   const version = nonEmpty(raw.engineVersion) ?? nonEmpty(body.engineVersion) ?? "unknown"
 
   return {

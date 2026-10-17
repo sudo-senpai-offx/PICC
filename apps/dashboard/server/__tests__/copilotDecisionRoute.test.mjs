@@ -217,13 +217,22 @@ describe("WS-7 T7R-B — POST /api/trading/copilot returns a REAL decision", () 
     rmSync(dir, { recursive: true, force: true })
   })
 
+  // `time` is unix SECONDS, which is what `marketDataBus.mjs` actually serves
+  // `decision.mjs` — every broker adapter in this tree builds it as
+  // `Math.floor(ts / 1000)` (yahooAdapter.mjs:75, ccxtConnector.mjs:103,
+  // trading.mjs:407), and the bus multiplies the raw difference back up by 1000
+  // at marketDataBus.mjs:157 to report a span in ms. Mocking the bus with
+  // millisecond bars hands `decision.mjs` a shape it never receives, and it is
+  // what let the missing seconds-to-ms conversion in `lastTimeMs` pass here.
+  // `at` stays in milliseconds because that is what the assertions below read.
   function ramp(n, at, step = 0.0004) {
     const out = []
+    const lastSec = Math.floor(at / 1000)
     for (let i = 0; i < n; i++) {
       const close = 1.08 + step * i
       const open = close - step / 2
       out.push({
-        time: at - (n - 1 - i) * 60_000,
+        time: lastSec - (n - 1 - i) * 60,
         open,
         high: close + Math.abs(step),
         low: close - Math.abs(step),
