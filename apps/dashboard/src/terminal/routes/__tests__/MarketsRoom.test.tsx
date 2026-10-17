@@ -303,18 +303,32 @@ describe("T7 room 1 - the engine's absence is reported, not filled in", () => {
   //
   // This is the browser E2E defect: the Markets copilot printed
   // `computed 1970-01-21T17:49:46.140Z`. Two independent routes reached a date
-  // the market never produced, and both had to be closed for this to pass:
+  // the market never produced:
   //
   //   - an ABSENT `computedAt` reaching the surface as `0` (Defect A, closed in
   //     `adapters/copilotReading.ts`), and
   //   - a REAL `computedAt` arriving in unix SECONDS and being read as
   //     milliseconds (Defect B, closed in `server/services/copilot/decision.mjs`).
   //
-  // Asserting on the HTML means neither can be reintroduced silently: restoring
-  // the `: 0` fallback prints 1970 here, dropping `stamp()`'s null branch prints
-  // "1970-01-01T00:00:00.000Z" here, and un-scaling the server value prints 1970
-  // here. A test that only checked the adapter's output would catch the first
-  // and none of the others.
+  // WHAT EACH BLOCK BELOW PINS, since the two defects are not both in this file:
+  //
+  //   - The first pins DEFECT A, and can only ever do so through this adapter:
+  //     restoring the `: 0` fallback makes `stamp()`'s null branch unreachable
+  //     again and prints "1970-01-01T00:00:00.000Z" here.
+  //   - The second pins the honest path, so `stamp()` cannot be swapped for a
+  //     constant and pass on the first test's silence alone.
+  //   - The third pins DEFECT B's RESIDUE — the only place in this file where
+  //     the reported string can be reproduced at all.
+  //
+  // DEFECT B IS NOT PINNED HERE, and an earlier version of this comment claimed
+  // it was ("un-scaling the server value prints 1970 here"). That was false twice
+  // over. Nothing in this file runs `decision.mjs`, so no edit to `lastTimeMs`
+  // could move a byte of this output; and the value an un-scaled bar produces
+  // renders `1970-01-21T17:49:46.140Z`, which contains neither "1970-01-01" nor
+  // "1969-12-31", so the first test's two year-boundary probes would have passed
+  // with the defect live. The conversion is pinned where it happens instead —
+  // `server/services/copilot/__tests__/decision.test.mjs`, "converts the bar's
+  // unix-SECOND time to the epoch-ms computedAt the engine's contract declares".
   it("renders NO date at all for a computedAt the server did not supply", () => {
     for (const computedAt of [undefined, null, 0, -1, "nonsense", NaN]) {
       const label = `computedAt=${JSON.stringify(computedAt) ?? String(computedAt)}`
@@ -345,6 +359,42 @@ describe("T7 room 1 - the engine's absence is reported, not filled in", () => {
     expect(html).toContain("2023-11-14T13:00:00.000Z")
     expect(html).not.toContain("1970")
     expect(html).not.toContain("not observed")
+  })
+
+  // THE REPORTED STRING, REPRODUCED EXACTLY. `1792186140` is a unix-SECOND bar
+  // time — 2026-10-16T21:29:00.000Z, an ordinary plausible instant, and the shape
+  // the wire actually carries. Read as milliseconds, which is all `stamp()` is
+  // entitled to assume, it renders `1970-01-21T17:49:46.140Z`: the browser E2E's
+  // string, to the millisecond.
+  //
+  // It asserts that this STILL renders, because that is the finding. A positive
+  // finite value is, to this client, a legitimate epoch-ms reading: nothing here
+  // can tell 1.79e9 ms (1970) from 1.79e9 s (2026) without inferring the unit
+  // from magnitude, and `decision.mjs:368-372` rejects exactly that inference on
+  // the wire because no producer in this tree emits milliseconds and one feed is
+  // not two. So the guard closes in `lastTimeMs()`, not here.
+  //
+  // Pinning the miss is what keeps the two decisions visibly one decision. A
+  // reader who satisfies this test with a client-side magnitude check will break
+  // it, and will have to confront that contradiction on the record instead of
+  // shipping a second unit heuristic that disagrees with the server's.
+  it("still renders a positive seconds value as 1970 — the residue the server conversion exists to remove", () => {
+    const SECONDS = 1792186140
+    // Pinned so the fixture is demonstrably a real instant, not a number picked
+    // to look like one.
+    expect(new Date(SECONDS * 1000).toISOString(), "the fixture must be a real second-denominated instant").toBe(
+      "2026-10-16T21:29:00.000Z"
+    )
+
+    const reading = projectDecision("EURUSD", {
+      ok: true,
+      confluence: { score: 12, computedAt: SECONDS }
+    } as never)
+    const html = renderToStaticMarkup(
+      <MarketsRoom confluence={reading.confluence} vetoes={reading.vetoes} rung={reading.rung} />
+    )
+    // The reported string, exactly.
+    expect(html).toContain("computed 1970-01-21T17:49:46.140Z")
   })
 })
 

@@ -231,6 +231,31 @@ export function projectDecision(assetId: string, body: DecisionResponse): Copilo
   // historical data, passes through untouched. Pinning that both directions is
   // `copilotReading.test.ts`'s "carries a computedAt it could not read through as
   // null" and "still carries a real finite timestamp through untouched".
+  //
+  // WHAT THIS GUARD STILL DOES NOT CATCH, recorded rather than closed. It is a
+  // magnitude test, and a value that is POSITIVE but mis-scaled satisfies it. The
+  // measured example is the browser E2E's own bar: the wire carried
+  // 1792186140 unix seconds (2026-10-16T21:29:00.000Z), `decision.mjs` did not
+  // convert, and `new Date(1792186140).toISOString()` is
+  // `1970-01-21T17:49:46.140Z` — the string the room printed. That passes the
+  // guard exactly as `0` would have been "correct" under `finite` alone.
+  //
+  // No client-side magnitude check is added for it, deliberately. Distinguishing
+  // 1.79e9 ms from 1.79e9 s is a unit inference from magnitude, and
+  // `server/services/copilot/decision.mjs:368-372` rejects precisely that on the
+  // wire: there is no milliseconds-denominated candle producer in this tree to
+  // accommodate, and a heuristic there "would reintroduce exactly the silent
+  // unit inference this file's header forbids". Adding the same guess on the
+  // client would open the identical hole from the other end, against a contract
+  // that declares `computedAt` to be epoch-ms (`marketState.mjs:137`) — so the
+  // guard would be second-guessing a value it has been told the meaning of, and
+  // the two sides would now be able to disagree about a well-formed millisecond
+  // value near the year 2286.
+  //
+  // So the fix lives where the unit is known: `lastTimeMs()` converts, pinned by
+  // `server/services/copilot/__tests__/decision.test.mjs` and, on the rendered
+  // side, by `MarketsRoom.test.tsx`'s "still renders a positive seconds value as
+  // 1970". This is a documented limit, not a closed defect.
   const computedAt = finite(raw.computedAt) && raw.computedAt > 0 ? raw.computedAt : null
   const version = nonEmpty(raw.engineVersion) ?? nonEmpty(body.engineVersion) ?? "unknown"
 

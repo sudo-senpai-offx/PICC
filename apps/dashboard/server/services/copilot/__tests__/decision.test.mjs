@@ -150,6 +150,22 @@ describe("WS-7 T7R-B — the first caller of the deterministic engine", () => {
   // This test drives a seconds-denominated series, because that is what the wire
   // carries. A milliseconds fixture here would agree with the bug, which is
   // exactly how it survived.
+  //
+  // THE FIXTURE AND THE CONVERSION ARE COUPLED, and that coupling is this test's
+  // blind spot: reverting `lastTimeMs()`'s `* 1000` AND `AT_SEC` back to
+  // milliseconds TOGETHER restores the bug with this test still green, because
+  // the fixture would then agree with the un-converted code. Either half alone
+  // is caught — drop the conversion and line 160's `toBe(AT_MS)` fails; feed
+  // seconds to a milliseconds `AT_SEC` and line 162's `not.toBe(AT_SEC)` fails.
+  //
+  // The protection against moving only one of them is that SECONDS IS THE
+  // NORMATIVE UNIT HERE, asserted by the block comment above (four producers,
+  // `marketDataBus.mjs:157`) and by this test's own name. `AT_SEC` is defined as
+  // `Math.floor(AT_MS / 1000)` rather than as a literal, so the fixture cannot
+  // silently drift back to the millisecond shape — it is derived from the same
+  // instant the assertions check. If the wire's unit ever changes, BOTH the
+  // production conversion and this fixture must move together, and the block
+  // comment's producer list is the evidence to re-check before either does.
   it("converts the bar's unix-SECOND time to the epoch-ms computedAt the engine's contract declares", async () => {
     const AT_MS = Date.UTC(2023, 10, 14, 13, 0, 0)
     const AT_SEC = Math.floor(AT_MS / 1000)
