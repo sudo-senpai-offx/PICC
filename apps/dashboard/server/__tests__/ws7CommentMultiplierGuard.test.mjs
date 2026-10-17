@@ -78,25 +78,60 @@
 // whole of the arithmetic, and its limit is recorded here rather than left for
 // the next reader to assume away.
 //
-// ONE CLAIM IN THESE TWO FILES IS MEASURABLY FALSE AND IS NOT FIXED HERE, AND
-// THE REASON IS WRITTEN DOWN IN THE ALLOWLIST RATHER THAN LEFT TO BE DISCOVERED.
-// `volatility.mjs:59` states `roundVolPct(5e-7) === "0.005%"` and calls it "2x".
-// Measured through the one call site that passes a RAW currentVol — the refusal
-// path, which publishes `roundVolPct(currentVol)` un-floored:
+// WHAT THAT SCOPE MEANS, STATED SO THE HEADER CANNOT BE READ AS COVERAGE: this
+// is a POINT FIX OVER A NAMED TWO-FILE SET, not a class fix. Proven by mutation —
+// a NEW false multiplier written into any other tracked file passes this entire
+// suite with exit 0, because the register, the phrase sweep and the
+// written-division sweep all read exactly `SOURCES` and nothing else. What it
+// will NOT catch, named rather than left to be discovered:
+//
+//   1. a false multiplier in any file outside `SOURCES`.
+//   2. a false multiplier in either of them written WITHOUT the
+//      substitution-factor phrase — that phrase is the only shape this detector
+//      knows, and it is the shape the reverted comments had.
+//   3. a three-term division written in a comment, which the leading-factor
+//      rule skips by the argument above.
+//   4. any multiplier in THIS guard's own file, for the reason in the next
+//      paragraph.
+//
+// AND IT DOES NOT SCAN ITSELF, which an earlier version of the self-scan test
+// claimed that it did. `SELF` is deliberately absent from `SOURCES`, and it
+// cannot be present: this header quotes `342x the truth`, `108x over` and `342`
+// in order to say they were false, so a self-scan would put every one of those
+// quotations in front of the phrase sweep, unregistered, and would need a
+// written allowance for each — an inventory, not a guard. The limit is PINNED by
+// a test rather than left as a silent hole. `ws7EncodingIntegrityGuard` carries
+// an identically-named test that genuinely asserts `SCAN.has(SELF) === true`, and
+// it is NOT a precedent for this one: that guard scans bytes and has no prose of
+// its own stating the figures it rejects.
+//
+// THE ONE CLAIM IN THESE TWO FILES THAT WAS MEASURABLY FALSE HAS BEEN DELETED,
+// NOT DEFENDED. `volatility.mjs:59` stated `roundVolPct(5e-7) === "0.005%"`
+// and called it "2x". Measured through the one call site that passes a RAW
+// currentVol — the refusal path, which publishes `roundVolPct(currentVol)`
+// un-floored:
 //
 //     volatilityPositionSize({ currentVol: 5e-7 }).currentVolPct === "0.00005%"
 //
-// so the value is 100x smaller than stated and the "2x" is not a doubling at
-// all. The claim is PRE-EXISTING: it is not one of the three multipliers commit
-// `653f533` corrected, and the example table four lines above it
-// (`2.05e-5 -> "0.00205%"`) is CORRECT and was re-measured here, which is what
-// isolates the fault to this one boundary line. It is left alone because the
-// correct rewrite is not measurable: `roundVolPct(5e-5)`, where its half-up
-// doubling genuinely applies, is unreachable on the refusal path (5e-5 is not
-// BELOW VOL_SIZING_FLOOR, so it is measured rather than refused) and is not
-// otherwise exported, so correcting it means either exporting a private helper
-// or restating a boundary nobody can check, and neither is this round's call.
-// Recorded as `comment-multiplier-roundvolpct-5e-7-boundary` in the round report.
+// so the value was a hundredth of what was stated and the "2x" was not a
+// doubling at all.
+//
+// An earlier version of this guard LEFT that row alone and recorded the
+// measurement in the ALLOWLIST, arguing that the correct rewrite was not
+// reachable from outside the module. The argument was sound and the conclusion
+// was still wrong, for two reasons that are now the reason the row is gone.
+// First: a KNOWN-FALSE claim parked behind a green allowance is a guard
+// defending the falsehood it exists to reject. Second, and worse, the pin
+// backing that allowance fired when the row was DELETED but not when it was
+// FIXED (see the third pin under the ALLOWLIST below), so the correction would
+// have landed with the claim left permanently unregistered and nothing left to
+// remind anyone it had ever been wrong. Deleting asserts nothing, so it is not
+// an unmeasurable fix — unlike keeping the falsehood behind a test that passes.
+//
+// The half-up-doubling POINT survives without the falsehood: the row above it,
+// `roundPublished(5e-5) === 0.0001  2x the measurement`, is correct and IS a
+// registered claim. `roundVolPct` stays private and its boundary stays
+// unreachable from the refusal path; nothing is asserted about it here.
 import { describe, expect, it } from "vitest"
 import { readFileSync } from "node:fs"
 import { join, relative, sep } from "node:path"
@@ -352,28 +387,42 @@ const expectedOf = ({ num, den }) => num / den
 // THE PHRASE THAT MEANS "THIS COMMENT IS STATING A SUBSTITUTION FACTOR", and the
 // lines that say it without being registered.
 //
-// Two reasons a line can match the phrase and hold no registerable claim, and
-// both are recorded rather than pattern-matched away:
+// Every line carrying the phrase must be either registered or excused here, and
+// BOTH entries in this list are the same kind of thing: a line that QUOTES a
+// withdrawn claim in order to say it was withdrawn. Registering one would require
+// it to be true, which is precisely what it says it is not.
 //
-//   1. It QUOTES a withdrawn claim in order to say it was withdrawn. Line 601
-//      reads `... was "342x the truth", which is false for it` — the quoted
-//      figure is the error being corrected, and registering it as a claim would
-//      require the comment to be true, which is the opposite of what it says.
-//   2. It is KNOWN FALSE and out of scope for this round. Line 59 is that, and
-//      its measurement is in this file's header.
+//   1. `volatility.mjs:612` reads `... was "342x the truth", which is false for
+//      it` — the quoted figure is the error being corrected, and the correcting
+//      half of the same sentence is a registered claim on the next line.
+//   2. `volatility.mjs:62` quotes the `roundVolPct(5e-7)` row verbatim, inside
+//      the note recording that the row was DELETED for being measurably false.
 //
 // The pattern is the ALLOWLIST-WITH-REASON shape the encoding guard already
 // uses: a bare marker is not an allowance, every entry carries a written reason,
-// and it is pinned from BOTH sides — a listed line that no longer matches is a
-// stale entry and fails, so an entry cannot outlive the text it excuses. That
-// last pin is what makes entry 2 safe: the day somebody fixes line 59, this
-// guard tells them to replace the allowance with a real claim instead of leaving
-// a permanent hole where the claim was.
+// and every entry additionally NAMES THE FALSITY that earns it, in `justifiedBy`
+// — the literal text whose presence is what makes the allowance necessary. For a
+// quotation that is the quoted figure; for a known-false live row it is the
+// false figure.
+//
+// THREE PINS, NOT TWO, AND THE THIRD IS THE ONE THIS FILE PREVIOUSLY DESCRIBED
+// AND DID NOT HAVE. (1) The anchor must resolve to exactly one line, so a line
+// that moved or was deleted makes the entry stale. (2) The excused line must
+// still state a multiplier, so an entry matching a line that now states nothing
+// is doing no work. (3) The named falsity must STILL BE ON THE LINE. Pin (1)
+// alone does not reach (3): correct an allowlisted line IN PLACE, keeping its
+// anchor words, and the entry stays non-stale and idle-free while the
+// now-CORRECT claim sits permanently unregistered with nothing left to remind
+// anyone it was ever wrong. That was not hypothetical here — it is exactly what
+// would have happened to the deleted `roundVolPct` row had somebody corrected it
+// in place instead of removing it. Pin (3) is what makes an allowance die with
+// its fix, and it is asserted per entry rather than described here.
 // ---------------------------------------------------------------------------
 const ALLOWLIST = [
   {
     rel: VOLATILITY_REL,
     anchor: "which is false for it",
+    justifiedBy: '"342x the truth"',
     reason:
       "Quotes the WITHDRAWN 342x claim in order to mark it false, which is the correction " +
       "doing its job. The line states no multiplier of its own; the correcting half of the same " +
@@ -384,25 +433,28 @@ const ALLOWLIST = [
   {
     rel: VOLATILITY_REL,
     anchor: "though it reads as rounding",
+    justifiedBy: '=== "0.005%", 2x',
     reason:
-      "KNOWN FALSE, PRE-EXISTING, AND OUT OF SCOPE FOR THIS ROUND. Measured through the refusal " +
-      "path - the only call site that passes a raw currentVol - roundVolPct(5e-7) publishes " +
-      "\"0.00005%\", so both the stated \"0.005%\" and the \"2x\" are wrong. Not one of the three " +
-      "multipliers 653f533 corrected, and the example table four lines above it is correct and was " +
-      "re-measured here, which isolates the fault to this line. The correct rewrite is not " +
-      "measurable from outside the module, so it is recorded as " +
-      "comment-multiplier-roundvolpct-5e-7-boundary rather than guessed at."
+      "Quotes the DELETED roundVolPct(5e-7) row verbatim, inside the note recording that the row " +
+      "was removed for being measurably false - the refusal path publishes \"0.00005%\", a " +
+      "hundredth of the quoted \"0.005%\", so the quoted \"2x\" was no doubling at all. Both sit " +
+      "inside the quotation, which is what the anchor names and what justifiedBy pins. The " +
+      "half-up doubling POINT is not lost either way: the row above it is correct and is a " +
+      "registered claim."
   }
 ]
 
 /** The phrase that marks a line as stating a substitution factor. */
 const MULTIPLIER_PHRASE = /\b\d[\d.,]*e?-?\d*\s*x\b|\bx\s*(?:the truth|over|of the measurement)\b/i
 
-// Every line, in both files, that states a multiplier of the truth.
-function multiplierLines() {
+// Every line, in the named files, that states a multiplier of the truth.
+// `rels`/`sources` are parameters so the self-scan exclusion can ask what this
+// file's OWN prose would contribute, rather than asserting the exclusion with no
+// evidence that it is still needed.
+function multiplierLines(rels = SOURCES, sources = SOURCES_BY_REL) {
   const found = []
-  for (const rel of SOURCES) {
-    const source = SOURCES_BY_REL.get(rel)
+  for (const rel of rels) {
+    const source = sources.get(rel)
     for (let i = 0; i < source.lines.length; i += 1) {
       if (!source.commentBearing[i]) continue
       if (!MULTIPLIER_PHRASE.test(source.lines[i])) continue
@@ -589,13 +641,30 @@ describe("WS-7 - comment multiplier guard: the register is real", () => {
     ).toEqual([])
   })
 
-  it("scans this guard's own file, so the guard cannot hide from itself", () => {
-    // The same self-inclusion the encoding guard pins. This file states ratios in
-    // prose and a detector that quietly stopped reading it would be free to hold
-    // false claims of its own.
-    expect(read(SELF).length, "this guard must be able to read its own source").toBeGreaterThan(0)
-    expect(SELF).not.toBe("")
-    expect(relative(REPO_ROOT, join(REPO_ROOT, SELF)).split(sep).join("/")).toBe(SELF)
+  it("pins the self-scan EXCLUSION, because this guard cannot scan itself", () => {
+    // REPLACES a test that was named "scans this guard's own file, so the guard
+    // cannot hide from itself", whose comment claimed "the same self-inclusion
+    // the encoding guard pins". `SOURCES` never contained `SELF`, so that test
+    // scanned nothing and all three of its assertions were trivially true — a
+    // name-only clone of a real test (`ws7EncodingIntegrityGuard`, which
+    // genuinely asserts `SCAN.has(SELF) === true`) sitting inside a guard whose
+    // own header warns that a check which passes forever is the failure this
+    // repository has already paid for three times.
+    //
+    // There is no honest version of the old claim, so this asserts the opposite
+    // and pins it. The header states the exclusion; this states that the
+    // exclusion is still real AND still load-bearing, which is the part that can
+    // rot. If this file's prose ever stopped quoting the withdrawn figures, the
+    // count below would fall to zero, the reason for excluding `SELF` would no
+    // longer exist, and the correct move would be to add it to `SOURCES` — which
+    // this test then refuses to let happen quietly.
+    expect(SOURCES, "this guard must not claim to scan a file it does not scan").not.toContain(SELF)
+    expect(
+      multiplierLines([SELF], new Map([[SELF, loadSource(SELF)]])).length,
+      "this guard's own header quotes the withdrawn multipliers in order to mark them false, and " +
+        "that is the whole reason SELF is kept out of SOURCES. If this reaches zero the exclusion " +
+        "is no longer load-bearing: add SELF to SOURCES and let the phrase sweep police this file."
+    ).toBeGreaterThan(0)
   })
 })
 
@@ -616,16 +685,60 @@ describe("WS-7 - comment multiplier guard: the allowlist stays honest", () => {
   })
 
   it("has no stale entry: an allowance must not outlive the line it excuses", () => {
-    // PINNED FROM BOTH SIDES, and this is the pin that makes the known-false
-    // entry safe rather than a permanent hole. When somebody fixes
-    // `volatility.mjs:59`, this anchor stops matching, the entry is reported
-    // stale, and the correct response is to replace it with a register claim -
-    // not to widen the allowance.
+    // ONE OF THREE PINS, and the one that used to be described as if it were the
+    // whole of the protection. It knows only that the ANCHOR resolved to exactly
+    // one line, so it catches a line that moved or was deleted. It does NOT
+    // catch a line that was corrected in place — see the `justifiedBy` test
+    // below for why that needed its own pin.
     const stale = ALLOWLIST.filter((entry) => anchorLines(SOURCES_BY_REL.get(entry.rel), entry.anchor).length !== 1)
     expect(
       stale.map((e) => `${e.rel}: ${e.anchor}`),
       "these allowances no longer match exactly one line. If the line was corrected, delete the " +
         "entry and register the corrected claim; if the line moved, re-anchor it."
+    ).toEqual([])
+  })
+
+  it("names the falsity that earns each allowance, and that falsity must still be there", () => {
+    // THE PIN THAT WAS MISSING, and it is the half the previous version of this
+    // file claimed and did not have. The stale-entry pin above only knows the
+    // ANCHOR resolved to one line, so it fires when the excused line is DELETED.
+    // It does not fire when the line is FIXED: correct the multipliers in place,
+    // keep the anchor words, and the entry stays non-stale, stays idle-free, and
+    // the now-CORRECT claim sits permanently unregistered with nothing left to
+    // remind anyone it was ever wrong. Proven on this file's own known-false row:
+    // `roundVolPct(5e-7) === "0.005%"` was correctable in place and the allowance
+    // would have ridden straight through the correction.
+    //
+    // So every entry declares `justifiedBy` — the literal falsity that earns it —
+    // and that falsity must still be on the line. Fix the line correctly and the
+    // allowance dies with it, which is the entire point: an allowance must not
+    // outlive its fix.
+    expect(
+      ALLOWLIST.length,
+      "the allowlist must not be empty, or every assertion over it passes vacuously"
+    ).toBeGreaterThan(0)
+
+    const unnamed = ALLOWLIST.filter(
+      (entry) => typeof entry.justifiedBy !== "string" || entry.justifiedBy.trim().length === 0
+    )
+    expect(
+      unnamed.map((e) => `${e.rel}: ${e.anchor}`),
+      "every allowance must name the falsity that makes it necessary, in `justifiedBy`. An " +
+        "allowance that cannot say what it is excusing is a bare marker wearing a reason."
+    ).toEqual([])
+
+    const outlived = ALLOWLIST.filter((entry) => {
+      const [lineNo] = anchorLines(SOURCES_BY_REL.get(entry.rel), entry.anchor)
+      // A line the stale pin has already reported is that test's business, not
+      // this one's, so it is not reported twice under a second failure.
+      if (lineNo === undefined) return false
+      return !SOURCES_BY_REL.get(entry.rel).lines[lineNo - 1].includes(entry.justifiedBy)
+    })
+    expect(
+      outlived.map((e) => `${e.rel}: ${e.anchor} — ${JSON.stringify(e.justifiedBy)}`),
+      "these allowances no longer have the falsity that earned them, so they excuse nothing any " +
+        "more: the line was corrected and the correction is invisible to the anchor pin. Delete " +
+        "the entry and register the corrected claim as real; do not widen the allowance."
     ).toEqual([])
   })
 

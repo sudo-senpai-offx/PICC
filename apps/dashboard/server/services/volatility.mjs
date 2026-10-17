@@ -56,7 +56,18 @@ const DAY_SECONDS = 86400
 // landing exactly on it is doubled:
 //
 //   roundPublished(5e-5)    === 0.0001     2x the measurement
-//   roundVolPct(5e-7)      === "0.005%"   2x, though it reads as rounding
+//
+// A SECOND ROW USED TO STAND HERE AND WAS DELETED, because it was measurably
+// false rather than merely imprecise. It read
+// `roundVolPct(5e-7) === "0.005%", 2x, though it reads as rounding`. Measured
+// through the only call site that publishes a RAW currentVol — the refusal
+// path — `volatilityPositionSize({ currentVol: 5e-7 }).currentVolPct` is
+// `"0.00005%"`: a hundredth of what was stated, so the doubling it claimed
+// was never one. `roundVolPct` is private, and its doubling boundary
+// (`roundPublished(5e-5)`) is unreachable on that path, so the CORRECT row
+// cannot be written in a way any reader or test could check. A row that
+// cannot be checked is worse than no row: the row above states the same
+// half-up doubling and is guarded, this one restated it wrongly and was not.
 //
 // This is the ONLY direction in which this publisher misstates a measurement —
 // everywhere else a nonzero value survives as itself. It is pre-existing, it is
